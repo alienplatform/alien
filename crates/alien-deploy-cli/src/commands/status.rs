@@ -484,7 +484,7 @@ fn collect_error_chain(error: &JsonValue, lines: &mut Vec<String>) {
     };
 
     if let Some(summary) = format_error_object_summary(object) {
-        lines.push(summary);
+        lines.push(alien_preflights::escape_for_display(&summary));
     }
 
     // Validation summaries contain counts; the saved results contain the
@@ -499,7 +499,10 @@ fn collect_error_chain(error: &JsonValue, lines: &mut Vec<String>) {
                 for (field, label) in [("errors", "Error"), ("warnings", "Warning")] {
                     if let Some(messages) = result.get(field).and_then(JsonValue::as_array) {
                         for message in messages.iter().filter_map(JsonValue::as_str) {
-                            lines.push(format!("{label}: {message}"));
+                            lines.push(format!(
+                                "{label}: {}",
+                                alien_preflights::escape_for_display(message)
+                            ));
                         }
                     }
                 }
@@ -532,11 +535,13 @@ fn json_string_field<'a>(
     object.get(field).and_then(JsonValue::as_str)
 }
 
+/// JSON escapes C0 control characters but leaves DEL and C1 as they are.
 fn format_json_fallback(value: &JsonValue) -> String {
-    match serde_json::to_string_pretty(value) {
+    let rendered = match serde_json::to_string_pretty(value) {
         Ok(rendered) => rendered,
         Err(_) => value.to_string(),
-    }
+    };
+    alien_preflights::escape_for_display(&rendered)
 }
 
 #[cfg(test)]
@@ -622,6 +627,45 @@ mod tests {
             "Error: VPC quota is exhausted",
             "Warning: GPU usage is unknown; missing permission",
         ]);
+    }
+
+    /// A saved failure that quotes a manifest's text prints its control characters escaped.
+    #[test]
+    fn prints_control_characters_in_saved_failures_escaped() {
+        let error = serde_json::json!({
+            "code": "VALIDATION_FAILED",
+            "message": "Validation failed with 1 errors and 0 warnings",
+            "context": { "results": [
+                { "errors": ["Extension name 'acme\u{1b}[2J' is refused"], "warnings": [] }
+            ] }
+        });
+
+        assert_eq!(
+            format_error_chain(&error),
+            vec![
+                "VALIDATION_FAILED: Validation failed with 1 errors and 0 warnings",
+                "Error: Extension name 'acme\\u{1b}[2J' is refused",
+            ]
+        );
+    }
+
+    /// A saved message that spans lines keeps them, each escaped; the JSON fallback escapes the
+    /// DEL and C1 characters JSON leaves as they are.
+    #[test]
+    fn prints_saved_multi_line_messages_and_unknown_shapes_escaped() {
+        let error = serde_json::json!({
+            "code": "VALIDATION_FAILED",
+            "message": "Input 'region' must match:\n^[a-z]+$\u{1b}[2J"
+        });
+        assert_eq!(
+            format_error_chain(&error),
+            vec!["VALIDATION_FAILED: Input 'region' must match:\n^[a-z]+$\\u{1b}[2J"]
+        );
+
+        let unknown = serde_json::json!({ "detail\u{9b}31m": "\u{7f}" });
+        let printed = format_error_chain(&unknown).join("\n");
+        assert!(!printed.contains(['\u{9b}', '\u{7f}']), "{printed:?}");
+        assert!(printed.contains("detail\\u{9b}31m"), "{printed}");
     }
 
     #[test]

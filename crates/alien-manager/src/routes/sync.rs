@@ -688,8 +688,10 @@ async fn acquired_deployment_response(
     let (held, _) = crate::values::with_generated_inputs(values, deployment_stack.as_ref(), held)
         .await
         .map_err(|e| e.into_generic())?;
+    // `false`: the config skips the management ExternalId when it serializes, so the runner
+    // never receives it, and looking it up here could only fail the acquire.
     let config = sources
-        .deployment_config(&held, deployment_stack.as_ref(), management_config)
+        .deployment_config(&held, deployment_stack.as_ref(), management_config, false)
         .await
         .context(GenericError {
             message: format!("Failed to build the config for deployment {}", record.id),
@@ -1098,7 +1100,7 @@ async fn release(
 }
 
 #[cfg(test)]
-pub(in crate::routes) mod tests {
+pub(crate) mod tests {
     use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
     use alien_commands::{
         dispatchers::NullCommandDispatcher,
@@ -1511,7 +1513,7 @@ pub(in crate::routes) mod tests {
     }
 
     /// The sync routes' state over `deployment_store`, with local command storage.
-    pub(in crate::routes) async fn test_app_state(
+    pub(crate) async fn test_app_state(
         directory: &std::path::Path,
         deployment_store: Arc<dyn crate::traits::DeploymentStore>,
         release_store: Arc<SqliteReleaseStore>,
@@ -1554,13 +1556,14 @@ pub(in crate::routes) mod tests {
             registry_routing_table: Arc::new(
                 RegistryRoutingTable::new(vec![]).expect("empty routing table"),
             ),
-            import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+            host_registrations: alien_infra::HostRegistrations::NONE,
             charts: None,
             runtime_identity: None,
             release_channels: None,
             signing: None,
             bundle_signing_key: None,
             bundle_sources: None,
+            extension_bundles: None,
             log_buffer: Arc::new(crate::dev::LogBuffer::new()),
             values: None,
             value_access: None,
@@ -1572,6 +1575,13 @@ pub(in crate::routes) mod tests {
 
     #[async_trait::async_trait]
     impl crate::traits::CredentialResolver for UnresolvableManagementIdentity {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -1602,6 +1612,13 @@ pub(in crate::routes) mod tests {
 
     #[async_trait::async_trait]
     impl crate::traits::CredentialResolver for ResolvedManagementIdentity {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -2624,6 +2641,47 @@ pub(in crate::routes) mod tests {
                 "Failed to resolve the azure management identity for deployment dep_test"
             );
             assert_eq!(sync.released.len(), 1, "{status}: the claim is given back");
+        }
+    }
+
+    /// The sync response of a running pull deployment without extensions. With
+    /// `ALIEN_PARITY_DIR` set it is written there, with its times and release id replaced, so a
+    /// run on another revision of the manager can be compared byte for byte.
+    #[tokio::test]
+    async fn a_pull_sync_without_extensions_is_written_for_comparison() {
+        let sync = sync_with_management_resolver(
+            deployment_record_with_state("running", None),
+            Arc::new(ResolvedManagementIdentity),
+        )
+        .await;
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        fn timeless(value: Value) -> Value {
+            match value {
+                Value::String(text) if chrono::DateTime::parse_from_rfc3339(&text).is_ok() => {
+                    Value::String("<time>".into())
+                }
+                // Each run creates its release with a new id.
+                Value::String(text) if text.starts_with("rel_") => {
+                    Value::String("<release>".into())
+                }
+                Value::Array(items) => Value::Array(items.into_iter().map(timeless).collect()),
+                Value::Object(fields) => Value::Object(
+                    fields
+                        .into_iter()
+                        .map(|(key, value)| (key, timeless(value)))
+                        .collect(),
+                ),
+                other => other,
+            }
+        }
+        let response = timeless(sync.response);
+        assert!(response["target"].get("extensions").is_none(), "{response}");
+        if let Ok(dir) = std::env::var("ALIEN_PARITY_DIR") {
+            std::fs::write(
+                std::path::Path::new(&dir).join("sync.json"),
+                serde_json::to_vec_pretty(&response).unwrap(),
+            )
+            .unwrap();
         }
     }
 
@@ -5401,6 +5459,7 @@ pub(in crate::routes) mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             image_registry: None,
             image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
@@ -5594,7 +5653,7 @@ pub(in crate::routes) mod tests {
         .await
         .expect("acquire response");
         let loop_config = sources
-            .deployment_config(&record, Some(&stack), None)
+            .deployment_config(&record, Some(&stack), None, false)
             .await
             .expect("loop config");
 
@@ -5626,6 +5685,77 @@ pub(in crate::routes) mod tests {
                 "LOG_LEVEL",
             ]
         );
+    }
+
+    /// A resolver whose management ExternalId lookup fails.
+    struct NoExternalId;
+
+    #[async_trait::async_trait]
+    impl crate::traits::CredentialResolver for NoExternalId {
+        async fn management_external_id(
+            &self,
+            deployment: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Err(AlienError::new(GenericError {
+                message: format!("no ExternalId for {}", deployment.id),
+            }))
+        }
+
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+    }
+
+    /// The runner never receives the management ExternalId, so acquiring a deployment whose
+    /// release lists an extension does not depend on looking it up.
+    #[tokio::test]
+    async fn acquiring_a_deployment_with_extensions_needs_no_external_id() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let mut stack = Stack::new("app".to_string()).build();
+        stack.extensions = vec![
+            alien_infra::extension_bundle::testing::TestBundle::new("acme", "1.0.0", &[]).manifest,
+        ];
+        let mut record = deployment_record_with_state("update-pending", None);
+        record.desired_release_id = Some("rel_next".to_string());
+        record.supplied_stacks = Some(crate::traits::deployment_store::SuppliedStacks {
+            current: None,
+            desired: Some(stack),
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = std::sync::Arc::new(
+            crate::stores::sqlite::SqliteDatabase::new(
+                &dir.path().join("manager.db").to_string_lossy(),
+            )
+            .await
+            .expect("database"),
+        );
+        let release_store = crate::stores::sqlite::SqliteReleaseStore::new(db);
+        let manager_config = crate::config::ManagerConfig {
+            base_url: Some("https://manager.example.test".to_string()),
+            ..Default::default()
+        };
+        let sources = RunnerConfigSources {
+            config: &manager_config,
+            credential_resolver: &NoExternalId,
+            bindings_provider: &None,
+            target_bindings_providers: &HashMap::new(),
+            commands_keys: None,
+        };
+
+        acquired_deployment_response(
+            &release_store,
+            None,
+            &sources,
+            &crate::traits::deployment_store::AcquiredDeployment {
+                deployment: record,
+                execution_claim: None,
+            },
+        )
+        .await
+        .expect("acquire response");
     }
 
     /// A runner that acquires a deployment runs with its generated secret

@@ -27,9 +27,9 @@ use alien_core::{
     import::{setup_import_format_version_for_platform, EmitContext},
     DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesSettings, Kv, Network, NetworkSettings, RemoteBindings,
-    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
-    StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
-    TelemetryMode, UpdatesMode,
+    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, SetupFormat, Stack,
+    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::generators::signing_limits;
@@ -480,9 +480,36 @@ pub(crate) fn render_terraform_module(
             stack_settings.setup_management,
             alien_core::SetupTarget::from_cloud(platform, target.is_kubernetes()),
         ) {
+            // The runtime creates this resource after setup, when no one may widen a
+            // workload's role, so setup still writes the grants profiles hold on it.
+            let ctx = EmitContext {
+                stack,
+                resource,
+                resource_id,
+                platform,
+                targets_kubernetes: target.is_kubernetes(),
+                stack_settings: &stack_settings,
+                names: &labels,
+                pins: &options.pins,
+            };
+            let mut fragment = TfFragment::default();
+            emit_custom_resource_grants(&ctx, &mut fragment)?;
+            if !fragment.resource_blocks.is_empty() {
+                if let Some(input_id) = resource.enabled_when.as_deref() {
+                    check_gate_input(&stack_inputs, resource_id, input_id)?;
+                    crate::gating::gate_fragment(&mut fragment, resource_id, input_id, &mut gated)?;
+                }
+                per_resource.insert(resource_id.clone(), fragment);
+            }
             continue;
         }
 
+        stack.check_setup_format(
+            resource_id,
+            &resource_type,
+            SetupFormat::Terraform,
+            platform,
+        )?;
         // A type with no emitter on this target that the installer can bind to existing
         // infrastructure is left out of the module; the installer supplies its binding. An
         // emitter registered for the type (an embedder may add one) always wins.
@@ -520,27 +547,11 @@ pub(crate) fn render_terraform_module(
                     reason: refusal.reason().to_string(),
                 }));
             }
-            // Re-validated at render time like the CloudFormation generator:
-            // a caller that renders without running preflights must fail here,
-            // not ship a module whose `var.input_x` is undeclared or a string.
-            alien_core::find_boolean_gate_input(&stack_inputs, input_id).map_err(|issue| {
-                AlienError::new(ErrorData::OperationNotSupported {
-                    operation: format!("enabled('{input_id}')"),
-                    reason: match issue {
-                        alien_core::GateInputIssue::Undeclared => format!(
-                            "resource '{resource_id}' is gated on stack input '{input_id}', \
-                             which this module never asks the deployer for"
-                        ),
-                        alien_core::GateInputIssue::NotBoolean(kind) => format!(
-                            "resource '{resource_id}' is gated on stack input '{input_id}', \
-                             which is a {kind:?} input rather than a boolean"
-                        ),
-                    },
-                })
-            })?;
+            check_gate_input(&stack_inputs, resource_id, input_id)?;
         }
 
         let mut fragment = emitter.emit_with_registry(&ctx, options.registry)?;
+        emit_custom_resource_grants(&ctx, &mut fragment)?;
         // What decides whether the resource exists: the deployer's input, or, for the network of
         // a Kubernetes module, whether the module creates the cluster.
         let gate = effective_gate(stack, resource_id, resource, target);
@@ -1078,6 +1089,10 @@ pub(crate) fn render_terraform_module(
         }
     }
 
+    if let (Some(section), Some(readme)) = (extensions_md(stack), files.get_mut("README.md")) {
+        readme.push_str(&section);
+    }
+
     // Last net: a reference hidden in a raw string escapes the AST rewrite;
     // catch it in the rendered output instead of shipping it.
     crate::gating::scan_rendered_for_unindexed(&files, &gated)?;
@@ -1159,6 +1174,73 @@ pub(crate) fn render_terraform_module(
     }
 
     Ok(module)
+}
+
+/// The README section listing each extension the stack uses: its version, the identity its
+/// controllers run as when setup creates one, and the origins outside the cloud its controllers
+/// may call.
+fn extensions_md(stack: &Stack) -> Option<String> {
+    if stack.extensions.is_empty() {
+        return None;
+    }
+    let lines = stack
+        .extensions
+        .iter()
+        .map(|extension| {
+            let mut line = format!("- `{}` version {}.", extension.name, extension.version);
+            let identity = stack.resources().find(|(_, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<alien_core::ServiceAccount>()
+                    .is_some_and(|account| account.extension.as_deref() == Some(&extension.name))
+            });
+            match identity {
+                Some((identity_id, _)) => line.push_str(&format!(
+                    " Its controllers run as `{identity_id}`, with only the permissions this module grants it."
+                )),
+                None => line.push_str(
+                    " Setup creates no identity for it, so its controllers hold none of this deployment's cloud credentials.",
+                ),
+            }
+            if !extension.egress.is_empty() {
+                line.push_str(&format!(
+                    " Its controllers may also call, with none of this deployment's credentials: {}.",
+                    extension.egress.join(", ")
+                ));
+            }
+            line
+        })
+        .collect::<Vec<_>>();
+    Some(format!(
+        "\n## Extensions\n\nThis deployment uses these extensions.\n\n{}\n",
+        lines.join("\n")
+    ))
+}
+
+/// Re-validated at render time like the CloudFormation generator: a caller that renders without
+/// running preflights must fail here, not ship a module whose `var.input_x` is undeclared or a
+/// string.
+fn check_gate_input(
+    stack_inputs: &[StackInputDefinition],
+    resource_id: &str,
+    input_id: &str,
+) -> Result<()> {
+    alien_core::find_boolean_gate_input(stack_inputs, input_id).map_err(|issue| {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: format!("enabled('{input_id}')"),
+            reason: match issue {
+                alien_core::GateInputIssue::Undeclared => format!(
+                    "resource '{resource_id}' is gated on stack input '{input_id}', \
+                     which this module never asks the deployer for"
+                ),
+                alien_core::GateInputIssue::NotBoolean(kind) => format!(
+                    "resource '{resource_id}' is gated on stack input '{input_id}', \
+                     which is a {kind:?} input rather than a boolean"
+                ),
+            },
+        })
+    })?;
+    Ok(())
 }
 
 fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Option<String> {
@@ -1332,6 +1414,50 @@ fn append_permission_entry(
     }
     for permission in permissions {
         lines.push(format!("  - {permission}"));
+    }
+}
+
+/// Writes the grants profiles hold on a custom resource: a workload that links it gets the
+/// sets its type links.
+///
+/// A built-in resource's emitter writes these for its own type. A custom type's emitter comes
+/// from an extension, so the generator writes them. On Google Cloud the service account's own
+/// emitter already binds them at the project.
+fn emit_custom_resource_grants(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
+    if ctx
+        .resource
+        .config
+        .downcast_ref::<alien_core::CustomResource>()
+        .is_none()
+    {
+        return Ok(());
+    }
+    match ctx.platform {
+        alien_core::Platform::Aws => {
+            crate::emitters::aws::helpers::emit_custom_resource_grants(ctx, fragment)
+        }
+        alien_core::Platform::Azure => {
+            let label = ctx
+                .name_for(ctx.resource_id)
+                .map(str::to_owned)
+                .unwrap_or_else(|| ctx.resource_id.replace('-', "_"));
+            let resource_type = ctx.resource.config.resource_type().to_string();
+            crate::emitters::azure::helpers::emit_profile_grants(
+                ctx,
+                fragment,
+                &label,
+                crate::emitters::azure::helpers::ProfileGrants {
+                    resource_type: &resource_type,
+                    context: crate::emitters::azure::helpers::permission_context(&label)
+                        .with_resource_name(format!(
+                            "${{local.resource_prefix}}-{}",
+                            ctx.resource_id
+                        )),
+                    scope: None,
+                },
+            )
+        }
+        _ => Ok(()),
     }
 }
 
@@ -2801,10 +2927,11 @@ fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
 /// An existing cluster is already attached to a network, so the manager prepares a stack with no
 /// network for it and setup must create no VPC and register none. The manager still expects the
 /// network when the source stack declares it, declares a `managed` cluster, the deployer
-/// requests one in the advanced settings, or the stack has a cloud database (see `kubernetes_requires_cloud_network` in `alien-preflights`). A database behind
-/// `enabled_when` counts only while its gate is on, because the manager drops declined frozen
-/// resources before it prepares the stack.
-///
+/// requests one in the advanced settings, or the stack has a cloud database or an extension type
+/// that requires the network (`alien_core::keeps_cloud_network`). A resource behind an input
+/// that gates a frozen resource counts only while that input is on, because the manager drops
+/// such declined resources, live ones included, before it prepares the stack. A live resource
+/// behind an input that gates nothing frozen is dropped only after, so it counts as ungated.
 fn effective_gate(
     stack: &Stack,
     resource_id: &str,
@@ -2834,18 +2961,21 @@ fn effective_gate(
     if declares_managed_cluster {
         return None;
     }
-    let mut database_gates = Vec::new();
+    let frozen_gating: HashSet<&str> = alien_core::frozen_gated(stack)
+        .map(|(_, input_id)| input_id)
+        .collect();
+    let mut network_gates = Vec::new();
     for (_, entry) in stack.resources() {
-        if !alien_core::is_network_database(entry) {
+        if !alien_core::keeps_cloud_network(stack, entry) {
             continue;
         }
         match entry.enabled_when.as_deref() {
-            None => return None,
-            Some(input_id) => database_gates.push(input_id),
+            Some(input_id) if frozen_gating.contains(input_id) => network_gates.push(input_id),
+            _ => return None,
         }
     }
     Some(crate::emitters::enabled::kubernetes_network_gate(
-        &database_gates,
+        &network_gates,
     ))
 }
 
@@ -6541,6 +6671,34 @@ fn retain_data_helper(
 
 #[cfg(test)]
 mod tests {
+    /// Each file the generator names, besides one per resource, is one an extension can't take
+    /// the name of: an extension's Terraform modifier writes `<extension>.tf` beside them.
+    #[test]
+    fn extension_names_cannot_take_a_file_the_module_writes() {
+        let source = include_str!("generator.rs");
+        let code = &source[..source.find("#[cfg(test)]\nmod tests {").unwrap()];
+        let mut stems = Vec::new();
+        for line in code
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+        {
+            for literal in line.split('"').skip(1).step_by(2) {
+                if let Some(stem) = literal.strip_suffix(".tf") {
+                    if !stem.is_empty() && !stem.contains(['{', '}', '/', ' ']) {
+                        stems.push(stem.to_string());
+                    }
+                }
+            }
+        }
+        assert!(stems.len() >= 10, "{stems:?}");
+        for stem in stems {
+            assert!(
+                alien_core::TERRAFORM_MODULE_FILE_STEMS.contains(&stem.as_str()),
+                "`{stem}.tf` is missing from alien_core::TERRAFORM_MODULE_FILE_STEMS"
+            );
+        }
+    }
+
     /// CI serves these providers from a mirror that falls back to the registry only for providers
     /// it doesn't list, so a constraint changed here without the script would break CI's inits.
     #[test]

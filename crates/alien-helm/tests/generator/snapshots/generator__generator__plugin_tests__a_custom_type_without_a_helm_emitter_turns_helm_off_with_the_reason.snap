@@ -1,0 +1,5 @@
+---
+source: crates/alien-helm/tests/generator/plugin_tests.rs
+expression: error.to_string()
+---
+OPERATION_NOT_SUPPORTED: Operation 'Helm setup' not supported: resource 'zone' has type acme/dns-zone from extension 'acme', which has no Helm emitter for it on kubernetes, so Helm setup is off for every stack that uses it

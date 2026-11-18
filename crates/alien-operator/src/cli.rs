@@ -1669,7 +1669,7 @@ fn with_plugins_key(json: String) -> String {
     }
 }
 
-fn parse_json_opt<T: serde::de::DeserializeOwned>(
+pub(crate) fn parse_json_opt<T: serde::de::DeserializeOwned>(
     json_str: Option<String>,
     label: &str,
 ) -> Result<Option<T>> {
@@ -1686,7 +1686,7 @@ fn parse_json_opt<T: serde::de::DeserializeOwned>(
     }
 }
 
-fn stack_settings_with_bindings(
+pub(crate) fn stack_settings_with_bindings(
     mut settings: alien_core::StackSettings,
     bindings: Option<alien_core::ExternalBindings>,
 ) -> alien_core::StackSettings {

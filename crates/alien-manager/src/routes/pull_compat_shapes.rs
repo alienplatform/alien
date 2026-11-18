@@ -1199,6 +1199,7 @@ fn handled() -> Vec<(&'static str, &'static str, Handling)> {
         ("Sandbox", "image_user", F(&SANDBOX_IMAGE_USER)),
         ("Storage", "cors_upload_origins", F(&STORAGE_UPLOAD_ORIGINS)),
         ("Storage", "notifications", F(&STORAGE_NOTIFICATIONS)),
+        ("ServiceAccount", "extension", F(&EXTENSIONS)),
         (
             "GcpRemoteBindingsImportData",
             "federation",

@@ -47,6 +47,8 @@ pub struct CloudAssetClient {
     project_id: String,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(CloudAssetClient);
+
 impl CloudAssetClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         let project_id = config.project_id.clone();

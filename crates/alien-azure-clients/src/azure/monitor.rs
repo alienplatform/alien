@@ -24,6 +24,8 @@ pub struct AzureMonitorClient {
     token_cache: AzureTokenCache,
 }
 
+crate::azure::common::impl_with_interceptors!(AzureMonitorClient);
+
 impl AzureMonitorClient {
     pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         let endpoint = token_cache.management_endpoint().to_string();

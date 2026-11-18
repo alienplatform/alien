@@ -1,21 +1,5 @@
+use alien_permissions::sensitive_content::AWS_SENSITIVE_CONTENT_ACTIONS as SENSITIVE_IMPLICIT_ACTIONS;
 use alien_permissions::{list_permission_set_ids, SENSITIVE_MICROVM_ACTIONS};
-
-const SENSITIVE_IMPLICIT_ACTIONS: &[&str] = &[
-    "s3:GetObject",
-    "s3:GetObjectVersion",
-    "dynamodb:BatchGetItem",
-    "dynamodb:GetItem",
-    "dynamodb:Query",
-    "dynamodb:Scan",
-    "ssm:GetParameter",
-    "ssm:GetParameters",
-    "ssm:GetParametersByPath",
-    "secretsmanager:GetSecretValue",
-    "sqs:ReceiveMessage",
-    "codebuild:BatchGetBuilds",
-    "logs:GetLogEvents",
-    "logs:FilterLogEvents",
-];
 
 #[test]
 fn aws_implicit_management_sets_do_not_grant_sensitive_content() {

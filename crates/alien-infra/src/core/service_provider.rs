@@ -70,6 +70,7 @@ use alien_azure_clients::{
     tables::{AzureTableManagementClient, TableManagementApi},
     AzureClientConfig, AzureTokenCache,
 };
+use alien_client_core::interceptor::{Cloud, InterceptorChain};
 use alien_client_core::runtime_credentials::RuntimeCapability;
 use alien_error::Context;
 use alien_gcp_clients::{
@@ -188,6 +189,12 @@ pub trait PlatformServiceProvider: Send + Sync {
         Ok(None)
     }
 
+    /// Where this provider's runtime credentials come from, so a provider built from it for a
+    /// release's extensions keeps them.
+    fn runtime_registry_credentials(&self) -> Option<Arc<dyn RuntimeRegistryCredentialProvider>> {
+        None
+    }
+
     /// The digest of `repository:reference` in the registry at `registry_origin`,
     /// read with the runtime registry pull token.
     async fn resolve_registry_manifest_digest(
@@ -206,6 +213,36 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         _platform: alien_core::Platform,
     ) -> Option<alien_core::InitialSetupAuthority> {
+        None
+    }
+
+    /// What this process loaded for the deployment's extensions: hooks modules and controller
+    /// endpoints. A provider that returns some serves one deployment.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn extensions(&self) -> Option<Arc<crate::LoadedExtensions>> {
+        None
+    }
+
+    /// The deployment's interceptors for a client of `cloud`, which every client this provider
+    /// builds carries. A controller that builds a client itself gives it these. `tenant_id` is
+    /// the Azure tenant an Azure client's calls are made in.
+    fn interceptors(&self, _cloud: Cloud, _tenant_id: Option<String>) -> InterceptorChain {
+        InterceptorChain::default()
+    }
+
+    /// The provider for deleting resources the current release has and the target release
+    /// removes: they are deleted with the current release's interceptors. `None` when nobody
+    /// loaded the current release for this provider; `DefaultPlatformServiceProvider` returns
+    /// `None` unless `with_current_release` was called. Whether the two releases' extensions
+    /// differ is the caller's to compare.
+    fn for_current_release(&self) -> Option<Arc<dyn PlatformServiceProvider>> {
+        None
+    }
+
+    /// This provider without the deployment's interceptors, for the reads Alien makes outside
+    /// its controllers, which interceptors never see. `None` when it has none to drop, so a
+    /// provider that carries interceptors must override this.
+    fn without_interceptors(&self) -> Option<Arc<dyn PlatformServiceProvider>> {
         None
     }
     // AWS clients
@@ -634,6 +671,31 @@ pub struct DefaultPlatformServiceProvider {
     runtime_registry_credentials: Option<Arc<dyn RuntimeRegistryCredentialProvider>>,
     #[cfg(feature = "local")]
     local_bindings: Option<Arc<alien_local::LocalBindingsProvider>>,
+    /// The extensions of the release the deployment runs or moves to.
+    #[cfg(not(target_arch = "wasm32"))]
+    extensions: Option<LoadedRelease>,
+    /// The extensions of the release the deployment moves from, during an update.
+    #[cfg(not(target_arch = "wasm32"))]
+    current_release: Option<LoadedRelease>,
+}
+
+/// What this process loaded for one release's extensions, and their interceptors in the order
+/// the release's stack lists them.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone)]
+struct LoadedRelease {
+    extensions: Arc<crate::LoadedExtensions>,
+    interceptors: crate::DeploymentInterceptors,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl LoadedRelease {
+    fn new(stack: &alien_core::Stack, extensions: Arc<crate::LoadedExtensions>) -> Result<Self> {
+        Ok(Self {
+            interceptors: crate::DeploymentInterceptors::for_stack(stack, &extensions)?,
+            extensions,
+        })
+    }
 }
 
 impl std::fmt::Debug for DefaultPlatformServiceProvider {
@@ -649,6 +711,10 @@ impl Default for DefaultPlatformServiceProvider {
         Self {
             #[cfg(feature = "local")]
             local_bindings: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            extensions: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            current_release: None,
             runtime_registry_credentials: None,
         }
     }
@@ -671,7 +737,73 @@ impl DefaultPlatformServiceProvider {
     pub fn with_local_bindings(local_bindings: Arc<alien_local::LocalBindingsProvider>) -> Self {
         Self {
             local_bindings: Some(local_bindings),
-            runtime_registry_credentials: None,
+            ..Self::default()
+        }
+    }
+
+    /// The provider for one deployment whose `stack` lists extensions this process loaded.
+    /// Every client it builds, except the identity clients, carries their interceptors, in the
+    /// order `stack` lists them, unless they were loaded without interceptors.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_extensions(
+        mut self,
+        stack: &alien_core::Stack,
+        extensions: Arc<crate::LoadedExtensions>,
+    ) -> Result<Self> {
+        self.extensions = Some(LoadedRelease::new(stack, extensions)?);
+        Ok(self)
+    }
+
+    /// Adds the release the deployment is moving from: `stack` is its stack, and `extensions`
+    /// what this process loaded for it. Resources the new release removes are deleted through it.
+    /// So is the whole deployment when it is deleted while an update is unfinished, with the
+    /// current release's interceptors.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_current_release(
+        mut self,
+        stack: &alien_core::Stack,
+        extensions: Arc<crate::LoadedExtensions>,
+    ) -> Result<Self> {
+        self.current_release = Some(LoadedRelease::new(stack, extensions)?);
+        Ok(self)
+    }
+
+    /// The provider for a deployment in `state`: with the extensions of the stack it applies
+    /// ([`alien_core::DeploymentState::applied_stack`]), and, when the release it moves from
+    /// lists other extensions, with that release's too. `load` gives what this process loaded
+    /// for one stack. A deployment whose releases list no extensions gets the provider unchanged.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_releases(
+        mut self,
+        state: &alien_core::DeploymentState,
+        mut load: impl FnMut(&alien_core::Stack) -> Result<Arc<crate::LoadedExtensions>>,
+    ) -> Result<Self> {
+        let applied = state.applied_stack();
+        if let Some(stack) = applied.filter(|stack| !stack.extensions.is_empty()) {
+            self = self.with_extensions(stack, load(stack)?)?;
+        }
+        if let (Some(current), Some(_), Some(applied)) =
+            (&state.current_release, &state.target_release, applied)
+        {
+            // An update that only adds an extension still changes the list: the resources it
+            // removes are deleted with the current release's interceptors.
+            if !current.stack.extensions.is_empty()
+                && current.stack.extensions != applied.extensions
+            {
+                self = self.with_current_release(&current.stack, load(&current.stack)?)?;
+            }
+        }
+        Ok(self)
+    }
+
+    /// The same provider with no extensions, which keeps its local bindings.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn without_extensions(&self) -> Self {
+        Self {
+            #[cfg(feature = "local")]
+            local_bindings: self.local_bindings.clone(),
+            runtime_registry_credentials: self.runtime_registry_credentials.clone(),
+            ..Self::default()
         }
     }
 }
@@ -733,6 +865,45 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         let _ = platform;
         None
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn extensions(&self) -> Option<Arc<crate::LoadedExtensions>> {
+        self.extensions
+            .as_ref()
+            .map(|release| release.extensions.clone())
+    }
+
+    fn interceptors(&self, cloud: Cloud, tenant_id: Option<String>) -> InterceptorChain {
+        #[cfg(not(target_arch = "wasm32"))]
+        return match &self.extensions {
+            Some(release) => release.interceptors.chain(cloud, tenant_id.as_deref()),
+            None => InterceptorChain::default(),
+        };
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (cloud, tenant_id);
+            InterceptorChain::default()
+        }
+    }
+
+    fn for_current_release(&self) -> Option<Arc<dyn PlatformServiceProvider>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.current_release.clone().map(|release| {
+            Arc::new(Self {
+                extensions: Some(release),
+                ..self.without_extensions()
+            }) as Arc<dyn PlatformServiceProvider>
+        });
+        #[cfg(target_arch = "wasm32")]
+        None
+    }
+
+    fn without_interceptors(&self) -> Option<Arc<dyn PlatformServiceProvider>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return Some(Arc::new(self.without_extensions()));
+        #[cfg(target_arch = "wasm32")]
+        None
+    }
     // AWS implementations
     async fn get_aws_bedrock_client(
         &self,
@@ -743,7 +914,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(BedrockClient::new(
             reqwest::Client::new(),
             credentials,
@@ -751,6 +923,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn IamApi>> {
+        // An identity client: no interceptor sees or changes its calls.
         let credentials = AwsCredentialProvider::from_config(config.clone())
             .await
             .context(crate::error::ErrorData::CloudPlatformError {
@@ -772,7 +945,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(LambdaMicrovmsClient::new(
             reqwest::Client::new(),
             credentials,
@@ -788,7 +962,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(CloudControlClient::new(
             reqwest::Client::new(),
             credentials,
@@ -801,7 +976,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(LambdaClient::new(
             reqwest::Client::new(),
             credentials,
@@ -814,7 +990,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(S3Client::new(reqwest::Client::new(), credentials)))
     }
 
@@ -824,7 +1001,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(KmsClient::new(
             reqwest::Client::new(),
             credentials,
@@ -840,7 +1018,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(ResourceGroupsTaggingClient::new(
             reqwest::Client::new(),
             credentials,
@@ -853,7 +1032,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(DlmClient::new(
             reqwest::Client::new(),
             credentials,
@@ -866,7 +1046,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(SesClient::new(
             reqwest::Client::new(),
             credentials,
@@ -882,7 +1063,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(CloudFormationClient::new(
             reqwest::Client::new(),
             credentials,
@@ -898,7 +1080,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(CodeBuildClient::new(
             reqwest::Client::new(),
             credentials,
@@ -911,7 +1094,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(EcrClient::new(
             reqwest::Client::new(),
             credentials,
@@ -927,7 +1111,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(SecretsManagerClient::new(
             reqwest::Client::new(),
             credentials,
@@ -940,7 +1125,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(SsmClient::new(
             reqwest::Client::new(),
             credentials,
@@ -956,7 +1142,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(CloudWatchLogsClient::new(
             reqwest::Client::new(),
             credentials,
@@ -972,7 +1159,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(DynamoDbClient::new(
             reqwest::Client::new(),
             credentials,
@@ -985,7 +1173,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(SqsClient::new(
             reqwest::Client::new(),
             credentials,
@@ -998,7 +1187,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(Ec2Client::new(
             reqwest::Client::new(),
             credentials,
@@ -1014,7 +1204,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(ServiceQuotasClient::new(
             reqwest::Client::new(),
             credentials,
@@ -1027,7 +1218,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(RdsClient::new(
             reqwest::Client::new(),
             credentials,
@@ -1043,7 +1235,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(ElastiCacheClient::new(
             reqwest::Client::new(),
             credentials,
@@ -1059,7 +1252,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(AutoScalingClient::new(
             reqwest::Client::new(),
             credentials,
@@ -1072,7 +1266,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(Elbv2Client::new(
             reqwest::Client::new(),
             credentials,
@@ -1088,7 +1283,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(CloudWatchClient::new(
             reqwest::Client::new(),
             credentials,
@@ -1101,7 +1297,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(EksClient::new(
             reqwest::Client::new(),
             credentials,
@@ -1114,7 +1311,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(AcmClient::new(
             reqwest::Client::new(),
             credentials,
@@ -1130,7 +1328,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(ApiGatewayClient::new(
             reqwest::Client::new(),
             credentials,
@@ -1146,7 +1345,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(ApiGatewayV2Client::new(
             reqwest::Client::new(),
             credentials,
@@ -1162,7 +1362,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
             .context(crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create AWS credential provider".to_string(),
                 resource_id: None,
-            })?;
+            })?
+            .with_interceptors(self.interceptors(Cloud::Aws, None));
         Ok(Arc::new(EventBridgeClient::new(
             reqwest::Client::new(),
             credentials,
@@ -1171,6 +1372,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
 
     // GCP implementations
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>> {
+        // An identity client: no interceptor sees or changes its calls.
         Ok(Arc::new(GcpIamClient::new(
             reqwest::Client::new(),
             config.clone(),
@@ -1181,23 +1383,24 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn CloudBuildApi>> {
-        Ok(Arc::new(CloudBuildClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            CloudBuildClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_cloudrun_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudRunApi>> {
-        Ok(Arc::new(CloudRunClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            CloudRunClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_resource_manager_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn ResourceManagerApi>> {
+        // An identity client: no interceptor sees or changes its calls.
         Ok(Arc::new(ResourceManagerClient::new(
             reqwest::Client::new(),
             config.clone(),
@@ -1208,142 +1411,142 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn ServiceUsageApi>> {
-        Ok(Arc::new(ServiceUsageClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            ServiceUsageClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_model_garden_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn ModelGardenApi>> {
-        Ok(Arc::new(ModelGardenClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            ModelGardenClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_gcs_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcsApi>> {
-        Ok(Arc::new(GcsClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            GcsClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_artifact_registry_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn ArtifactRegistryApi>> {
-        Ok(Arc::new(ArtifactRegistryClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            ArtifactRegistryClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_secret_manager_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn SecretManagerApi>> {
-        Ok(Arc::new(SecretManagerClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            SecretManagerClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_cloud_kms_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudKmsApi>> {
-        Ok(Arc::new(CloudKmsClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            CloudKmsClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_agent_platform_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn AgentPlatformApi>> {
-        Ok(Arc::new(AgentPlatformClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            AgentPlatformClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_firestore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn FirestoreApi>> {
-        Ok(Arc::new(FirestoreClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            FirestoreClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_pubsub_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn PubSubApi>> {
-        Ok(Arc::new(PubSubClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            PubSubClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>> {
-        Ok(Arc::new(GcpComputeClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            GcpComputeClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_cloud_sql_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudSqlApi>> {
-        Ok(Arc::new(CloudSqlClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            CloudSqlClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_memorystore_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn MemorystoreApi>> {
-        Ok(Arc::new(MemorystoreClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            MemorystoreClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_monitoring_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn MonitoringApi>> {
-        Ok(Arc::new(MonitoringClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            MonitoringClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_service_connection_policy_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn ServiceConnectionPolicyApi>> {
-        Ok(Arc::new(ServiceConnectionPolicyClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            ServiceConnectionPolicyClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_cloud_scheduler_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn CloudSchedulerApi>> {
-        Ok(Arc::new(CloudSchedulerClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            CloudSchedulerClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     fn get_gcp_container_client(
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn GkeContainerApi>> {
-        Ok(Arc::new(GkeContainerClient::new(
-            reqwest::Client::new(),
-            config.clone(),
-        )))
+        Ok(Arc::new(
+            GkeContainerClient::new(reqwest::Client::new(), config.clone())
+                .with_interceptors(self.interceptors(Cloud::Gcp, None)),
+        ))
     }
 
     // Azure implementations
@@ -1351,6 +1554,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn AuthorizationApi>> {
+        // An identity client: no interceptor sees or changes its calls.
         Ok(Arc::new(AzureAuthorizationClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
@@ -1361,10 +1565,12 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn SandboxGroupsApi>> {
-        Ok(Arc::new(AzureSandboxGroupsClient::new(
+        let mut client = AzureSandboxGroupsClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_sandbox_data_plane_client(
@@ -1385,143 +1591,167 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ApplicationGatewayApi>> {
-        Ok(Arc::new(AzureApplicationGatewayClient::new(
+        let mut client = AzureApplicationGatewayClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_blob_container_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn BlobContainerApi>> {
-        Ok(Arc::new(AzureBlobContainerClient::new(
+        let mut client = AzureBlobContainerClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_compute_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn VirtualMachineScaleSetsApi>> {
-        Ok(Arc::new(AzureVmssClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(config.clone()),
-        )))
+        let mut client =
+            AzureVmssClient::new(reqwest::Client::new(), AzureTokenCache::new(config.clone()));
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_resource_skus_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ResourceSkusApi>> {
-        Ok(Arc::new(AzureResourceSkusClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(config.clone()),
-        )))
+        Ok(Arc::new(
+            AzureResourceSkusClient::new(
+                reqwest::Client::new(),
+                AzureTokenCache::new(config.clone()),
+            )
+            .with_interceptors(self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()))),
+        ))
     }
 
     fn get_azure_container_apps_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ContainerAppsApi>> {
-        Ok(Arc::new(AzureContainerAppsClient::new(
+        let mut client = AzureContainerAppsClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_container_registry_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ContainerRegistryApi>> {
-        Ok(Arc::new(AzureContainerRegistryClient::new(
+        let mut client = AzureContainerRegistryClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_long_running_operation_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn LongRunningOperationApi>> {
-        Ok(Arc::new(LongRunningOperationClient::new(
+        let mut client = LongRunningOperationClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_load_balancer_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn LoadBalancerApi>> {
-        Ok(Arc::new(AzureLoadBalancerClient::new(
+        let mut client = AzureLoadBalancerClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_managed_disks_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedDisksApi>> {
-        Ok(Arc::new(AzureManagedDisksClient::new(
+        let mut client = AzureManagedDisksClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_flexible_server_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn FlexibleServerApi>> {
-        Ok(Arc::new(AzureFlexibleServerClient::new(
+        let mut client = AzureFlexibleServerClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_managed_redis_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedRedisApi>> {
-        Ok(Arc::new(AzureManagedRedisClient::new(
+        let mut client = AzureManagedRedisClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_monitor_client(&self, config: &AzureClientConfig) -> Result<Arc<dyn MonitorApi>> {
-        Ok(Arc::new(AzureMonitorClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(config.clone()),
-        )))
+        Ok(Arc::new(
+            AzureMonitorClient::new(reqwest::Client::new(), AzureTokenCache::new(config.clone()))
+                .with_interceptors(self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()))),
+        ))
     }
 
     fn get_azure_snapshots_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn SnapshotsApi>> {
-        Ok(Arc::new(AzureSnapshotsClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(config.clone()),
-        )))
+        let mut client =
+            AzureSnapshotsClient::new(reqwest::Client::new(), AzureTokenCache::new(config.clone()));
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_data_protection_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn DataProtectionApi>> {
-        Ok(Arc::new(AzureDataProtectionClient::new(
+        let mut client = AzureDataProtectionClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_managed_identity_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedIdentityApi>> {
+        // An identity client: no interceptor sees or changes its calls.
         Ok(Arc::new(AzureManagedIdentityClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
@@ -1532,50 +1762,58 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedClustersApi>> {
-        Ok(Arc::new(AzureManagedClustersClient::new(
+        let mut client = AzureManagedClustersClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_resources_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ResourcesApi>> {
-        Ok(Arc::new(AzureResourcesClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(config.clone()),
-        )))
+        let mut client =
+            AzureResourcesClient::new(reqwest::Client::new(), AzureTokenCache::new(config.clone()));
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_storage_accounts_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn StorageAccountsApi>> {
-        Ok(Arc::new(AzureStorageAccountsClient::new(
+        let mut client = AzureStorageAccountsClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_cognitive_services_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn CognitiveServicesAccountsApi>> {
-        Ok(Arc::new(AzureCognitiveServicesClient::new(
+        let mut client = AzureCognitiveServicesClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_key_vault_management_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn KeyVaultManagementApi>> {
-        Ok(Arc::new(AzureKeyVaultManagementClient::new(
+        let mut client = AzureKeyVaultManagementClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_key_vault_secrets_client(
@@ -1612,20 +1850,24 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn TableManagementApi>> {
-        Ok(Arc::new(AzureTableManagementClient::new(
+        let mut client = AzureTableManagementClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_service_bus_management_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ServiceBusManagementApi>> {
-        Ok(Arc::new(AzureServiceBusManagementClient::new(
+        let mut client = AzureServiceBusManagementClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_service_bus_data_plane_client(
@@ -1642,30 +1884,32 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn EventGridApi>> {
-        Ok(Arc::new(AzureEventGridClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(config.clone()),
-        )))
+        Ok(Arc::new(
+            AzureEventGridClient::new(reqwest::Client::new(), AzureTokenCache::new(config.clone()))
+                .with_interceptors(self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()))),
+        ))
     }
 
     fn get_azure_network_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn AzureNetworkApi>> {
-        Ok(Arc::new(AzureNetworkClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(config.clone()),
-        )))
+        let mut client =
+            AzureNetworkClient::new(reqwest::Client::new(), AzureTokenCache::new(config.clone()));
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     fn get_azure_private_networking_client(
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn PrivateNetworkingApi>> {
-        Ok(Arc::new(AzurePrivateNetworkingClient::new(
+        let mut client = AzurePrivateNetworkingClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
-        )))
+        );
+        client.base.interceptors = self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()));
+        Ok(Arc::new(client))
     }
 
     async fn get_azure_caller_principal_id(&self, config: &AzureClientConfig) -> Result<String> {
@@ -1716,7 +1960,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             },
         )?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(client.with_interceptors(
+            self.interceptors(Cloud::Kubernetes, None),
+        )))
     }
 
     #[cfg(feature = "kubernetes")]
@@ -1730,7 +1976,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             },
         )?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(client.with_interceptors(
+            self.interceptors(Cloud::Kubernetes, None),
+        )))
     }
 
     #[cfg(feature = "kubernetes")]
@@ -1744,7 +1992,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             },
         )?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(client.with_interceptors(
+            self.interceptors(Cloud::Kubernetes, None),
+        )))
     }
 
     #[cfg(feature = "kubernetes")]
@@ -1758,7 +2008,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             },
         )?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(client.with_interceptors(
+            self.interceptors(Cloud::Kubernetes, None),
+        )))
     }
 
     #[cfg(feature = "kubernetes")]
@@ -1772,7 +2024,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             },
         )?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(client.with_interceptors(
+            self.interceptors(Cloud::Kubernetes, None),
+        )))
     }
 
     #[cfg(feature = "kubernetes")]
@@ -1786,7 +2040,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             },
         )?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(client.with_interceptors(
+            self.interceptors(Cloud::Kubernetes, None),
+        )))
     }
 
     #[cfg(feature = "kubernetes")]
@@ -1800,7 +2056,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             },
         )?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(client.with_interceptors(
+            self.interceptors(Cloud::Kubernetes, None),
+        )))
     }
 
     #[cfg(feature = "kubernetes")]
@@ -1814,7 +2072,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             },
         )?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(client.with_interceptors(
+            self.interceptors(Cloud::Kubernetes, None),
+        )))
     }
 
     #[cfg(feature = "kubernetes")]
@@ -1828,7 +2088,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             },
         )?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(client.with_interceptors(
+            self.interceptors(Cloud::Kubernetes, None),
+        )))
     }
 
     #[cfg(feature = "kubernetes")]
@@ -1842,7 +2104,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             },
         )?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(client.with_interceptors(
+            self.interceptors(Cloud::Kubernetes, None),
+        )))
     }
 
     #[cfg(feature = "kubernetes")]
@@ -1856,7 +2120,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             },
         )?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(client.with_interceptors(
+            self.interceptors(Cloud::Kubernetes, None),
+        )))
     }
 
     #[cfg(feature = "kubernetes")]
@@ -1870,7 +2136,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             },
         )?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(client.with_interceptors(
+            self.interceptors(Cloud::Kubernetes, None),
+        )))
     }
 
     // Local platform service managers
@@ -1946,6 +2214,10 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_local_bindings_provider(&self) -> Option<Arc<alien_local::LocalBindingsProvider>> {
         self.local_bindings.clone()
     }
+
+    fn runtime_registry_credentials(&self) -> Option<Arc<dyn RuntimeRegistryCredentialProvider>> {
+        self.runtime_registry_credentials.clone()
+    }
 }
 
 /// Builds a Kubernetes client, resolving a kubeconfig reference first.
@@ -1959,4 +2231,109 @@ async fn kubernetes_client(
 ) -> alien_client_core::Result<KubernetesClient> {
     let resolved = crate::kubeconfig::resolve_kubeconfig(config).await?;
     KubernetesClient::new(resolved).await
+}
+
+#[cfg(test)]
+mod tests {
+    /// A cloud client this provider builds without the deployment's interceptors is a call an
+    /// extension's interceptor never sees, and it fails silently. Only the data-plane clients, the
+    /// caller lookup, the identity clients and the local managers go without them; a new client
+    /// that should too goes on one of these lists on purpose.
+    #[test]
+    fn every_cloud_client_carries_the_deployments_interceptors() {
+        const WITHOUT: &[&str] = &[
+            "get_azure_sandbox_data_plane_client",
+            "get_azure_key_vault_secrets_client",
+            "get_azure_key_vault_keys_client",
+            "get_azure_key_vault_certificates_client",
+            "get_azure_service_bus_data_plane_client",
+            "get_azure_caller_principal_id",
+            "get_azure_caller_is_user",
+        ];
+        // Their calls change who has access or act as another identity, which no interceptor
+        // may change, so they never carry the chain.
+        const IDENTITY: &[&str] = &[
+            "get_aws_iam_client",
+            "get_gcp_iam_client",
+            "get_gcp_resource_manager_client",
+            "get_azure_authorization_client",
+            "get_azure_managed_identity_client",
+        ];
+        let source = include_str!("service_provider.rs");
+        // Built from two pieces, so the search can't find this line instead of the impl.
+        let header = concat!(
+            "impl PlatformServiceProvider",
+            " for DefaultPlatformServiceProvider {"
+        );
+        let start = source.find(header).expect("the provider impl");
+        let body = &source[start..start + source[start..].find("\n}\n").expect("its end")];
+        // Each method runs from its `fn` line to the next method's.
+        let starts: Vec<usize> = body
+            .match_indices("\n    fn ")
+            .chain(body.match_indices("\n    async fn "))
+            .map(|(at, _)| at)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let mut checked = Vec::new();
+        let mut missing = Vec::new();
+        let mut identity_with_chain = Vec::new();
+        for (i, &at) in starts.iter().enumerate() {
+            let item = &body[at..starts.get(i + 1).copied().unwrap_or(body.len())];
+            let Some(rest) = item.split("fn get_").nth(1) else {
+                continue;
+            };
+            let name = format!(
+                "get_{}",
+                &rest[..rest.find(['(', '<']).unwrap_or(rest.len())]
+            );
+            // The chain for the client's own cloud, and an Azure client's for its tenant.
+            let expected = match name.split('_').nth(1) {
+                Some("aws") => "self.interceptors(Cloud::Aws, None)",
+                Some("gcp") => "self.interceptors(Cloud::Gcp, None)",
+                Some("azure") => "self.interceptors(Cloud::Azure, Some(config.tenant_id.clone()))",
+                Some("kubernetes") => "self.interceptors(Cloud::Kubernetes, None)",
+                Some("local") => continue,
+                // A cloud this test doesn't know yet: say which chain it should carry here.
+                _ => {
+                    missing.push(name);
+                    continue;
+                }
+            };
+            checked.push(name.clone());
+            if IDENTITY.contains(&name.as_str()) {
+                if item.contains(expected) {
+                    identity_with_chain.push(name);
+                }
+            } else if !WITHOUT.contains(&name.as_str()) && !item.contains(expected) {
+                missing.push(name);
+            }
+        }
+        for name in WITHOUT.iter().chain(IDENTITY) {
+            assert!(
+                checked.contains(&name.to_string()),
+                "stale exemption {name}"
+            );
+        }
+        for sentinel in [
+            "get_aws_s3_client",
+            "get_gcp_gcs_client",
+            "get_azure_resources_client",
+            "get_kubernetes_pod_client",
+        ] {
+            assert!(
+                checked.iter().any(|name| name == sentinel),
+                "the scan didn't reach {sentinel}; it read {} methods",
+                checked.len()
+            );
+        }
+        assert!(
+            missing.is_empty(),
+            "built without interceptors: {missing:?}"
+        );
+        assert!(
+            identity_with_chain.is_empty(),
+            "identity clients built with interceptors: {identity_with_chain:?}"
+        );
+    }
 }

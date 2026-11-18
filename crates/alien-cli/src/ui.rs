@@ -188,10 +188,12 @@ where
     T: AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
 {
     let report = error.human_report();
+    // Messages quote text from manifests, stacks and cloud responses.
+    let message = alien_preflights::escape_for_display(&report.message);
     let mut rendered = if supports_ansi() {
-        style(report.message).red().to_string()
+        style(message).red().to_string()
     } else {
-        report.message
+        message
     };
 
     if !report.causes.is_empty() {
@@ -199,7 +201,10 @@ where
         rendered.push_str("Cause:");
         for cause in report.causes {
             rendered.push('\n');
-            rendered.push_str(&format!("  - {}", cause.message));
+            rendered.push_str(&format!(
+                "  - {}",
+                alien_preflights::escape_for_display(&cause.message).replace('\n', "\n    ")
+            ));
         }
     }
 
@@ -210,7 +215,10 @@ where
         for check in failed_checks {
             rendered.push('\n');
             // A message can span lines; keep them under its bullet.
-            rendered.push_str(&format!("  - {}", check.replace('\n', "\n    ")));
+            rendered.push_str(&format!(
+                "  - {}",
+                alien_preflights::escape_for_display(&check).replace('\n', "\n    ")
+            ));
         }
     }
 
@@ -590,6 +598,10 @@ mod event_tests {
                         "Sandbox lifecycle",
                         &["A source-built sandbox must be Live"],
                     ),
+                    check(
+                        "Extension names",
+                        &["Extension name 'acme\u{1b}[2J' must start with a lowercase letter"],
+                    ),
                 ],
             },
         ))
@@ -602,8 +614,35 @@ mod event_tests {
 
         assert!(
             rendered.contains(
-                "Failed checks:\n  - Input 'apiKey' is not deployer-provided\n  - Input 'region' must match:\n    ^[a-z]+$\n  - A source-built sandbox must be Live"
+                "Failed checks:\n  - Input 'apiKey' is not deployer-provided\n  - Input 'region' must match:\n    ^[a-z]+$\n  - A source-built sandbox must be Live\n  - Extension name 'acme\\u{1b}[2J' must start with a lowercase letter"
             ),
+            "{rendered}"
+        );
+    }
+
+    /// The message and its causes quote text from manifests and stacks, so they print with
+    /// their control and bidi characters escaped.
+    #[test]
+    fn render_human_error_prints_message_and_causes_escaped() {
+        let error = Err::<(), _>(AlienError::new(crate::error::ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: "'acme\u{1b}[2J' is refused".to_string(),
+        }))
+        .context(crate::error::ErrorData::ConfigurationError {
+            message: "Extension 'acme\u{202e}' failed".to_string(),
+        })
+        .unwrap_err();
+
+        let rendered = render_human_error(&error);
+
+        assert!(!rendered.contains("\u{1b}[2J"), "{rendered:?}");
+        assert!(!rendered.contains('\u{202e}'), "{rendered:?}");
+        assert!(
+            rendered.contains("Extension 'acme\\u{202e}' failed"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("'acme\\u{1b}[2J' is refused"),
             "{rendered}"
         );
     }

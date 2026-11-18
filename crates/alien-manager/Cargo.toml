@@ -137,6 +137,7 @@ mockall = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = { workspace = true }
 httpmock = { workspace = true }
+alien-client-core = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = { workspace = true }
 container-registry = { workspace = true, features = ["test-support"] }

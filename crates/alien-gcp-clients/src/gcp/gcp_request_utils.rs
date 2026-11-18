@@ -1,5 +1,5 @@
-use alien_client_core::RequestBuilderExt;
-use alien_client_core::{ErrorData, Result};
+use alien_client_core::interceptor::{Cloud, InterceptorChain};
+use alien_client_core::{ErrorData, InterceptedRequestBuilder, Result};
 use alien_error::{Context, ContextError, IntoAlienError};
 use reqwest::RequestBuilder;
 use serde::de::DeserializeOwned;
@@ -10,6 +10,44 @@ use serde::Deserialize;
 pub struct GcpAuthConfig {
     /// A valid OAuth 2.0 bearer token (e.g. generated from a service account JWT).
     pub bearer_token: String,
+    /// The client's endpoint key (`cloudsql`, `storage`), the service interceptors match on.
+    pub service: String,
+    /// The deployment's interceptors.
+    pub interceptors: InterceptorChain,
+}
+
+/// Runs the deployment's interceptors on the request, then attaches the bearer token, so no
+/// interceptor sees it.
+fn auth_gcp_request_intercepted(
+    builder: RequestBuilder,
+    config: &GcpAuthConfig,
+) -> Result<InterceptedRequestBuilder> {
+    let (client, request) = builder.build_split();
+    let mut request = request
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: "Unable to build reqwest::Request prior to attaching bearer token".to_string(),
+        })?;
+    let mut response_hook =
+        config
+            .interceptors
+            .intercept(Cloud::Gcp, &config.service, &mut request)?;
+    let builder = RequestBuilder::from_parts(client, request).auth_gcp_request(config)?;
+    // The interceptors ran before the token was attached, so the hook learns it here.
+    let Some(hook) = response_hook.as_mut() else {
+        return Ok(InterceptedRequestBuilder::new(builder, None));
+    };
+    let (client, request) = builder.build_split();
+    let request = request
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: "Unable to build the authenticated request".to_string(),
+        })?;
+    hook.remember_credentials(&request);
+    Ok(InterceptedRequestBuilder::new(
+        RequestBuilder::from_parts(client, request),
+        response_hook,
+    ))
 }
 
 /// GCP API error response structure
@@ -241,8 +279,7 @@ pub async fn auth_send_json<T: DeserializeOwned + Send + 'static>(
     resource_name: &str,
     resource_type: &str,
 ) -> Result<T> {
-    let result = builder
-        .auth_gcp_request(config)?
+    let result = auth_gcp_request_intercepted(builder, config)?
         .with_retry()
         .send_json::<T>()
         .await;
@@ -263,7 +300,9 @@ pub async fn auth_send_json_once<T: DeserializeOwned + Send + 'static>(
     resource_name: &str,
     resource_type: &str,
 ) -> Result<T> {
-    let result = builder.auth_gcp_request(config)?.send_json::<T>().await;
+    let result = auth_gcp_request_intercepted(builder, config)?
+        .send_json::<T>()
+        .await;
     map_gcp_result(result, operation, resource_name, resource_type)
 }
 
@@ -276,8 +315,7 @@ pub async fn auth_send_no_response(
     resource_name: &str,
     resource_type: &str,
 ) -> Result<()> {
-    let result = builder
-        .auth_gcp_request(config)?
+    let result = auth_gcp_request_intercepted(builder, config)?
         .with_retry()
         .send_no_response()
         .await;

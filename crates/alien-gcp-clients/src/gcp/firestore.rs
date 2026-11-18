@@ -411,6 +411,8 @@ pub struct FirestoreClient {
     project_id: String,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(FirestoreClient);
+
 impl FirestoreClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         let project_id = config.project_id.clone();

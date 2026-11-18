@@ -176,8 +176,8 @@ fn existing_cluster_preconditions(checks: &[(String, &str)]) -> hcl::structure::
     ))
 }
 
-const SHARED_VPC_MESSAGE: &str = "The existing cluster uses a Shared VPC network owned by another project. This module looks the network up in its own project (gcp_project) and cannot place the database endpoint in a host project's network. Use a cluster on a network in gcp_project, or run the database in a deployment without this cluster.";
-const OTHER_REGION_MESSAGE: &str = "The existing cluster's subnet is in a different region than gcp_region. The database endpoint is created in gcp_region and must be in the cluster's region to reach it. Set gcp_region to the region of the cluster's subnet.";
+const SHARED_VPC_MESSAGE: &str = "The existing cluster uses a Shared VPC network owned by another project. This module looks the network up in its own project (gcp_project) and cannot place private endpoints, such as a database's, in a host project's network. Use a cluster on a network in gcp_project, or let this module create the cluster (kubernetes_cluster_mode = \"create\").";
+const OTHER_REGION_MESSAGE: &str = "The existing cluster's subnet is in a different region than gcp_region. Private endpoints, such as a database's, are created in gcp_region and must be in the cluster's region for it to reach them. Set gcp_region to the region of the cluster's subnet.";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GcpNetworkEmitter;

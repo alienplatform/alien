@@ -605,6 +605,19 @@ pub(crate) fn gateway_not_created(ctx: &crate::core::ResourceControllerContext<'
         .is_none_or(|state| state.status == alien_core::ResourceStatus::Pending)
 }
 
+/// The Secrets Manager client for the replica secret. Its value is a credential, so no
+/// interceptor reads or rewrites these calls.
+#[cfg(feature = "aws")]
+pub(crate) async fn replica_secret_client(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+) -> Result<std::sync::Arc<dyn SecretsManagerApi>> {
+    ctx.service_provider
+        .without_interceptors()
+        .unwrap_or_else(|| ctx.service_provider.clone())
+        .get_aws_secrets_manager_client(ctx.get_aws_config()?)
+        .await
+}
+
 /// Whether the replica secret exists. Setup creates it; the managing identity may only see
 /// that it exists, never its value. A direct setup has no setup stack, so the controller creates
 /// it once, with a value it never reads back. A setup from before the secret existed answers
@@ -615,10 +628,7 @@ async fn ensure_aws_replica_secret(
     ctx: &crate::core::ResourceControllerContext<'_>,
 ) -> Result<bool> {
     let name = replica_secret_name(ctx.resource_prefix);
-    let client = ctx
-        .service_provider
-        .get_aws_secrets_manager_client(ctx.get_aws_config()?)
-        .await?;
+    let client = replica_secret_client(ctx).await?;
     match client
         .describe_secret(DescribeSecretRequest {
             secret_id: name.clone(),

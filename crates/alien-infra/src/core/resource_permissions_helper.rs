@@ -1168,7 +1168,9 @@ impl ResourcePermissionsHelper {
         // Process each permission set for this resource
         for permission_set_ref in permission_set_refs {
             let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .resolve(|name| {
+                    alien_permissions::get_stack_permission_set(ctx.desired_stack, name).cloned()
+                })
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::ResourceConfigInvalid {
                         message: format!("Permission set '{}' not found", permission_set_ref.id()),
@@ -1360,17 +1362,11 @@ impl ResourcePermissionsHelper {
             .with_signing(&ctx.deployment_config.stack_settings);
 
         for permission_set_ref in &combined_refs {
-            let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "Management permission set '{}' not found",
-                            permission_set_ref.id()
-                        ),
-                        resource_id: Some(resource_id.to_string()),
-                    })
-                })?;
+            let permission_set = crate::remote_stack_management::resolve_management_permission_set(
+                ctx.desired_stack,
+                permission_set_ref,
+                resource_id,
+            )?;
 
             let grant_plan = generator
                 .generate_grant_plan(
@@ -2023,6 +2019,7 @@ impl ResourcePermissionsHelper {
         let service_account_role_name = Self::get_aws_service_account_role_name(ctx, profile_name)?;
 
         let policies = Self::prepare_aws_profile_policies(
+            ctx.desired_stack,
             resource_id,
             profile_name,
             permission_set_refs,
@@ -2077,6 +2074,7 @@ impl ResourcePermissionsHelper {
     /// Render the final workload policy batch and reject certain aggregate overflow
     /// before any IAM writes. Selection has already resolved setup ownership.
     fn prepare_aws_profile_policies(
+        stack: &alien_core::Stack,
         resource_id: &str,
         profile_name: &str,
         permission_set_refs: &[PermissionSetReference],
@@ -2086,7 +2084,7 @@ impl ResourcePermissionsHelper {
         let mut policies = IndexMap::new();
         for permission_set_ref in permission_set_refs {
             let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .resolve(|name| alien_permissions::get_stack_permission_set(stack, name).cloned())
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::ResourceConfigInvalid {
                         message: format!("Permission set '{}' not found", permission_set_ref.id()),
@@ -2190,17 +2188,11 @@ impl ResourcePermissionsHelper {
         .await?;
 
         for permission_set_ref in &combined_refs {
-            let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "Management permission set '{}' not found",
-                            permission_set_ref.id()
-                        ),
-                        resource_id: Some(resource_id.to_string()),
-                    })
-                })?;
+            let permission_set = crate::remote_stack_management::resolve_management_permission_set(
+                ctx.desired_stack,
+                permission_set_ref,
+                resource_id,
+            )?;
 
             // Skip provision permission sets — they are handled by RemoteStackManagement
             // at project level, not by resource controllers.
@@ -2401,17 +2393,11 @@ impl ResourcePermissionsHelper {
             .with_signing(&ctx.deployment_config.stack_settings);
 
         for permission_set_ref in management_refs {
-            let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "Management permission set '{}' not found",
-                            permission_set_ref.id()
-                        ),
-                        resource_id: Some(resource_id.to_string()),
-                    })
-                })?;
+            let permission_set = crate::remote_stack_management::resolve_management_permission_set(
+                ctx.desired_stack,
+                permission_set_ref,
+                resource_id,
+            )?;
 
             let grant_plan = generator
                 .generate_grant_plan(
@@ -2580,6 +2566,7 @@ mod tests {
 
     #[test]
     fn aws_workload_batch_rejects_combined_documents_before_cloud_writes() {
+        let stack = alien_core::Stack::new("app".to_string()).build();
         let generator = AwsRuntimePermissionsGenerator::new();
         let context = PermissionContext::new();
         let grants = [
@@ -2589,6 +2576,7 @@ mod tests {
         let mut combined_size = 0;
         for grant in &grants {
             let control = ResourcePermissionsHelper::prepare_aws_profile_policies(
+                &stack,
                 "objects",
                 "reader",
                 std::slice::from_ref(grant),
@@ -2609,7 +2597,7 @@ mod tests {
         }
         assert!(combined_size > 10_240);
         let error = ResourcePermissionsHelper::prepare_aws_profile_policies(
-            "objects", "reader", &grants, &generator, &context,
+            &stack, "objects", "reader", &grants, &generator, &context,
         )
         .unwrap_err();
         assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
@@ -2624,7 +2612,7 @@ mod tests {
             literal_aws_resource_grant("second", 10),
         ];
         let control = ResourcePermissionsHelper::prepare_aws_profile_policies(
-            "objects", "reader", &small, &generator, &context,
+            &stack, "objects", "reader", &small, &generator, &context,
         )
         .unwrap();
         assert_eq!(control.len(), 2);
@@ -2640,6 +2628,36 @@ mod tests {
         }
     }
 
+    /// A resource-scoped grant of an extension's set resolves from the stack.
+    #[test]
+    fn a_resource_grant_of_an_extension_set_resolves_from_the_stack() {
+        let (extension, _) = crate::service_account::extension_with_a_stack_wide_set();
+        let mut stack = alien_core::Stack::new("app".to_string()).build();
+        stack.extensions = vec![extension];
+        let grants = [PermissionSetReference::from_name(
+            "acme/dns-zone/records-write".to_string(),
+        )];
+        let policies = ResourcePermissionsHelper::prepare_aws_profile_policies(
+            &stack,
+            "zone",
+            "app",
+            &grants,
+            &AwsRuntimePermissionsGenerator::new(),
+            &PermissionContext::new()
+                .with_aws_account_id("123456789012")
+                .with_aws_region("us-east-1")
+                .with_stack_prefix("test")
+                .with_resource_name("test-zone"),
+        )
+        .unwrap_or_else(|error| panic!("the extension's set did not resolve: {error}"));
+        assert!(
+            policies
+                .values()
+                .any(|policy| policy.contains("route53:ChangeResourceRecordSets")),
+            "{policies:?}"
+        );
+    }
+
     #[test]
     fn aws_workload_batch_counts_final_same_name_replacement() {
         let generator = AwsRuntimePermissionsGenerator::new();
@@ -2651,7 +2669,12 @@ mod tests {
             literal_aws_resource_grant("same", 99),
         ];
         let policies = ResourcePermissionsHelper::prepare_aws_profile_policies(
-            "objects", "reader", &grants, &generator, &context,
+            &alien_core::Stack::new("app".to_string()).build(),
+            "objects",
+            "reader",
+            &grants,
+            &generator,
+            &context,
         )
         .unwrap();
         assert_eq!(policies.len(), 1);
@@ -2667,6 +2690,7 @@ mod tests {
             PermissionSetReference::from_name("storage/data-read".to_string()),
         ];
         let error = ResourcePermissionsHelper::prepare_aws_profile_policies(
+            &alien_core::Stack::new("app".to_string()).build(),
             "objects",
             "reader",
             &grants,

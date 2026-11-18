@@ -54,6 +54,11 @@ pub async fn run_observe_pass(
         return Ok(ObserveReport::default());
     };
 
+    // An observe pass reads what runs outside Alien's controllers, so the deployment's
+    // interceptors never see its calls.
+    let service_provider = service_provider
+        .without_interceptors()
+        .unwrap_or_else(|| service_provider.clone());
     let deployment_client = service_provider
         .get_kubernetes_deployment_client(kubernetes_config)
         .await
@@ -236,5 +241,55 @@ fn namespace_from(config: &KubernetesClientConfig) -> String {
         | KubernetesClientConfig::Manual { namespace, .. } => {
             namespace.clone().unwrap_or_else(|| "default".to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_error::AlienError;
+    use alien_infra::{MockPlatformServiceProvider, PlatformServiceProvider};
+
+    /// The deployment's provider hands out no client here: the pass reads only through the
+    /// provider without interceptors, whose refusal it reports.
+    #[tokio::test]
+    async fn an_observe_pass_reads_without_the_deployments_interceptors() {
+        let mut without = MockPlatformServiceProvider::new();
+        without
+            .expect_get_kubernetes_deployment_client()
+            .returning(|_| {
+                Err(AlienError::new(
+                    alien_infra::ErrorData::CloudPlatformError {
+                        message: "no cluster".to_string(),
+                        resource_id: None,
+                    },
+                ))
+            });
+        let without: Arc<dyn PlatformServiceProvider> = Arc::new(without);
+        let mut deployment = MockPlatformServiceProvider::new();
+        deployment
+            .expect_without_interceptors()
+            .times(1)
+            .returning(move || Some(without.clone()));
+        let deployment: Arc<dyn PlatformServiceProvider> = Arc::new(deployment);
+
+        let error = run_observe_pass(
+            Platform::Kubernetes,
+            &ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
+                namespace: Some("app".to_string()),
+                additional_headers: None,
+            })),
+            &deployment,
+            "dep_1",
+            None,
+            false,
+        )
+        .await
+        .err()
+        .expect("the provider without interceptors refused");
+        assert!(
+            error.to_string().contains("deployment observer client"),
+            "{error}"
+        );
     }
 }

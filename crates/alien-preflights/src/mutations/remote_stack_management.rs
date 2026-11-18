@@ -167,7 +167,7 @@ impl StackMutation for RemoteStackManagementMutation {
                 mutation_name: self.description().to_string(),
                 message: format!(
                     "resource ID '{remote_mgmt_id}' is reserved for stack management, but is already used by resource type '{}'",
-                    existing.config.resource_type()
+                    crate::escape_control_characters(existing.config.resource_type().as_ref())
                 ),
                 resource_id: Some(remote_mgmt_id.to_string()),
             }));
@@ -217,6 +217,7 @@ mod tests {
         deployment_model: DeploymentModel,
     ) -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             image_registry: None,
             image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,

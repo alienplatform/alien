@@ -1,7 +1,7 @@
 use crate::error::{ErrorData, Result};
-use crate::{CheckResult, CompileTimeCheck, PreflightRegistry, PreflightSummary};
+use crate::{CheckResult, ClusterCloud, CompileTimeCheck, PreflightRegistry, PreflightSummary};
 use alien_core::{DeploymentConfig, Platform, Stack, StackState};
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, ContextError};
 use tracing::{debug, error, info, warn};
 
 #[cfg(feature = "runtime-checks")]
@@ -49,9 +49,21 @@ impl PreflightRunner {
         stack: &Stack,
         platform: Platform,
     ) -> Result<PreflightSummary> {
+        self.run_compile_time_checks_on(stack, platform, ClusterCloud::Unknown)
+            .await
+    }
+
+    /// Run compile-time checks on a stack for a deployment on `platform` whose Kubernetes
+    /// cluster runs where `cloud` says (see [`CompileTimeCheck::check_on`]).
+    async fn run_compile_time_checks_on(
+        &self,
+        stack: &Stack,
+        platform: Platform,
+        cloud: ClusterCloud,
+    ) -> Result<PreflightSummary> {
         info!("Running compile-time checks for platform {:?}", platform);
         let checks = self.registry.get_compile_time_checks(stack, platform);
-        let results = run_stack_checks(checks, stack, platform).await?;
+        let results = run_stack_checks(checks, stack, platform, cloud).await?;
         Ok(PreflightSummary::from_results(results))
     }
 
@@ -559,6 +571,19 @@ impl PreflightRunner {
         stack: &Stack,
         platform: Platform,
     ) -> Result<PreflightSummary> {
+        self.run_template_preflights_on(stack, platform, ClusterCloud::Unknown)
+            .await
+    }
+
+    /// Run template-generation preflights for a template whose Kubernetes cluster runs where
+    /// `cloud` says: a cloud for the eks, gke and aks targets' (see
+    /// [`CompileTimeCheck::check_on`]).
+    pub async fn run_template_preflights_on(
+        &self,
+        stack: &Stack,
+        platform: Platform,
+        cloud: ClusterCloud,
+    ) -> Result<PreflightSummary> {
         info!(
             "Running template-generation preflights for platform {:?}",
             platform
@@ -573,15 +598,13 @@ impl PreflightRunner {
         for check in checks {
             debug!("Running check: {}", check.description());
 
-            let mut result =
-                check
-                    .check(stack, platform)
-                    .await
-                    .context(ErrorData::CompileTimeCheckFailed {
-                        check_name: check.description().to_string(),
-                        message: "Check execution failed".to_string(),
-                        resource_id: None,
-                    })?;
+            let mut result = check.check_on(stack, platform, cloud).await.context(
+                ErrorData::CompileTimeCheckFailed {
+                    check_name: check.description().to_string(),
+                    message: "Check execution failed".to_string(),
+                    resource_id: None,
+                },
+            )?;
 
             result = result.with_check_metadata(check.code(), check.description());
 
@@ -626,9 +649,17 @@ impl PreflightRunner {
         stack: &Stack,
         platform: Platform,
     ) -> Result<PreflightSummary> {
-        let checks = self.registry.get_build_time_checks(stack, platform);
-        let summary =
-            PreflightSummary::from_results(run_stack_checks(checks, stack, platform).await?);
+        let mut checks = self.registry.get_build_time_checks(stack, platform);
+        // A prebuilt stack's extensions were never checked against the stack: the custom types
+        // they declare, their permission sets, links and cloud services. A stack that uses no
+        // extension feature keeps the checks it always had.
+        let allowed_user_resources = crate::compile_time::AllowedUserResourcesCheck;
+        if uses_extension_features(stack) && allowed_user_resources.should_run(stack, platform) {
+            checks.push(&allowed_user_resources);
+        }
+        let summary = PreflightSummary::from_results(
+            run_stack_checks(checks, stack, platform, ClusterCloud::Unknown).await?,
+        );
         if !summary.success {
             return Err(AlienError::new(ErrorData::ValidationFailed {
                 error_count: summary.failed_checks,
@@ -646,6 +677,18 @@ impl PreflightRunner {
         stack: &Stack,
         platform: Platform,
     ) -> Result<PreflightSummary> {
+        self.run_build_time_preflights_on(stack, platform, ClusterCloud::Unknown)
+            .await
+    }
+
+    /// [`Self::run_build_time_preflights`] for a build whose Kubernetes cluster runs where
+    /// `cloud` says, as `alien build --base-platform` names it.
+    pub async fn run_build_time_preflights_on(
+        &self,
+        stack: &Stack,
+        platform: Platform,
+        cloud: ClusterCloud,
+    ) -> Result<PreflightSummary> {
         info!("Running build-time preflights for platform {:?}", platform);
 
         // Run compile-time checks only - mutations are now deployment-time only. Build-time-only
@@ -653,7 +696,7 @@ impl PreflightRunner {
         let mut checks = self.registry.get_compile_time_checks(stack, platform);
         checks.extend(self.registry.get_build_time_checks(stack, platform));
         let check_summary =
-            PreflightSummary::from_results(run_stack_checks(checks, stack, platform).await?);
+            PreflightSummary::from_results(run_stack_checks(checks, stack, platform, cloud).await?);
 
         // If checks failed, return early with the error summary
         if !check_summary.success {
@@ -758,7 +801,13 @@ impl PreflightRunner {
         }
 
         // Run compile-time checks first (fast, no cloud API calls)
-        let compile_summary = self.run_compile_time_checks(&stack, platform).await?;
+        let compile_summary = self
+            .run_compile_time_checks_on(
+                &stack,
+                platform,
+                ClusterCloud::of_deployment(config.base_platform),
+            )
+            .await?;
         let compile_checks_succeeded = compile_summary.success;
         all_results.extend(compile_summary.results);
 
@@ -768,7 +817,38 @@ impl PreflightRunner {
             .choose_machines_with_room(&stack, stack_state, config, client_config, &mut all_results)
             .await?;
         let config = chosen_config.as_ref().unwrap_or(config);
-        let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
+        let uses_extensions = uses_extension_features(&stack);
+        let mutated_stack = match self.apply_mutations(stack, stack_state, config).await {
+            Ok(mutated_stack) => mutated_stack,
+            // An extension the compile checks refused can make a mutation fail on it too; the
+            // refusal is what the developer has to fix, so it is reported first.
+            Err(error) if uses_extensions && !compile_checks_succeeded => {
+                // Each layer of the mutation's own kind repeats its template, and the innermost
+                // one says the most, such as which profile. It and every cause under it make the
+                // reason.
+                let mut reason = error.message.clone();
+                let mut cause = error.source.as_deref();
+                while let Some(layer) = cause {
+                    reason = if layer.code == error.code {
+                        layer.message.clone()
+                    } else {
+                        format!("{reason}: {}", layer.message)
+                    };
+                    cause = layer.source.as_deref();
+                }
+                all_results.push(
+                    CheckResult::failed(vec![reason.replace('\n', " ")])
+                        .with_check_description("Stack mutations".to_string()),
+                );
+                let summary = PreflightSummary::from_results(all_results);
+                return Err(error.context(ErrorData::ValidationFailed {
+                    error_count: summary.failed_checks,
+                    warning_count: summary.warning_count,
+                    results: summary.results,
+                }));
+            }
+            Err(error) => return Err(error),
+        };
         // Drop the comparison projection before later awaits so it does not enlarge
         // the deployment future and exhaust the runner's worker stack.
         let mut authorization_mismatch: Option<String> = None;
@@ -893,6 +973,17 @@ impl PreflightRunner {
             Some(stack_state),
         )?);
 
+        // The boundary is generated from the extension's sets, which only a stack that passed
+        // the compile checks is known to hold in a form it can generate.
+        if compile_checks_succeeded {
+            all_results.push(crate::compile_time::extension_identity_boundary::check(
+                &mutated_stack,
+                platform,
+                config,
+                &permission_context,
+            )?);
+        }
+
         let prerequisite_summary = self
             .run_deployment_prerequisite_checks(&mutated_stack, stack_state, config)
             .await?;
@@ -1000,6 +1091,22 @@ impl PreflightRunner {
 
         Ok((mutated_stack, summary, setup_update_authorized))
     }
+}
+
+/// Whether `stack` lists an extension, holds a custom resource, or declares a service account
+/// marked as an extension's identity.
+fn uses_extension_features(stack: &Stack) -> bool {
+    !stack.extensions.is_empty()
+        || stack.resources.values().any(|entry| {
+            entry
+                .config
+                .downcast_ref::<alien_core::CustomResource>()
+                .is_some()
+                || entry
+                    .config
+                    .downcast_ref::<alien_core::ServiceAccount>()
+                    .is_some_and(|account| account.extension.is_some())
+        })
 }
 
 /// The target as the setup re-import hashed it: without the declined Live resources an update
@@ -2025,6 +2132,7 @@ mod setup_update_authorization_tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             built_architectures: Default::default(),
             id: "stack".to_string(),
@@ -3532,6 +3640,7 @@ async fn run_stack_checks(
     checks: Vec<&dyn CompileTimeCheck>,
     stack: &Stack,
     platform: Platform,
+    cloud: ClusterCloud,
 ) -> Result<Vec<CheckResult>> {
     let mut platform_stack = stack.clone();
     alien_core::remove_off_platform_gated_resources(&mut platform_stack, platform, None);
@@ -3541,15 +3650,13 @@ async fn run_stack_checks(
     for check in checks {
         debug!("Running check: {}", check.description());
 
-        let mut result =
-            check
-                .check(stack, platform)
-                .await
-                .context(ErrorData::CompileTimeCheckFailed {
-                    check_name: check.description().to_string(),
-                    message: "Check execution failed".to_string(),
-                    resource_id: None,
-                })?;
+        let mut result = check.check_on(stack, platform, cloud).await.context(
+            ErrorData::CompileTimeCheckFailed {
+                check_name: check.description().to_string(),
+                message: "Check execution failed".to_string(),
+                resource_id: None,
+            },
+        )?;
 
         result = result.with_check_metadata(check.code(), check.description());
 

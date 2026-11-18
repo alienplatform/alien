@@ -65,6 +65,10 @@ jobs:
           install_args: rust
           cache: false
 
+      - name: Install Rust targets
+        # alien-hooks-runtime's tests build their hooks module for wasm32-wasip1.
+        run: rustup target add wasm32-wasip1
+
       - uses: Swatinem/rust-cache@v2
 
       - uses: taiki-e/install-action@nextest

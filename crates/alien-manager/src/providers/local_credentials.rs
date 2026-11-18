@@ -1,6 +1,6 @@
 use crate::traits::credential_resolver::CredentialResolver;
 use crate::traits::deployment_store::DeploymentRecord;
-use alien_core::ClientConfig;
+use alien_core::{ClientConfig, ManagementExternalId};
 use alien_error::AlienError;
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -17,6 +17,14 @@ impl LocalCredentialResolver {
 
 #[async_trait]
 impl CredentialResolver for LocalCredentialResolver {
+    /// A manager on its own credentials has no control plane to issue an ExternalId.
+    async fn management_external_id(
+        &self,
+        _deployment: &DeploymentRecord,
+    ) -> Result<Option<ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         Ok(ClientConfig::Local {
             state_directory: self.state_dir.to_string_lossy().to_string(),

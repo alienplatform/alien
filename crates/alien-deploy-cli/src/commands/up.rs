@@ -5,6 +5,7 @@
 //!
 //! Pull model (Local, Kubernetes): installs and starts the alien-operator service.
 
+mod extension_bundles;
 mod setup_update;
 
 /// Identifies this binary and its version to the platform, as `alien-cli/<version>` does.
@@ -415,6 +416,8 @@ mod tests {
                 platform,
                 kubernetes_client_config(),
                 false,
+                &server.base_url(),
+                "setup-token",
             )
             .await
             .expect_err("the mock stops teardown at acquire");
@@ -1380,6 +1383,203 @@ mod tests {
         unlock.assert_hits_async(1).await;
     }
 
+    /// Direct setup checks every extension bundle its release pins before the first step, so
+    /// a bundle it refuses runs nothing and the lock is released.
+    #[tokio::test]
+    async fn setup_refuses_an_extension_bundle_before_any_step_runs() {
+        let server = MockServer::start_async().await;
+        let mut detail = installed_deployment("pending", Some("rel_target"));
+        detail["deploymentProtocolVersion"] =
+            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION.into();
+        detail["currentReleaseId"] = serde_json::Value::Null;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(detail);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/acquire");
+                then.status(200).json_body(serde_json::json!({"deployments": [{
+                "deployment": {"id": "dep_demo", "status": "pending", "retryRequested": false},
+                "executionClaim": {"operationId": "op_ext", "attemptId": "attempt_1"}
+            }]}));
+            })
+            .await;
+        let mut target = mock_release("rel_target");
+        target["stack"]["machines"] = target["stack"]["aws"].take();
+        // A digest no bundle can match is refused before anything is downloaded or written.
+        target["stack"]["machines"]["extensions"] = serde_json::json!([{
+            "name": "acme", "version": "1.0.0", "digest": "sha256:not-a-digest", "resourceTypes": {}
+        }]);
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/releases/rel_target");
+                then.status(200).json_body(target);
+            })
+            .await;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile");
+                then.status(200);
+            })
+            .await;
+        let bundles = server
+            .mock_async(|when, then| {
+                when.path_contains("/v1/extensions/bundles/");
+                then.status(500);
+            })
+            .await;
+        let unlock = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            run_machines_setup(&server),
+        )
+        .await
+        .expect("setup finishes")
+        .expect_err("the bundle is refused");
+
+        assert!(
+            format!("{error:?}").contains("Extension 'acme'"),
+            "{error:?}"
+        );
+        reconcile.assert_hits_async(0).await;
+        bundles.assert_hits_async(0).await;
+        unlock.assert_hits_async(1).await;
+    }
+
+    /// Direct teardown checks every extension bundle the releases pin before anything runs,
+    /// so a bundle it refuses deletes nothing and takes no lock.
+    #[tokio::test]
+    async fn teardown_refuses_an_extension_bundle_before_any_step_runs() {
+        let server = MockServer::start_async().await;
+        let mut teardown = installed_deployment("teardown-required", None);
+        teardown["currentReleaseId"] = "rel_ext".into();
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(teardown);
+            })
+            .await;
+        let mut release = mock_release("rel_ext");
+        release["stack"]["machines"] = release["stack"]["aws"].take();
+        // A digest no bundle can match is refused before anything is downloaded or written.
+        release["stack"]["machines"]["extensions"] = serde_json::json!([{
+            "name": "acme", "version": "1.0.0", "digest": "sha256:not-a-digest", "resourceTypes": {}
+        }]);
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/releases/rel_ext");
+                then.status(200).json_body(release);
+            })
+            .await;
+        let lock_or_step = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path_contains("/v1/sync/");
+                then.status(500);
+            })
+            .await;
+        let bundles = server
+            .mock_async(|when, then| {
+                when.path_contains("/v1/extensions/bundles/");
+                then.status(500);
+            })
+            .await;
+        let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+
+        let error = push_deletion(
+            &client,
+            "dep_demo",
+            Platform::Machines,
+            ClientConfig::Machines,
+            false,
+            &server.base_url(),
+            "setup-token",
+        )
+        .await
+        .expect_err("the bundle is refused");
+
+        assert!(
+            format!("{error:?}").contains("Extension 'acme'"),
+            "{error:?}"
+        );
+        lock_or_step.assert_hits_async(0).await;
+        bundles.assert_hits_async(0).await;
+    }
+
+    /// The chart the setup CLI installs renders a custom type with its extension's emitter, from
+    /// the bundle the manager serves.
+    #[tokio::test]
+    async fn the_kubernetes_chart_runs_the_extensions_helm_emitter() {
+        let bundle = alien_infra::extension_bundle::testing::TestBundle::with_hooks(
+            "acme",
+            "1.0.0",
+            r#"[{"name":"emit-zone","kind":"helmEmitter","resourceType":"acme/zone","platform":"kubernetes"}]"#,
+            &[],
+        );
+        let mut manifest = bundle.manifest.clone();
+        manifest.resource_types = serde_json::from_value(serde_json::json!({
+            "acme/zone": {
+                "lifecycles": ["frozen"], "holdsData": false,
+                "setup": {"cloudformation": [], "terraform": [], "helm": ["kubernetes"], "importers": []},
+                "controllerPlatforms": [], "permissionSets": [], "link": {"permissionSets": []},
+                "schemas": {"config": {}, "outputs": {}}
+            }
+        }))
+        .unwrap();
+        let mut stack: Stack = serde_json::from_value(serde_json::json!({
+            "id": "app",
+            "resources": {"zone": {
+                "config": {"type": "acme/zone", "id": "zone"},
+                "lifecycle": "frozen",
+                "dependencies": []
+            }}
+        }))
+        .unwrap();
+        stack.extensions = vec![manifest];
+        let server = MockServer::start_async().await;
+        let core = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path(format!("/v1/extensions/bundles/{}", bundle.manifest.digest));
+                then.status(200).body(&bundle.zip);
+            })
+            .await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let cache = alien_infra::extension_bundle::BundleCache::new(cache_dir.path());
+
+        let extensions =
+            extension_bundles::extensions_in(&cache, &server.base_url(), "dep-token", &stack)
+                .await
+                .unwrap();
+        let rendered =
+            render_kubernetes_helm_chart(&stack, &StackSettings::default(), "demo", &extensions);
+
+        core.assert_hits_async(1).await;
+        // The module answers with no fragment, which the chart can't read: the emitter ran.
+        let Err(error) = rendered else {
+            panic!("the chart rendered with an emitter that answers nothing")
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("the output of the Helm emitter of extension 'acme' for acme/zone on kubernetes did not read"),
+            "{message}"
+        );
+    }
+
     /// A manager can remove the record on the `Deleted` checkpoint and still answer 500 (work
     /// after its commit failed). The final reconcile then finds the record gone, so the
     /// teardown that finished is reported as finished.
@@ -1450,6 +1650,7 @@ mod tests {
             })
             .await;
         let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+        let manager_url = server.base_url();
 
         // Once the failing commit is answered, the record is gone. The
         // watcher stops with the deletion, so a deletion that fails before
@@ -1460,6 +1661,8 @@ mod tests {
             Platform::Machines,
             ClientConfig::Machines,
             false,
+            &manager_url,
+            "setup-token",
         );
         let result = tokio::time::timeout(std::time::Duration::from_secs(60), async {
             tokio::pin!(deletion);
@@ -1635,7 +1838,15 @@ mod tests {
         let client = create_manager_client("setup-token", &server.base_url()).unwrap();
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            push_deletion(&client, "dep_demo", platform, client_config, erase_data),
+            push_deletion(
+                &client,
+                "dep_demo",
+                platform,
+                client_config,
+                erase_data,
+                &server.base_url(),
+                "setup-token",
+            ),
         )
         .await
         .expect("teardown finishes");
@@ -3400,8 +3611,13 @@ platform = "{platform}"
     #[test]
     fn kubernetes_install_carries_an_enrollment_code_and_no_token() {
         let stack = Stack::new("orders".to_string()).build();
-        let chart = render_kubernetes_helm_chart(&stack, &StackSettings::default(), "orders-eu")
-            .expect("chart renders");
+        let chart = render_kubernetes_helm_chart(
+            &stack,
+            &StackSettings::default(),
+            "orders-eu",
+            &alien_infra::LoadedExtensions::default(),
+        )
+        .expect("chart renders");
         let values = write_kubernetes_helm_values(
             chart.path(),
             "https://manager.example.test",
@@ -3512,6 +3728,16 @@ platform = "{platform}"
         status: u16,
         body: serde_json::Value,
     ) -> (Result<()>, Option<serde_json::Value>, usize) {
+        let stack = mock_release("rel_k8s")["stack"]["aws"].take();
+        kubernetes_install_of(stack, status, body).await
+    }
+
+    /// [`kubernetes_install_with_code_answer`] for a release whose Kubernetes stack is `stack`.
+    async fn kubernetes_install_of(
+        stack: serde_json::Value,
+        status: u16,
+        body: serde_json::Value,
+    ) -> (Result<()>, Option<serde_json::Value>, usize) {
         use std::os::unix::fs::PermissionsExt;
         let server = MockServer::start_async().await;
         let mut deployment = installed_deployment("running", Some("rel_k8s"));
@@ -3529,7 +3755,7 @@ platform = "{platform}"
             })
             .await;
         let mut release = mock_release("rel_k8s");
-        release["stack"]["kubernetes"] = release["stack"]["aws"].take();
+        release["stack"] = serde_json::json!({ "kubernetes": stack });
         server
             .mock_async(|when, then| {
                 when.method(httpmock::Method::GET)
@@ -3565,9 +3791,11 @@ platform = "{platform}"
             &client,
             &args,
             &server.base_url(),
+            "ax_dg_fixture",
             "dep_demo",
             "orders-eu",
             &StackSettings::default(),
+            None,
             None,
         )
         .await;
@@ -3575,6 +3803,107 @@ platform = "{platform}"
             .ok()
             .map(|contents| serde_json::from_str(&contents).unwrap());
         (result, values, code.hits_async().await)
+    }
+
+    /// A refusal that carries no check's reason prints the preflights' own message.
+    #[test]
+    fn kubernetes_preflights_refusal_without_reasons_keeps_its_message() {
+        let error = preflights_refused(AlienError::new(
+            alien_preflights::error::ErrorData::ValidationFailed {
+                error_count: 1,
+                warning_count: 0,
+                results: Vec::new(),
+            },
+        ));
+        assert_eq!(
+            error.message,
+            "Configuration error: The release's Kubernetes stack failed its preflights: Validation failed with 1 errors and 0 warnings"
+        );
+    }
+
+    /// The refusal the CLI prints quotes an extension's name and resource type with their
+    /// control characters escaped, so the terminal shows the text the manifest holds.
+    #[tokio::test]
+    async fn kubernetes_preflights_refusal_prints_control_characters_escaped() {
+        let manifest: alien_core::ExtensionManifest = serde_json::from_value(serde_json::json!({
+            "name": "acme\u{1b}[2J",
+            "version": "1.0.0",
+            "digest": "sha256:0",
+            "resourceTypes": { "acme\u{1b}[31m/zone": {
+                "lifecycles": ["frozen"],
+                "holdsData": false,
+                "setup": { "cloudformation": [], "terraform": [], "helm": ["kubernetes"], "importers": [] },
+                "controllerPlatforms": [],
+                "permissionSets": [],
+                "link": { "permissionSets": [] },
+                "schemas": { "config": { "type": "object" }, "outputs": { "type": "object" } }
+            } }
+        }))
+        .unwrap();
+        let mut stack = Stack::new("orders".to_string()).build();
+        stack.extensions = vec![manifest];
+
+        let error = alien_preflights::runner::PreflightRunner::new()
+            .run_template_preflights_on(
+                &stack,
+                Platform::Kubernetes,
+                alien_preflights::ClusterCloud::of_target(None),
+            )
+            .await
+            .expect_err("the preflights refuse the stack");
+        let printed = preflights_refused(error).to_string();
+
+        assert!(!printed.contains('\u{1b}'), "{printed:?}");
+        assert!(
+            printed.contains("Extension name 'acme\\u{1b}[2J'"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("resource type 'acme\\u{1b}[31m/zone'"),
+            "{printed}"
+        );
+    }
+
+    /// A Kubernetes stack the template preflights refuse is refused before the
+    /// CLI asks for an enrollment code or loads an extension: Helm never runs,
+    /// and no extension hook renders anything.
+    #[tokio::test]
+    async fn kubernetes_deploy_of_a_stack_the_preflights_refuse_asks_for_nothing() {
+        // `acme/zone` is Live, and its extension allows it only Frozen.
+        let mut manifest =
+            alien_infra::extension_bundle::testing::TestBundle::new("acme", "1.0.0", &[]).manifest;
+        manifest.resource_types = serde_json::from_value(serde_json::json!({ "acme/zone": {
+            "lifecycles": ["frozen"],
+            "holdsData": false,
+            "setup": { "cloudformation": [], "terraform": [], "helm": ["kubernetes"], "importers": [] },
+            "controllerPlatforms": [],
+            "permissionSets": [],
+            "link": { "permissionSets": [] },
+            "schemas": { "config": { "type": "object" }, "outputs": { "type": "object" } }
+        } }))
+        .unwrap();
+        let zone = alien_core::CustomResource::from_untagged(
+            "acme/zone",
+            serde_json::json!({ "id": "zone" }),
+        )
+        .unwrap();
+        let mut stack = Stack::new("orders".to_string())
+            .add(zone, alien_core::ResourceLifecycle::Live)
+            .build();
+        stack.extensions = vec![manifest];
+
+        let (result, values, hits) = kubernetes_install_of(
+            serde_json::to_value(&stack).unwrap(),
+            200,
+            serde_json::json!({ "code": "ax_enroll_fixture", "managerAudience": "aud" }),
+        )
+        .await;
+
+        let error = result.expect_err("the preflights refuse the stack");
+        // The reason reaches the message the CLI prints, not only the error's context.
+        assert!(error.message.contains("acme/zone"), "{}", error.message);
+        assert_eq!(hits, 0, "no enrollment code is issued");
+        assert!(values.is_none(), "helm must not run");
     }
 
     /// Running `deploy` again with a group key, after the Operator enrolled,
@@ -3634,8 +3963,13 @@ platform = "{platform}"
     #[test]
     fn kubernetes_helm_values_leave_the_encryption_key_to_the_chart() {
         let stack = Stack::new("orders".to_string()).build();
-        let chart = render_kubernetes_helm_chart(&stack, &StackSettings::default(), "orders-eu")
-            .expect("chart renders");
+        let chart = render_kubernetes_helm_chart(
+            &stack,
+            &StackSettings::default(),
+            "orders-eu",
+            &alien_infra::LoadedExtensions::default(),
+        )
+        .expect("chart renders");
         for run in ["first run", "second run"] {
             let values = write_kubernetes_helm_values(
                 chart.path(),
@@ -4754,7 +5088,7 @@ async fn up_command_with(
 
     let install_context_platform = base_platform.unwrap_or(platform);
     let install_context_platform_str = install_context_platform.as_str().to_string();
-    let (manager_url, install_management_config) =
+    let (manager_url, install_management_config, install_management_external_id) =
         if requires_install_context(install_context_platform) {
             if print_progress {
                 output::info("Resolving deployment install context via platform API...");
@@ -4771,10 +5105,14 @@ async fn up_command_with(
             // single-account setup (where the deployment account *is* the
             // managing account and no cross-account access is involved);
             // downstream code is already `Option<ManagementConfig>`-aware.
-            (context.manager_url, context.management_config)
+            (
+                context.manager_url,
+                context.management_config,
+                context.management_external_id,
+            )
         } else {
             match resolved.manager_url {
-                Some(url) => (url, None),
+                Some(url) => (url, None, None),
                 None => {
                     if print_progress {
                         output::info("Discovering manager via platform API...");
@@ -4785,7 +5123,11 @@ async fn up_command_with(
                         &install_context_platform_str,
                     )
                     .await?;
-                    (context.manager_url, context.management_config)
+                    (
+                        context.manager_url,
+                        context.management_config,
+                        context.management_external_id,
+                    )
                 }
             }
         };
@@ -5099,6 +5441,7 @@ async fn up_command_with(
             &manager_url,
             &effective_token,
             install_management_config.clone(),
+            install_management_external_id.clone(),
             &args.network,
             None,
             setup_revision,
@@ -5225,6 +5568,7 @@ async fn up_command_with(
                 &name,
                 &stack_settings,
                 platform,
+                base_platform,
                 embedded_config,
                 public_endpoints.as_ref(),
             )
@@ -5288,6 +5632,7 @@ async fn up_command_with(
                     &manager_url,
                     &effective_token,
                     install_management_config,
+                    install_management_external_id,
                     &args.network,
                     Some(on_progress),
                     setup_revision,
@@ -5877,6 +6222,7 @@ async fn run_tracked_setup_update(
         base_platform,
         manager_url,
         &token,
+        None,
         None,
         &args.network,
         None,
@@ -6835,6 +7181,9 @@ fn read_line_with_echo() -> Result<String> {
 struct ManagerInstallContext {
     manager_url: String,
     management_config: Option<ManagementConfig>,
+    /// The ExternalId the platform issued for the token's deployment group, which a setup run
+    /// writes into the trust of the roles it creates for the managing role.
+    management_external_id: Option<alien_core::ManagementExternalId>,
 }
 
 /// Discover the manager URL and platform-managed install context via the platform API.
@@ -6907,6 +7256,8 @@ async fn discover_manager_install_context(
     #[serde(rename_all = "camelCase")]
     struct ResolveInstallContext {
         management_config: ManagementConfig,
+        #[serde(default)]
+        management_external_id: Option<alien_core::ManagementExternalId>,
     }
 
     let resolved: ResolveResponse =
@@ -6917,11 +7268,17 @@ async fn discover_manager_install_context(
                 message: "Failed to parse /v1/resolve response".to_string(),
             })?;
 
+    let (management_config, management_external_id) = match resolved.install_context {
+        Some(context) => (
+            Some(context.management_config),
+            context.management_external_id,
+        ),
+        None => (None, None),
+    };
     Ok(ManagerInstallContext {
         manager_url: resolved.manager_url,
-        management_config: resolved
-            .install_context
-            .map(|context| context.management_config),
+        management_config,
+        management_external_id,
     })
 }
 
@@ -7534,6 +7891,7 @@ async fn run_pull_model(
     deployment_name: &str,
     stack_settings: &StackSettings,
     platform: Platform,
+    base_platform: Option<Platform>,
     embedded_config: Option<&DeployCliConfig>,
     public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
@@ -7544,9 +7902,11 @@ async fn run_pull_model(
                 client,
                 args,
                 manager_url,
+                token,
                 deployment_id,
                 deployment_name,
                 stack_settings,
+                base_platform,
                 public_endpoints,
             )
             .await
@@ -7810,13 +8170,27 @@ async fn run_kubernetes_pull_model(
     client: &ServerClient,
     args: &UpArgs,
     manager_url: &str,
+    token: &str,
     deployment_id: &str,
     deployment_name: &str,
     stack_settings: &StackSettings,
+    base_platform: Option<Platform>,
     public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
     output::info("Kubernetes platform detected — installing alien-operator with Helm.");
     let (stack, resource_prefix) = fetch_kubernetes_release_stack(client, deployment_id).await?;
+    // Before the enrollment code and the extensions: rendering the chart runs the extensions'
+    // hooks, which may run only on a stack the preflights accept. A rerun without
+    // --base-platform does not know the cluster's cloud, so it checks the stack as the chart
+    // every Kubernetes target installs.
+    alien_preflights::runner::PreflightRunner::new()
+        .run_template_preflights_on(
+            &stack,
+            Platform::Kubernetes,
+            alien_preflights::ClusterCloud::of_target(base_platform),
+        )
+        .await
+        .map_err(preflights_refused)?;
     let HelmRelease {
         name: release,
         namespace,
@@ -7852,7 +8226,19 @@ async fn run_kubernetes_pull_model(
         }
     };
 
-    let chart_dir = render_kubernetes_helm_chart(&stack, stack_settings, deployment_name)?;
+    let extensions = extension_bundles::extensions_for(manager_url, token, &stack).await?;
+    let chart_dir = alien_infra::run_hooks({
+        let (stack, stack_settings, deployment_name) = (
+            stack.clone(),
+            stack_settings.clone(),
+            deployment_name.to_string(),
+        );
+        move || render_kubernetes_helm_chart(&stack, &stack_settings, &deployment_name, &extensions)
+    })
+    .await
+    .context(ErrorData::ConfigurationError {
+        message: "The stack's extensions stopped before the Helm chart was ready".to_string(),
+    })??;
     let values_file = write_kubernetes_helm_values(
         chart_dir.path(),
         manager_url,
@@ -7890,6 +8276,32 @@ async fn run_kubernetes_pull_model(
     output::info(&format!("Deployment ID: {}", deployment_id));
 
     Ok(())
+}
+
+/// The preflights' refusal of a release's Kubernetes stack, with the reason of each failed check
+/// in the message the CLI prints.
+fn preflights_refused(
+    error: AlienError<alien_preflights::error::ErrorData>,
+) -> AlienError<ErrorData> {
+    let reasons = match &error.error {
+        Some(alien_preflights::error::ErrorData::ValidationFailed { results, .. }) => results
+            .iter()
+            .flat_map(|result| result.errors.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join("; "),
+        _ => String::new(),
+    };
+    let reasons = if reasons.is_empty() {
+        error.message.clone()
+    } else {
+        reasons
+    };
+    error.context(ErrorData::ConfigurationError {
+        message: format!(
+            "The release's Kubernetes stack failed its preflights: {}",
+            alien_preflights::escape_for_display(&reasons)
+        ),
+    })
 }
 
 /// The Helm release `up` installs the Operator as. Registration reports it, so
@@ -7986,6 +8398,7 @@ fn render_kubernetes_helm_chart(
     stack: &Stack,
     stack_settings: &StackSettings,
     deployment_name: &str,
+    extensions: &alien_infra::LoadedExtensions,
 ) -> Result<tempfile::TempDir> {
     let chart_dir =
         tempfile::tempdir()
@@ -7993,14 +8406,18 @@ fn render_kubernetes_helm_chart(
             .context(ErrorData::ConfigurationError {
                 message: "Failed to create temporary Helm chart directory".to_string(),
             })?;
-    let registry = alien_helm::HelmRegistry::built_in();
+    let registries = alien_infra::DeploymentRegistries::for_stack(
+        stack,
+        &alien_infra::HostRegistrations::NONE,
+        extensions,
+    );
     let mut helm_settings = stack_settings.clone();
     // Helm charts install the Kubernetes operator, which always polls the manager.
     helm_settings.deployment_model = DeploymentModel::Pull;
     let chart = alien_helm::generate_helm_chart(
         stack,
         alien_helm::HelmOptions {
-            registry: &registry,
+            registry: &registries.helm,
             stack_settings: helm_settings,
             chart_name: sanitize_kubernetes_dns_label(deployment_name),
         },
@@ -8379,26 +8796,28 @@ async fn run_push_model(
     manager_url: &str,
     deployment_token: &str,
     management_config: Option<ManagementConfig>,
+    management_external_id: Option<alien_core::ManagementExternalId>,
     network_args: &NetworkArgs,
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
     setup_revision: Option<&str>,
 ) -> Result<SetupRunOutcome> {
     let client_config = setup_client_config(base_platform.unwrap_or(platform)).await?;
 
-    push_initial_setup(
-        client,
-        deployment_id,
-        platform,
-        base_platform,
-        client_config,
-        management_config,
-        manager_url,
-        deployment_token,
-        Some(network_args),
-        on_progress,
-        setup_revision,
-    )
-    .await
+    push_initial_setup_targeted()
+        .client(client)
+        .deployment_id(deployment_id)
+        .platform(platform)
+        .maybe_base_platform(base_platform)
+        .client_config(client_config)
+        .maybe_management_config(management_config)
+        .maybe_management_external_id(management_external_id)
+        .manager_base_url(manager_url)
+        .deployment_token(deployment_token)
+        .network_args(network_args)
+        .maybe_on_progress(on_progress)
+        .maybe_setup_revision(setup_revision)
+        .call()
+        .await
 }
 
 async fn setup_client_config(platform: Platform) -> Result<ClientConfig> {
@@ -8478,6 +8897,7 @@ async fn push_initial_setup_targeted(
     base_platform: Option<Platform>,
     client_config: ClientConfig,
     management_config: Option<alien_core::ManagementConfig>,
+    management_external_id: Option<alien_core::ManagementExternalId>,
     manager_base_url: &str,
     deployment_token: &str,
     network_args: Option<&NetworkArgs>,
@@ -8690,6 +9110,7 @@ async fn push_initial_setup_targeted(
 
         config.setup_run = true;
         config.setup_run_id = Some(uuid::Uuid::new_v4().to_string());
+        config.management_external_id = management_external_id.clone();
 
         // Re-fetch the deployment state now that we hold the lock.
         // The manager may have advanced the state while we were waiting.
@@ -8855,6 +9276,16 @@ async fn push_initial_setup_targeted(
                     .ai_access_checks = checks;
             }
         }
+        // Every extension the releases list is downloaded and checked before any step runs.
+        let service_provider = extension_bundles::provider_for(
+            None,
+            manager_base_url,
+            deployment_token,
+            &state,
+            deployment_id,
+            extension_bundles::Operation::Setup,
+        )
+        .await?;
 
         // Run the shared step loop with per-step reconciliation via the manager API
         let transport = SetupRevisionTransport {
@@ -8880,7 +9311,7 @@ async fn push_initial_setup_targeted(
                 deployment_id,
                 &policy,
                 &transport,
-                None,
+                service_provider,
                 on_progress.as_ref(),
             )
             .await,
@@ -9027,6 +9458,8 @@ pub async fn push_deletion(
     platform: Platform,
     client_config: ClientConfig,
     erase_data: bool,
+    manager_url: &str,
+    token: &str,
 ) -> Result<()> {
     let deployment = client
         .get_deployment()
@@ -9130,7 +9563,16 @@ pub async fn push_deletion(
     })?;
 
     apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
-    let service_provider = runtime_service_provider(&client_config)?;
+    // Every extension the releases list is downloaded and checked before any step runs.
+    let service_provider = extension_bundles::provider_for(
+        runtime_service_provider(&client_config)?,
+        manager_url,
+        token,
+        &state,
+        deployment_id,
+        extension_bundles::Operation::Teardown,
+    )
+    .await?;
 
     if platform == Platform::Local
         && !matches!(

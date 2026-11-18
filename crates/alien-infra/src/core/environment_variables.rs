@@ -776,9 +776,69 @@ impl EnvironmentVariableBuilder {
 
                 self.env_vars.extend(binding_env_vars);
             }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            self.add_extension_link_env(link, resource_state, ctx, resource_id_for_errors)
+                .await?;
         }
 
         Ok(self)
+    }
+
+    /// The variables an extension's link gives the workload for `link`, a resource of one of the
+    /// extension's types. A name the workload already has, its own or another link's, is refused
+    /// rather than replaced.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn add_extension_link_env(
+        &mut self,
+        link: &ResourceRef,
+        resource_state: &alien_core::StackResourceState,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id_for_errors: &str,
+    ) -> Result<()> {
+        if ctx.desired_stack.descriptor(link.resource_type()).is_none() {
+            return Ok(());
+        }
+        let outputs = match &resource_state.outputs {
+            Some(outputs) => outputs
+                .as_resource_outputs()
+                .to_json_value()
+                .into_alien_error()
+                .context(ErrorData::ResourceStateSerializationFailed {
+                    resource_id: link.id().to_string(),
+                    message: "Failed to serialize the linked resource's outputs".to_string(),
+                })?,
+            None => serde_json::Value::Object(Default::default()),
+        };
+        let extensions = ctx.service_provider.extensions();
+        let env = crate::extensions::link_environment(
+            ctx.desired_stack,
+            extensions.as_deref(),
+            link.resource_type(),
+            link.id(),
+            outputs,
+        )
+        .await
+        .context(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "Failed to read the environment the link to '{}' gives '{resource_id_for_errors}'",
+                link.id()
+            ),
+            resource_id: Some(resource_id_for_errors.to_string()),
+        })?;
+        for (name, value) in env {
+            if self.env_vars.contains_key(&name) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "The link to '{}' sets `{name}`, which '{resource_id_for_errors}' already has from its own environment or another link",
+                        link.id()
+                    ),
+                    resource_id: Some(resource_id_for_errors.to_string()),
+                }));
+            }
+            self.env_vars.insert(name, value);
+        }
+        Ok(())
     }
 
     /// Add a single environment variable.

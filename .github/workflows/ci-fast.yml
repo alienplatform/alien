@@ -328,6 +328,10 @@ jobs:
           install_args: rust
           cache: false
 
+      - name: Install Rust targets
+        # alien-hooks-runtime's tests build their hooks module for wasm32-wasip1.
+        run: rustup target add wasm32-wasip1
+
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:

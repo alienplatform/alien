@@ -1,5 +1,6 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
+use alien_client_core::interceptor::keep_interceptor_failure_final;
 use alien_client_core::Result;
 use alien_error::{Context, IntoAlienError};
 use async_trait::async_trait;
@@ -70,6 +71,7 @@ impl KmsClient {
             region: region.to_string(),
             credentials: self.credentials.get_credentials(),
             signing_region: None,
+            interceptors: self.credentials.interceptors().clone(),
         };
         Ok((request, config))
     }
@@ -81,22 +83,26 @@ impl KmsClient {
         key_id: &str,
     ) -> Result<T> {
         let (request, config) = self.request(target, body).await?;
-        crate::aws::aws_request_utils::sign_send_json(request, &config)
-            .await
-            .context(alien_client_core::ErrorData::GenericError {
-                message: format!("AWS KMS {target} failed for key '{key_id}'"),
-            })
+        keep_interceptor_failure_final(
+            crate::aws::aws_request_utils::sign_send_json(request, &config)
+                .await
+                .context(alien_client_core::ErrorData::GenericError {
+                    message: format!("AWS KMS {target} failed for key '{key_id}'"),
+                }),
+        )
     }
 
     /// For operations such as `EnableKeyRotation` and `PutKeyPolicy`, which answer 200 with an
     /// empty body.
     async fn send_no_response(&self, target: &str, body: String, key_id: &str) -> Result<()> {
         let (request, config) = self.request(target, body).await?;
-        crate::aws::aws_request_utils::sign_send_no_response(request, &config)
-            .await
-            .context(alien_client_core::ErrorData::GenericError {
-                message: format!("AWS KMS {target} failed for key '{key_id}'"),
-            })
+        keep_interceptor_failure_final(
+            crate::aws::aws_request_utils::sign_send_no_response(request, &config)
+                .await
+                .context(alien_client_core::ErrorData::GenericError {
+                    message: format!("AWS KMS {target} failed for key '{key_id}'"),
+                }),
+        )
     }
 }
 

@@ -152,6 +152,7 @@ fn stack() -> Stack {
         dynamic_container_image_resources: Vec::new(),
         operations: None,
         built_architectures: Default::default(),
+        extensions: Vec::new(),
     }
 }
 
@@ -192,6 +193,7 @@ fn config(stack_settings: StackSettings) -> DeploymentConfig {
         image_registry: None,
         image_pull_secrets: Vec::new(),
         signed_config: None,
+        management_external_id: None,
     }
 }
 

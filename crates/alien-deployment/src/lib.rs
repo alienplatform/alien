@@ -30,6 +30,8 @@ mod provisioning;
 pub mod runner;
 mod running;
 pub mod setup_teardown;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod testing;
 pub mod transport;
 mod updating;
 
@@ -93,7 +95,8 @@ async fn resolve_gcp_project_number(
 /// - Takes the current deployment state (which includes target release with stack)
 /// - Takes the deployment configuration (management config, capabilities, env vars)
 /// - Takes cloud credentials for executing the deployment
-/// - Takes an optional service provider for platform services (defaults to DefaultPlatformServiceProvider)
+/// - Takes an optional service provider for platform services (real clients when `None`; a
+///   deployment whose release lists extensions needs the provider that loaded them)
 /// - Does ONE incremental step based on `current.status`
 /// - Returns the complete next state (not a delta)
 /// - Works identically whether called from CLI, controller, or manager
@@ -107,7 +110,8 @@ async fn resolve_gcp_project_number(
 /// * `current` - Current deployment state (includes current_release and target_release)
 /// * `config` - Deployment configuration (management config, capabilities, env vars)
 /// * `client_config` - Cloud credentials for deployment execution
-/// * `service_provider` - Optional platform service provider (uses default if None)
+/// * `service_provider` - Platform service provider; real clients when `None`, which a
+///   deployment with extensions refuses
 ///
 /// # Returns
 /// `DeploymentStepResult` containing the complete next state and platform hints
@@ -231,10 +235,7 @@ pub async fn step(
     // runtime_metadata.prepared_stack instead).
     let target_stack = current.target_release.as_ref().map(|r| r.stack.clone());
 
-    // Use provided service provider or default
-    let service_provider = service_provider.unwrap_or_else(|| {
-        std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default())
-    });
+    let service_provider = helpers::service_provider_for(&current, service_provider)?;
 
     // Dispatch to appropriate handler based on status
     // Mutation and injection strategy:
@@ -258,15 +259,17 @@ pub async fn step(
         })
     };
 
+    // Each handler's future is boxed: unboxed, a debug build gives every one of them its own slot
+    // in this poll's stack frame, more than a bounded Tokio worker stack holds.
     let update = match current.status {
         DeploymentStatus::Pending => {
-            pending::handle_pending(
+            Box::pin(pending::handle_pending(
                 current,
                 require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
-            )
+            ))
             .await?
         }
         DeploymentStatus::PreflightsFailed => {
@@ -284,19 +287,24 @@ pub async fn step(
                 retry_state.status = DeploymentStatus::Pending;
                 retry_state.error = None;
                 retry_state.retry_requested = false;
-                pending::handle_pending(
+                Box::pin(pending::handle_pending(
                     retry_state,
                     require_target_stack()?,
                     config,
                     client_config,
                     service_provider,
-                )
+                ))
                 .await?
             }
         }
         DeploymentStatus::InitialSetup => {
-            initial_setup::handle_initial_setup(current, config, client_config, service_provider)
-                .await?
+            Box::pin(initial_setup::handle_initial_setup(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::Provisioning => {
             Box::pin(provisioning::handle_provisioning(
@@ -378,40 +386,48 @@ pub async fn step(
             ))
             .await?
         }
-        DeploymentStatus::TeardownRequired => deleting::handle_teardown_required(current).await?,
+        DeploymentStatus::TeardownRequired => {
+            Box::pin(deleting::handle_teardown_required(current)).await?
+        }
         // Failed states - retry failed resources and transition back to active status
         DeploymentStatus::InitialSetupFailed => {
-            initial_setup::handle_initial_setup_failed(
+            Box::pin(initial_setup::handle_initial_setup_failed(
                 current,
                 require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
-            )
+            ))
             .await?
         }
         DeploymentStatus::ProvisioningFailed => {
-            provisioning::handle_provisioning_failed(
+            Box::pin(provisioning::handle_provisioning_failed(
                 current,
                 require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
-            )
+            ))
             .await?
         }
         DeploymentStatus::UpdateFailed => {
-            updating::handle_update_failed(
+            Box::pin(updating::handle_update_failed(
                 current,
                 require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
-            )
+            ))
             .await?
         }
         DeploymentStatus::DeleteFailed => {
-            deleting::handle_delete_failed(current, config, client_config, service_provider).await?
+            Box::pin(deleting::handle_delete_failed(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::TeardownFailed => {
             debug!("Deployment setup teardown failed, no normal deployment action");
@@ -424,7 +440,13 @@ pub async fn step(
             }
         }
         DeploymentStatus::RefreshFailed => {
-            running::handle_refresh_failed(current, config, client_config, service_provider).await?
+            Box::pin(running::handle_refresh_failed(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::RetentionRequired
         | DeploymentStatus::Retained

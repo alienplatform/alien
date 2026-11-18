@@ -24,7 +24,7 @@ use alien_permissions::{
         AwsIamStatement, AwsRuntimePermissionsGenerator, MAX_ATTACHED_MANAGEMENT_POLICIES,
         MAX_MANAGED_POLICY_BYTES,
     },
-    get_permission_set, AwsNetworkScope, BindingTarget, PermissionContext,
+    AwsNetworkScope, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
 
@@ -954,11 +954,11 @@ impl AwsRemoteStackManagementController {
             management_profile,
         );
         for permission_set_ref in global_refs {
-            let permission_set =
-                permission_set_ref.resolve(|name| get_permission_set(name).cloned());
-            let Some(permission_set) = permission_set else {
-                continue;
-            };
+            let permission_set = super::resolve_management_permission_set(
+                ctx.desired_stack,
+                permission_set_ref,
+                "management",
+            )?;
             if permission_set.platforms.aws.is_none() {
                 continue;
             }
@@ -1036,11 +1036,11 @@ impl AwsRemoteStackManagementController {
                 if permission_set_ref.id().ends_with("/provision") {
                     continue;
                 }
-                let Some(permission_set) =
-                    permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-                else {
-                    continue;
-                };
+                let permission_set = super::resolve_management_permission_set(
+                    ctx.desired_stack,
+                    permission_set_ref,
+                    &resource_id,
+                )?;
                 if permission_set.platforms.aws.is_none() {
                     continue;
                 }
@@ -1718,6 +1718,49 @@ mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::{MockPlatformServiceProvider, StackResourceStateExt};
+
+    /// The management role never gets an extension's set: a grant of one, at stack scope or on a
+    /// resource, is refused rather than resolved from the stack.
+    #[tokio::test]
+    async fn a_management_grant_of_an_extensions_set_is_refused() {
+        let (extension, _) = crate::service_account::extension_with_a_stack_wide_set();
+        for management in [
+            alien_core::permissions::PermissionProfile::new()
+                .global(["acme/dns-zone/records-write"]),
+            alien_core::permissions::PermissionProfile::new()
+                .resource("files", ["acme/dns-zone/records-write"]),
+        ] {
+            let executor = SingleControllerExecutor::builder()
+                .resource(RemoteStackManagement::new("management".to_string()).build())
+                .controller(AwsRemoteStackManagementController::default())
+                .platform(Platform::Aws)
+                .with_stack_resource(
+                    alien_core::Storage::new("files".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .management_permissions(alien_core::ManagementPermissions::Extend(management))
+                .extension(extension.clone())
+                .build()
+                .await
+                .unwrap();
+            let error = executor
+                .with_context(|ctx| {
+                    AwsRemoteStackManagementController::default().management_policy_statements(
+                        ctx,
+                        "test-management",
+                        "arn:aws:iam::123456789012:policy/test-boundary",
+                    )
+                })
+                .unwrap_err();
+            assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+            assert!(
+                error
+                    .message
+                    .contains("granted only to the extension's own identity"),
+                "{error:?}"
+            );
+        }
+    }
 
     fn ssm_answering(
         name: String,

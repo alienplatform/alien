@@ -515,6 +515,15 @@ pub(crate) async fn run_deployment_continuously(
             .and_then(|release| release.release_id.as_deref())
             == Some(target_release_id);
 
+    let service_provider = crate::extension_bundles::provider_for(
+        state.service_provider.clone(),
+        &crate::extension_bundles::cache(&state.config.data_dir),
+        &current,
+        &deployment_id,
+        &client_config,
+    )
+    .await?;
+
     let transport = OperatorTransport {
         db: Arc::clone(&state.db),
         operator_config: state.config.clone(),
@@ -533,7 +542,7 @@ pub(crate) async fn run_deployment_continuously(
             .await?
             .is_some_and(|execution| execution.claim.is_some());
         let steps = match run_maintenance_refresh(
-            state,
+            service_provider,
             &mut current,
             &mut enriched_config,
             &client_config,
@@ -577,7 +586,7 @@ pub(crate) async fn run_deployment_continuously(
         &deployment_id,
         &policy,
         &transport,
-        state.service_provider.clone(),
+        service_provider,
         None,
     )
     .await
@@ -744,6 +753,15 @@ async fn refresh_installed(state: &OperatorState) -> Result<Duration> {
             message: "The deployment identity is unavailable for health refresh".to_string(),
         })
     })?;
+    // An air-gapped Operator gets no downloads, so this is the bundle it already holds.
+    let service_provider = crate::extension_bundles::provider_for(
+        state.service_provider.clone(),
+        &crate::extension_bundles::cache(&state.config.data_dir),
+        &current,
+        &deployment_id,
+        &client_config,
+    )
+    .await?;
     let transport = OperatorTransport {
         db: Arc::clone(&state.db),
         operator_config: state.config.clone(),
@@ -758,7 +776,7 @@ async fn refresh_installed(state: &OperatorState) -> Result<Duration> {
         delay_strategy: alien_deployment::runner::DelayStrategy::Yield,
     };
     let result = run_maintenance_refresh(
-        state,
+        service_provider,
         &mut current,
         &mut config,
         &client_config,
@@ -839,7 +857,7 @@ async fn renew_installed_credentials_or_warn(state: &OperatorState) {
 
 /// One Running refresh pass over the installed release.
 async fn run_maintenance_refresh(
-    state: &OperatorState,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     current: &mut DeploymentState,
     config: &mut DeploymentConfig,
     client_config: &ClientConfig,
@@ -854,7 +872,7 @@ async fn run_maintenance_refresh(
         deployment_id,
         policy,
         transport,
-        state.service_provider.clone(),
+        service_provider,
         None,
     )
     .await
@@ -1388,6 +1406,7 @@ mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             image_registry: None,
             image_pull_secrets: Vec::new(),
             gcp_federation_scope: None,
@@ -1779,6 +1798,223 @@ mod tests {
         .unwrap();
 
         assert_eq!(enriched.external_bindings, bindings);
+    }
+
+    /// The deployment config the Operator runs with when the chart's `external-bindings.json`,
+    /// the `toJson` of its `infrastructure` values, is `chart_json`: read at startup, then merged
+    /// into the deployment's config.
+    async fn config_from_chart(chart_json: &str) -> DeploymentConfig {
+        let bindings = crate::cli::parse_json_opt::<ExternalBindings>(
+            Some(chart_json.to_string()),
+            "external bindings",
+        )
+        .unwrap();
+        let settings = crate::cli::stack_settings_with_bindings(StackSettings::default(), bindings);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        let operator_config = OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .stack_settings(settings)
+            .encryption_key(encryption_key)
+            .build();
+        enrich_config(
+            test_deployment_config(),
+            &operator_config,
+            Platform::Kubernetes,
+            &db,
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// The full example's stack on a cluster in no cloud: its Frozen zone, whose type the `acme`
+    /// extension declares as the example's build does, and the service provider that loaded the
+    /// extension's hooks module.
+    fn zone_stack() -> (
+        alien_core::Stack,
+        Arc<dyn alien_infra::PlatformServiceProvider>,
+    ) {
+        use alien_infra::extension_bundle::{testing::TestBundle, ExtensionBundle, Runtime};
+
+        // Its link sets the zone's id, as the example's link does.
+        let bundle = TestBundle::with_hooks_answering(
+            "acme",
+            "1.0.0",
+            r#"[{"name":"link-zone","kind":"link","resourceType":"acme/dns-zone"}]"#,
+            r#"{"env":{"ACME_ZONE_ID":"Z0123"},"permissionSets":[]}"#,
+            &[],
+        );
+        let mut manifest = bundle.manifest.clone();
+        manifest.resource_types.insert(
+            "acme/dns-zone".into(),
+            serde_json::from_value(serde_json::json!({
+                "lifecycles": ["frozen", "live"],
+                "holdsData": false,
+                "setup": {
+                    "cloudformation": ["aws"],
+                    "terraform": ["aws", "gcp", "azure"],
+                    "helm": ["kubernetes"],
+                    "importers": ["aws", "gcp", "azure"]
+                },
+                "controllerPlatforms": ["aws", "gcp", "azure", "local"],
+                "permissionSets": [],
+                "link": { "permissionSets": [], "env": ["ACME_ZONE_ID"] },
+                "schemas": {
+                    "config": {},
+                    "outputs": {
+                        "type": "object",
+                        "required": ["zoneId"],
+                        "properties": { "zoneId": { "type": "string" } }
+                    }
+                }
+            }))
+            .unwrap(),
+        );
+        let stack: alien_core::Stack = serde_json::from_value(serde_json::json!({
+            "id": "my-app",
+            "resources": {
+                "zone": {
+                    "config": { "type": "acme/dns-zone", "id": "zone", "domain": "internal.acme.dev" },
+                    "lifecycle": "frozen",
+                    "dependencies": []
+                }
+            },
+            "permissions": { "profiles": {}, "management": "auto" },
+            "extensions": [manifest]
+        }))
+        .unwrap();
+        let hooks = ExtensionBundle::open(&bundle.manifest, &bundle.zip)
+            .unwrap()
+            .load_hooks(&Runtime::new().unwrap())
+            .unwrap();
+        let provider: Arc<dyn alien_infra::PlatformServiceProvider> = Arc::new(
+            alien_infra::DefaultPlatformServiceProvider::default()
+                .with_extensions(
+                    &stack,
+                    Arc::new(alien_infra::LoadedExtensions::default().with_hooks("acme", hooks)),
+                )
+                .unwrap(),
+        );
+        (stack, provider)
+    }
+
+    fn kubernetes() -> alien_core::ClientConfig {
+        alien_core::ClientConfig::Kubernetes(Box::new(alien_core::KubernetesClientConfig::Manual {
+            server_url: "https://kubernetes.test".to_string(),
+            certificate_authority_data: None,
+            insecure_skip_tls_verify: Some(true),
+            client_certificate_data: None,
+            client_key_data: None,
+            token: None,
+            username: None,
+            password: None,
+            namespace: Some("app".to_string()),
+            additional_headers: Default::default(),
+        }))
+    }
+
+    /// The chart's binding for the full example's zone: the Operator reads it at startup, the
+    /// zone binds with no controller on Kubernetes, and a workload that links it gets its outputs.
+    #[tokio::test]
+    async fn a_custom_frozen_resource_binds_from_the_chart_s_values() {
+        use alien_core::{ResourceRef, ResourceStatus};
+
+        let config = config_from_chart(
+            r#"{"zone":{"type":"acme/dns-zone","service":"route53","zoneId":"Z0123"}}"#,
+        )
+        .await;
+        let (stack, provider) = zone_stack();
+        let executor = alien_infra::StackExecutor::builder(&stack, kubernetes())
+            .deployment_config(&config)
+            .service_provider(provider.clone())
+            .build()
+            .unwrap_or_else(|error| panic!("the executor refused the bound zone: {error:?}"));
+        let stepped = executor
+            .step(alien_core::StackState::new(Platform::Kubernetes))
+            .await
+            .unwrap()
+            .next_state;
+        let zone = &stepped.resources["zone"];
+        assert_eq!(zone.status, ResourceStatus::Running);
+        assert!(zone.external_binding);
+        assert!(zone.internal_state.is_none(), "no controller ran");
+        assert_eq!(
+            serde_json::to_value(zone.outputs.as_ref().unwrap()).unwrap(),
+            serde_json::json!({ "type": "acme/dns-zone", "zoneId": "Z0123" })
+        );
+
+        // A workload that links the zone, as a Kubernetes controller renders its environment.
+        let registry = Arc::new(alien_infra::ResourceRegistry::with_built_ins());
+        let worker = alien_core::Resource::new(
+            alien_core::Worker::new("api".to_string())
+                .code(alien_core::WorkerCode::Image {
+                    image: "registry.example.com/api:1".to_string(),
+                })
+                .permissions("default".to_string())
+                .build(),
+        );
+        let ctx = alien_infra::ResourceControllerContext {
+            desired_config: &worker,
+            platform: Platform::Kubernetes,
+            client_config: kubernetes(),
+            state: &stepped,
+            resource_prefix: "app",
+            registry: &registry,
+            desired_stack: &stack,
+            service_provider: &provider,
+            deployment_config: &config,
+            initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+            heartbeat_collector: Default::default(),
+        };
+        let env = HashMap::new();
+        let (env_vars, _) = alien_infra::EnvironmentVariableBuilder::new(&env)
+            .add_linked_resources(
+                &[ResourceRef::new(
+                    alien_core::ResourceType::from("acme/dns-zone"),
+                    "zone".to_string(),
+                )],
+                &ctx,
+                "api",
+            )
+            .await
+            .unwrap()
+            .build_with_bindings();
+        let binding: serde_json::Value =
+            serde_json::from_str(&env_vars["ALIEN_ZONE_BINDING"]).unwrap();
+        assert_eq!(
+            binding,
+            serde_json::json!({ "service": "route53", "zoneId": "Z0123" })
+        );
+        assert_eq!(env_vars["ACME_ZONE_ID"], "Z0123", "the link's variable");
+    }
+
+    /// A value the type's outputs don't describe, such as a misspelled field, stops the
+    /// deployment before anything runs.
+    #[tokio::test]
+    async fn a_chart_binding_the_zone_s_outputs_do_not_describe_is_refused() {
+        let config = config_from_chart(
+            r#"{"zone":{"type":"acme/dns-zone","service":"route53","zoneID":"Z0123"}}"#,
+        )
+        .await;
+        let (stack, provider) = zone_stack();
+        let Err(error) = alien_infra::StackExecutor::builder(&stack, kubernetes())
+            .deployment_config(&config)
+            .service_provider(provider)
+            .build()
+        else {
+            panic!("the executor accepted a binding with no zoneId");
+        };
+        assert!(
+            error.message.contains("the binding has no 'zoneId'")
+                && error
+                    .message
+                    .contains("'zoneID' is not one of the outputs its schema names"),
+            "{error:?}"
+        );
     }
 
     #[tokio::test]
@@ -2408,8 +2644,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
             status: DeploymentStatus::UpdatePending,

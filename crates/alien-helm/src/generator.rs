@@ -19,7 +19,7 @@ use alien_core::{
     AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode, ErrorData,
     KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
     KubernetesClusterProvider, Platform, RemoteStackManagementOutputs, ResourceLifecycle, Result,
-    ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
+    ServiceAccount, ServiceAccountOutputs, SetupFormat, Stack, StackSettings, Worker, WorkerCode,
     ALIEN_STACK_TAG_KEY,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -258,6 +258,32 @@ pub fn generate_product_helm_chart_with_image_identity(
     )
 }
 
+/// The README section listing each extension the stack uses, with its version and the origins
+/// outside the cluster its controllers may call.
+fn extensions_md(stack: &Stack) -> Option<String> {
+    if stack.extensions.is_empty() {
+        return None;
+    }
+    let lines = stack
+        .extensions
+        .iter()
+        .map(|extension| {
+            let mut line = format!("- `{}` version {}.", extension.name, extension.version);
+            if !extension.egress.is_empty() {
+                line.push_str(&format!(
+                    " Its controllers may also call, with none of this deployment's credentials: {}.",
+                    extension.egress.join(", ")
+                ));
+            }
+            line
+        })
+        .collect::<Vec<_>>();
+    Some(format!(
+        "\n## Extensions\n\nThis deployment uses these extensions.\n\n{}\n",
+        lines.join("\n")
+    ))
+}
+
 fn generate_helm_chart_internal(
     stack: &Stack,
     mut options: HelmOptions<'_>,
@@ -275,7 +301,7 @@ fn generate_helm_chart_internal(
     );
     let stack = &platform_stack;
     let chart_name = sanitize_chart_name(&options.chart_name);
-    let analysis = ChartAnalysis::from_stack(stack, options.registry)?;
+    let analysis = ChartAnalysis::from_stack(stack, Some(options.registry))?;
 
     let stack_json = to_stable_pretty_json(stack).context(ErrorData::JsonSerializationFailed {
         reason: "failed to serialize stack into chart metadata".to_string(),
@@ -466,6 +492,9 @@ fn generate_helm_chart_internal(
         readme.push_str(
             "\n## Runtime cleanup and Helm history\n\nRuntime cleanup and Pod log collection default to the deployment resource prefix (`serviceAccountPrefix`). Helm upgrades automatically preserve the existing immutable cleanup scope. Pod log collection follows the resource prefix independently. For GitOps or offline rendering, set `logCollector.scope.deploymentLabelValue` to the installed cleanup ConfigMap’s `data.labelValue` before upgrading, and render upgrades with `helm template --is-upgrade`; without cluster lookup an upgrade with no explicit scope is refused. Renderers that do not identify upgrades must preserve this value explicitly. Use `logCollector.scope.podLabelKey` and `podLabelValue` to override workload log selection. An older mismatched cleanup scope does not remove those workloads; they require separately scoped cleanup.\n\nRuntime cleanup uses the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set `runtime.cleanup.onUninstall.helmHistoryBackend=configmap`. The SQL and memory backends are unsupported because the chart cannot verify and prune unsafe rollback history.\n\n## Remote Operator\n\nThe Remote Operator is disabled by default and adds no cluster-scoped resources until enabled. Install or upgrade the chart once with it disabled, then enable it in a second upgrade with `remoteOperator.bootstrapIdentity=true`; this proves that Helm uses a supported Kubernetes history backend before any durable identity is created. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it. Protected upgrades use the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set both `runtime.cleanup.onUninstall.helmHistoryBackend=configmap` and `remoteOperator.helmHistoryBackend=configmap`. Before identity creation, a credential-free one-shot Job mounts the exact pending Helm record from that backend and verifies a render-specific proof, so stale records cannot authorize an upgrade. The SQL and memory storage backends are rejected because the chart cannot verify or prune their rollback history. Uninstall permanently retires this release by deleting its exact retained identity records and identity PVC.\n",
         );
+    }
+    if let Some(section) = extensions_md(stack) {
+        readme.push_str(&section);
     }
     files.insert("README.md".to_string(), readme);
     files.insert(
@@ -2312,8 +2341,8 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
         validate_runtime_encryption_key(options.runtime_encryption_key)?;
     }
 
-    let registry = HelmRegistry::built_in();
-    let analysis = ChartAnalysis::from_stack(options.stack, &registry)?;
+    // These values name no infrastructure, so no emitter runs.
+    let analysis = ChartAnalysis::from_stack(options.stack, None)?;
     let mut yaml = String::new();
 
     yaml.push_str("management:\n");
@@ -3861,7 +3890,10 @@ struct KubernetesRoleRule {
 }
 
 impl ChartAnalysis {
-    fn from_stack(stack: &Stack, registry: &HelmRegistry) -> Result<Self> {
+    /// Reads what a chart needs from `stack`. With `registry`, it also runs each frozen
+    /// resource's Helm emitter; without one, it skips them, for callers that read only the
+    /// stack's service accounts and services.
+    fn from_stack(stack: &Stack, registry: Option<&HelmRegistry>) -> Result<Self> {
         let mut analysis = Self {
             postgres: crate::postgres::values(stack),
             ..Self::default()
@@ -3938,8 +3970,23 @@ impl ChartAnalysis {
                 continue;
             }
 
+            let Some(registry) = registry else {
+                continue;
+            };
             let resource_type = entry.config.resource_type();
-            let Some(emitter) = registry.emitter(&resource_type, Platform::Kubernetes) else {
+            stack.check_setup_format(
+                resource_id,
+                &resource_type,
+                SetupFormat::Helm,
+                Platform::Kubernetes,
+            )?;
+            // A custom type whose descriptor lists Helm must have its emitter.
+            let emitter = if stack.descriptor(&resource_type).is_some() {
+                Some(registry.require(&resource_type, Platform::Kubernetes)?)
+            } else {
+                registry.emitter(&resource_type, Platform::Kubernetes)
+            };
+            let Some(emitter) = emitter else {
                 continue;
             };
 

@@ -1,10 +1,41 @@
 use crate::{
-    is_prepared_cluster, ownership_policy_for_resource_type, ComputeCluster, ErrorData, Key,
-    KubernetesCluster, KubernetesClusterOwnership, ManagementPermissions, NetworkSettings,
-    Platform, ResourceEntry, ResourceLifecycle, Result, Sandbox, SetupManagement, Stack,
-    StackSettings, Storage,
+    is_prepared_cluster, ownership_policy_for_resource_type, Build, ComputeCluster, Container,
+    CustomResource, Daemon, ErrorData, Key, KubernetesCluster, KubernetesClusterOwnership,
+    ManagementPermissions, NetworkSettings, Platform, ResourceEntry, ResourceLifecycle,
+    ResourceRef, ResourceType, Result, Sandbox, SetupManagement, Stack, StackSettings, Storage,
+    Worker,
 };
 use alien_error::AlienError;
+
+/// Whether a permission profile scopes sets to `id`, or a workload with a profile links it and
+/// its type links sets, as `ResourceLinkPermissionsMutation` grants them.
+fn is_granted_on(stack: &Stack, id: &str, resource_type: &ResourceType) -> bool {
+    // A type no extension defines links nothing, as the mutation skips its links.
+    let links_sets = stack
+        .descriptor(resource_type)
+        .is_some_and(|descriptor| !descriptor.link.permission_sets.is_empty());
+    let linked = |links: &[ResourceRef]| links_sets && links.iter().any(|link| link.id == id);
+    stack
+        .permissions
+        .profiles
+        .values()
+        .any(|profile| profile.0.get(id).is_some_and(|sets| !sets.is_empty()))
+        || stack.resources().any(|(_, entry)| {
+            let config = &entry.config;
+            config
+                .downcast_ref::<Worker>()
+                .is_some_and(|w| linked(&w.links))
+                || config
+                    .downcast_ref::<Container>()
+                    .is_some_and(|c| linked(&c.links))
+                || config
+                    .downcast_ref::<Daemon>()
+                    .is_some_and(|d| d.permissions.is_some() && linked(&d.links))
+                || config
+                    .downcast_ref::<Build>()
+                    .is_some_and(|b| linked(&b.links))
+        })
+}
 
 /// Refuse resources whose setup-owned scaffolding cannot yet be created by runtime.
 /// Check both package generation and deployment planning, including later additions.
@@ -43,6 +74,14 @@ pub fn validate_automatic_setup_resources(
         for (id, entry) in stack.resources() {
             if let Some(resource_type) = automatic_setup_unsupported_resource(entry, platform) {
                 return Err(unsupported(&resource_type, id));
+            }
+            // On AWS the runtime creates a workload's role after setup, and nothing then grants
+            // a custom resource's sets, so a grant on one would never be written.
+            if platform == Platform::Aws
+                && entry.config.downcast_ref::<CustomResource>().is_some()
+                && is_granted_on(stack, id, &entry.config.resource_type())
+            {
+                return Err(unsupported("custom resource grant", id));
             }
         }
     }
@@ -161,13 +200,25 @@ pub fn is_network_database(entry: &ResourceEntry) -> bool {
     resource_type == crate::Postgres::RESOURCE_TYPE || resource_type == crate::Redis::RESOURCE_TYPE
 }
 
+/// Whether this resource keeps a network of the cloud's own on a Kubernetes target, in every
+/// cluster mode: a cloud database, or an extension type whose descriptor requires the network.
+///
+/// The network preflight and the Terraform network gate both ask this, so they cannot disagree.
+pub fn keeps_cloud_network(stack: &Stack, entry: &ResourceEntry) -> bool {
+    is_network_database(entry)
+        || stack
+            .descriptor(&entry.config.resource_type())
+            .is_some_and(|descriptor| descriptor.requires_network)
+}
+
 /// Whether setup can put this resource's private endpoint on the network of an existing
 /// Kubernetes cluster, so that the cluster's workloads reach it.
 ///
 /// Only a GCP Postgres can: the module looks the cluster's own network up. A Memorystore
 /// instance cannot move to another network after creation, and on AWS and Azure the module keeps
-/// a network of its own that the cluster is not attached to. A resource that is not a cloud
-/// database needs no network, so the answer for it is `true`.
+/// a network of its own that the cluster is not attached to. Any other resource is never
+/// refused, so the answer for it is `true`. That includes an extension type that requires the
+/// network: it uses whichever network the module keeps, whether or not the cluster reaches it.
 ///
 /// The network preflight (at build time) and the generated modules (at plan time, where the
 /// cluster mode is chosen) both ask this, so they refuse the same cases.
@@ -255,6 +306,59 @@ pub fn refuse_unreachable_databases(
                 resource_id: id.to_string(),
             }));
         }
+    }
+    Ok(())
+}
+
+/// Refuses an extension type that requires the network on an existing cluster when its input
+/// also gates a frozen resource, for a setup that fixes the network when it is rendered
+/// (CloudFormation). Declining that input drops the resource before the manager prepares the
+/// stack, so the manager could expect no network while the setup still registers one.
+///
+/// Nothing is refused when the deployer brings the network in the settings, or when another
+/// resource keeps the network without such an input, so it stays whatever the deployer answers.
+/// A database is left to [`refuse_unreachable_databases`].
+pub fn refuse_declinable_network_extensions(stack: &Stack, settings: &StackSettings) -> Result<()> {
+    if !setup_targets_existing_cluster(stack, settings)
+        || matches!(
+            settings.network,
+            Some(
+                NetworkSettings::ByoVpcAws { .. }
+                    | NetworkSettings::ByoVpcGcp { .. }
+                    | NetworkSettings::ByoVnetAzure { .. }
+            )
+        )
+    {
+        return Ok(());
+    }
+    let frozen_gating: std::collections::HashSet<&str> = crate::frozen_gated(stack)
+        .map(|(_, input_id)| input_id)
+        .collect();
+    let declinable = |entry: &ResourceEntry| {
+        entry
+            .enabled_when
+            .as_deref()
+            .is_some_and(|input_id| frozen_gating.contains(input_id))
+    };
+    if stack
+        .resources()
+        .any(|(_, entry)| keeps_cloud_network(stack, entry) && !declinable(entry))
+    {
+        return Ok(());
+    }
+    for (id, entry) in stack.resources() {
+        if is_network_database(entry) || !keeps_cloud_network(stack, entry) || !declinable(entry) {
+            continue;
+        }
+        let resource_type = entry.config.resource_type();
+        let input_id = entry.enabled_when.as_deref().unwrap_or_default();
+        return Err(AlienError::new(ErrorData::SetupPlacementUnsupported {
+            message: format!(
+                "Setup cannot yet place the {resource_type} '{id}' on an existing cluster while its input '{input_id}' also turns off a resource setup creates, because the network it requires is fixed when the template is rendered. Use a cluster that setup creates, bring the cluster's own network in the stack's network settings, give the {resource_type} an input that turns off only resources the runtime creates, or remove its input."
+            ),
+            resource_type: resource_type.to_string(),
+            resource_id: id.to_string(),
+        }));
     }
     Ok(())
 }
@@ -351,5 +455,95 @@ mod cors_tests {
             error.error,
             Some(ErrorData::AutomaticSetupResourceUnsupported { .. })
         ));
+    }
+}
+
+#[cfg(test)]
+mod custom_resource_grant_tests {
+    use super::*;
+    use crate::{ResourceType, WorkerCode};
+
+    fn linked_zone() -> Stack {
+        let zone =
+            CustomResource::from_untagged("acme/dns-zone", serde_json::json!({ "id": "zone" }))
+                .unwrap();
+        let mut api = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "registry.example.com/api:1".to_string(),
+            })
+            .permissions("api".to_string())
+            .build();
+        api.links.push(ResourceRef::new(
+            ResourceType::from("acme/dns-zone"),
+            "zone",
+        ));
+        let mut stack = Stack::new("app".to_string())
+            .add(zone, ResourceLifecycle::Live)
+            .add(api, ResourceLifecycle::Live)
+            .build();
+        stack
+            .extensions
+            .push(acme(&["acme/dns-zone/records-write"]));
+        stack
+    }
+
+    /// The extension that defines `acme/dns-zone`, whose type links `link_sets`.
+    fn acme(link_sets: &[&str]) -> crate::ExtensionManifest {
+        serde_json::from_value(serde_json::json!({
+            "name": "acme", "version": "1.0.0", "digest": "sha256:0",
+            "resourceTypes": { "acme/dns-zone": {
+                "lifecycles": ["live"], "holdsData": false,
+                "setup": { "cloudformation": [], "terraform": [], "helm": [], "importers": [] },
+                "controllerPlatforms": ["aws"], "permissionSets": [],
+                "link": { "permissionSets": link_sets },
+                "schemas": { "config": {}, "outputs": {} }
+            }}
+        }))
+        .unwrap()
+    }
+
+    /// A workload that links a custom resource needs a grant setup writes, which automatic setup
+    /// on AWS can't, at package generation and when a later release adds the link alike.
+    #[test]
+    fn automatic_setup_on_aws_refuses_a_grant_on_a_custom_resource() {
+        let error = validate_automatic_setup_resources(
+            &linked_zone(),
+            Platform::Aws,
+            SetupManagement::Automatic,
+        )
+        .expect_err("the link is refused");
+        assert_eq!(
+            error.code, "AUTOMATIC_SETUP_RESOURCE_UNSUPPORTED",
+            "{error}"
+        );
+        assert!(error.to_string().contains("'zone'"), "{error}");
+        assert!(!error.retryable);
+
+        // A permission profile that scopes sets to the resource grants it too.
+        let mut scoped = linked_zone();
+        let api = scoped.resources.get_mut("api").unwrap();
+        api.config.downcast_mut::<Worker>().unwrap().links.clear();
+        scoped.permissions.profiles.insert(
+            "api".to_string(),
+            serde_json::from_value(serde_json::json!({ "zone": ["acme/dns-zone/records-write"] }))
+                .unwrap(),
+        );
+        validate_automatic_setup_resources(&scoped, Platform::Aws, SetupManagement::Automatic)
+            .expect_err("the profile's grant is refused");
+
+        let mut unlinked = linked_zone();
+        unlinked.resources.shift_remove("api");
+        // A link to a type that links no sets grants nothing.
+        let mut no_link_sets = linked_zone();
+        no_link_sets.extensions = vec![acme(&[])];
+        for (stack, platform, management) in [
+            (linked_zone(), Platform::Aws, SetupManagement::Manual),
+            (linked_zone(), Platform::Gcp, SetupManagement::Automatic),
+            (unlinked, Platform::Aws, SetupManagement::Automatic),
+            (no_link_sets, Platform::Aws, SetupManagement::Automatic),
+        ] {
+            validate_automatic_setup_resources(&stack, platform, management)
+                .unwrap_or_else(|error| panic!("{platform:?} {management:?}: {error}"));
+        }
     }
 }

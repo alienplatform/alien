@@ -720,6 +720,8 @@ async fn complete_local_deletion(
         },
         // The harness's delete request (TestDeployment::destroy) asks for erase.
         true,
+        &manager.url,
+        &manager.admin_token,
     )
     .await
     .map_err(|error| anyhow::anyhow!("Local setup teardown failed: {error}"))

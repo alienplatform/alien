@@ -144,4 +144,16 @@ pub trait Authz: Send + Sync {
     }
     /// Generic "can act on deployment".
     fn can_act_on_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+
+    // -- Extension bundles -------------------------------------------------
+    /// Upload an object of an extension bundle to `project_id`, whose releases then pin it.
+    /// Defaults to deny so an embedder decides explicitly.
+    fn can_upload_extension_bundle(&self, _subject: &Subject, _project_id: &str) -> bool {
+        false
+    }
+    /// Download an object of an extension bundle by its digest from `project_id`. Defaults to
+    /// deny so an embedder decides explicitly.
+    fn can_read_extension_bundle(&self, _subject: &Subject, _project_id: &str) -> bool {
+        false
+    }
 }

@@ -5,9 +5,9 @@ use crate::core::{GcpCustomRoleNaming, ResourceControllerContext, ResourcePermis
 use crate::error::{ErrorData, Result};
 use alien_core::{
     GcpServiceAccountHeartbeatData, HeartbeatBackend, ObservedHealth, PermissionSet, Platform,
-    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus, ServiceAccount, ServiceAccountHeartbeatData, ServiceAccountHeartbeatStatus,
-    ServiceAccountOutputs,
+    ProviderLifecycleState, RemoteStackManagement, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs, ResourceRef, ResourceStatus, ServiceAccount, ServiceAccountHeartbeatData,
+    ServiceAccountHeartbeatStatus, ServiceAccountOutputs,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::iam::{
@@ -55,7 +55,12 @@ impl GcpServiceAccountController {
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
 
-        let service_account_id = get_gcp_service_account_id(ctx.resource_prefix, &config.id);
+        let service_account_id = match &config.extension {
+            Some(_) => {
+                alien_core::extension_identity_gcp_account_id(ctx.resource_prefix, &config.id)
+            }
+            None => get_gcp_service_account_id(ctx.resource_prefix, &config.id),
+        };
 
         info!(
             service_account_id = %service_account_id,
@@ -63,16 +68,23 @@ impl GcpServiceAccountController {
             "Creating GCP service account"
         );
 
-        let display_name = match ctx.deployment_name_for_metadata() {
-            Some(deployment_name) => format!("{deployment_name}: Runtime service account"),
-            None => "Runtime service account".to_string(),
+        let display_name = match (&config.extension, ctx.deployment_name_for_metadata()) {
+            (Some(extension), _) => alien_core::extension_identity_display_name(extension),
+            (None, Some(deployment_name)) => format!("{deployment_name}: Runtime service account"),
+            (None, None) => "Runtime service account".to_string(),
         };
-        let description = match ctx.deployment_name_for_metadata() {
-            Some(deployment_name) => format!(
+        let description = match (&config.extension, ctx.deployment_name_for_metadata()) {
+            (Some(extension), _) => format!(
+                "{}. Resource prefix: {}. Resource: {}.",
+                alien_core::extension_identity_display_name(extension),
+                ctx.resource_prefix,
+                config.id
+            ),
+            (None, Some(deployment_name)) => format!(
                 "Runtime cloud identity for {deployment_name}. Resource prefix: {}. Resource: {}.",
                 ctx.resource_prefix, config.id
             ),
-            None => format!(
+            (None, None) => format!(
                 "Runtime cloud identity. Resource prefix: {}. Resource: {}.",
                 ctx.resource_prefix, config.id
             ),
@@ -536,7 +548,7 @@ impl GcpServiceAccountController {
             .and_then(|name| ctx.desired_stack.permissions.profiles.get(name));
         let concrete = config
             .concrete_permission_sets(legacy_profile, |name| {
-                alien_permissions::get_permission_set(name).cloned()
+                alien_permissions::get_stack_permission_set(ctx.desired_stack, name).cloned()
             })
             .context(ErrorData::ResourceConfigInvalid {
                 message: "Cannot resolve concrete account grants".to_string(),
@@ -708,7 +720,7 @@ impl GcpServiceAccountController {
             .and_then(|name| ctx.desired_stack.permissions.profiles.get(name));
         let concrete = config
             .concrete_permission_sets(legacy_profile, |name| {
-                alien_permissions::get_permission_set(name).cloned()
+                alien_permissions::get_stack_permission_set(ctx.desired_stack, name).cloned()
             })
             .context(ErrorData::ResourceConfigInvalid {
                 message: "Cannot resolve concrete account grants".to_string(),
@@ -757,6 +769,27 @@ impl GcpServiceAccountController {
                     resource_id: Some(config.id.clone()),
                 }));
             }
+            let manager_trust = manager_trust_binding(ctx)?;
+            // The manager's trust must land on the account this controller created, never on a
+            // name derived from the grants, and the grants written with it must address that
+            // same account.
+            let target = match (&manager_trust, explicit_target) {
+                (None, Some(explicit_target)) => explicit_target,
+                (Some(_), Some(explicit_target))
+                    if explicit_target != *service_account_email
+                        && explicit_target
+                            .rsplit_once("/serviceAccounts/")
+                            .is_none_or(|(_, account)| account != service_account_email) =>
+                {
+                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: format!(
+                            "The extension identity's grants target '{explicit_target}', not its own service account '{service_account_email}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+                _ => service_account_email.clone(),
+            };
             let sa_email_owned = service_account_email.clone();
             let config_id_owned = config.id.clone();
 
@@ -773,11 +806,9 @@ impl GcpServiceAccountController {
                             .into_iter()
                             .map(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding),
                     );
+                    iam_policy.bindings.extend(manager_trust);
                     client
-                        .set_service_account_iam_policy(
-                            explicit_target.unwrap_or_else(|| sa_email_owned.clone()),
-                            iam_policy,
-                        )
+                        .set_service_account_iam_policy(target, iam_policy)
                         .await
                         .context(ErrorData::CloudPlatformError {
                             message: format!(
@@ -960,6 +991,46 @@ fn emit_gcp_service_account_heartbeat(
     });
 }
 
+/// An extension's identity lets the manager impersonate it through the management identity's
+/// federation, the way the remote bindings identity does through its own.
+fn manager_trust_binding(ctx: &ResourceControllerContext<'_>) -> Result<Option<Binding>> {
+    let config = ctx.desired_resource_config::<ServiceAccount>()?;
+    let Some(extension) = &config.extension else {
+        return Ok(None);
+    };
+    let missing = |message: &str| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!("{message}; the identity of the extension '{extension}' trusts the manager through it"),
+            resource_id: Some(config.id.clone()),
+        })
+    };
+    let (management_id, _) = ctx
+        .state
+        .resources
+        .iter()
+        .find(|(_, state)| state.resource_type == RemoteStackManagement::RESOURCE_TYPE.as_ref())
+        .ok_or_else(|| missing("The stack has no management identity"))?;
+    let management = ctx
+        .require_dependency::<crate::remote_stack_management::GcpRemoteStackManagementController>(
+            &ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, management_id.clone()),
+        )?;
+    let member = management
+        .federation_access
+        .as_ref()
+        .ok_or_else(|| missing("The management identity has no federation"))?
+        .principal()
+        .context(ErrorData::ResourceConfigInvalid {
+            message: "Invalid management federation principal".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
+    Ok(Some(
+        Binding::builder()
+            .role("roles/iam.workloadIdentityUser".to_string())
+            .members(vec![member])
+            .build(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{decide_custom_role_cleanup, CustomRoleCleanup};
@@ -993,6 +1064,298 @@ mod tests {
     }
 
     use super::*;
+    use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::MockPlatformServiceProvider;
+    use alien_gcp_clients::iam::MockIamApi;
+    use alien_gcp_clients::resource_manager::MockResourceManagerApi;
+    use std::sync::Arc;
+
+    /// A stack-wide grant of an extension's permission set resolves from the stack: Alien's own
+    /// registry has no set by that id.
+    #[tokio::test]
+    async fn a_stack_wide_extension_grant_resolves_from_the_stack() {
+        let (extension, profile) = crate::service_account::extension_with_a_stack_wide_set();
+        let mut resource_manager = MockResourceManagerApi::new();
+        resource_manager
+            .expect_get_project_iam_policy()
+            .returning(|_, _| Ok(IamPolicy::builder().version(3).bindings(vec![]).build()));
+        let resource_manager = Arc::new(resource_manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(resource_manager.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(ServiceAccount::new("app-sa".to_string()).build())
+            .controller(GcpServiceAccountController {
+                state: GcpServiceAccountState::BindingStackRoles,
+                service_account_email: Some(
+                    "test-app-sa@test-project.iam.gserviceaccount.com".to_string(),
+                ),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .permission_profile("app", profile)
+            .extension(extension)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor
+            .step()
+            .await
+            .unwrap_or_else(|error| panic!("the extension's set did not resolve: {error}"));
+    }
+
+    /// Direct setup lets the manager, federated through the management identity, impersonate an
+    /// extension's identity, as the setup template does.
+    #[tokio::test]
+    async fn direct_setup_lets_the_federated_manager_impersonate_the_extension_identity() {
+        let management =
+            crate::remote_stack_management::GcpRemoteStackManagementController::mock_ready(
+                "test-management",
+            );
+        let principal = management
+            .federation_access
+            .as_ref()
+            .unwrap()
+            .principal()
+            .unwrap();
+        let mut iam = MockIamApi::new();
+        iam.expect_set_service_account_iam_policy()
+            .times(1)
+            .returning(move |email, policy| {
+                assert_eq!(email, "test-acme-ext@mock-project.iam.gserviceaccount.com");
+                let trust = policy
+                    .bindings
+                    .iter()
+                    .filter(|binding| binding.role == "roles/iam.workloadIdentityUser")
+                    .map(|binding| binding.members.clone())
+                    .collect::<Vec<_>>();
+                assert_eq!(trust, [vec![principal.clone()]]);
+                Ok(policy)
+            });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(
+                alien_core::ServiceAccount::new("acme-ext".to_string())
+                    .extension("acme".to_string())
+                    .build(),
+            )
+            .controller(GcpServiceAccountController {
+                state: GcpServiceAccountState::ApplyingResourcePermissions,
+                service_account_email: Some(
+                    "test-acme-ext@mock-project.iam.gserviceaccount.com".to_string(),
+                ),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .with_dependency(
+                RemoteStackManagement::new("management".to_string()).build(),
+                management,
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+        assert_eq!(
+            executor
+                .internal_state::<GcpServiceAccountController>()
+                .unwrap()
+                .state,
+            GcpServiceAccountState::Ready
+        );
+    }
+
+    /// The manager's trust is written on the account the controller recorded, not on a name its
+    /// grants derive from the permission context.
+    #[tokio::test]
+    async fn the_manager_trust_is_written_on_the_extension_identitys_own_account() {
+        let mut iam = MockIamApi::new();
+        iam.expect_set_service_account_iam_policy()
+            .times(1)
+            .returning(|email, policy| {
+                assert_eq!(
+                    email,
+                    "test-acme-ext@test-project-123.iam.gserviceaccount.com"
+                );
+                Ok(policy)
+            });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(
+                alien_core::ServiceAccount::new("acme-ext".to_string())
+                    .stack_permission_set(
+                        alien_permissions::get_permission_set("storage/data-read")
+                            .unwrap()
+                            .clone(),
+                    )
+                    .extension("acme".to_string())
+                    .build(),
+            )
+            .controller(GcpServiceAccountController {
+                state: GcpServiceAccountState::ApplyingResourcePermissions,
+                service_account_email: Some(
+                    "test-acme-ext@test-project-123.iam.gserviceaccount.com".to_string(),
+                ),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .with_dependency(
+                RemoteStackManagement::new("management".to_string()).build(),
+                crate::remote_stack_management::GcpRemoteStackManagementController::mock_ready(
+                    "test-management",
+                ),
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+    }
+
+    /// An extension identity's grants that address another service account, here the same name
+    /// in the deployment's project while the identity lives in another, are refused rather than
+    /// written onto the identity's own account.
+    #[tokio::test]
+    async fn an_extension_identitys_grant_on_another_account_is_refused() {
+        let mut iam = MockIamApi::new();
+        iam.expect_set_service_account_iam_policy().times(0);
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(
+                alien_core::ServiceAccount::new("acme-ext".to_string())
+                    .stack_permission_set(
+                        alien_permissions::get_permission_set("storage/data-read")
+                            .unwrap()
+                            .clone(),
+                    )
+                    .extension("acme".to_string())
+                    .build(),
+            )
+            .controller(GcpServiceAccountController {
+                state: GcpServiceAccountState::ApplyingResourcePermissions,
+                service_account_email: Some(
+                    "test-acme-ext@other-project.iam.gserviceaccount.com".to_string(),
+                ),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .with_dependency(
+                RemoteStackManagement::new("management".to_string()).build(),
+                crate::remote_stack_management::GcpRemoteStackManagementController::mock_ready(
+                    "test-management",
+                ),
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        let error = executor.step().await.unwrap_err();
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+        assert!(
+            error.message.contains(
+                "projects/test-project-123/serviceAccounts/test-acme-ext@test-project-123"
+            ),
+            "{error:?}"
+        );
+    }
+
+    /// An extension identity in a stack with no management identity has no manager to trust; a
+    /// retry cannot add one.
+    #[tokio::test]
+    async fn an_extension_identity_without_a_management_identity_is_not_retried() {
+        let mut iam = MockIamApi::new();
+        iam.expect_set_service_account_iam_policy().times(0);
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(
+                alien_core::ServiceAccount::new("acme-ext".to_string())
+                    .extension("acme".to_string())
+                    .build(),
+            )
+            .controller(GcpServiceAccountController {
+                state: GcpServiceAccountState::ApplyingResourcePermissions,
+                service_account_email: Some(
+                    "test-acme-ext@mock-project.iam.gserviceaccount.com".to_string(),
+                ),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        let error = executor.step().await.unwrap_err();
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+        assert!(!error.retryable && !error.internal, "{error:?}");
+    }
+
+    /// Direct setup names and describes an extension's identity as the setup template does.
+    #[tokio::test]
+    async fn direct_setup_names_the_extension_identity_as_the_template_does() {
+        let mut iam = MockIamApi::new();
+        iam.expect_create_service_account()
+            .times(1)
+            .returning(|account_id, request| {
+                assert_eq!(
+                    account_id,
+                    alien_core::extension_identity_gcp_account_id("test", "acme-ext")
+                );
+                let account = request.service_account;
+                assert_eq!(
+                    account.display_name.as_deref(),
+                    Some("Extension identity (acme)")
+                );
+                Ok(GcpServiceAccount {
+                    email: Some(format!("{account_id}@mock-project.iam.gserviceaccount.com")),
+                    unique_id: Some("123".to_string()),
+                    ..Default::default()
+                })
+            });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(
+                alien_core::ServiceAccount::new("acme-ext".to_string())
+                    .extension("acme".to_string())
+                    .build(),
+            )
+            .controller(GcpServiceAccountController::default())
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+        assert_eq!(
+            executor
+                .internal_state::<GcpServiceAccountController>()
+                .unwrap()
+                .state,
+            GcpServiceAccountState::BindingStackRoles
+        );
+    }
 
     /// Deleting the last service account of a direct Google Cloud setup removes the custom
     /// roles of the deployment; nothing else does, so they stayed behind after every destroy.

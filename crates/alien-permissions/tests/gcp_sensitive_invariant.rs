@@ -1,40 +1,8 @@
 use alien_permissions::list_permission_set_ids;
-
-const SENSITIVE_IMPLICIT_PERMISSIONS: &[&str] = &[
-    "storage.objects.get",
-    "datastore.entities.get",
-    "datastore.entities.list",
-    "secretmanager.versions.access",
-    "pubsub.subscriptions.consume",
-    "artifactregistry.repositories.downloadArtifacts",
-    "cloudbuild.builds.get",
-    "cloudbuild.builds.list",
-    // Runs code and reads files inside a live sandbox session; belongs to sandbox/execute alone.
-    "aiplatform.sandboxEnvironments.execute",
-];
-
-const SENSITIVE_IMPLICIT_ROLES: &[&str] = &[
-    "roles/storage.admin",
-    "roles/storage.objectViewer",
-    "roles/storage.objectUser",
-    "roles/storage.objectAdmin",
-    "roles/datastore.viewer",
-    "roles/datastore.user",
-    "roles/datastore.owner",
-    "roles/datastore.admin",
-    "roles/secretmanager.secretAccessor",
-    "roles/secretmanager.admin",
-    "roles/pubsub.subscriber",
-    "roles/pubsub.editor",
-    "roles/pubsub.admin",
-    "roles/artifactregistry.reader",
-    "roles/artifactregistry.writer",
-    "roles/artifactregistry.repoAdmin",
-    "roles/artifactregistry.admin",
-    "roles/cloudbuild.builds.viewer",
-    "roles/cloudbuild.builds.editor",
-    "roles/cloudbuild.admin",
-];
+use alien_permissions::sensitive_content::{
+    GCP_SENSITIVE_CONTENT_PERMISSIONS as SENSITIVE_IMPLICIT_PERMISSIONS,
+    GCP_SENSITIVE_CONTENT_ROLES as SENSITIVE_IMPLICIT_ROLES,
+};
 
 #[test]
 fn gcp_implicit_management_sets_do_not_grant_sensitive_content() {
