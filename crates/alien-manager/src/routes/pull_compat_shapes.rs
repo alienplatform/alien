@@ -1,5 +1,5 @@
 //! Field lists of the older Operators' structs that deny unknown fields, copied
-//! from the v3.3.31 and v3.3.62 tags of `alien-core` (every `deny_unknown_fields`
+//! from the v3.3.31, v3.3.62 and v3.3.68 tags of `alien-core` (every `deny_unknown_fields`
 //! struct that still exists, as serde field names in snake case).
 //!
 //! To cover a newer release: check out its tag, list the fields of each struct
@@ -716,10 +716,441 @@ const V3_3_62: &[(&str, &[&str])] = &[
     ),
 ];
 
+const V3_3_68: &[(&str, &[&str])] = &[
+    ("Ai", &["id", "models"]),
+    ("AiModel", &["id", "required"]),
+    (
+        "ArtifactRegistry",
+        &["id", "replication_regions", "replication_regions_input"],
+    ),
+    ("AuthoredAutoscaling", &["max", "min"]),
+    (
+        "AuthoredEnvMapping",
+        &["name", "target_resources", "var_type"],
+    ),
+    (
+        "AuthoredInput",
+        &[
+            "default",
+            "description",
+            "env",
+            "format",
+            "generate",
+            "kind",
+            "label",
+            "max",
+            "max_items",
+            "max_length",
+            "min",
+            "min_items",
+            "min_length",
+            "pattern",
+            "placeholder",
+            "platforms",
+            "provided_by",
+            "required",
+            "values",
+            "when",
+        ],
+    ),
+    (
+        "AuthoredPool",
+        &[
+            "architecture",
+            "autoscaling",
+            "cpu",
+            "data_disk",
+            "ephemeral_storage",
+            "failure_domain_spread",
+            "gpu",
+            "machines",
+            "memory",
+            "nested_virtualization",
+        ],
+    ),
+    (
+        "AwsClientConfig",
+        &["account_id", "credentials", "region", "service_overrides"],
+    ),
+    (
+        "AwsImpersonationConfig",
+        &[
+            "duration_seconds",
+            "external_id",
+            "role_arn",
+            "session_name",
+            "target_region",
+        ],
+    ),
+    ("AwsOpenSearch", &["capacity", "collection_type", "id"]),
+    ("AwsOpenSearchCapacity", &["indexing", "search"]),
+    ("AwsOpenSearchCapacityRange", &["max_ocu", "min_ocu"]),
+    ("AwsRemoteBindingsImportData", &["role_arn", "role_name"]),
+    ("AwsServiceOverrides", &["endpoints"]),
+    (
+        "AwsWebIdentityConfig",
+        &[
+            "duration_seconds",
+            "role_arn",
+            "session_name",
+            "web_identity_token_file",
+        ],
+    ),
+    (
+        "AzureClientConfig",
+        &[
+            "credentials",
+            "region",
+            "service_overrides",
+            "subscription_id",
+            "tenant_id",
+        ],
+    ),
+    ("AzureContainerAppsEnvironment", &["id"]),
+    (
+        "AzureImpersonationConfig",
+        &[
+            "client_id",
+            "scope",
+            "target_region",
+            "target_subscription_id",
+            "tenant_id",
+        ],
+    ),
+    (
+        "AzureRemoteBindingsImportData",
+        &["client_id", "identity_id", "principal_id", "tenant_id"],
+    ),
+    ("AzureResourceGroup", &["id"]),
+    ("AzureServiceBusNamespace", &["id"]),
+    ("AzureServiceOverrides", &["endpoints"]),
+    ("AzureStorageAccount", &["id"]),
+    (
+        "Build",
+        &["compute_type", "environment", "id", "links", "permissions"],
+    ),
+    (
+        "ComputeCluster",
+        &[
+            "capacity_groups",
+            "container_cidr",
+            "dynamic_container_pool",
+            "failure_domain_spread",
+            "id",
+            "node_permissions",
+            "node_permissions_platforms",
+            "selected_failure_domains",
+        ],
+    ),
+    (
+        "Container",
+        &[
+            "autoscaling",
+            "cluster",
+            "code",
+            "command",
+            "commands_capability_file",
+            "commands_enabled",
+            "cpu",
+            "egress",
+            "environment",
+            "ephemeral_storage",
+            "gpu",
+            "health_check",
+            "id",
+            "kubernetes_liveness_probe",
+            "kubernetes_readiness_probe",
+            "kubernetes_secret_mounts",
+            "links",
+            "memory",
+            "permissions",
+            "persistent_storage",
+            "pool",
+            "ports",
+            "priority",
+            "public_endpoints",
+            "replicas",
+            "resource_choices",
+            "security",
+            "stateful",
+            "stop_grace_period_seconds",
+        ],
+    ),
+    ("ContainerResourceChoices", &["cpu", "memory"]),
+    (
+        "ContainerResourceSelection",
+        &["cpu", "memory", "volume_size_gib"],
+    ),
+    (
+        "Daemon",
+        &[
+            "cluster",
+            "code",
+            "command",
+            "commands_capability_file",
+            "commands_enabled",
+            "cpu",
+            "environment",
+            "health_check",
+            "id",
+            "links",
+            "memory",
+            "permissions",
+            "pool",
+            "priority",
+            "public_endpoints",
+            "runtime",
+            "security",
+            "stop_grace_period_seconds",
+        ],
+    ),
+    (
+        "DaemonRuntime",
+        &[
+            "mounts",
+            "network_mode",
+            "pid_namespace",
+            "privileged",
+            "user",
+        ],
+    ),
+    ("DaemonRuntimeMount", &["options", "source", "target"]),
+    ("Email", &["domains", "events", "id", "inbound"]),
+    ("EmailEvents", &["queue"]),
+    ("EmailInbound", &["storage"]),
+    ("GcpAgentPlatformEngine", &["id"]),
+    (
+        "GcpClientConfig",
+        &[
+            "credentials",
+            "project_id",
+            "project_number",
+            "region",
+            "service_overrides",
+        ],
+    ),
+    (
+        "GcpFederationAccess",
+        &[
+            "assertion_audience",
+            "pool_id",
+            "project_number",
+            "provider_id",
+            "service_account_email",
+            "trust",
+        ],
+    ),
+    ("GcpFederationScope", &["deployment_id"]),
+    ("GcpFederationTrust", &["issuer", "subject"]),
+    (
+        "GcpImpersonationConfig",
+        &[
+            "delegates",
+            "lifetime",
+            "scopes",
+            "service_account_email",
+            "target_project_id",
+            "target_region",
+        ],
+    ),
+    (
+        "GcpRemoteBindingsImportData",
+        &[
+            "federation",
+            "project_id",
+            "service_account_email",
+            "service_account_unique_id",
+        ],
+    ),
+    (
+        "GcpRemoteStackManagementImportData",
+        &[
+            "federation",
+            "management_permissions_applied",
+            "project_id",
+            "project_number",
+            "service_account_email",
+            "service_account_unique_id",
+        ],
+    ),
+    ("GcpServiceOverrides", &["endpoints"]),
+    ("Key", &["id"]),
+    (
+        "KubernetesCloudReference",
+        &[
+            "account_id",
+            "cluster_id",
+            "cluster_name",
+            "project_id",
+            "region",
+            "resource_group",
+            "subscription_id",
+        ],
+    ),
+    (
+        "KubernetesCluster",
+        &[
+            "cloud",
+            "heartbeat_mode",
+            "id",
+            "namespace",
+            "ownership",
+            "provider",
+        ],
+    ),
+    ("Kv", &["id"]),
+    ("LifecycleRule", &["days", "prefix"]),
+    (
+        "MachineRuntimeIdentity",
+        &["audience", "deployment_id", "exchange_url"],
+    ),
+    ("Network", &["id", "settings"]),
+    (
+        "Postgres",
+        &[
+            "backend",
+            "cpu",
+            "encryption_key",
+            "high_availability",
+            "id",
+            "memory",
+            "storage",
+            "version",
+        ],
+    ),
+    ("Queue", &["id"]),
+    ("QueueBatchConfig", &["max_messages", "max_window_seconds"]),
+    (
+        "Redis",
+        &[
+            "encryption_key",
+            "eviction_policy",
+            "high_availability",
+            "id",
+            "memory",
+            "persistence",
+        ],
+    ),
+    (
+        "RemoteBindingGrant",
+        &["permission_set", "resource_id", "revision"],
+    ),
+    ("RemoteBindings", &["grants", "id"]),
+    ("RemoteStackManagement", &["id"]),
+    ("ResourceChoiceRange", &["default", "max", "min"]),
+    (
+        "Sandbox",
+        &[
+            "code",
+            "default_policy",
+            "egress",
+            "id",
+            "image_user",
+            "lifecycle",
+            "limits",
+            "links",
+            "preview_ports",
+            "private_base_image",
+            "privileged_supervisor",
+        ],
+    ),
+    (
+        "SandboxCapabilities",
+        &[
+            "domain_egress_rules",
+            "egress_deny",
+            "enforced_limits",
+            "files",
+            "interactive_commands",
+            "jobs",
+            "pause_resume",
+            "preview",
+            "process_limit",
+            "reconnect",
+            "sandbox_lifetime",
+            "snapshot",
+            "supervisor_isolation",
+            "supervisor_pid_namespace",
+        ],
+    ),
+    (
+        "SandboxEgressGateway",
+        &[
+            "admin_ca_pem",
+            "audience",
+            "container",
+            "kid",
+            "replicas",
+            "signing_key",
+        ],
+    ),
+    ("SandboxEgressReplicas", &["count", "dns", "port"]),
+    ("SandboxEgressSigningKey", &["key", "vault"]),
+    (
+        "SandboxImageCommand",
+        &["command", "env", "user", "working_directory"],
+    ),
+    (
+        "SandboxLifecyclePolicy",
+        &["idle_pause_seconds", "max_lifetime_seconds"],
+    ),
+    ("SandboxLimits", &["cpu", "disk", "max_processes", "memory"]),
+    ("SandboxPrivilegedSupervisor", &["command_uid"]),
+    (
+        "ServiceAccount",
+        &["id", "resource_permission_sets", "stack_permission_sets"],
+    ),
+    ("ServiceActivation", &["id", "service_name"]),
+    ("SigningVerifier", &["id"]),
+    ("SigningVerifierImportData", &["name"]),
+    ("StackSigning", &["channel", "fingerprint"]),
+    (
+        "Storage",
+        &[
+            "cors_allowed_origins",
+            "cors_upload_origins",
+            "encryption_key",
+            "id",
+            "lifecycle_rules",
+            "notifications",
+            "public_read",
+            "versioning",
+        ],
+    ),
+    (
+        "StorageNotification",
+        &["events", "prefix", "queue", "suffix"],
+    ),
+    ("Vault", &["id"]),
+    (
+        "Worker",
+        &[
+            "code",
+            "commands_enabled",
+            "concurrency_limit",
+            "environment",
+            "id",
+            "links",
+            "memory_mb",
+            "permissions",
+            "public_endpoints",
+            "readiness_probe",
+            "runtime_identity_exchange",
+            "security",
+            "timeout_seconds",
+            "triggers",
+        ],
+    ),
+];
+
 use super::pull_compat::{self, Feature};
 
 /// Older Operators the manager still serves.
-const OLDER_OPERATORS: &[(&str, &[(&str, &[&str])])] = &[("3.3.31", V3_3_31), ("3.3.62", V3_3_62)];
+const OLDER_OPERATORS: &[(&str, &[(&str, &[&str])])] = &[
+    ("3.3.31", V3_3_31),
+    ("3.3.62", V3_3_62),
+    ("3.3.68", V3_3_68),
+];
 
 /// How every field added to a struct that older Operators parse strictly is
 /// handled: a [`Feature`] that strips or refuses it for Operators that cannot
@@ -857,6 +1288,7 @@ fn every_field_added_since_an_older_operator_is_handled() {
         .collect();
     let handled = handled();
     let mut unhandled = Vec::new();
+    let mut too_old = Vec::new();
     let mut used = std::collections::BTreeSet::new();
     for (version, shapes) in OLDER_OPERATORS {
         for (name, fields) in &head {
@@ -867,6 +1299,18 @@ fn every_field_added_since_an_older_operator_is_handled() {
                 match handled.iter().position(|(n, f, _)| n == name && f == field) {
                     Some(index) => {
                         used.insert(index);
+                        // A gate at or below the older Operator's own version
+                        // does not protect it: it already reads that version.
+                        if let Handling::Feature(feature) = &handled[index].2 {
+                            let since = semver::Version::parse(feature.since).expect("since");
+                            let operator = semver::Version::parse(version).expect("version");
+                            if since <= operator {
+                                too_old.push(format!(
+                                    "{name}.{field}: gated at {} ({}), but the {version} Operator rejects it",
+                                    feature.since, feature.name
+                                ));
+                            }
+                        }
                     }
                     None => unhandled.push(format!("{name}.{field} (new since {version})")),
                 }
@@ -879,6 +1323,13 @@ fn every_field_added_since_an_older_operator_is_handled() {
         unhandled.is_empty(),
         "fields older Operators reject, with no handling in pull_compat:\n{}",
         unhandled.join("\n")
+    );
+    too_old.sort();
+    too_old.dedup();
+    assert!(
+        too_old.is_empty(),
+        "features gated at a version the older Operator already runs:\n{}",
+        too_old.join("\n")
     );
     for (index, (name, field, handling)) in handled.iter().enumerate() {
         assert!(

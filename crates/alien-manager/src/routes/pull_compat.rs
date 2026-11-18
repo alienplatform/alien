@@ -19,8 +19,9 @@
 //! development build) is treated as current.
 //!
 //! To add a feature: add a [`Feature`] with the first release that reads it
-//! ([`NEXT_RELEASE`] until it ships), detect it in [`apply`], and add that
-//! version's definitions to the older-shape fixture in `tests`.
+//! (the current [`NEXT_RELEASE`] value, written as a literal), detect it in
+//! [`apply`], and add that version's definitions to the older-shape fixture in
+//! `tests`.
 
 use alien_core::{
     Ai, ArtifactRegistry, Container, Daemon, Postgres, Sandbox, Stack, Storage, Worker,
@@ -29,9 +30,12 @@ use alien_core::{
 /// The oldest supported Operator, assumed when none reports its version.
 const OLDEST_OPERATOR: &str = "3.3.31";
 
-/// The release that first ships features that are on main but in no tag. Set it
-/// to the version the next release gets.
-pub(crate) const NEXT_RELEASE: &str = "3.3.65";
+/// The release that first ships features that are on main but in no tag: the
+/// version after the newest release tag. The release prepare step bumps it
+/// (`.github/scripts/bump-next-release.sh`); CI fails when it is not newer than
+/// the latest tag. Feature gates always carry a literal version: for a feature
+/// not yet released, write this value, never the constant itself.
+pub(crate) const NEXT_RELEASE: &str = "3.3.70";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Action {
@@ -85,7 +89,7 @@ pub(crate) const RESOURCE_CHOICES: Feature = feature(
 );
 pub(crate) const REPLICATION_REGIONS_INPUT: Feature = feature(
     "registry replication inputs",
-    NEXT_RELEASE,
+    "3.3.65",
     Action::Strip,
     "setup reads the input; the pull Operator never renders replication",
 );
@@ -100,7 +104,7 @@ pub(crate) const AI_MODELS: Feature = feature(
 /// release, whose stack is never altered.
 pub(crate) const UNREADABLE_SECURITY: Feature = feature(
     "pod security settings",
-    NEXT_RELEASE,
+    "3.3.65",
     Action::Strip,
     "older Operators apply no pod security context; delivery removes the settings",
 );
@@ -118,19 +122,19 @@ pub(crate) const EGRESS: Feature = feature(
 );
 pub(crate) const WRITABLE_PATHS: Feature = feature(
     "writable paths for restricted containers",
-    NEXT_RELEASE,
+    "3.3.65",
     Action::Refuse,
     "an older Operator would mount a read-only root without them",
 );
 pub(crate) const DAEMON_SECURITY: Feature = feature(
     "restricted security settings for daemons",
-    NEXT_RELEASE,
+    "3.3.65",
     Action::Refuse,
     "a declared restriction; older Operators cannot apply it",
 );
 pub(crate) const WORKER_SECURITY: Feature = feature(
     "restricted security settings for workers",
-    NEXT_RELEASE,
+    "3.3.65",
     Action::Refuse,
     "a declared restriction; older Operators cannot apply it",
 );
@@ -172,15 +176,21 @@ pub(crate) const REDIS: Feature = feature(
 );
 pub(crate) const SIGNING_VERIFIER: Feature = feature(
     "signing verifier resources",
-    NEXT_RELEASE,
+    "3.3.65",
     Action::Refuse,
     "older Operators cannot parse the resource type",
 );
 pub(crate) const AZURE_SANDBOX_INTERNET: Feature = feature(
     "internet egress for Azure sandboxes",
-    NEXT_RELEASE,
+    "3.3.69",
     Action::Refuse,
     "the setup-created gateway's binding carries replica addresses and a protocol floor older Operators reject, and they have no Azure gateway to enforce the rules",
+);
+pub(crate) const AMBIENT_AI_BINDING: Feature = feature(
+    "external AI bindings that use the workload's cloud identity (Bedrock)",
+    "3.3.69",
+    Action::Refuse,
+    "older Operators read an external AI binding only as a provider and an API key, so one without them fails to parse and they reject the whole target",
 );
 pub(crate) const CUSTOM_BASE_DOMAIN: Feature = feature(
     "custom base domains for Kubernetes endpoints",
@@ -210,6 +220,7 @@ pub(crate) const FEATURES: &[&Feature] = &[
     &REDIS,
     &SIGNING_VERIFIER,
     &AZURE_SANDBOX_INTERNET,
+    &AMBIENT_AI_BINDING,
     &CUSTOM_BASE_DOMAIN,
 ];
 
@@ -398,6 +409,21 @@ pub(crate) fn apply(
     {
         refuse(&CUSTOM_BASE_DOMAIN);
     }
+    // External bindings travel in the deployment's settings and its
+    // configuration; an Operator that cannot read one rejects the whole target.
+    if settings
+        .and_then(|settings| settings.external_bindings.as_ref())
+        .is_some_and(|bindings| {
+            bindings.0.values().any(|binding| {
+                matches!(
+                    binding,
+                    alien_core::ExternalBinding::Ai(alien_core::ExternalAi::Ambient(_))
+                )
+            })
+        })
+    {
+        refuse(&AMBIENT_AI_BINDING);
+    }
     refused
 }
 
@@ -441,7 +467,7 @@ pub(crate) fn refusal_message(refused: &[&Feature]) -> String {
         .unwrap_or_else(|| NEXT_RELEASE.to_string());
     let names: Vec<&str> = refused.iter().map(|feature| feature.name).collect();
     format!(
-        "This release uses {}; the deployment's Operator must be {newest} or newer. Update the Operator, then deploy the release again. The deployment keeps running its current release.",
+        "This deployment needs {}; the deployment's Operator must be {newest} or newer. Update the Operator, then deploy the release again. The deployment keeps running its current release.",
         names.join(", ")
     )
 }
@@ -795,11 +821,10 @@ mod tests {
     fn an_azure_internet_sandbox_is_refused_for_operators_before_its_gateway_binding() {
         use alien_core::Platform;
         let stack = internet_sandbox();
-        for version in [None, Some("3.3.31"), Some("3.3.62")] {
+        for version in [None, Some("3.3.31"), Some("3.3.62"), Some("3.3.68")] {
             let operator = OperatorVersion::from_report(version);
             assert_eq!(
-                refuse_for_platform(&stack, Platform::Azure, &operator)
-                    .map(|feature| feature.name),
+                refuse_for_platform(&stack, Platform::Azure, &operator).map(|feature| feature.name),
                 Some("internet egress for Azure sandboxes"),
                 "{version:?}"
             );
@@ -807,7 +832,7 @@ mod tests {
             assert!(refuse_for_platform(&stack, Platform::Aws, &operator).is_none());
             assert!(refuse_for_platform(&stack, Platform::Kubernetes, &operator).is_none());
         }
-        let reads = OperatorVersion::from_report(Some(NEXT_RELEASE));
+        let reads = OperatorVersion::from_report(Some("3.3.69"));
         assert!(refuse_for_platform(&stack, Platform::Azure, &reads).is_none());
         let mut none = stack.clone();
         for (_, entry) in none.resources_mut() {
@@ -815,18 +840,96 @@ mod tests {
                 sandbox.egress = alien_core::SandboxEgress::None;
             }
         }
-        assert!(refuse_for_platform(
-            &none,
-            Platform::Azure,
-            &OperatorVersion::from_report(None)
+        assert!(
+            refuse_for_platform(&none, Platform::Azure, &OperatorVersion::from_report(None))
+                .is_none()
+        );
+    }
+
+    /// The v3.3.68 shape of an external AI binding (`alien-core`
+    /// `ExternalBinding::Ai(ExternalAiBinding)`), copied so the failure older
+    /// Operators have is reproduced, not assumed.
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    enum OldExternalBinding {
+        #[allow(dead_code)]
+        Ai(OldExternalAiBinding),
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    #[allow(dead_code)]
+    struct OldExternalAiBinding {
+        provider: String,
+        api_key: serde_json::Value,
+    }
+
+    fn bedrock_settings() -> alien_core::StackSettings {
+        let binding: alien_core::ExternalBinding = serde_json::from_value(serde_json::json!({
+            "type": "ai", "service": "bedrock", "region": "us-east-1"
+        }))
+        .unwrap();
+        alien_core::StackSettings {
+            external_bindings: Some(alien_core::ExternalBindings(
+                [("llm".to_string(), binding)].into(),
+            )),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_ambient_bedrock_binding_is_refused_for_operators_that_cannot_parse_it() {
+        let settings = bedrock_settings();
+        // What a 3.3.68 Operator does with the binding this manager would send.
+        let sent =
+            serde_json::to_value(&settings.external_bindings.as_ref().unwrap().0["llm"]).unwrap();
+        let old = serde_json::from_value::<OldExternalBinding>(sent);
+        let error = old.unwrap_err().to_string();
+        assert!(error.contains("missing field `provider`"), "{error}");
+
+        let stack = stack_with(container(), daemon(None));
+        for version in [None, Some("3.3.31"), Some("3.3.65"), Some("3.3.68")] {
+            let refused = apply(
+                &mut stack.clone(),
+                Some(&settings),
+                &OperatorVersion::from_report(version),
+                false,
+            );
+            assert_eq!(
+                refused.iter().map(|f| f.since).collect::<Vec<_>>(),
+                ["3.3.69"],
+                "{version:?}"
+            );
+        }
+        assert!(apply(
+            &mut stack.clone(),
+            Some(&settings),
+            &OperatorVersion::from_report(Some("3.3.69")),
+            false
         )
-        .is_none());
+        .is_empty());
+        // A bring-your-own-key binding was always readable.
+        let key: alien_core::ExternalBinding = serde_json::from_value(serde_json::json!({
+            "type": "ai", "provider": "openai", "apiKey": "k"
+        }))
+        .unwrap();
+        let settings = alien_core::StackSettings {
+            external_bindings: Some(alien_core::ExternalBindings([("llm".into(), key)].into())),
+            ..Default::default()
+        };
+        assert!(apply(
+            &mut stack.clone(),
+            Some(&settings),
+            &OperatorVersion::from_report(None),
+            false
+        )
+        .is_empty());
     }
 
     #[test]
     fn the_message_names_the_features_and_the_newest_version() {
         let message = refusal_message(&[&STORAGE_NOTIFICATIONS, &REDIS]);
-        assert!(message.contains("storage notifications, Redis resources"));
+        assert!(message.contains("This deployment needs storage notifications, Redis resources"));
         assert!(message.contains("must be 3.3.59 or newer"));
         assert!(message.contains("keeps running its current release"));
     }
