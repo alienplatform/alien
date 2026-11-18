@@ -1,14 +1,16 @@
 import {
   type EgressPolicy,
+  type ResourceRef,
   type ResourceType,
   type SandboxCode,
   type Sandbox as SandboxConfig,
   type SandboxEgress,
   type SandboxLifecyclePolicy,
   type SandboxLimits,
+  type SandboxPersistentStorage,
   SandboxSchema,
 } from "./generated/index.js"
-import { type Resource, ResourceBuilder } from "./resource.js"
+import { Resource, ResourceBuilder } from "./resource.js"
 
 export type {
   EgressPolicy,
@@ -20,9 +22,22 @@ export type {
   SandboxLifecyclePolicy,
   SandboxLimits,
   SandboxOutputs,
+  SandboxPersistentStorage,
   SandboxPrivilegedSupervisor,
 } from "./generated/index.js"
 export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
+
+/** Options for {@link Sandbox.persistentStorage}. */
+export interface SandboxPersistentStorageOptions {
+  /** Absolute directory inside the sandbox, such as `/workspace`. */
+  path: string
+  /** The Storage the directory is replicated to: its encryption, retention and uninstall policy apply. */
+  storage: Resource | ResourceRef
+  /** Paths relative to `path` kept local and never replicated, such as `tmp/`. */
+  exclude?: string[]
+  /** Largest replicated tree, such as `"8Gi"`. A commit above it is refused whole. */
+  maxSize?: string
+}
 
 /**
  * An isolated environment for running untrusted code.
@@ -109,6 +124,23 @@ export class Sandbox extends ResourceBuilder {
    */
   public previewPorts(ports: number[]): this {
     this._config.previewPorts = ports
+    return this
+  }
+
+  /**
+   * Declares a directory whose contents belong to a key the caller chooses, not to a sandbox.
+   *
+   * Alien's agent replicates the directory to `storage` within seconds of a write and restores
+   * it into a new sandbox created with the same `storageKey` before the image command starts.
+   * The application reads a key's files without a sandbox and erases a key through the binding.
+   * Platforms without a replication transport refuse the declaration when the stack is planned.
+   */
+  public persistentStorage(options: SandboxPersistentStorageOptions): this {
+    const storage = options.storage instanceof Resource ? options.storage.ref() : options.storage
+    const persistentStorage: SandboxPersistentStorage = { path: options.path, storage }
+    if (options.exclude !== undefined) persistentStorage.exclude = options.exclude
+    if (options.maxSize !== undefined) persistentStorage.maxSize = options.maxSize
+    this._config.persistentStorage = persistentStorage
     return this
   }
 

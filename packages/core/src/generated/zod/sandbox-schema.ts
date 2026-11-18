@@ -9,6 +9,7 @@ import { SandboxCodeSchema } from "./sandbox-code-schema.js";
 import { SandboxEgressSchema } from "./sandbox-egress-schema.js";
 import { SandboxLifecyclePolicySchema } from "./sandbox-lifecycle-policy-schema.js";
 import { SandboxLimitsSchema } from "./sandbox-limits-schema.js";
+import { SandboxPersistentStorageSchema } from "./sandbox-persistent-storage-schema.js";
 import { SandboxPrivilegedSupervisorSchema } from "./sandbox-privileged-supervisor-schema.js";
 
 /**
@@ -30,6 +31,9 @@ get "lifecycle"(){
               },
 get "limits"(){
                 return z.union([SandboxLimitsSchema, z.null()]).optional()
+              },
+get "persistentStorage"(){
+                return z.union([SandboxPersistentStorageSchema, z.null()]).optional()
               },
 "previewPorts": z.optional(z.array(z.int().min(0)).describe("Ports eligible for a preview capability. An application reaches its sandbox through the\nprovider, so it cannot widen its own ingress at runtime; a holder of a remote binding's\ncredentials is bounded by no port condition, which is why a remote sandbox declares none.")),
 "privateBaseImage": z.string().describe("Private ECR base image an AWS build pulls; `code.image` names only the S3 bundle, so this is\nwhat the cross-account grant opens. Live only: the grant needs the customer account,\nwhich registration reports. Absent means the base image is pulled anonymously.").nullish(),

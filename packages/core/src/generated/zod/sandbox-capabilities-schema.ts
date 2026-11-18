@@ -16,6 +16,7 @@ export const SandboxCapabilitiesSchema = z.object({
 "interactiveCommands": z.boolean().describe("A running command takes input on stdin, can be signalled, and streams its output as it is\nwritten, so a caller can drive a REPL, a language server or a tool protocol over it."),
 "jobs": z.boolean().describe("A command can be started, polled and cancelled across separate calls, so it outlives the\none that started it. False where nothing inside the sandbox owns the process in between."),
 "pauseResume": z.boolean().describe("Sandbox state can be paused and resumed"),
+"persistentStorage": z.optional(z.boolean().describe("A directory can be declared as persistent storage: the agent replicates it to a linked\nStorage under a caller-chosen key and restores it into a new sandbox for the same key.\n\nDefaults to false when absent, so a capability set written before it still reads.")),
 "preview": z.boolean().describe("An authenticated, port-scoped capability to reach a service inside the sandbox"),
 "processLimit": z.boolean().describe("The platform can cap how many processes a sandbox runs"),
 "reconnect": z.boolean().describe("A later call can reach a sandbox created by an earlier one"),

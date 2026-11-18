@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { Sandbox, SandboxConfigSchema, type SandboxEgress } from "../sandbox.js"
+import { Storage } from "../storage.js"
 
 const limits = { cpu: "1", memory: "2Gi", disk: "20Gi", maxProcesses: 256 }
 const lifecycle = { maxLifetimeSeconds: 3600 }
@@ -51,6 +52,31 @@ describe("Sandbox", () => {
 
     expect(r.config.egress).toBe("internet")
     expect(r.config.defaultPolicy).toEqual({ allow: ["example.com"] })
+  })
+
+  it("links persistent storage to a Storage by reference", () => {
+    const workspaces = new Storage("workspaces").build()
+    const r = complete()
+      .persistentStorage({
+        path: "/workspace",
+        storage: workspaces,
+        exclude: ["tmp/"],
+        maxSize: "8Gi",
+      })
+      .build()
+
+    expect(r.config.persistentStorage).toEqual({
+      path: "/workspace",
+      storage: { type: "storage", id: "workspaces" },
+      exclude: ["tmp/"],
+      maxSize: "8Gi",
+    })
+  })
+
+  // A sandbox without persistent storage must build exactly as before.
+  it("omits persistent storage unless declared", () => {
+    const r = complete().build()
+    expect("persistentStorage" in r.config).toBe(false)
   })
 
   it("carries declared preview ports", () => {
