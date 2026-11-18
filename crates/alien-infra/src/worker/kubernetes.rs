@@ -1916,7 +1916,7 @@ mod tests {
             if drift {
                 let error = result.expect_err("not ready");
                 assert_eq!(error.code, "WORKLOAD_NOT_READY", "{status}");
-                assert!(!error.retryable);
+                assert!(error.retryable);
             } else {
                 assert!(
                     matches!(

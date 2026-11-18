@@ -2709,7 +2709,10 @@ mod tests {
         assert_eq!(resumed.state, KubernetesDaemonState::UpdateStart);
     }
 
-    fn daemonset_status_body(labels: &std::collections::BTreeMap<String, String>, ready: i32) -> serde_json::Value {
+    fn daemonset_status_body(
+        labels: &std::collections::BTreeMap<String, String>,
+        ready: i32,
+    ) -> serde_json::Value {
         serde_json::json!({
             "apiVersion":"apps/v1", "kind":"DaemonSet",
             "metadata":{"name":"agent", "generation":2, "labels":labels},
@@ -2750,7 +2753,8 @@ mod tests {
         let mut rolling = server.mock(|when, then| {
             when.method(httpmock::Method::GET)
                 .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
-            then.status(200).json_body(daemonset_status_body(&labels, 6));
+            then.status(200)
+                .json_body(daemonset_status_body(&labels, 6));
         });
         let error = controller.step(&ctx).await.expect_err("mid-roll");
         assert_eq!(error.code, "WORKLOAD_NOT_READY");
@@ -2766,9 +2770,13 @@ mod tests {
         server.mock(|when, then| {
             when.method(httpmock::Method::GET)
                 .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
-            then.status(200).json_body(daemonset_status_body(&labels, 10));
+            then.status(200)
+                .json_body(daemonset_status_body(&labels, 10));
         });
-        controller.step(&ctx).await.expect("recovers on the next refresh");
+        controller
+            .step(&ctx)
+            .await
+            .expect("recovers on the next refresh");
         assert_eq!(controller.get_status(), ResourceStatus::Running);
     }
 }

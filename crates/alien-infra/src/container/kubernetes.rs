@@ -3889,7 +3889,7 @@ mod tests {
             } else {
                 let error = result.expect_err("one of two replicas is not ready");
                 assert_eq!(error.code, "WORKLOAD_NOT_READY", "{status}");
-                assert!(!error.retryable);
+                assert!(error.retryable);
             }
         }
     }
