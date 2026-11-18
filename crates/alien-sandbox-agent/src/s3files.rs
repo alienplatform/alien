@@ -394,11 +394,12 @@ pub fn mount_target_name(fs_id: &str, region: &str) -> String {
     format!("{fs_id}.s3files.{region}.on.aws")
 }
 
-/// NFS options of an S3 Files mount through the proxy (`get_nfs_mount_options`), as `(name,
-/// value)` pairs for `mount(2)`.
+/// NFS options of an S3 Files mount through the proxy (`get_nfs_mount_options`). The `tls`
+/// option of the upstream helper is one of its own (NON_NFS_OPTIONS): the proxy does the TLS, so
+/// the kernel speaks plain NFS to the loopback port. `nosuid` and `nodev` are mount flags.
 pub fn nfs_options(proxy_port: u16) -> String {
     format!(
-        "nfsvers=4.2,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,tls,port={proxy_port},nosuid,nodev"
+        "nfsvers=4.2,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,port={proxy_port}"
     )
 }
 

@@ -80,6 +80,10 @@ pub enum HelperRequest {
         access_point_id: String,
         region: String,
     },
+    /// New credentials were written: make a fresh client certificate and have the proxy read it.
+    Refresh {
+        path: String,
+    },
     Unmount {
         path: String,
     },
@@ -188,6 +192,7 @@ pub enum Refusal {
     Unknown(String),
     Missing(String),
     NoMounts,
+    RefreshFailed(String),
 }
 
 impl std::fmt::Display for Refusal {
@@ -196,6 +201,7 @@ impl std::fmt::Display for Refusal {
             Self::Unknown(path) => write!(f, "'{path}' is not a declared s3files mount"),
             Self::Missing(path) => write!(f, "no source was given for the mount '{path}'"),
             Self::NoMounts => f.write_str("this sandbox declares no s3files mounts"),
+            Self::RefreshFailed(reason) => write!(f, "the new credentials were stored but not applied: {reason}"),
         }
     }
 }
@@ -377,7 +383,17 @@ impl Mounts {
             return Err(Refusal::Unknown(path.to_string()));
         }
         write_credentials(&self.credentials_dir, path, credentials)
-            .map_err(|_| Refusal::Unknown(path.to_string()))
+            .map_err(|_| Refusal::Unknown(path.to_string()))?;
+        // Only a mounted file system has a certificate to remake; before that the mount reads
+        // the new file itself.
+        if self.is_mounted(path) {
+            self.backend
+                .request(&HelperRequest::Refresh {
+                    path: path.to_string(),
+                })
+                .map_err(Refusal::RefreshFailed)?;
+        }
+        Ok(())
     }
 
     /// Unmounts in reverse declaration order, before a suspend. Status goes back to `pending`.
@@ -467,10 +483,11 @@ pub fn fork_helper() -> std::io::Result<HelperClient> {
 fn helper_loop(stream: std::os::unix::net::UnixStream) {
     let mut writer = stream.try_clone().expect("socket clone");
     let reader = BufReader::new(stream);
+    let mut helper = crate::s3files_mount::Helper::new(CREDENTIALS_DIR.into());
     for line in reader.lines() {
         let Ok(line) = line else { return };
         let error = match serde_json::from_str::<HelperRequest>(&line) {
-            Ok(request) => perform(&request).err(),
+            Ok(request) => perform(&mut helper, &request).err(),
             Err(_) => Some("unreadable request".to_string()),
         };
         let reply = serde_json::to_string(&HelperReply { error }).expect("reply");
@@ -481,7 +498,10 @@ fn helper_loop(stream: std::os::unix::net::UnixStream) {
 }
 
 #[cfg(target_os = "linux")]
-fn perform(request: &HelperRequest) -> Result<(), String> {
+fn perform(
+    helper: &mut crate::s3files_mount::Helper,
+    request: &HelperRequest,
+) -> Result<(), String> {
     match request {
         HelperRequest::Tmpfs {
             path,
@@ -489,15 +509,22 @@ fn perform(request: &HelperRequest) -> Result<(), String> {
             uid,
             gid,
         } => mount_tmpfs(path, *size_bytes, *uid, *gid),
-        HelperRequest::S3Files { .. } => {
-            Err("s3files mounting is not available in this agent build".into())
+        HelperRequest::S3Files {
+            path,
+            file_system_id,
+            access_point_id,
+            region,
+        } => helper.mount(path, file_system_id, access_point_id, region),
+        HelperRequest::Refresh { path } => helper.refresh(path),
+        HelperRequest::Unmount { path } => {
+            helper.stop_proxy(path);
+            unmount(path)
         }
-        HelperRequest::Unmount { path } => unmount(path),
     }
 }
 
 #[cfg(target_os = "linux")]
-fn c_string(text: &str) -> Result<std::ffi::CString, String> {
+pub(crate) fn c_string(text: &str) -> Result<std::ffi::CString, String> {
     std::ffi::CString::new(text).map_err(|_| "invalid path".to_string())
 }
 
@@ -525,7 +552,7 @@ fn mount_tmpfs(path: &str, size_bytes: u64, uid: u32, gid: u32) -> Result<(), St
 }
 
 #[cfg(target_os = "linux")]
-fn unmount(path: &str) -> Result<(), String> {
+pub(crate) fn unmount(path: &str) -> Result<(), String> {
     let target = c_string(path)?;
     // SAFETY: valid NUL-terminated path.
     if unsafe { libc::umount2(target.as_ptr(), 0) } != 0 {
@@ -682,17 +709,18 @@ mod tests {
         mounts.advance(&sources);
         let calls_before = fake.calls.lock().unwrap().len();
         mounts.renew("/workspace", &credentials("2")).unwrap();
+        // The only thing asked of the helper is a fresh certificate; nothing is mounted again.
+        assert_eq!(
+            fake.calls.lock().unwrap()[calls_before..],
+            [HelperRequest::Refresh { path: "/workspace".into() }]
+        );
+
         let file = credentials_file(dir.path(), "/workspace");
         let written = std::fs::read_to_string(&file).unwrap();
         assert!(written.contains("SK2") && !written.contains("SK1"));
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600
-        );
-        assert_eq!(
-            fake.calls.lock().unwrap().len(),
-            calls_before,
-            "renewal does not remount"
         );
         assert!(mounts.renew("/nowhere", &credentials("3")).is_err());
     }
