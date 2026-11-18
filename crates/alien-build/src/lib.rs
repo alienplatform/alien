@@ -2401,7 +2401,11 @@ async fn push_sandbox_agent_image(
         }
         protocol => protocol.clone(),
     };
-    let protocol = gcp_sandbox_image::with_loopback_agent_registry(protocol, agent_image);
+    let protocol = if gcp_sandbox_image::is_agent_image_override(agent_image) {
+        gcp_sandbox_image::with_loopback_agent_registry(protocol, agent_image)
+    } else {
+        protocol
+    };
     let image = gcp_sandbox_image::build_sandbox_agent_image(
         resource_name,
         base,

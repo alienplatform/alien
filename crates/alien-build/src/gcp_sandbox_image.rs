@@ -38,8 +38,16 @@ pub fn sandbox_agent_image() -> String {
     agent_image_or_override(std::env::var(SANDBOX_AGENT_IMAGE_OVERRIDE).ok())
 }
 
+/// Whether `agent_image` is the one [`SANDBOX_AGENT_IMAGE_OVERRIDE`] names. Only that image may
+/// come from a plain-HTTP loopback registry; the released agent always comes over HTTPS.
+pub fn is_agent_image_override(agent_image: &str) -> bool {
+    std::env::var(SANDBOX_AGENT_IMAGE_OVERRIDE)
+        .is_ok_and(|image| !image.trim().is_empty() && image.trim() == agent_image)
+}
+
 /// An overriding agent image on a loopback registry (`localhost:5000/...`) is pulled over plain
-/// HTTP, as Docker treats such registries; every other registry keeps `protocol`.
+/// HTTP, as Docker treats such registries; every other registry keeps `protocol`. Callers apply it
+/// only to the override ([`is_agent_image_override`]).
 pub fn with_loopback_agent_registry(protocol: ClientProtocol, agent_image: &str) -> ClientProtocol {
     let Ok(reference) = Reference::try_from(agent_image) else {
         return protocol;
