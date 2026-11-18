@@ -150,6 +150,14 @@ impl AgentState {
 
     /// Called only after network checks, before accepting any session operation.
     pub fn start_image_once(&self) -> crate::error::Result<()> {
+        // Declared mounts come first: the image command never sees a half-mounted sandbox. The
+        // start is remembered and made when the last mount succeeds.
+        #[cfg(unix)]
+        if let Some(mounts) = crate::mounts::global() {
+            if !mounts.may_start() {
+                return Ok(());
+            }
+        }
         let mut env = std::collections::BTreeMap::new();
         self.native_environment(&mut env);
         #[cfg(target_os = "linux")]
@@ -175,6 +183,9 @@ pub struct HealthResponse {
     pub boot_id: String,
     /// Session readiness; awaiting-egress-policy until create installs the signed token.
     pub status: String,
+    /// One entry per declared mount; absent when the sandbox declares none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mounts: Vec<crate::mounts::MountStatus>,
 }
 
 /// Optional version assertion from the caller.
@@ -381,6 +392,11 @@ pub fn router(state: Arc<AgentState>) -> Router {
     #[cfg(target_os = "linux")]
     let router = router
         .route("/v1/egress", axum::routing::put(update_egress))
+        .route("/v1/mounts", axum::routing::put(put_mounts))
+        .route(
+            "/v1/mounts/credentials",
+            axum::routing::put(put_mount_credentials),
+        )
         .route(&hook_path("run"), get(hook_lifecycle).post(run_egress_hook))
         .with_state(state);
     #[cfg(not(target_os = "linux"))]
@@ -437,6 +453,9 @@ async fn health(
         status: status.into(),
         protocol_version: PROTOCOL_VERSION,
         boot_id,
+        mounts: crate::mounts::global()
+            .map(|mounts| mounts.status())
+            .unwrap_or_default(),
     }))
 }
 
@@ -1446,6 +1465,70 @@ impl axum::response::IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (self.status, self.message).into_response()
     }
+}
+
+/// Delivers the sources of the declared s3files mounts, mounts everything that can be mounted,
+/// and starts the image command once all mounts are in place.
+#[cfg(target_os = "linux")]
+async fn put_mounts(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::mounts::MountsRequest>,
+) -> std::result::Result<Json<Vec<crate::mounts::MountStatus>>, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    let mounts = crate::mounts::global().ok_or_else(|| {
+        ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: "this sandbox declares no mounts".into(),
+        }))
+    })?;
+    mounts.check_sources(&request.mounts).map_err(|refusal| {
+        ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: refusal.to_string(),
+        }))
+    })?;
+    // Mounting blocks on the helper and the network.
+    let sources = request.mounts;
+    tokio::task::spawn_blocking(move || {
+        if let Some(mounts) = crate::mounts::global() {
+            mounts.advance(&sources);
+        }
+    })
+    .await
+    .map_err(|_| {
+        ApiError::from(AlienError::new(ErrorData::OperationFailed {
+            operation: "mount".into(),
+            reason: "the mount task failed".into(),
+        }))
+    })?;
+    if mounts.take_deferred_start() {
+        state.start_image_once()?;
+    }
+    Ok(Json(mounts.status()))
+}
+
+/// Replaces one mount's credentials. Nothing is remounted.
+#[cfg(target_os = "linux")]
+async fn put_mount_credentials(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::mounts::CredentialsRequest>,
+) -> std::result::Result<StatusCode, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    let mounts = crate::mounts::global().ok_or_else(|| {
+        ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: "this sandbox declares no mounts".into(),
+        }))
+    })?;
+    mounts
+        .renew(&request.path, &request.credentials)
+        .map_err(|refusal| {
+            ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+                reason: refusal.to_string(),
+            }))
+        })?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(target_os = "linux")]
