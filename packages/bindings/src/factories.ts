@@ -172,6 +172,7 @@ function toStorageStatus(raw: RawSandboxStorageStatus): SandboxStorageStatus {
     head: raw.head ?? null,
     lastError: raw.lastError ?? null,
     grantExpiresAt: raw.grantExpiresAt ?? null,
+    pendingBytes: raw.pendingBytes ?? null,
   }
 }
 

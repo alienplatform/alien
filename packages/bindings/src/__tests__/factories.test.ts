@@ -175,7 +175,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
       sandboxId === "plain"
         ? null
         : { key: "engine-42", state: "denied", head: 7, lastError: "grant expired" },
-    syncStorage: async () => ({ key: "engine-42", state: "replicating", head: 8 }),
+    syncStorage: async () => ({ key: "engine-42", state: "behind", head: 8, pendingBytes: 4096 }),
     readStorageFile: async (key, path) => Buffer.from(`${key}:${path}`),
     deleteStorage: async () => {},
   }
@@ -1520,8 +1520,11 @@ describe("sandbox persistent storage", () => {
       head: 7,
       lastError: "grant expired",
       grantExpiresAt: null,
+      pendingBytes: null,
     })
-    expect((await sandbox("sbx").syncStorage("s1")).state).toBe("replicating")
+    const synced = await sandbox("sbx").syncStorage("s1")
+    expect(synced.state).toBe("behind")
+    expect(synced.pendingBytes).toBe(4096)
     expect((await sandbox("sbx").readStorageFile("engine-42", "notes.md")).toString()).toBe(
       "engine-42:notes.md",
     )

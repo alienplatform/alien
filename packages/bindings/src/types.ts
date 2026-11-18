@@ -771,4 +771,10 @@ export interface SandboxStorageStatus {
   lastError?: string | null
   /** RFC 3339 time the sandbox's grant to its store expires. */
   grantExpiresAt?: string | null
+  /**
+   * On GCP, where the binding pulls commits from the sandbox: bytes committed inside the sandbox
+   * that are not in the store yet. Call `syncStorage` before the workload exits or scales to
+   * zero. `null` elsewhere.
+   */
+  pendingBytes?: number | null
 }

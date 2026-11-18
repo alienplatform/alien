@@ -97,6 +97,9 @@ pub struct SandboxStorageStatusJs {
     pub head: Option<i64>,
     /// Why the state is `behind`, `denied` or `stopped`.
     pub last_error: Option<String>,
+    /// Bytes committed inside the sandbox that are not in the store yet. Only on GCP, where the
+    /// binding pulls commits from the sandbox.
+    pub pending_bytes: Option<i64>,
     /// RFC 3339 time the sandbox's grant to its store expires.
     pub grant_expires_at: Option<String>,
 }
@@ -113,6 +116,9 @@ fn storage_status_to_js(
         last_synced_at: status.last_synced_at.map(|at| at.to_rfc3339()),
         head: status.head.and_then(|head| i64::try_from(head).ok()),
         last_error: status.last_error,
+        pending_bytes: status
+            .pending_bytes
+            .and_then(|bytes| i64::try_from(bytes).ok()),
         grant_expires_at: status.grant_expires_at.map(|at| at.to_rfc3339()),
     }
 }
