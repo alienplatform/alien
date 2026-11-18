@@ -483,6 +483,7 @@ export type { SandboxHeartbeatStatus } from "./sandbox-heartbeat-status-schema.j
 export type { SandboxLifecyclePolicy } from "./sandbox-lifecycle-policy-schema.js";
 export type { SandboxLimits } from "./sandbox-limits-schema.js";
 export type { SandboxOutputs } from "./sandbox-outputs-schema.js";
+export type { SandboxPersistentStorage } from "./sandbox-persistent-storage-schema.js";
 export type { SandboxPrivilegedSupervisor } from "./sandbox-privileged-supervisor-schema.js";
 export type { Sandbox } from "./sandbox-schema.js";
 export type { ScheduledEvent } from "./scheduled-event-schema.js";
@@ -1041,6 +1042,7 @@ export { SandboxHeartbeatStatusSchema } from "./sandbox-heartbeat-status-schema.
 export { SandboxLifecyclePolicySchema } from "./sandbox-lifecycle-policy-schema.js";
 export { SandboxLimitsSchema } from "./sandbox-limits-schema.js";
 export { SandboxOutputsSchema } from "./sandbox-outputs-schema.js";
+export { SandboxPersistentStorageSchema } from "./sandbox-persistent-storage-schema.js";
 export { SandboxPrivilegedSupervisorSchema } from "./sandbox-privileged-supervisor-schema.js";
 export { SandboxSchema } from "./sandbox-schema.js";
 export { ScheduledEventSchema } from "./scheduled-event-schema.js";

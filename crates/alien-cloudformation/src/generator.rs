@@ -557,7 +557,10 @@ pub fn generate_cloudformation_template_with_profile(
                     alien_core::SetupTarget::from_cloud(Platform::Aws, true),
                 ) && options
                     .registry
-                    .emitter(&entry.config.resource_type(), options.target.cloud_platform())
+                    .emitter(
+                        &entry.config.resource_type(),
+                        options.target.cloud_platform(),
+                    )
                     .is_some()
             },
         )?;
@@ -706,6 +709,7 @@ pub fn generate_cloudformation_template_with_profile(
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     add_sandbox_gateway_replica_secret(&mut template, stack, options.target);
+    add_sandbox_persistent_store_rules(&mut template, stack, options.target);
     add_signing_settings(&mut template, &stack_settings_value, options.target)?;
     consolidate_role_inline_policies(&mut template)?;
     // After consolidation, so the count of managed policies on the management role is final.
@@ -1997,6 +2001,63 @@ fn add_sandbox_gateway_replica_secret(
         ]),
     );
     template.resources.insert(secret.logical_id.clone(), secret);
+}
+
+/// A sandbox's path to its persistent store needs the region's S3 prefix list, which the template
+/// maps from `alien_core`'s table, and the gateway endpoint setup puts on the sandbox route
+/// table it creates. Rules refuse a region outside the table and a network setup does not
+/// create, before any resource is made.
+fn add_sandbox_persistent_store_rules(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    target: CloudFormationTarget,
+) {
+    if target.is_kubernetes()
+        || alien_core::sandbox_egress::aws_sandboxes_with_store_path(stack).is_empty()
+    {
+        return;
+    }
+    use crate::emitters::aws::sandbox::{MAPPING_S3_PREFIX_LISTS, MAPPING_S3_PREFIX_LIST_KEY};
+    let table = alien_core::sandbox_storage_network::S3_PREFIX_LISTS;
+    let mut mapping = CfMapping::new();
+    for (region, prefix_list) in table {
+        mapping.insert(
+            region.to_string(),
+            indexmap! {
+                MAPPING_S3_PREFIX_LIST_KEY.to_string() => CfExpression::from(*prefix_list),
+            },
+        );
+    }
+    template
+        .mappings
+        .insert(MAPPING_S3_PREFIX_LISTS.to_string(), mapping);
+    let mut assertions = vec![CfRuleAssertion {
+        assertion: CfExpression::contains(
+            CfExpression::list(table.iter().map(|(region, _)| CfExpression::from(*region))),
+            CfExpression::ref_("AWS::Region"),
+        ),
+        assert_description: format!(
+            "Sandbox persistent storage is available in these AWS regions: {}.",
+            table
+                .iter()
+                .map(|(region, _)| *region)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }];
+    if template.parameters.contains_key(PARAM_NETWORK_MODE) {
+        assertions.push(CfRuleAssertion {
+            assertion: equals_ref(PARAM_NETWORK_MODE, "create-new"),
+            assert_description: "Sandbox persistent storage needs the network this template \
+                creates: its sandbox subnets reach the store through an S3 gateway endpoint on \
+                their route table. Set Network to create-new."
+                .to_string(),
+        });
+    }
+    template.rules.insert(
+        "SandboxPersistentStoreNetwork".to_string(),
+        CfRule { assertions },
+    );
 }
 
 /// Template parameter that shows a protected install's signing fingerprint. It allows exactly

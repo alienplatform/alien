@@ -101,6 +101,14 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                     .expect("the bundle lives in the deployment's own bucket");
             }
         }
+        TestApp::SandboxStorage => {
+            common::sandbox_storage::check_round_trip_and_lifecycle(ctx)
+                .await
+                .expect("persistent storage round trip and lifecycle");
+            common::sandbox_storage::check_abrupt_terminations(ctx)
+                .await
+                .expect("abrupt terminations lose at most seconds and keep integrity");
+        }
         TestApp::SandboxRemote => {
             common::sandbox::check_remote_interactive_command(&ctx.deployment, ctx.platform)
                 .await
@@ -983,6 +991,45 @@ sandbox_session_context!(
 #[test_context(CloudFormationAwsPushSandboxSession)]
 #[tokio::test]
 async fn cloudformation_aws_push_sandbox_session(ctx: &mut CloudFormationAwsPushSandboxSession) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+/// A distribution test of the `sandbox-storage` app.
+macro_rules! sandbox_storage_context {
+    ($name:ident, $flow:expr) => {
+        struct $name {
+            ctx: alien_test::TestContext,
+        }
+
+        impl test_context::AsyncTestContext for $name {
+            async fn setup() -> Self {
+                alien_test::e2e::init_tracing();
+                let ctx = alien_test::e2e::setup_distribution($flow, TestApp::SandboxStorage)
+                    .await
+                    .expect(concat!(stringify!($name), " setup failed"));
+                Self { ctx }
+            }
+
+            async fn teardown(self) {
+                self.ctx
+                    .cleanup()
+                    .await
+                    .expect("distribution cleanup must reach a safe setup handoff");
+            }
+        }
+    };
+}
+
+sandbox_storage_context!(
+    CloudFormationAwsPushSandboxStorage,
+    DistributionFlow::CloudFormationAwsPush
+);
+
+/// A Live sandbox with persistent storage installed by CloudFormation: the acceptance suite
+/// through a release, from a Worker that holds the sandbox binding.
+#[test_context(CloudFormationAwsPushSandboxStorage)]
+#[tokio::test]
+async fn cloudformation_aws_push_sandbox_storage(ctx: &mut CloudFormationAwsPushSandboxStorage) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 

@@ -439,6 +439,7 @@ impl ResolvedRemoteBinding {
                             })
                             .transpose()?,
                         allow_egress: binding.allow_egress,
+                        persistent_storage: None,
                     }),
                     client_config: Box::new(alien_core::AwsClientConfig {
                         account_id: client_config.account_id,

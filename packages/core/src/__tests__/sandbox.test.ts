@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
+import { Key } from "../key.js"
 import { Sandbox, SandboxConfigSchema, type SandboxEgress } from "../sandbox.js"
+import { Storage } from "../storage.js"
 
 const limits = { cpu: "1", memory: "2Gi", disk: "20Gi", maxProcesses: 256 }
 const lifecycle = { maxLifetimeSeconds: 3600 }
@@ -51,6 +53,38 @@ describe("Sandbox", () => {
 
     expect(r.config.egress).toBe("internet")
     expect(r.config.defaultPolicy).toEqual({ allow: ["example.com"] })
+  })
+
+  it("declares persistent storage with its own store", () => {
+    const key = new Key("workspace-key").build()
+    const r = complete()
+      .persistentStorage({
+        path: "/workspace",
+        exclude: ["tmp/"],
+        maxSize: "8Gi",
+        encryptionKey: key,
+      })
+      .build()
+
+    expect(r.config.persistentStorage).toEqual({
+      path: "/workspace",
+      exclude: ["tmp/"],
+      maxSize: "8Gi",
+      encryptionKey: { type: "key", id: "workspace-key" },
+    })
+  })
+
+  it("refuses an encryption key that is not a Key", () => {
+    const storage = new Storage("not-a-key").build()
+    expect(() =>
+      complete().persistentStorage({ path: "/workspace", encryptionKey: storage }),
+    ).toThrow()
+  })
+
+  // A sandbox without persistent storage must build exactly as before.
+  it("omits persistent storage unless declared", () => {
+    const r = complete().build()
+    expect("persistentStorage" in r.config).toBe(false)
   })
 
   it("carries declared preview ports", () => {

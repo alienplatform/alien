@@ -286,6 +286,7 @@ async fn local_declares_no_jobs_and_asks_its_manager_for_nothing() {
             manager_url: BindingValue::Value(manager),
             sandbox_key: BindingValue::Value("sbx".to_string()),
             token_path: BindingValue::Value(token.path().display().to_string()),
+            persistent_storage: None,
         },
     )
     .await

@@ -203,6 +203,10 @@ pub struct AwsSandboxController {
     /// Whether the declaration asked for open egress.
     #[serde(default)]
     pub(crate) allow_egress: bool,
+    /// The store setup created for a sandbox that declares persistent storage, from the import.
+    /// Published on the binding as is; absent for every other sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) persistent_storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
     /// Ports a preview token may be minted for; the mint is bounded by this list alone.
     #[serde(default)]
     pub(crate) preview_ports: Vec<u16>,
@@ -1311,6 +1315,7 @@ impl AwsSandboxController {
             idle_pause_seconds: self.idle_pause_seconds,
             max_lifetime_seconds: self.max_lifetime_seconds,
             allow_egress: self.allow_egress,
+            persistent_storage: self.persistent_storage.clone(),
         });
 
         Ok(Some(
@@ -5275,6 +5280,7 @@ mod tests {
                     gateway_cidrs: vec![],
                     workload_cidrs: vec![],
                     vpc_cidrs: vec![],
+                    persistent_store_endpoint_id: None,
                 }),
                 ..Default::default()
             }

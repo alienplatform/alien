@@ -226,7 +226,10 @@ async fn an_internet_sandbox_setup_template_carries_the_gateway_network() {
         let mut proxy_rules = 0;
         let document: serde_json::Value = serde_yaml::from_str(&yaml).expect("template parses");
         collect_ports(&document, &mut proxy_rules);
-        assert!(proxy_rules > 0, "{description}: no gateway proxy rule found");
+        assert!(
+            proxy_rules > 0,
+            "{description}: no gateway proxy rule found"
+        );
         cfn_lint(&yaml).assert_ok(&description);
         for (kind, name) in [
             ("resource", "SandboxGatewaySubnet1"),
@@ -791,7 +794,62 @@ fn collect_ports(value: &serde_json::Value, rules: &mut usize) {
             }
             map.values().for_each(|inner| collect_ports(inner, rules));
         }
-        serde_json::Value::Array(items) => items.iter().for_each(|inner| collect_ports(inner, rules)),
+        serde_json::Value::Array(items) => {
+            items.iter().for_each(|inner| collect_ports(inner, rules))
+        }
         _ => {}
     }
+}
+
+/// An `internet` sandbox with persistent storage: the gateway's network and the store path in
+/// one template. The network registration records the store endpoint, which is what lets the
+/// controller's route check admit it on the connector subnets, and the connector's rules keep
+/// the gateway proxy next to HTTPS to S3.
+#[tokio::test]
+async fn an_internet_sandbox_with_persistent_storage_records_its_store_endpoint() {
+    let mut source = stack(Shape::SandboxOnly, SandboxEgress::Internet);
+    let entry = source.resources.get_mut("agents").expect("sandbox");
+    let mut sandbox = entry
+        .config
+        .downcast_ref::<Sandbox>()
+        .expect("sandbox")
+        .clone();
+    sandbox.image_user = Some(1001);
+    sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+        path: "/workspace".to_string(),
+        exclude: vec![],
+        max_size: None,
+        encryption_key: None,
+    });
+    entry.config = alien_core::Resource::new(sandbox);
+    let description = "internet sandbox with persistent storage";
+    let prepared = prepare_for_setup_template(source.clone(), &settings()).await;
+    let template = render(&prepared, &source, settings(), description)
+        .unwrap_or_else(|error| panic!("{description}: {error}"));
+    let yaml = to_yaml(&template).expect("template serializes");
+    cfn_lint(&yaml).assert_ok(description);
+
+    let resources = serde_json::to_value(&template.resources).expect("json");
+    let endpoint_id = resources
+        .as_object()
+        .expect("resources")
+        .iter()
+        .find(|(_, resource)| resource["Type"] == "AWS::EC2::VPCEndpoint")
+        .map(|(id, _)| id.clone())
+        .expect("the store endpoint renders");
+    let rendered = serde_json::to_string(&resources).expect("json");
+    assert!(
+        rendered.contains(&format!(
+            "\"persistentStoreEndpointId\":{{\"Ref\":\"{endpoint_id}\"}}"
+        )),
+        "the network registration records the endpoint"
+    );
+    let egress =
+        resources["AgentsEgressSecurityGroup"]["Properties"]["SecurityGroupEgress"].to_string();
+    assert!(egress.contains("3128"), "{egress}");
+    assert_eq!(
+        egress.matches("SandboxS3PrefixLists").count(),
+        2,
+        "both network-mode branches carry the store rule: {egress}"
+    );
 }

@@ -2377,3 +2377,299 @@ async fn the_bundle_bucket_and_its_guards_render_under_both_setup_modes() {
         );
     }
 }
+
+/// A sandbox with persistent storage, run by an `execution` profile holding `sandbox/execute`,
+/// next to a `watcher` profile holding only `sandbox/management`, under Remote Stack Management.
+fn persistent_storage_stack() -> (Stack, StackSettings) {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let mut sandbox = sandbox_fixture(SandboxEgress::None);
+    sandbox.image_user = Some(1001);
+    sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+        path: "/workspace".to_string(),
+        exclude: vec!["tmp/".to_string()],
+        max_size: Some("8Gi".to_string()),
+        encryption_key: None,
+    });
+    let stack = Stack::new("acme-persistent".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("agents", ["sandbox/execute"]),
+        )
+        .permission(
+            "watcher",
+            PermissionProfile::new().resource("agents", ["sandbox/management"]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("watcher-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sandbox, ResourceLifecycle::Frozen)
+        .add(
+            alien_core::RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    (stack, settings)
+}
+
+/// Persistent storage gets a private bucket of its own, kept like a Storage's, reachable only
+/// over TLS, and its objects are granted to the role that runs sessions (it claims keys and
+/// signs the agent's grants) by exact ARN. No other role, management least of all, gets object
+/// access that could reach it.
+#[test]
+fn persistent_storage_gets_a_private_bucket_only_the_session_role_reaches() {
+    let (stack, settings) = persistent_storage_stack();
+    let (template, yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "sandbox persistent storage",
+    );
+
+    let bucket = serde_json::to_value(&template.resources["AgentsPersistentStore"]).expect("json");
+    assert_eq!(bucket["Type"], "AWS::S3::Bucket");
+    assert_eq!(bucket["DeletionPolicy"], "RetainExceptOnCreate");
+    for flag in [
+        "BlockPublicAcls",
+        "BlockPublicPolicy",
+        "IgnorePublicAcls",
+        "RestrictPublicBuckets",
+    ] {
+        assert_eq!(
+            bucket["Properties"]["PublicAccessBlockConfiguration"][flag], true,
+            "{flag}"
+        );
+    }
+    assert!(bucket["Properties"]
+        .get("VersioningConfiguration")
+        .is_none());
+    let policy =
+        serde_json::to_string(&template.resources["AgentsPersistentStorePolicy"]).expect("json");
+    assert!(policy.contains("aws:SecureTransport"), "{policy}");
+
+    // Policies are consolidated per role, so the grant is found by what it names.
+    const OBJECT_ACTIONS: [&str; 4] = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:*"];
+    let mut granted_to = Vec::new();
+    for (name, resource) in &template.resources {
+        if !matches!(
+            resource.resource_type.as_str(),
+            "AWS::IAM::Policy" | "AWS::IAM::Role" | "AWS::IAM::ManagedPolicy"
+        ) {
+            continue;
+        }
+        let document = serde_json::to_string(&resource.properties).expect("json");
+        let reaches_store = document.contains("AgentsPersistentStore")
+            || document.contains("-agents-ps")
+            || document.contains(":s3:::*")
+            || document.contains(":s3:::${AWS::StackName}-*");
+        let grants_objects = OBJECT_ACTIONS
+            .iter()
+            .any(|action| document.contains(&format!("\"{action}\"")));
+        if !(reaches_store && grants_objects) {
+            continue;
+        }
+        // Only a policy whose sole role is the session role may (consolidated per role).
+        assert_ne!(
+            resource.resource_type, "AWS::IAM::Role",
+            "{name} must not reach the persistent store's objects: {document}"
+        );
+        assert_eq!(
+            serde_json::to_value(resource.properties.get("Roles")).expect("json"),
+            serde_json::json!([{ "Ref": "ExecutionSaRole" }]),
+            "{name}: only the profile holding sandbox/execute: {document}"
+        );
+        granted_to.push(name.clone());
+    }
+    assert!(
+        !granted_to.is_empty(),
+        "the session role must be able to claim keys and sign grants"
+    );
+
+    let _ = yaml;
+}
+
+/// The agent receives its half of the declaration; the image gets nothing else new.
+#[test]
+fn persistent_storage_reaches_the_agent_environment() {
+    let (stack, settings) = persistent_storage_stack();
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "sandbox persistent storage",
+    );
+    let image = serde_json::to_string(&template.resources["Agents"].properties).expect("json");
+    assert!(
+        image.contains("ALIEN_SANDBOX_PERSISTENT_STORAGE"),
+        "{image}"
+    );
+}
+
+/// The runtime controller publishes the binding the deployment's own workloads read and learns the
+/// store only from what setup registers: a declaring sandbox's import data carries the binding's
+/// `persistentStorage`, which the importer accepts; an undeclared sandbox's import data has none.
+#[test]
+fn the_registration_hands_the_controller_the_persistent_store() {
+    let (stack, settings) = persistent_storage_stack();
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "sandbox persistent storage registration",
+    );
+    let emitted = emitted_import_data(&template, "agents");
+    assert_eq!(
+        emitted["persistentStorage"],
+        serde_json::json!({
+            "path": "/workspace",
+            "store": {"type": "aws", "bucket": {"Ref": "AgentsPersistentStore"}},
+            "exclude": ["tmp/"],
+            "maxSizeBytes": 8u64 << 30,
+        }),
+        "{emitted:#}"
+    );
+    let parsed: AwsSandboxImportData =
+        serde_json::from_value(registration_import_data(&template, "agents"))
+            .expect("the importer accepts what the emitter renders");
+    assert!(parsed.persistent_storage.is_some());
+
+    let (mut stack, settings) = persistent_storage_stack();
+    let entry = stack.resources.get_mut("agents").expect("sandbox");
+    let mut sandbox = entry
+        .config
+        .downcast_ref::<Sandbox>()
+        .expect("sandbox")
+        .clone();
+    sandbox.persistent_storage = None;
+    entry.config = alien_core::Resource::new(sandbox);
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "sandbox without persistent storage",
+    );
+    let emitted = emitted_import_data(&template, "agents");
+    assert!(emitted.get("persistentStorage").is_none(), "{emitted:#}");
+}
+
+/// The store path under egress `none`: the connector moves to the dedicated sandbox subnets, one
+/// S3 gateway endpoint goes on their route table with a policy naming only the persistent store's
+/// objects, the connector's security group gains HTTPS to the region's S3 prefix list (mapped in
+/// the template), and rules refuse an unmapped region or a network the template does not create.
+#[test]
+fn persistent_storage_opens_only_the_store_path_to_the_connector() {
+    let (stack, settings) = persistent_storage_stack();
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "sandbox persistent storage network",
+    );
+    let resources = serde_json::to_value(&template.resources).expect("json");
+    let endpoints: Vec<(&String, &Value)> = resources
+        .as_object()
+        .expect("resources")
+        .iter()
+        .filter(|(_, resource)| resource["Type"] == "AWS::EC2::VPCEndpoint")
+        .collect();
+    assert_eq!(endpoints.len(), 1, "{endpoints:#?}");
+    let (endpoint_id, endpoint) = endpoints[0];
+    let network = endpoint_id
+        .strip_suffix("SandboxStoreEndpoint")
+        .expect("named for the network");
+    let properties = &endpoint["Properties"];
+    assert_eq!(properties["VpcEndpointType"], "Gateway");
+    assert_eq!(
+        properties["RouteTableIds"],
+        serde_json::json!([{ "Ref": format!("{network}SandboxRouteTable") }])
+    );
+    assert_eq!(endpoint["Condition"], "NetworkModeCreate");
+    let statements = properties["PolicyDocument"]["Statement"]
+        .as_array()
+        .expect("statements");
+    assert_eq!(statements.len(), 1);
+    assert_eq!(
+        statements[0]["Action"],
+        serde_json::json!(["s3:GetObject", "s3:PutObject"])
+    );
+    assert_eq!(
+        statements[0]["Resource"],
+        serde_json::json!([{ "Fn::Join": ["", [
+            { "Fn::GetAtt": ["AgentsPersistentStore", "Arn"] }, "/*"
+        ]] }])
+    );
+    assert!(
+        resources[format!("{network}SandboxRouteTable")].is_object(),
+        "the dedicated route table exists under none when a store needs it"
+    );
+
+    let connector = &resources["AgentsEgressConnector"]["Properties"]["Configuration"]
+        ["VpcEgressConfiguration"];
+    // Under create-new; use-existing is refused by the template's rule (asserted below).
+    assert_eq!(connector["SubnetIds"]["Fn::If"][0], "NetworkModeCreate");
+    let subnets = connector["SubnetIds"]["Fn::If"][1].to_string();
+    assert!(
+        subnets.contains(&format!("{network}SandboxSubnet1")),
+        "the connector sits in the dedicated subnets: {subnets}"
+    );
+    assert!(!subnets.contains("PrivateSubnet"), "{subnets}");
+
+    let egress = resources["AgentsEgressSecurityGroup"]["Properties"]["SecurityGroupEgress"]
+        .as_array()
+        .expect("egress rules")
+        .clone();
+    assert_eq!(egress.len(), 2, "{egress:#?}");
+    assert_eq!(egress[1]["IpProtocol"], "tcp");
+    assert_eq!(egress[1]["FromPort"], 443);
+    assert_eq!(egress[1]["ToPort"], 443);
+    assert_eq!(
+        egress[1]["DestinationPrefixListId"],
+        serde_json::json!({ "Fn::FindInMap": [
+            "SandboxS3PrefixLists", { "Ref": "AWS::Region" }, "PrefixListId"
+        ] })
+    );
+    assert!(egress[1].get("CidrIp").is_none());
+
+    let mapping = &template.mappings["SandboxS3PrefixLists"];
+    assert_eq!(
+        mapping.len(),
+        alien_core::sandbox_storage_network::S3_PREFIX_LISTS.len()
+    );
+    assert_eq!(
+        serde_json::to_value(&mapping["us-east-2"]).expect("json"),
+        serde_json::json!({ "PrefixListId": "pl-7ba54012" })
+    );
+    let rule = serde_json::to_value(&template.rules["SandboxPersistentStoreNetwork"]).unwrap();
+    let rule = rule.to_string();
+    assert!(
+        rule.contains("us-east-2") && rule.contains("AWS::Region"),
+        "{rule}"
+    );
+    assert!(rule.contains("create-new"), "{rule}");
+}

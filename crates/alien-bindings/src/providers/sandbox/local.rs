@@ -33,6 +33,9 @@ struct SessionBody {
     /// Absent from a manager that predates it, which reported every session it listed.
     #[serde(default = "running_by_default")]
     running: bool,
+    /// The persistent storage key the session holds.
+    #[serde(default)]
+    storage_key: Option<String>,
 }
 
 fn running_by_default() -> bool {
@@ -82,6 +85,8 @@ pub struct LocalSandbox {
     client: reqwest::Client,
     base_url: String,
     token: String,
+    /// The declared persistent storage: a host directory per key.
+    persistent_storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
 }
 
 impl LocalSandbox {
@@ -149,7 +154,39 @@ impl LocalSandbox {
             client: reqwest::Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.trim().to_string(),
+            persistent_storage: binding.persistent_storage.clone(),
         })
+    }
+
+    /// The host directory holding `key`, refusing a key that is not one safe segment.
+    fn key_dir(&self, key: &str, operation: &str) -> Result<std::path::PathBuf> {
+        let Some(alien_core::bindings::PersistentStoreLocator::Local { dir }) = self
+            .persistent_storage
+            .as_ref()
+            .map(|storage| &storage.store)
+        else {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: operation.to_string(),
+                reason: "this sandbox declares no persistent storage".to_string(),
+            }));
+        };
+        alien_sandbox_storage::validate_key(key).map_err(|e| {
+            AlienError::new(ErrorData::InvalidInput {
+                operation_context: operation.to_string(),
+                details: e.to_string(),
+                field_name: Some("storageKey".to_string()),
+            })
+        })?;
+        let dir = dir
+            .clone()
+            .into_value(operation, "persistentStorage.store.dir")
+            .map_err(|e| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: operation.to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+        Ok(std::path::Path::new(&dir).join(key))
     }
 
     fn url(&self, path: &str) -> String {
@@ -325,6 +362,11 @@ impl Sandbox for LocalSandbox {
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
         super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         refuse_create_time_lifetime(&request)?;
+        let storage_key = super::storage_key::resolve_storage_key(
+            self.persistent_storage.as_ref(),
+            request.storage_key.as_deref(),
+            "sandbox.create",
+        )?;
         let sandbox_id = request
             .sandbox_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
@@ -335,7 +377,10 @@ impl Sandbox for LocalSandbox {
             .send(
                 self.client
                     .post(self.url("/v1/sessions"))
-                    .json(&json!({ "sessionId": sandbox_id })),
+                    .json(&match &storage_key {
+                        Some(key) => json!({ "sessionId": sandbox_id, "storageKey": key }),
+                        None => json!({ "sessionId": sandbox_id }),
+                    }),
                 "sandbox.create",
             )
             .await?;
@@ -360,6 +405,11 @@ impl Sandbox for LocalSandbox {
         // Refused on the reconnect path too: an existing sandbox honors a lifetime no more than a
         // fresh one would.
         refuse_create_time_lifetime(&request)?;
+        super::storage_key::resolve_storage_key(
+            self.persistent_storage.as_ref(),
+            request.storage_key.as_deref(),
+            "sandbox.getOrCreate",
+        )?;
         if let Some(id) = request.sandbox_id.as_deref() {
             if let Some(existing) = self.get(id).await? {
                 return Ok(ResolvedSandbox::found(existing));
@@ -629,6 +679,72 @@ impl Sandbox for LocalSandbox {
         Err(self.unsupported("jobs"))
     }
 
+    async fn read_storage_file(&self, key: &str, path: &str) -> Result<Vec<u8>> {
+        let operation = "sandbox.readStorageFile";
+        let mut target = self.key_dir(key, operation)?;
+        alien_sandbox_storage::validate_tree_path(path).map_err(|e| {
+            AlienError::new(ErrorData::InvalidInput {
+                operation_context: operation.to_string(),
+                details: e.to_string(),
+                field_name: Some("path".to_string()),
+            })
+        })?;
+        let failed = |reason: String| {
+            AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "readStorageFile".to_string(),
+                reason,
+            })
+        };
+        // The session's user writes this directory, so no component may be a symlink: the
+        // binding reads as the host user and would otherwise follow it anywhere on the host.
+        for component in path.split('/') {
+            target.push(component);
+            let metadata =
+                std::fs::symlink_metadata(&target).map_err(|e| failed(format!("'{path}': {e}")))?;
+            if metadata.file_type().is_symlink() {
+                return Err(failed(format!("'{path}' passes through a symlink")));
+            }
+        }
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&target)
+            .map_err(|e| failed(format!("'{path}': {e}")))?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut bytes)
+            .map_err(|e| failed(format!("'{path}': {e}")))?;
+        Ok(bytes)
+    }
+
+    async fn delete_storage(&self, key: &str) -> Result<()> {
+        let operation = "sandbox.deleteStorage";
+        let dir = self.key_dir(key, operation)?;
+        let sessions: Vec<SessionBody> = self
+            .send(self.client.get(self.url("/v1/sessions")), operation)
+            .await?;
+        if let Some(holder) = sessions
+            .iter()
+            .find(|session| session.running && session.storage_key.as_deref() == Some(key))
+        {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "deleteStorage".to_string(),
+                reason: format!(
+                    "storage key '{key}' is held by sandbox '{}'; terminate it first",
+                    holder.session_id
+                ),
+            }));
+        }
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "deleteStorage".to_string(),
+                reason: format!("could not erase '{}': {error}", dir.display()),
+            })),
+        }
+    }
+
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
         self.request(
             self.client
@@ -763,6 +879,7 @@ mod tests {
             client: reqwest::Client::new(),
             base_url: format!("http://{address}"),
             token: "test-token".to_string(),
+            persistent_storage: None,
         }
     }
 

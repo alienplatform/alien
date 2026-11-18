@@ -53,6 +53,7 @@ futures-util = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
+alien-sandbox-storage = { workspace = true }
 
 # Time
 chrono = { workspace = true, features = ["serde"] }

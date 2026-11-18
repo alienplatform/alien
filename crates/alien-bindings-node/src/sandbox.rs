@@ -84,6 +84,39 @@ fn preview_to_js(preview: PreviewCapability) -> SandboxPreviewJs {
     }
 }
 
+/// How far a sandbox's persistent storage is durable.
+#[napi(object)]
+pub struct SandboxStorageStatusJs {
+    /// The storage key the sandbox holds, once attached.
+    pub key: Option<String>,
+    /// `awaitingRestore`, `replicating`, `behind`, `stopped` or `denied`.
+    pub state: String,
+    /// RFC 3339 time a commit last published or found nothing to publish.
+    pub last_synced_at: Option<String>,
+    /// Sequence number of the commit the key's HEAD names.
+    pub head: Option<i64>,
+    /// Why the state is `behind`, `denied` or `stopped`.
+    pub last_error: Option<String>,
+    /// RFC 3339 time the sandbox's grant to its store expires.
+    pub grant_expires_at: Option<String>,
+}
+
+fn storage_status_to_js(
+    status: alien_bindings::traits::SandboxStorageStatus,
+) -> SandboxStorageStatusJs {
+    SandboxStorageStatusJs {
+        key: status.key,
+        state: serde_json::to_value(status.state)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default(),
+        last_synced_at: status.last_synced_at.map(|at| at.to_rfc3339()),
+        head: status.head.and_then(|head| i64::try_from(head).ok()),
+        last_error: status.last_error,
+        grant_expires_at: status.grant_expires_at.map(|at| at.to_rfc3339()),
+    }
+}
+
 /// A sandbox from `getOrCreate`, and which of the two things happened.
 #[napi(object)]
 pub struct ResolvedSandboxJs {
@@ -341,6 +374,7 @@ fn capability_names(value: alien_core::SandboxCapabilities) -> Vec<String> {
         sandbox_lifetime,
         supervisor_pid_namespace,
         supervisor_isolation,
+        persistent_storage,
     } = value;
 
     [
@@ -357,6 +391,7 @@ fn capability_names(value: alien_core::SandboxCapabilities) -> Vec<String> {
         (sandbox_lifetime, "sandboxLifetime"),
         (supervisor_pid_namespace, "supervisorPidNamespace"),
         (supervisor_isolation, "supervisorIsolation"),
+        (persistent_storage, "persistentStorage"),
     ]
     .into_iter()
     .filter(|(supported, _)| *supported)
@@ -418,6 +453,7 @@ impl SandboxHandle {
         env: Option<std::collections::HashMap<String, String>>,
         timeout_ms: Option<u32>,
         egress: Option<serde_json::Value>,
+        storage_key: Option<String>,
     ) -> napi::Result<SandboxInstanceJs> {
         let sandbox = self.inner.clone();
         let created = sandbox
@@ -427,6 +463,7 @@ impl SandboxHandle {
                 tenant_key,
                 env: into_env(env),
                 timeout_ms: timeout_ms.map(u64::from),
+                storage_key,
             })
             .await
             .map_err(map_alien_error)?;
@@ -466,6 +503,7 @@ impl SandboxHandle {
         env: Option<std::collections::HashMap<String, String>>,
         timeout_ms: Option<u32>,
         egress: Option<serde_json::Value>,
+        storage_key: Option<String>,
     ) -> napi::Result<ResolvedSandboxJs> {
         let sandbox = self.inner.clone();
         let resolved = sandbox
@@ -475,6 +513,7 @@ impl SandboxHandle {
                 tenant_key,
                 env: into_env(env),
                 timeout_ms: timeout_ms.map(u64::from),
+                storage_key,
             })
             .await
             .map_err(map_alien_error)?;
@@ -696,14 +735,60 @@ impl SandboxHandle {
         sandbox.resume(&sandbox_id).await.map_err(map_alien_error)
     }
 
-    /// Destroys a sandbox. Idempotent: a sandbox already gone is the desired end state.
+    /// The sandbox's persistent storage, or `null` where it declares none.
     #[napi]
-    pub async fn terminate(&self, sandbox_id: String) -> napi::Result<()> {
+    pub async fn storage_status(
+        &self,
+        sandbox_id: String,
+    ) -> napi::Result<Option<SandboxStorageStatusJs>> {
         let sandbox = self.inner.clone();
         sandbox
-            .terminate(&sandbox_id)
+            .storage_status(&sandbox_id)
             .await
+            .map(|status| status.map(storage_status_to_js))
             .map_err(map_alien_error)
+    }
+
+    /// Commits everything written so far and returns once it is durable.
+    #[napi]
+    pub async fn sync_storage(&self, sandbox_id: String) -> napi::Result<SandboxStorageStatusJs> {
+        let sandbox = self.inner.clone();
+        sandbox
+            .sync_storage(&sandbox_id)
+            .await
+            .map(storage_status_to_js)
+            .map_err(map_alien_error)
+    }
+
+    /// Reads one file of a storage key without a sandbox, as of its last commit.
+    #[napi]
+    pub async fn read_storage_file(&self, key: String, path: String) -> napi::Result<Buffer> {
+        let sandbox = self.inner.clone();
+        sandbox
+            .read_storage_file(&key, &path)
+            .await
+            .map(Buffer::from)
+            .map_err(map_alien_error)
+    }
+
+    /// Erases a storage key. Refused while a running sandbox holds it.
+    #[napi]
+    pub async fn delete_storage(&self, key: String) -> napi::Result<()> {
+        let sandbox = self.inner.clone();
+        sandbox.delete_storage(&key).await.map_err(map_alien_error)
+    }
+
+    /// Destroys a sandbox. Idempotent: a sandbox already gone is the desired end state.
+    /// Persistent storage is committed first unless `discard` is true.
+    #[napi]
+    pub async fn terminate(&self, sandbox_id: String, discard: Option<bool>) -> napi::Result<()> {
+        let sandbox = self.inner.clone();
+        if discard.unwrap_or(false) {
+            sandbox.terminate_discarding(&sandbox_id).await
+        } else {
+            sandbox.terminate(&sandbox_id).await
+        }
+        .map_err(map_alien_error)
     }
 }
 

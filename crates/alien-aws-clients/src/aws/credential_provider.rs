@@ -155,7 +155,9 @@ impl AwsCredentialProvider {
             cached.access_key_id.clone(),
             cached.secret_access_key.clone(),
             cached.session_token.clone(),
-            None,
+            // Whatever is presigned with these ends with them, so they say when.
+            (cached.expires_at != 0)
+                .then(|| std::time::UNIX_EPOCH + std::time::Duration::from_secs(cached.expires_at)),
             "AwsCredentialProvider",
         )
     }
@@ -355,6 +357,23 @@ mod tests {
         assert_eq!(credentials.access_key_id(), "access-key");
         assert_eq!(credentials.secret_access_key(), "secret-key");
         assert_eq!(credentials.session_token(), Some("session-token"));
+        // A URL presigned with a session dies with it; the signer must be able to tell when.
+        assert_eq!(
+            credentials.expiry(),
+            Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(4_070_908_800))
+        );
+    }
+
+    #[test]
+    fn static_access_keys_have_no_expiry() {
+        let provider = AwsCredentialProvider::from_config_sync(config_with_credentials(
+            AwsCredentials::AccessKeys {
+                access_key_id: "access-key".to_string(),
+                secret_access_key: "secret-key".to_string(),
+                session_token: None,
+            },
+        ));
+        assert_eq!(provider.get_credentials().expiry(), None);
     }
 
     #[tokio::test]

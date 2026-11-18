@@ -23,6 +23,8 @@ pub mod interactive;
 #[cfg(feature = "aws")]
 pub mod aws;
 
+pub mod persistent_store;
+
 #[cfg(feature = "azure")]
 pub mod azure;
 
@@ -38,6 +40,7 @@ pub mod local;
 pub(crate) mod egress;
 #[cfg(any(feature = "aws", feature = "gcp"))]
 mod refusal;
+pub(crate) mod storage_key;
 
 #[cfg(all(
     test,

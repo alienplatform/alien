@@ -22,9 +22,20 @@ use dockdash::{
 };
 use oci_client::errors::{OciDistributionError, OciErrorCode};
 use oci_client::Reference;
+use sha2::{Digest, Sha256};
 use std::error::Error as StdError;
 use tokio::time::sleep;
 use tracing::warn;
+
+/// Names a local agent binary to layer instead of pulling [`sandbox_agent_image`]: for testing an
+/// unreleased agent on a real cloud. A release built with it records the file's digest.
+pub const DEVELOPMENT_AGENT_BINARY_ENV: &str = "ALIEN_SANDBOX_AGENT_BINARY";
+
+fn development_agent_binary() -> Option<std::path::PathBuf> {
+    std::env::var_os(DEVELOPMENT_AGENT_BINARY_ENV)
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+}
 
 /// The sandbox agent layered onto a GCP sandbox, released with the same version as
 /// `alien-build`, so a build never layers an agent from a different release than the CLI's.
@@ -158,43 +169,63 @@ pub(crate) async fn build_sandbox_agent_image(
     let base_layers = image_layers(&base)?;
     drop(base);
 
-    // The agent image is public, so no registry credential is sent to its registry.
-    let pulling_agent = format!("Pulling the agent image {agent_image}");
-    let (agent, agent_build) = build_with_retry(
-        resource_name,
-        agent_image,
-        Pulled::Agent,
-        &pulling_agent,
-        || async {
-            Ok(Image::builder()
-                .from(agent_image)
-                .platform("linux", &layering.arch)
-                .pull_policy(PullPolicy::Always)
-                .protocol(protocol.clone())
-                .auth(RegistryAuth::Anonymous)
-                .blob_cache(cache.clone()))
-        },
-    )
-    .await?;
-    let agent_binary = match agent.read_file(AGENT_PATH).await {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            let context = unreadable_file(
-                &error,
-                resource_name,
-                AGENT_PATH,
-                &format!("the agent image {agent_image}"),
+    let (agent_binary, agent_digest) = match development_agent_binary() {
+        Some(path) => {
+            let bytes = std::fs::read(&path)
+                .into_alien_error()
+                .context(failed(format!(
+                    "Cannot read the agent binary {} named by {DEVELOPMENT_AGENT_BINARY_ENV}",
+                    path.display()
+                )))?;
+            let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+            warn!(
+                path = %path.display(),
+                %digest,
+                "{DEVELOPMENT_AGENT_BINARY_ENV} is set: layering a local agent binary instead of {agent_image}"
             );
-            return Err(error).into_alien_error().context(context);
+            (bytes, digest)
         }
-    }
-    .ok_or_else(|| {
-        AlienError::new(rejected(format!(
-            "The agent image {agent_image} has no file at {AGENT_PATH}"
-        )))
-    })?;
-    // Each pulled image holds a full archive on disk; only the agent binary was needed.
-    drop(agent);
+        None => {
+            // The agent image is public, so no registry credential is sent to its registry.
+            let pulling_agent = format!("Pulling the agent image {agent_image}");
+            let (agent, agent_build) = build_with_retry(
+                resource_name,
+                agent_image,
+                Pulled::Agent,
+                &pulling_agent,
+                || async {
+                    Ok(Image::builder()
+                        .from(agent_image)
+                        .platform("linux", &layering.arch)
+                        .pull_policy(PullPolicy::Always)
+                        .protocol(protocol.clone())
+                        .auth(RegistryAuth::Anonymous)
+                        .blob_cache(cache.clone()))
+                },
+            )
+            .await?;
+            let agent_binary = match agent.read_file(AGENT_PATH).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let context = unreadable_file(
+                        &error,
+                        resource_name,
+                        AGENT_PATH,
+                        &format!("the agent image {agent_image}"),
+                    );
+                    return Err(error).into_alien_error().context(context);
+                }
+            }
+            .ok_or_else(|| {
+                AlienError::new(rejected(format!(
+                    "The agent image {agent_image} has no file at {AGENT_PATH}"
+                )))
+            })?;
+            // Each pulled image holds a full archive on disk; only the agent binary was needed.
+            drop(agent);
+            (agent_binary, agent_build.resolved_manifest_digest)
+        }
+    };
 
     let passwd = merge_identity(
         identity.passwd.as_deref(),
@@ -302,7 +333,7 @@ pub(crate) async fn build_sandbox_agent_image(
         ))?;
     Ok(SandboxAgentImage {
         image,
-        agent_digest: agent_build.resolved_manifest_digest,
+        agent_digest,
     })
 }
 

@@ -17,7 +17,8 @@ use crate::{
 };
 use alien_core::sandbox_build_role::sandbox_build_role_name;
 use alien_core::sandbox_egress::{
-    sandbox_egress_network, sandbox_needs_connector, SandboxEgressVpc, LOOPBACK_ONLY_CIDR,
+    aws_sandbox_has_store_path, aws_sandbox_uses_dedicated_subnets, sandbox_egress_network,
+    sandbox_needs_connector, SandboxEgressVpc, LOOPBACK_ONLY_CIDR,
 };
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::sandbox_setup_inputs::aws_sandbox_renders_bundle;
@@ -120,17 +121,24 @@ impl CfEmitter for AwsSandboxEmitter {
             security_group
                 .properties
                 .insert("VpcId".to_string(), vpc_id);
+            // A sandbox with persistent storage also reaches S3 on 443, through the gateway
+            // endpoint on its subnets' route table; only the agent's marked sockets get there.
+            let store_rule =
+                aws_sandbox_has_store_path(ctx.stack, sandbox).then(persistent_store_egress_rule);
             let egress_rules = if matches!(sandbox.egress, SandboxEgress::None) {
-                CfExpression::list([CfExpression::object([
-                    ("IpProtocol", CfExpression::from("-1")),
-                    ("CidrIp", CfExpression::from(LOOPBACK_ONLY_CIDR)),
-                    (
-                        "Description",
-                        CfExpression::from("Sandbox sessions reach nothing outbound"),
-                    ),
-                ])])
+                CfExpression::list(
+                    std::iter::once(CfExpression::object([
+                        ("IpProtocol", CfExpression::from("-1")),
+                        ("CidrIp", CfExpression::from(LOOPBACK_ONLY_CIDR)),
+                        (
+                            "Description",
+                            CfExpression::from("Sandbox sessions reach nothing outbound"),
+                        ),
+                    ]))
+                    .chain(store_rule),
+                )
             } else {
-                super::network::gateway_egress_rules(ctx)?
+                super::network::gateway_egress_rules(ctx, store_rule)?
             };
             security_group
                 .properties
@@ -278,6 +286,7 @@ impl CfEmitter for AwsSandboxEmitter {
             resources.push(policy);
         }
         resources.extend(profile_policies(ctx, sandbox)?);
+        resources.extend(persistent_store_resources(ctx, sandbox, image_id)?);
         Ok(resources)
     }
 
@@ -287,7 +296,7 @@ impl CfEmitter for AwsSandboxEmitter {
         if provisioned_at_runtime(ctx) {
             return runtime_import_ref(ctx, sandbox, image_id);
         }
-        Ok(CfExpression::object([
+        let mut fields = vec![
             ("previewPorts", preview_ports(sandbox)),
             (
                 "egressConnectorArns",
@@ -312,7 +321,9 @@ impl CfEmitter for AwsSandboxEmitter {
                 "imageVersion",
                 CfExpression::get_att(image_id, "LatestActiveImageVersion"),
             ),
-        ]))
+        ];
+        fields.extend(persistent_storage_import(sandbox, image_id));
+        Ok(CfExpression::object(fields))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
@@ -355,6 +366,9 @@ impl CfEmitter for AwsSandboxEmitter {
             ("region".to_string(), CfExpression::ref_("AWS::Region")),
         ];
         fields.extend(lifecycle_fields(sandbox));
+        if let Some(storage) = persistent_storage_binding(sandbox, image_id) {
+            fields.push(("persistentStorage".to_string(), storage));
+        }
         if let Some(policy) = &sandbox.default_policy {
             fields.push((
                 "defaultPolicy".to_string(),
@@ -575,6 +589,285 @@ fn profile_policies(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Vec<CfRe
     Ok(resources)
 }
 
+/// Template mapping from region to the AWS-managed S3 prefix list (`alien_core`'s table): a
+/// gateway endpoint does not return its prefix list to CloudFormation.
+pub(crate) const MAPPING_S3_PREFIX_LISTS: &str = "SandboxS3PrefixLists";
+pub(crate) const MAPPING_S3_PREFIX_LIST_KEY: &str = "PrefixListId";
+
+/// The connector rule to S3 over HTTPS, scoped to the region's S3 prefix list.
+fn persistent_store_egress_rule() -> CfExpression {
+    CfExpression::object([
+        ("IpProtocol", CfExpression::from("tcp")),
+        ("FromPort", CfExpression::Integer(443)),
+        ("ToPort", CfExpression::Integer(443)),
+        (
+            "DestinationPrefixListId",
+            CfExpression::find_in_map(
+                MAPPING_S3_PREFIX_LISTS,
+                CfExpression::ref_("AWS::Region"),
+                MAPPING_S3_PREFIX_LIST_KEY,
+            ),
+        ),
+        (
+            "Description",
+            CfExpression::from("Sandbox agent to its persistent store through the S3 endpoint"),
+        ),
+    ])
+}
+
+/// Logical id of the bucket a sandbox's persistent storage lives in.
+pub(crate) fn persistent_store_id(image_id: &str) -> String {
+    format!("{image_id}PersistentStore")
+}
+
+/// The persistent store, emitted only for a sandbox that declares persistent storage: a private
+/// bucket of its own (every key under `<key>/`), kept when the stack goes like a Storage's, and
+/// the access the workloads that run this sandbox's sessions need to claim keys and sign the
+/// agent's grants. That access names the bucket exactly and goes only to roles whose profile
+/// holds `sandbox/execute` or `sandbox/remote-execute` on this sandbox: reaching a key's files
+/// is reaching the sandbox's contents, which management, provision and heartbeat never do.
+fn persistent_store_resources(
+    ctx: &EmitContext<'_>,
+    sandbox: &Sandbox,
+    image_id: &str,
+) -> Result<Vec<CfResource>> {
+    let Some(storage) = &sandbox.persistent_storage else {
+        return Ok(Vec::new());
+    };
+    let bucket_id = persistent_store_id(image_id);
+    let key_arn = storage
+        .encryption_key
+        .as_ref()
+        .and_then(|key| ctx.name_for(&key.id))
+        .map(|key_id| CfExpression::get_att(key_id, "Arn"));
+
+    let mut bucket = CfResource::new(bucket_id.clone(), "AWS::S3::Bucket".to_string());
+    bucket.properties.insert(
+        "BucketName".to_string(),
+        super::storage::bucket_name(&format!("{}-ps", sandbox.id())),
+    );
+    let encryption = match &key_arn {
+        Some(arn) => CfExpression::object([
+            ("SSEAlgorithm", CfExpression::from("aws:kms")),
+            ("KMSMasterKeyID", arn.clone()),
+        ]),
+        None => CfExpression::object([("SSEAlgorithm", CfExpression::from("AES256"))]),
+    };
+    bucket.properties.insert(
+        "BucketEncryption".to_string(),
+        CfExpression::object([(
+            "ServerSideEncryptionConfiguration",
+            CfExpression::list([CfExpression::object([(
+                "ServerSideEncryptionByDefault",
+                encryption,
+            )])]),
+        )]),
+    );
+    bucket.properties.insert(
+        "OwnershipControls".to_string(),
+        CfExpression::object([(
+            "Rules",
+            CfExpression::list([CfExpression::object([(
+                "ObjectOwnership",
+                CfExpression::from("BucketOwnerEnforced"),
+            )])]),
+        )]),
+    );
+    bucket.properties.insert(
+        "PublicAccessBlockConfiguration".to_string(),
+        CfExpression::object([
+            ("BlockPublicAcls", CfExpression::from(true)),
+            ("BlockPublicPolicy", CfExpression::from(true)),
+            ("IgnorePublicAcls", CfExpression::from(true)),
+            ("RestrictPublicBuckets", CfExpression::from(true)),
+        ]),
+    );
+    // Versioning stays off: packs and manifests are content-addressed and written once, HEAD is
+    // replaced under a precondition, and an old version would only keep deleted keys' data.
+    bucket.properties.insert(
+        "LifecycleConfiguration".to_string(),
+        CfExpression::object([(
+            "Rules",
+            CfExpression::list([CfExpression::object([
+                ("Id", CfExpression::from("AbortIncompleteUploads")),
+                ("Status", CfExpression::from("Enabled")),
+                (
+                    "AbortIncompleteMultipartUpload",
+                    CfExpression::object([("DaysAfterInitiation", CfExpression::Integer(1))]),
+                ),
+            ])]),
+        )]),
+    );
+    bucket.properties.insert("Tags".to_string(), tags(ctx));
+    bucket.retain_data();
+
+    let bucket_arn = CfExpression::get_att(&bucket_id, "Arn");
+    let objects_arn = CfExpression::object([(
+        "Fn::Join",
+        CfExpression::list([
+            CfExpression::from(""),
+            CfExpression::list([bucket_arn.clone(), CfExpression::from("/*")]),
+        ]),
+    )]);
+    // Only TLS reaches the bucket; the agent's grant travels in its requests.
+    let mut bucket_policy = CfResource::new(
+        format!("{bucket_id}Policy"),
+        "AWS::S3::BucketPolicy".to_string(),
+    );
+    bucket_policy
+        .properties
+        .insert("Bucket".to_string(), CfExpression::ref_(&bucket_id));
+    bucket_policy.properties.insert(
+        "PolicyDocument".to_string(),
+        CfExpression::object([
+            ("Version", CfExpression::from("2012-10-17")),
+            (
+                "Statement",
+                CfExpression::list([CfExpression::object([
+                    ("Sid", CfExpression::from("DenyPlaintext")),
+                    ("Effect", CfExpression::from("Deny")),
+                    ("Principal", CfExpression::from("*")),
+                    ("Action", CfExpression::from("s3:*")),
+                    (
+                        "Resource",
+                        CfExpression::list([bucket_arn.clone(), objects_arn.clone()]),
+                    ),
+                    (
+                        "Condition",
+                        CfExpression::object([(
+                            "Bool",
+                            CfExpression::object([(
+                                "aws:SecureTransport",
+                                CfExpression::from("false"),
+                            )]),
+                        )]),
+                    ),
+                ])]),
+            ),
+        ]),
+    );
+
+    let mut resources = vec![bucket, bucket_policy];
+    let roles: Vec<CfExpression> = ctx
+        .stack
+        .permission_profiles()
+        .iter()
+        .filter(|(_, profile)| {
+            prefixed_permission_refs(profile, ctx.resource_id, PERMISSION_SET_PREFIX)
+                .iter()
+                .any(|permission| {
+                    matches!(
+                        permission.id(),
+                        "sandbox/execute" | "sandbox/remote-execute"
+                    )
+                })
+        })
+        .filter_map(|(profile_name, _)| service_account_role_id(ctx, profile_name))
+        .map(CfExpression::ref_)
+        .collect();
+    if !roles.is_empty() {
+        let mut statements = vec![
+            CfExpression::object([
+                ("Sid", CfExpression::from("PersistentStoreObjects")),
+                ("Effect", CfExpression::from("Allow")),
+                (
+                    "Action",
+                    CfExpression::list([
+                        CfExpression::from("s3:GetObject"),
+                        CfExpression::from("s3:PutObject"),
+                        CfExpression::from("s3:DeleteObject"),
+                    ]),
+                ),
+                ("Resource", objects_arn),
+            ]),
+            CfExpression::object([
+                ("Sid", CfExpression::from("PersistentStoreList")),
+                ("Effect", CfExpression::from("Allow")),
+                ("Action", CfExpression::from("s3:ListBucket")),
+                ("Resource", bucket_arn),
+            ]),
+        ];
+        if let Some(arn) = key_arn {
+            statements.push(CfExpression::object([
+                ("Sid", CfExpression::from("PersistentStoreKey")),
+                ("Effect", CfExpression::from("Allow")),
+                (
+                    "Action",
+                    CfExpression::list([
+                        CfExpression::from("kms:Decrypt"),
+                        CfExpression::from("kms:GenerateDataKey"),
+                    ]),
+                ),
+                ("Resource", arn),
+            ]));
+        }
+        let mut policy =
+            CfResource::new(format!("{bucket_id}Access"), "AWS::IAM::Policy".to_string());
+        policy.properties.insert(
+            "PolicyName".to_string(),
+            CfExpression::sub(format!(
+                "${{AWS::StackName}}-{}-persistent-storage",
+                sandbox.id()
+            )),
+        );
+        policy.properties.insert(
+            "PolicyDocument".to_string(),
+            CfExpression::object([
+                ("Version", CfExpression::from("2012-10-17")),
+                ("Statement", CfExpression::list(statements)),
+            ]),
+        );
+        policy
+            .properties
+            .insert("Roles".to_string(), CfExpression::list(roles));
+        resources.push(policy);
+    }
+    Ok(resources)
+}
+
+/// The store setup created, as the import data carries it: the runtime controller publishes the
+/// binding a deployment's own workloads read and learns the store only from this. Only a declaring
+/// sandbox has one, so every other sandbox's import data is unchanged.
+fn persistent_storage_import(
+    sandbox: &Sandbox,
+    image_id: &str,
+) -> Option<(&'static str, CfExpression)> {
+    persistent_storage_binding(sandbox, image_id).map(|storage| ("persistentStorage", storage))
+}
+
+/// The persistent storage half of the binding: where the agent's directory goes, and the store.
+fn persistent_storage_binding(sandbox: &Sandbox, image_id: &str) -> Option<CfExpression> {
+    let storage = sandbox.persistent_storage.as_ref()?;
+    let mut fields = vec![
+        (
+            "path".to_string(),
+            CfExpression::from(storage.path.as_str()),
+        ),
+        (
+            "store".to_string(),
+            CfExpression::object([
+                ("type", CfExpression::from("aws")),
+                ("bucket", CfExpression::ref_(persistent_store_id(image_id))),
+            ]),
+        ),
+    ];
+    if !storage.exclude.is_empty() {
+        fields.push((
+            "exclude".to_string(),
+            CfExpression::list(
+                storage
+                    .exclude
+                    .iter()
+                    .map(|path| CfExpression::from(path.as_str())),
+            ),
+        ));
+    }
+    if let Some(bytes) = storage.max_size_bytes().and_then(|b| i64::try_from(b).ok()) {
+        fields.push(("maxSizeBytes".to_string(), CfExpression::Integer(bytes)));
+    }
+    Some(CfExpression::object(fields))
+}
+
 /// Whether this sandbox's image is built by the runtime controller rather than by stack creation.
 fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
     ctx.resource.lifecycle == ResourceLifecycle::Live
@@ -608,6 +901,7 @@ fn runtime_import_ref(
     if !aws_sandbox_renders_bundle(ctx.stack, sandbox.id()) {
         fields.push(("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)));
     }
+    fields.extend(persistent_storage_import(sandbox, image_id));
     Ok(CfExpression::object(fields))
 }
 
@@ -964,7 +1258,8 @@ fn egress_network(
             network.id
         ))
     })?;
-    let gateway = matches!(sandbox.egress, SandboxEgress::Internet);
+    // `internet` sessions and those with a path to a persistent store use the dedicated subnets.
+    let gateway = aws_sandbox_uses_dedicated_subnets(ctx.stack, sandbox);
 
     Ok(Some(match network.vpc {
         // Deliberately not `private_subnet_ids_expr`: its use-default branch resolves to
@@ -988,7 +1283,10 @@ fn egress_network(
                         "PrivateSubnet"
                     },
                 ),
-                CfExpression::ref_(if gateway {
+                // A store path is refused under use-existing by the template's rule (its
+                // endpoint goes on the route table this template creates), so only `internet`
+                // takes the supplied dedicated subnets here.
+                CfExpression::ref_(if matches!(sandbox.egress, SandboxEgress::Internet) {
                     "SandboxSubnetIds"
                 } else {
                     PARAM_PRIVATE_SUBNET_IDS
@@ -1174,6 +1472,7 @@ mod tests {
             idle_pause_seconds: Some(600),
             max_lifetime_seconds: Some(1800),
             allow_egress: true,
+            persistent_storage: None,
         })
         .expect("the binding type serializes");
 
@@ -1193,6 +1492,32 @@ mod tests {
         assert!(
             declared(None, None).is_empty(),
             "an undeclared ceiling must not reach the template at all"
+        );
+    }
+
+    /// The binding's persistent storage half reads as the type the workload deserializes, with
+    /// the bucket a reference to the store this template creates; undeclared, there is none.
+    #[test]
+    fn the_persistent_storage_binding_reads_as_the_binding_type() {
+        let mut sandbox = sandbox_with("s3://acme-artifacts/agents/bundle.zip");
+        assert!(persistent_storage_binding(&sandbox, "Sbx").is_none());
+        sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+            path: "/workspace".to_string(),
+            exclude: vec!["tmp/".to_string()],
+            max_size: Some("1Gi".to_string()),
+            encryption_key: None,
+        });
+        let emitted =
+            serde_json::to_value(persistent_storage_binding(&sandbox, "Sbx").expect("declared"))
+                .expect("serializes");
+        let typed: alien_core::bindings::SandboxPersistentStorageBinding =
+            serde_json::from_value(emitted.clone()).expect("the binding type reads it");
+        assert_eq!(typed.path, "/workspace");
+        assert_eq!(typed.exclude, vec!["tmp/".to_string()]);
+        assert_eq!(typed.max_size_bytes, Some(1 << 30));
+        assert_eq!(
+            emitted["store"],
+            serde_json::json!({ "type": "aws", "bucket": { "Ref": "SbxPersistentStore" } })
         );
     }
 

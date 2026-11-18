@@ -133,7 +133,18 @@ fn main() -> Result<()> {
     #[cfg(target_os = "linux")]
     if image_command_enabled()? && std::env::var(ENV_AUTHORIZATION).as_deref() == Ok("native-file")
     {
-        alien_sandbox_agent::gateway_egress::isolate_image_devices()?;
+        match std::env::var(alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS) {
+            Err(_) => alien_sandbox_agent::gateway_egress::isolate_image_devices()?,
+            Ok(value) => {
+                let allowed = guest_egress_allowed(&value).ok_or_else(|| {
+                    invalid(
+                        alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS,
+                        "expected `none` or `only:` followed by comma-separated IPv4 addresses",
+                    )
+                })?;
+                alien_sandbox_agent::gateway_egress::isolate_guest_without_egress(allowed)?
+            }
+        }
     }
     if network_admin || image_command_enabled()? {
         #[cfg(target_os = "linux")]
@@ -440,24 +451,40 @@ fn load_state() -> Result<AgentState> {
     // without that state machine need a separate image activation gate.
     #[cfg(target_os = "linux")]
     let wait_for_run_hook = wait_for_run_hook && gateway_egress.is_none();
-    Ok(AgentState {
-        image_process: if image_command_enabled()? {
-            if agent_uid != 0 || isolation != Isolation::UidSplit {
-                return Err(invalid(
-                    ENV_IMAGE_COMMAND,
-                    "requires a root agent with uid-split isolation",
-                ));
-            }
-            if authorization.requires_activation() || wait_for_run_hook {
-                alien_sandbox_agent::image_command::ImageProcess::awaiting_activation()
-            } else {
-                alien_sandbox_agent::image_command::ImageProcess::with_image_user()
-            }
-        } else if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
-            Default::default()
+    #[cfg(target_os = "linux")]
+    let storage = alien_sandbox_agent::storage::attach::StorageConfig::from_env()?;
+    #[cfg(target_os = "linux")]
+    if storage.is_some() && !image_command_enabled()? {
+        return Err(invalid(
+            alien_sandbox_agent::storage::attach::ENV_PERSISTENT_STORAGE,
+            "requires the packaged image command, which the restore holds until the tree is in place",
+        ));
+    }
+    let image_process = if image_command_enabled()? {
+        if agent_uid != 0 || isolation != Isolation::UidSplit {
+            return Err(invalid(
+                ENV_IMAGE_COMMAND,
+                "requires a root agent with uid-split isolation",
+            ));
+        }
+        if authorization.requires_activation() || wait_for_run_hook {
+            alien_sandbox_agent::image_command::ImageProcess::awaiting_activation()
         } else {
-            alien_sandbox_agent::image_command::ImageProcess::not_configured()
-        },
+            alien_sandbox_agent::image_command::ImageProcess::with_image_user()
+        }
+    } else if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
+        Default::default()
+    } else {
+        alien_sandbox_agent::image_command::ImageProcess::not_configured()
+    };
+    #[cfg(target_os = "linux")]
+    let image_process = if storage.is_some() {
+        image_process.awaiting_restore()
+    } else {
+        image_process
+    };
+    Ok(AgentState {
+        image_process,
         session_root,
         authorization,
         exec_identity,
@@ -468,6 +495,10 @@ fn load_state() -> Result<AgentState> {
         gateway_egress,
         preview: Default::default(),
         agent_binary,
+        #[cfg(target_os = "linux")]
+        storage: storage.map(|config| {
+            Arc::new(alien_sandbox_agent::storage::attach::PersistentStorage::new(config))
+        }),
     })
 }
 
@@ -550,6 +581,19 @@ where
         .map_err(|error| invalid(name, &format!("{error}")))
 }
 
+/// `none` allows guest sockets no direct destination; `only:a,b` allows those addresses alone.
+fn guest_egress_allowed(value: &str) -> Option<Vec<std::net::Ipv4Addr>> {
+    if value == "none" {
+        return Some(Vec::new());
+    }
+    value
+        .strip_prefix("only:")?
+        .split(',')
+        .map(|address| address.parse().ok())
+        .collect::<Option<Vec<_>>>()
+        .filter(|addresses| !addresses.is_empty())
+}
+
 fn invalid(name: &str, reason: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::ConfigInvalid {
         setting: name.to_string(),
@@ -567,6 +611,30 @@ fn failed(operation: &str, reason: String) -> ErrorData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The guest egress the Azure binding asks for: nothing, or a fixed set of addresses.
+    /// Anything else, including an empty list, refuses to start.
+    #[test]
+    fn guest_egress_reads_none_or_a_fixed_address_list() {
+        assert_eq!(super::guest_egress_allowed("none"), Some(Vec::new()));
+        assert_eq!(
+            super::guest_egress_allowed("only:10.0.6.4,168.63.129.16"),
+            Some(vec![
+                std::net::Ipv4Addr::new(10, 0, 6, 4),
+                std::net::Ipv4Addr::new(168, 63, 129, 16)
+            ])
+        );
+        for refused in [
+            "",
+            "all",
+            "only:",
+            "only:10.0.6.4,",
+            "only:host.example",
+            "only:::1",
+        ] {
+            assert_eq!(super::guest_egress_allowed(refused), None, "{refused}");
+        }
+    }
 
     fn exec(uid: u32, gid: u32) -> ExecIdentity {
         ExecIdentity { uid, gid }

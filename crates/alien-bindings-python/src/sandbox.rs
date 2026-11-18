@@ -75,6 +75,38 @@ fn preview(value: PreviewCapability) -> Preview {
     }
 }
 
+/// How far a sandbox's persistent storage is durable.
+#[pyclass(frozen, get_all, skip_from_py_object)]
+#[derive(Clone)]
+pub(crate) struct StorageStatus {
+    /// The storage key the sandbox holds, once attached.
+    key: Option<String>,
+    /// `awaitingRestore`, `replicating`, `behind`, `stopped` or `denied`.
+    state: String,
+    /// RFC 3339 time a commit last published or found nothing to publish.
+    last_synced_at: Option<String>,
+    /// Sequence number of the commit the key's HEAD names.
+    head: Option<u64>,
+    /// Why the state is `behind`, `denied` or `stopped`.
+    last_error: Option<String>,
+    /// RFC 3339 time the sandbox's grant to its store expires.
+    grant_expires_at: Option<String>,
+}
+
+fn storage_status(value: alien_bindings::traits::SandboxStorageStatus) -> StorageStatus {
+    StorageStatus {
+        key: value.key,
+        state: serde_json::to_value(value.state)
+            .ok()
+            .and_then(|state| state.as_str().map(str::to_string))
+            .unwrap_or_default(),
+        last_synced_at: value.last_synced_at.map(|at| at.to_rfc3339()),
+        head: value.head,
+        last_error: value.last_error,
+        grant_expires_at: value.grant_expires_at.map(|at| at.to_rfc3339()),
+    }
+}
+
 fn sandbox_info(value: SandboxInstance) -> SandboxInfo {
     SandboxInfo {
         sandbox_id: value.sandbox_id,
@@ -273,6 +305,7 @@ fn sandbox_request(
     env: Option<HashMap<String, String>>,
     timeout_ms: Option<u64>,
     egress: Option<alien_core::EgressPolicy>,
+    storage_key: Option<String>,
 ) -> CreateSandboxRequest {
     CreateSandboxRequest {
         egress,
@@ -282,6 +315,7 @@ fn sandbox_request(
             .map(|value| value.into_iter().collect())
             .unwrap_or_default(),
         timeout_ms,
+        storage_key,
     }
 }
 
@@ -318,6 +352,7 @@ fn capability_names(value: alien_core::SandboxCapabilities) -> Vec<String> {
         (value.sandbox_lifetime, "sandboxLifetime"),
         (value.supervisor_pid_namespace, "supervisorPidNamespace"),
         (value.supervisor_isolation, "supervisorIsolation"),
+        (value.persistent_storage, "persistentStorage"),
     ]
     .into_iter()
     .filter(|(supported, _)| *supported)
@@ -346,7 +381,7 @@ impl SandboxHandle {
         })
     }
 
-    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None))]
+    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None, storage_key=None))]
     fn create<'py>(
         &self,
         py: Python<'py>,
@@ -355,13 +390,19 @@ impl SandboxHandle {
         env: Option<HashMap<String, String>>,
         timeout_ms: Option<u64>,
         egress_json: Option<String>,
+        storage_key: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let egress = egress_json.as_deref().map(parse_egress).transpose()?;
         let inner = self.inner.clone();
         future_into_py(py, async move {
             inner
                 .create(sandbox_request(
-                    sandbox_id, tenant_key, env, timeout_ms, egress,
+                    sandbox_id,
+                    tenant_key,
+                    env,
+                    timeout_ms,
+                    egress,
+                    storage_key,
                 ))
                 .await
                 .map(sandbox_info)
@@ -396,7 +437,7 @@ impl SandboxHandle {
         })
     }
 
-    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None))]
+    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None, storage_key=None))]
     fn get_or_create<'py>(
         &self,
         py: Python<'py>,
@@ -405,13 +446,19 @@ impl SandboxHandle {
         env: Option<HashMap<String, String>>,
         timeout_ms: Option<u64>,
         egress_json: Option<String>,
+        storage_key: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let egress = egress_json.as_deref().map(parse_egress).transpose()?;
         let inner = self.inner.clone();
         future_into_py(py, async move {
             let value = inner
                 .get_or_create(sandbox_request(
-                    sandbox_id, tenant_key, env, timeout_ms, egress,
+                    sandbox_id,
+                    tenant_key,
+                    env,
+                    timeout_ms,
+                    egress,
+                    storage_key,
                 ))
                 .await
                 .map_err(map_alien_error)?;
@@ -605,10 +652,73 @@ impl SandboxHandle {
         })
     }
 
-    fn terminate<'py>(&self, py: Python<'py>, sandbox_id: String) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (sandbox_id, discard=false))]
+    fn terminate<'py>(
+        &self,
+        py: Python<'py>,
+        sandbox_id: String,
+        discard: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         future_into_py(py, async move {
-            inner.terminate(&sandbox_id).await.map_err(map_alien_error)
+            if discard {
+                inner.terminate_discarding(&sandbox_id).await
+            } else {
+                inner.terminate(&sandbox_id).await
+            }
+            .map_err(map_alien_error)
+        })
+    }
+
+    fn storage_status<'py>(
+        &self,
+        py: Python<'py>,
+        sandbox_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            inner
+                .storage_status(&sandbox_id)
+                .await
+                .map(|status| status.map(storage_status))
+                .map_err(map_alien_error)
+        })
+    }
+
+    fn sync_storage<'py>(
+        &self,
+        py: Python<'py>,
+        sandbox_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            inner
+                .sync_storage(&sandbox_id)
+                .await
+                .map(storage_status)
+                .map_err(map_alien_error)
+        })
+    }
+
+    fn read_storage_file<'py>(
+        &self,
+        py: Python<'py>,
+        key: String,
+        path: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            inner
+                .read_storage_file(&key, &path)
+                .await
+                .map_err(map_alien_error)
+        })
+    }
+
+    fn delete_storage<'py>(&self, py: Python<'py>, key: String) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            inner.delete_storage(&key).await.map_err(map_alien_error)
         })
     }
 }

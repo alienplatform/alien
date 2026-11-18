@@ -462,6 +462,16 @@ async fn cleanup_retained_cloudformation_resources(
                     })?;
                 cleanup_retained_ecr_repository(env, &data.repository_prefix, &data.region).await?;
             }
+            // A sandbox's persistent store is kept when its stack goes, like a Storage's bucket.
+            "sandbox" => {
+                if let Some(bucket) = resource
+                    .import_data
+                    .pointer("/persistentStorage/store/bucket")
+                    .and_then(Value::as_str)
+                {
+                    cleanup_retained_s3_bucket(env, bucket).await?;
+                }
+            }
             _ => {}
         }
     }
@@ -2991,6 +3001,7 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
                 | TestApp::AutomaticSetup
                 | TestApp::StorageNotifications
                 | TestApp::SandboxRemote
+                | TestApp::SandboxStorage
         )
         && matches!(
             ctx.platform,
@@ -3104,7 +3115,7 @@ fn cloudformation_import_request_from_outputs(
         .context("DeploymentSetupFingerprintVersion output is invalid")?;
     let management_config =
         parse_json_output::<ManagementConfig>(&values, "DeploymentManagementConfig")?;
-    let stack_settings = parse_json_output::<StackSettings>(&values, "DeploymentStackSettings")?;
+    let stack_settings = parse_cfn_stack_settings(&values)?;
     let resources = parse_cfn_resources(&values)?;
 
     Ok(StackImportRequest {
@@ -3129,7 +3140,32 @@ fn cloudformation_import_request_from_outputs(
     })
 }
 
+/// The stack settings as `alien-deploy register` reads them: CloudFormation renders `Number`
+/// parameters inside `Fn::ToJsonString` as strings (a created network's `availability_zones`).
+fn parse_cfn_stack_settings(values: &BTreeMap<String, String>) -> anyhow::Result<StackSettings> {
+    let mut value = parse_json_output::<Value>(values, "DeploymentStackSettings")?;
+    alien_deploy_cli::commands::register::normalize_cloudformation_stack_settings(&mut value)
+        .map_err(|error| anyhow::anyhow!("DeploymentStackSettings: {error}"))?;
+    serde_json::from_value(value).context("Failed to parse DeploymentStackSettings")
+}
+
+/// The resources as `alien-deploy register` reads them: a created network's gated trailing
+/// availability-zone entries render as `null`.
 fn parse_cfn_resources(values: &BTreeMap<String, String>) -> anyhow::Result<Vec<ImportedResource>> {
+    let mut resources = parse_cfn_resource_outputs(values)?;
+    for resource in &mut resources {
+        alien_deploy_cli::commands::register::normalize_cloudformation_import_data(
+            resource.resource_type.as_ref(),
+            &mut resource.import_data,
+        )
+        .map_err(|error| anyhow::anyhow!("resource '{}': {error}", resource.id))?;
+    }
+    Ok(resources)
+}
+
+fn parse_cfn_resource_outputs(
+    values: &BTreeMap<String, String>,
+) -> anyhow::Result<Vec<ImportedResource>> {
     if let Some(resources) = values.get("DeploymentResources") {
         return serde_json::from_str(resources).context("Failed to parse DeploymentResources");
     }
@@ -4513,6 +4549,7 @@ resource "terraform_data" "gate_keeper" {}
             e2e_artifact_registry: crate::config::E2eArtifactRegistryConfig {
                 aws_ar_push_role_arn: None,
                 aws_ar_pull_role_arn: None,
+                aws_repository_prefix: None,
                 gcp_gar_repository: None,
                 gcp_ar_pull_sa_email: None,
                 gcp_ar_push_sa_email: None,

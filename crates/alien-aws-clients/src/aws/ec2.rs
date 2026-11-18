@@ -122,6 +122,11 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
         &self,
         request: DescribeRouteTablesRequest,
     ) -> Result<DescribeRouteTablesResponse>;
+    /// AWS-managed and customer prefix lists matching `filters` (e.g. `prefix-list-name`).
+    async fn describe_managed_prefix_lists(
+        &self,
+        filters: Vec<Filter>,
+    ) -> Result<DescribeManagedPrefixListsResponse>;
     async fn create_route_table(
         &self,
         request: CreateRouteTableRequest,
@@ -1409,6 +1414,21 @@ impl Ec2Api for Ec2Client {
         }
 
         self.send_form(form_data, "DescribeRouteTables", "RouteTable")
+            .await
+    }
+
+    async fn describe_managed_prefix_lists(
+        &self,
+        filters: Vec<Filter>,
+    ) -> Result<DescribeManagedPrefixListsResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "Action".to_string(),
+            "DescribeManagedPrefixLists".to_string(),
+        );
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        Self::add_filters(&mut form_data, &filters);
+        self.send_form(form_data, "DescribeManagedPrefixLists", "PrefixList")
             .await
     }
 
@@ -3177,6 +3197,27 @@ pub struct DescribeRouteTablesRequest {
     pub max_results: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_token: Option<String>,
+}
+
+/// Response from describing managed prefix lists.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeManagedPrefixListsResponse {
+    #[serde(rename = "prefixListSet")]
+    pub prefix_list_set: Option<ManagedPrefixListSet>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ManagedPrefixListSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<ManagedPrefixList>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedPrefixList {
+    pub prefix_list_id: Option<String>,
+    pub prefix_list_name: Option<String>,
 }
 
 /// Response from describing route tables.

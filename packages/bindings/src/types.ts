@@ -523,6 +523,14 @@ export interface CreateSandboxOptions {
    * one, and Kubernetes and Local ignore it (#1475).
    */
   tenantKey?: string
+  /**
+   * Key whose persistent storage the sandbox restores and replicates.
+   *
+   * Required when the sandbox declares `persistentStorage`, refused otherwise. One path segment
+   * of letters, digits, `.`, `_` and `-` (at most 128). Never the sandbox id: a replacement
+   * sandbox gets a new id but keeps the key, and with it the tree.
+   */
+  storageKey?: string
   /** Environment every command in the sandbox starts with. */
   env?: Record<string, string>
   /**
@@ -729,7 +737,40 @@ export interface Sandbox {
   resume(sandboxId: string): Promise<void>
   /**
    * Destroys a sandbox. Idempotent, so a terminate that could not confirm the sandbox is gone
-   * rejects with a retryable error and can be repeated.
+   * rejects with a retryable error and can be repeated. Persistent storage is committed first;
+   * with `discard: true` what was written since the last commit is dropped and the key keeps
+   * its last commit.
    */
-  terminate(sandboxId: string): Promise<void>
+  terminate(sandboxId: string, options?: { discard?: boolean }): Promise<void>
+  /**
+   * The sandbox's persistent storage: the key it holds and how far its writes are durable.
+   * `null` where the sandbox declares no persistent storage.
+   */
+  storageStatus(sandboxId: string): Promise<SandboxStorageStatus | null>
+  /** Commits everything written to the persistent storage so far; resolves once it is durable. */
+  syncStorage(sandboxId: string): Promise<SandboxStorageStatus>
+  /** Reads one file of a storage key without a sandbox, as of the key's last commit. */
+  readStorageFile(key: string, path: string): Promise<Buffer>
+  /** Erases a storage key. Rejected while a running sandbox holds it. */
+  deleteStorage(key: string): Promise<void>
+}
+
+/** How far a sandbox's persistent storage is durable. */
+export interface SandboxStorageStatus {
+  /** The storage key the sandbox holds, once attached. */
+  key?: string | null
+  /**
+   * `replicating`: every change seen is committed or in flight. `behind`: the last commit failed
+   * and is retried. `denied`: the sandbox's grant to its store lapsed; it resumes once renewed.
+   * `stopped`: another sandbox claimed the key. `awaitingRestore`: the key is being restored.
+   */
+  state: "awaitingRestore" | "replicating" | "behind" | "stopped" | "denied"
+  /** RFC 3339 time a commit last published or found nothing to publish. */
+  lastSyncedAt?: string | null
+  /** Sequence number of the commit the key's HEAD names. */
+  head?: number | null
+  /** Why the state is `behind`, `denied` or `stopped`. */
+  lastError?: string | null
+  /** RFC 3339 time the sandbox's grant to its store expires. */
+  grantExpiresAt?: string | null
 }

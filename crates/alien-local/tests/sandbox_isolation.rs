@@ -26,6 +26,7 @@ fn config(egress: SandboxEgressMode) -> SandboxSessionConfig {
         egress,
         preview_ports: Vec::new(),
         env: HashMap::new(),
+        persistent_storage: None,
     }
 }
 
@@ -637,4 +638,85 @@ async fn image_user_and_primary_group_survive_create_exec_and_file_upload() {
     let result = result.expect("executed").expect("exec succeeds");
     assert_eq!(result.exit_code, 0, "{result:?}");
     assert_eq!(stdout(&result), "image-user");
+}
+
+/// Local persistent storage: the key's host directory is mounted at the declared path, so a new
+/// session for the same key finds what the last one wrote; one running session holds a key at a
+/// time; the key is required when declared and refused otherwise.
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_storage_key_outlives_its_session_and_has_one_holder() {
+    let (manager, _dir) = manager();
+    let sandbox = "storage-a";
+    manager.reap(sandbox).await.expect("clean slate");
+    let mut declared = config(SandboxEgressMode::Deny);
+    declared.persistent_storage = Some("/workspace".to_string());
+
+    manager
+        .create_session_with_storage(sandbox, "nokey", &declared, None)
+        .await
+        .expect_err("the key is required when declared");
+    manager
+        .create_session_with_storage(
+            sandbox,
+            "undeclared",
+            &config(SandboxEgressMode::Deny),
+            Some("k"),
+        )
+        .await
+        .expect_err("a key is refused when nothing is declared");
+    manager
+        .create_session_with_storage(sandbox, "badkey", &declared, Some("../x"))
+        .await
+        .expect_err("a key is one safe segment");
+
+    let first = manager
+        .create_session_with_storage(sandbox, "s1", &declared, Some("engine-42"))
+        .await
+        .expect("session creates");
+    assert_eq!(first.storage_key.as_deref(), Some("engine-42"));
+    let wrote = manager
+        .exec(
+            &first.container_id,
+            &sh("echo remembered > /workspace/notes.md && id -u && stat -c %u /workspace"),
+        )
+        .await
+        .expect("exec runs");
+    assert_eq!(wrote.exit_code, 0, "{:?}", wrote.output);
+
+    manager
+        .create_session_with_storage(sandbox, "s2", &declared, Some("engine-42"))
+        .await
+        .expect_err("a running session holds the key");
+    let listed = manager.list_sessions(sandbox).await.expect("list");
+    assert!(listed
+        .iter()
+        .any(|s| s.session_id == "s1" && s.storage_key.as_deref() == Some("engine-42")));
+
+    manager.terminate(sandbox, "s1").await.expect("terminate");
+    let second = manager
+        .create_session_with_storage(sandbox, "s2", &declared, Some("engine-42"))
+        .await
+        .expect("the key is free again");
+    let read = manager
+        .exec(&second.container_id, &sh("cat /workspace/notes.md"))
+        .await
+        .expect("exec runs");
+    assert_eq!(stdout(&read).trim(), "remembered");
+    assert_eq!(
+        std::fs::read_to_string(manager.storage_dir(sandbox).join("engine-42/notes.md"))
+            .expect("on the host"),
+        "remembered\n"
+    );
+
+    let other = manager
+        .create_session_with_storage(sandbox, "s3", &declared, Some("engine-43"))
+        .await
+        .expect("another key");
+    let empty = manager
+        .exec(&other.container_id, &sh("ls -A /workspace | wc -l"))
+        .await
+        .expect("exec runs");
+    assert_eq!(stdout(&empty).trim(), "0", "keys do not share a directory");
+    manager.reap(sandbox).await.expect("cleanup");
 }

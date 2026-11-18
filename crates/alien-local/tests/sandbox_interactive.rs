@@ -43,6 +43,7 @@ async fn every_interactive_conformance_case_passes_on_local() {
             egress: SandboxEgressMode::Deny,
             preview_ports: Vec::new(),
             env: Default::default(),
+            persistent_storage: None,
         },
     )
     .await
@@ -57,6 +58,7 @@ async fn every_interactive_conformance_case_passes_on_local() {
                 manager_url: BindingValue::value(route.base_url.clone()),
                 sandbox_key: BindingValue::value(SANDBOX.to_string()),
                 token_path: BindingValue::value(route.token_path.display().to_string()),
+                persistent_storage: None,
             },
         )
         .await
@@ -110,6 +112,7 @@ async fn language_bindings_drive_interactive_commands_against_local() {
             egress: SandboxEgressMode::Deny,
             preview_ports: Vec::new(),
             env: Default::default(),
+            persistent_storage: None,
         },
     )
     .await
@@ -178,6 +181,7 @@ async fn local_session(sandbox_key: &str, pids_limit: i64) -> (TempDir, Arc<dyn 
             egress: SandboxEgressMode::Deny,
             preview_ports: Vec::new(),
             env: Default::default(),
+            persistent_storage: None,
         },
     )
     .await
@@ -191,6 +195,7 @@ async fn local_session(sandbox_key: &str, pids_limit: i64) -> (TempDir, Arc<dyn 
                 manager_url: BindingValue::value(route.base_url.clone()),
                 sandbox_key: BindingValue::value(sandbox_key.to_string()),
                 token_path: BindingValue::value(route.token_path.display().to_string()),
+                persistent_storage: None,
             },
         )
         .await

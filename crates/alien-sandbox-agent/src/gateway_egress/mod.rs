@@ -5,6 +5,7 @@
 )]
 
 mod dns;
+mod guest_drop;
 mod guest_network;
 #[cfg(test)]
 mod guest_network_tests;
@@ -52,6 +53,28 @@ fn failed(reason: &str) -> ErrorData {
 }
 fn invalid(reason: &str) -> AlienError<ErrorData> {
     AlienError::new(failed(reason))
+}
+
+/// Connects one of the agent's own sockets to `host:port`: resolved through a marked DNS socket
+/// and marked itself where the agent holds NET_ADMIN (it installed guest network rules), so the
+/// in-guest redirect that catches every command socket leaves it alone. Without NET_ADMIN no
+/// rules exist, and plain sockets reach the network as they always did.
+pub async fn trusted_connect(host: &str, port: u16) -> std::io::Result<TcpStream> {
+    let marked = can_mark();
+    let address = dns::resolve_gateway(&format!("{host}:{port}"), marked).await?;
+    let socket = redirect::socket(marked)?;
+    timeout(TIMEOUT, socket.connect(address))
+        .await
+        .map_err(|_| std::io::Error::other(format!("connect {host}:{port} timed out")))?
+}
+
+/// Whether this process may set the agent's socket mark.
+fn can_mark() -> bool {
+    static CAN_MARK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CAN_MARK.get_or_init(|| {
+        std::net::UdpSocket::bind("0.0.0.0:0")
+            .is_ok_and(|socket| redirect::mark(socket.as_raw_fd()).is_ok())
+    })
 }
 
 /// True when the pod's NetworkPolicy, not this agent, enforces the egress limit (Kubernetes only).
@@ -118,6 +141,26 @@ pub fn isolate_image_devices() -> Result<()> {
     guest_network::install(false)
         .into_alien_error()
         .context(failed("isolate guest devices before starting image code"))
+}
+
+/// Azure under `none` with persistent storage: the platform lets the store's host through for
+/// the agent, so the guest keeps commands from it (and from everything else, which `none`
+/// already denies them). Guest sockets are marked, and marked traffic is dropped on its way out
+/// by a rule that needs no connection tracking, which the Azure guest kernel lacks. Commands
+/// cannot open IPv6 sockets either. Installed once, before capabilities are reduced; this
+/// replaces `isolate_image_devices`, whose device filter it also installs.
+///
+/// `allowed` are the only addresses guest sockets may still open connections to directly (under
+/// `internet`: the gateway replicas and the platform resolver).
+pub fn isolate_guest_without_egress(allowed: Vec<std::net::Ipv4Addr>) -> Result<()> {
+    guest_network::install(true)
+        .into_alien_error()
+        .context(failed("isolate guest sockets before starting image code"))?;
+    guest_drop::install(allowed)
+        .into_alien_error()
+        .context(failed("drop guest egress before starting image code"))?;
+    crate::privilege::block_command_ipv6();
+    Ok(())
 }
 
 impl GatewayEgress {

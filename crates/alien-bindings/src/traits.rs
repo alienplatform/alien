@@ -1297,6 +1297,55 @@ pub struct CreateSandboxRequest {
     /// so a caller cannot buy itself more life than the deployment allows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Key whose persistent storage the sandbox restores and replicates. Required when the
+    /// sandbox declares persistent storage and refused otherwise. One path segment, chosen by
+    /// the caller; never the sandbox id, which a replacement does not keep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_key: Option<String>,
+}
+
+/// Replication state of a sandbox's persistent storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum SandboxStorageState {
+    /// The key's tree is being restored; the image command waits.
+    AwaitingRestore,
+    /// Every change seen so far is committed or in flight.
+    Replicating,
+    /// The last commit failed (store unreachable, `maxSize` exceeded); retried on the next change.
+    Behind,
+    /// Another sandbox claimed the key; this one commits nothing more.
+    Stopped,
+    /// The sandbox's grant expired or was refused; commits resume once it is renewed.
+    Denied,
+}
+
+/// `sandbox.persistentStorage`: the key a sandbox holds and how far its writes are durable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxStorageStatus {
+    /// The storage key, once attached.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// Replication state.
+    pub state: SandboxStorageState,
+    /// When a commit last published or found nothing to publish.
+    #[serde(default)]
+    pub last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Sequence number of the commit HEAD names now.
+    #[serde(default)]
+    pub head: Option<u64>,
+    /// Why the state is `behind`, `denied` or `stopped`.
+    #[serde(default)]
+    pub last_error: Option<String>,
+    /// When the sandbox's grant expires; bindings renew it past half its life.
+    #[serde(default)]
+    pub grant_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the sandbox received that grant.
+    #[serde(default)]
+    pub grant_issued_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// A live sandbox.
@@ -1741,8 +1790,46 @@ pub trait Sandbox: Binding {
     /// that could not confirm the sandbox is gone fails with a retryable error and can be repeated.
     async fn terminate(&self, sandbox_id: &str) -> Result<()>;
 
+    /// Terminates a sandbox without committing what its persistent storage wrote since its last
+    /// commit (`terminate { discard: true }`); the key keeps its last commit. Where a terminate
+    /// commits nothing first, this is `terminate`.
+    async fn terminate_discarding(&self, sandbox_id: &str) -> Result<()> {
+        self.terminate(sandbox_id).await
+    }
+
+    /// The sandbox's persistent storage state, or `None` when the declaration has none.
+    async fn storage_status(&self, sandbox_id: &str) -> Result<Option<SandboxStorageStatus>> {
+        let _ = sandbox_id;
+        Ok(None)
+    }
+
+    /// Commits everything the sandbox wrote so far and returns once it is durable.
+    async fn sync_storage(&self, sandbox_id: &str) -> Result<SandboxStorageStatus> {
+        let _ = sandbox_id;
+        Err(storage_unsupported("sandbox.sync"))
+    }
+
+    /// Reads one file of a key's last commit, without a sandbox.
+    async fn read_storage_file(&self, key: &str, path: &str) -> Result<Vec<u8>> {
+        let _ = (key, path);
+        Err(storage_unsupported("sandbox.readStorageFile"))
+    }
+
+    /// Erases a key. Refused while a running sandbox holds it.
+    async fn delete_storage(&self, key: &str) -> Result<()> {
+        let _ = key;
+        Err(storage_unsupported("sandbox.deleteStorage"))
+    }
+
     /// Get a reference to this object as `Any` for dynamic casting
     fn as_any(&self) -> &dyn std::any::Any;
+}
+
+fn storage_unsupported(operation: &str) -> alien_error::AlienError<crate::error::ErrorData> {
+    alien_error::AlienError::new(crate::error::ErrorData::OperationNotSupported {
+        operation: operation.to_string(),
+        reason: "this sandbox binding has no persistent storage".to_string(),
+    })
 }
 
 /// A provider must implement methods to load the various types of bindings

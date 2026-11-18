@@ -84,6 +84,8 @@ impl Agent {
             interactive: Default::default(),
             preview: Default::default(),
             agent_binary: agent_binary(),
+            #[cfg(target_os = "linux")]
+            storage: None,
         });
 
         let served = Arc::clone(&state);
@@ -471,6 +473,8 @@ async fn transport_authorization_needs_no_capability() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        #[cfg(target_os = "linux")]
+        storage: None,
     });
 
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -521,6 +525,8 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        #[cfg(target_os = "linux")]
+        storage: None,
     });
 
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -617,6 +623,8 @@ async fn the_validate_hook_passes_and_leaves_the_session_root_empty() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        #[cfg(target_os = "linux")]
+        storage: None,
     })
     .await
     .expect("a working agent must validate");
@@ -647,6 +655,8 @@ async fn the_validate_hook_refuses_a_caller_running_as_the_exec_identity() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        #[cfg(target_os = "linux")]
+        storage: None,
     }))
     .await;
 
@@ -697,6 +707,8 @@ async fn the_validate_hook_refuses_a_caller_without_a_capability() {
         // A check that ran would answer 500 on this, so a 401 is the refusal and not a failed check.
         preview: Default::default(),
         agent_binary: root.join("no-such-agent"),
+        #[cfg(target_os = "linux")]
+        storage: None,
     }))
     .await;
 
@@ -744,6 +756,8 @@ async fn the_validate_hook_names_the_file_check_when_the_session_root_is_not_wri
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        #[cfg(target_os = "linux")]
+        storage: None,
     })
     .await;
 
@@ -786,6 +800,8 @@ async fn the_validate_hook_names_the_identity_check_when_the_probe_cannot_run_as
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        #[cfg(target_os = "linux")]
+        storage: None,
     }))
     .await;
 
@@ -1031,6 +1047,8 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        #[cfg(target_os = "linux")]
+        storage: None,
     });
 
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -1286,6 +1304,8 @@ async fn root_image_cannot_call_control_routes() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        #[cfg(target_os = "linux")]
+        storage: None,
     });
     let base = serve(state).await;
     let mut command = std::process::Command::new("python3");
@@ -2006,6 +2026,8 @@ async fn transport_agent_listening_on(own_ports: &[u16]) -> (String, TempDir) {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        #[cfg(target_os = "linux")]
+        storage: None,
     });
     state.preview.set_own_ports(own_ports);
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -2524,6 +2546,8 @@ async fn native_file_agent() -> (String, String, TempDir) {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        #[cfg(target_os = "linux")]
+        storage: None,
     });
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
         .await
@@ -2917,4 +2941,110 @@ async fn read_file_pages_by_offset_and_length() {
         .expect("rewrite");
     assert!(put.status().is_success());
     assert_ne!(page(300, 200).await["version"], second["version"]);
+}
+
+/// Persistent storage: until the binding attaches the key, nothing runs in the sandbox (a
+/// command would see an empty directory that the restore then clears), and the status says why.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn nothing_runs_before_persistent_storage_is_restored() {
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path().canonicalize().expect("canonical root");
+    let config = alien_sandbox_agent::storage::attach::StorageConfig {
+        path: root.join("workspace").display().to_string(),
+        exclude: vec![],
+        max_size_bytes: None,
+    };
+    let state = Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::default()
+            .awaiting_restore(),
+        gateway_egress: None,
+        session_root: root.clone(),
+        authorization: AgentAuthorization::Transport,
+        exec_identity: ExecIdentity {
+            uid: 60000,
+            gid: 60000,
+        },
+        output_cap: 1 << 20,
+        jobs: JobRegistry::new(),
+        interactive: Default::default(),
+        preview: Default::default(),
+        agent_binary: agent_binary(),
+        storage: Some(Arc::new(
+            alien_sandbox_agent::storage::attach::PersistentStorage::new(config),
+        )),
+    });
+    let base_url = serve(state).await;
+    let client = reqwest::Client::new();
+
+    let refused = client
+        .put(format!("{base_url}/v1/files"))
+        .json(&json!({"path": "early.txt", "contentsBase64": BASE64.encode("x")}))
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(refused.status(), 503);
+    assert!(!root.join("early.txt").exists());
+
+    let status: serde_json::Value = client
+        .get(format!("{base_url}/v1/storage"))
+        .send()
+        .await
+        .expect("responds")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(status["state"], "awaitingRestore");
+
+    let health: serde_json::Value = client
+        .get(format!("{base_url}/v1/health"))
+        .send()
+        .await
+        .expect("responds")
+        .json()
+        .await
+        .expect("json");
+    assert!(
+        health.to_string().contains("awaitingRestore"),
+        "health reports the image waiting for the restore: {health}"
+    );
+
+    let malformed = client
+        .put(format!("{base_url}/v1/storage"))
+        .json(&json!({"key": "k"}))
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(malformed.status(), 400);
+}
+
+/// A sandbox without persistent storage has no storage routes to drive.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn storage_routes_answer_not_found_without_the_declaration() {
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path().canonicalize().expect("canonical root");
+    let base_url = serve(Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
+        gateway_egress: None,
+        session_root: root,
+        authorization: AgentAuthorization::Transport,
+        exec_identity: ExecIdentity {
+            uid: 60000,
+            gid: 60000,
+        },
+        output_cap: 1 << 20,
+        jobs: JobRegistry::new(),
+        interactive: Default::default(),
+        preview: Default::default(),
+        agent_binary: agent_binary(),
+        storage: None,
+    }))
+    .await;
+    let response = reqwest::Client::new()
+        .post(format!("{base_url}/v1/storage/sync"))
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(response.status(), 404);
 }

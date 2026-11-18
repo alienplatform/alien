@@ -517,6 +517,11 @@ impl KubernetesSandbox {
     }
 
     async fn create_resolved(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        super::storage_key::resolve_storage_key(
+            None,
+            request.storage_key.as_deref(),
+            "sandbox.create",
+        )?;
         self.validate_egress(request.egress.as_ref())?;
         let _policy_write = self.policy_write.lock().await;
         let policy = request
@@ -736,6 +741,11 @@ impl Sandbox for KubernetesSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        super::storage_key::resolve_storage_key(
+            None,
+            request.storage_key.as_deref(),
+            "sandbox.getOrCreate",
+        )?;
         self.validate_egress(request.egress.as_ref())?;
         // `timeout_ms` applies when this call creates the session. A session that already exists
         // keeps the deadline it was created with.

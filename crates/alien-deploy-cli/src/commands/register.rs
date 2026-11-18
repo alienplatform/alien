@@ -936,7 +936,7 @@ fn build_import_request(
 /// CloudFormation resolves `Number` parameter references inside
 /// `Fn::ToJsonString` as JSON strings. Convert only the numeric fields the
 /// generated StackSettings contract sources from those parameters.
-fn normalize_cloudformation_stack_settings(value: &mut JsonValue) -> Result<()> {
+pub fn normalize_cloudformation_stack_settings(value: &mut JsonValue) -> Result<()> {
     normalize_u32_string(value, "/network/availability_zones")?;
 
     let Some(pools) = value
@@ -981,7 +981,7 @@ fn normalize_u32_value(value: &mut JsonValue, field: &str) -> Result<()> {
 /// `AWS::NoValue` becomes `null` inside an `Fn::ToJsonString` list. Generated
 /// network lists gate only their trailing availability-zone entries, so
 /// trim trailing nulls while rejecting an interior null as malformed output.
-fn normalize_cloudformation_import_data(
+pub fn normalize_cloudformation_import_data(
     resource_type: &str,
     import_data: &mut JsonValue,
 ) -> Result<()> {

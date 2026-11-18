@@ -444,6 +444,11 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn create(&self, mut request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        super::storage_key::resolve_storage_key(
+            None,
+            request.storage_key.as_deref(),
+            "sandbox.create",
+        )?;
         let policy = self.requested_policy(request.egress.as_ref())?;
         checked_sandbox_env(CREATE, &request.env)?;
         if self.agent
@@ -631,6 +636,11 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        super::storage_key::resolve_storage_key(
+            None,
+            request.storage_key.as_deref(),
+            "sandbox.getOrCreate",
+        )?;
         if let Some(policy) = request.egress.as_ref() {
             self.requested_policy(Some(policy))?;
         }

@@ -17,7 +17,8 @@ use crate::{
 };
 use alien_core::sandbox_build_role::sandbox_build_role_name;
 use alien_core::sandbox_egress::{
-    sandbox_egress_name, sandbox_egress_network, sandbox_needs_connector, LOOPBACK_ONLY_CIDR,
+    aws_sandbox_has_store_path, sandbox_egress_name, sandbox_egress_network,
+    sandbox_needs_connector, LOOPBACK_ONLY_CIDR,
 };
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::sandbox_setup_inputs::aws_sandbox_renders_bundle;
@@ -91,6 +92,13 @@ impl TfEmitter for AwsSandboxEmitter {
             Expression::Null
         } else if matches!(sandbox.egress, SandboxEgress::Internet) {
             super::network::sandbox_subnet_ids(ctx)?
+        } else if aws_sandbox_has_store_path(ctx.stack, sandbox) {
+            // The store's endpoint is on the dedicated route table this module creates; the
+            // network's guard refuses any other network mode.
+            expr::raw(format!(
+                "aws_subnet.{}_sandbox[*].id",
+                store_network_label(ctx)?
+            ))
         } else {
             sandbox_egress_network(ctx.stack).map_err(|refusal| {
                 AlienError::new(ErrorData::OperationNotSupported {
@@ -260,14 +268,22 @@ impl TfEmitter for AwsSandboxEmitter {
                             ]
                         },
                     ),
-                    attr("tags", tags(ctx, "sandbox")),
-                ],
+                ]
+                .into_iter()
+                .chain(store_egress_rule(ctx, sandbox)?)
+                .chain([attr("tags", tags(ctx, "sandbox"))]),
             );
 
             let mut connector_dependencies = vec![expr::traversal([
                 PROPAGATION_BARRIER_RESOURCE,
                 &format!("{label}_iam_propagation"),
             ])];
+            if aws_sandbox_has_store_path(ctx.stack, sandbox) {
+                connector_dependencies.push(expr::traversal([
+                    "terraform_data",
+                    &format!("{}_sandbox_store_guard", store_network_label(ctx)?),
+                ]));
+            }
             if matches!(sandbox.egress, SandboxEgress::Internet) {
                 let network = sandbox_egress_network(ctx.stack).map_err(|error| {
                     AlienError::new(ErrorData::OperationNotSupported {
@@ -437,6 +453,7 @@ impl TfEmitter for AwsSandboxEmitter {
         fragment.resource_blocks.extend(egress_resources);
         emit_remote_bindings_policy(ctx, &mut fragment)?;
         emit_profile_policies(ctx, &mut fragment)?;
+        emit_persistent_store(ctx, sandbox, label, &mut fragment);
         Ok(fragment)
     }
 
@@ -446,7 +463,7 @@ impl TfEmitter for AwsSandboxEmitter {
         if provisioned_at_runtime(ctx) {
             return runtime_import_ref(ctx, sandbox, label);
         }
-        Ok(expr::object([
+        let mut fields = vec![
             ("previewPorts", preview_ports(sandbox)),
             (
                 "egressConnectorArns",
@@ -468,7 +485,13 @@ impl TfEmitter for AwsSandboxEmitter {
                 "imageVersion",
                 image_property(label, "LatestActiveImageVersion"),
             ),
-        ]))
+        ];
+        // The controller publishes the binding the deployment's own workloads read and learns the
+        // store only from this; only a declaring sandbox has one.
+        if let Some(storage) = persistent_storage_binding(sandbox, label) {
+            fields.push(("persistentStorage", storage));
+        }
+        Ok(expr::object(fields))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
@@ -510,6 +533,9 @@ impl TfEmitter for AwsSandboxEmitter {
             ),
         ];
         fields.extend(lifecycle_fields(sandbox));
+        if let Some(storage) = persistent_storage_binding(sandbox, label) {
+            fields.push(("persistentStorage", storage));
+        }
         if let Some(policy) = &sandbox.default_policy {
             fields.push((
                 "defaultPolicy",
@@ -736,6 +762,9 @@ fn runtime_import_ref(ctx: &EmitContext<'_>, sandbox: &Sandbox, label: &str) -> 
     if !aws_sandbox_renders_bundle(ctx.stack, sandbox.id()) {
         fields.push(("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)));
     }
+    if let Some(storage) = persistent_storage_binding(sandbox, label) {
+        fields.push(("persistentStorage", storage));
+    }
     Ok(expr::object(fields))
 }
 
@@ -878,6 +907,231 @@ fn emit_profile_policies(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Re
         }
     }
     Ok(())
+}
+
+/// Terraform label of the network that carries the sandboxes' store path.
+fn store_network_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {
+    let network = sandbox_egress_network(ctx.stack).map_err(|error| {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "sandbox persistent store path".into(),
+            reason: error.to_string(),
+        })
+    })?;
+    ctx.name_for(network.id).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!("network '{}' has no generated name", network.id),
+        })
+    })
+}
+
+/// As in the CloudFormation template: HTTPS to the region's S3 prefix list, for a sandbox with a
+/// path to its persistent store; only the agent's marked sockets get there.
+fn store_egress_rule(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Option<hcl::Structure>> {
+    if !aws_sandbox_has_store_path(ctx.stack, sandbox) {
+        return Ok(None);
+    }
+    Ok(Some(nested_block(
+        "egress",
+        vec![
+            attr("from_port", Expression::from(443)),
+            attr("to_port", Expression::from(443)),
+            attr("protocol", Expression::from("tcp")),
+            attr(
+                "prefix_list_ids",
+                expr::raw(format!(
+                    "[data.aws_prefix_list.{}_s3.id]",
+                    store_network_label(ctx)?
+                )),
+            ),
+        ],
+    )))
+}
+
+/// Terraform label of the bucket a sandbox's persistent storage lives in.
+pub(crate) fn persistent_store_label(label: &str) -> String {
+    format!("{label}_persistent_store")
+}
+
+/// The persistent store, as the CloudFormation emitter builds it: a private bucket of its own,
+/// kept when the stack goes, reachable only over TLS, and object access by exact ARN for the
+/// roles whose profile holds `sandbox/execute` or `sandbox/remote-execute` on this sandbox.
+fn emit_persistent_store(
+    ctx: &EmitContext<'_>,
+    sandbox: &Sandbox,
+    label: &str,
+    fragment: &mut TfFragment,
+) {
+    let Some(storage) = &sandbox.persistent_storage else {
+        return;
+    };
+    let store = persistent_store_label(label);
+    let key_label = storage
+        .encryption_key
+        .as_ref()
+        .and_then(|key| ctx.name_for(&key.id));
+    fragment.resource_blocks.push(resource_block(
+        "aws_s3_bucket",
+        &store,
+        [
+            attr(
+                "bucket",
+                resource_prefix_template(&format!("{}-ps", sandbox.id())),
+            ),
+            attr("force_destroy", Expression::Bool(false)),
+            attr("tags", tags(ctx, "sandbox")),
+            nested_block(
+                "lifecycle",
+                vec![attr("prevent_destroy", Expression::Bool(true))],
+            ),
+        ],
+    ));
+    fragment
+        .resource_blocks
+        .push(super::storage::encryption(&store, key_label));
+    fragment
+        .resource_blocks
+        .push(super::storage::ownership_controls(&store));
+    fragment
+        .resource_blocks
+        .push(super::storage::public_access_block(&store, true));
+    fragment
+        .resource_blocks
+        .push(super::storage::lifecycle(&store, &[]));
+    let bucket_arn = || expr::traversal(["aws_s3_bucket", store.as_str(), "arn"]);
+    let objects_arn = || {
+        expr::raw(format!(
+            "\"${{{}}}/*\"",
+            super::storage::bucket_path(&store, "arn")
+        ))
+    };
+    fragment.resource_blocks.push(resource_block(
+        "aws_s3_bucket_policy",
+        &store,
+        [
+            attr("bucket", super::storage::bucket_id(&store)),
+            attr(
+                "policy",
+                jsonencode(expr::object([
+                    ("Version", Expression::String("2012-10-17".to_string())),
+                    (
+                        "Statement",
+                        Expression::Array(vec![expr::object([
+                            ("Sid", Expression::String("DenyPlaintext".to_string())),
+                            ("Effect", Expression::String("Deny".to_string())),
+                            ("Principal", Expression::String("*".to_string())),
+                            ("Action", Expression::String("s3:*".to_string())),
+                            (
+                                "Resource",
+                                Expression::Array(vec![bucket_arn(), objects_arn()]),
+                            ),
+                            (
+                                "Condition",
+                                expr::object([(
+                                    "Bool",
+                                    expr::object([(
+                                        "aws:SecureTransport",
+                                        Expression::String("false".to_string()),
+                                    )]),
+                                )]),
+                            ),
+                        ])]),
+                    ),
+                ])),
+            ),
+        ],
+    ));
+
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let runs_sessions = [ctx.resource_id, "*"]
+            .into_iter()
+            .filter_map(|key| profile.0.get(key))
+            .flatten()
+            .any(|reference| {
+                matches!(reference.id(), "sandbox/execute" | "sandbox/remote-execute")
+            });
+        let Some(role_label) = service_account_label(ctx, profile_name).filter(|_| runs_sessions)
+        else {
+            continue;
+        };
+        let mut statements = vec![
+            expr::object([
+                (
+                    "Sid",
+                    Expression::String("PersistentStoreObjects".to_string()),
+                ),
+                ("Effect", Expression::String("Allow".to_string())),
+                (
+                    "Action",
+                    Expression::Array(vec![
+                        Expression::String("s3:GetObject".to_string()),
+                        Expression::String("s3:PutObject".to_string()),
+                        Expression::String("s3:DeleteObject".to_string()),
+                    ]),
+                ),
+                ("Resource", objects_arn()),
+            ]),
+            expr::object([
+                ("Sid", Expression::String("PersistentStoreList".to_string())),
+                ("Effect", Expression::String("Allow".to_string())),
+                ("Action", Expression::String("s3:ListBucket".to_string())),
+                ("Resource", bucket_arn()),
+            ]),
+        ];
+        if let Some(key_label) = key_label {
+            statements.push(expr::object([
+                ("Sid", Expression::String("PersistentStoreKey".to_string())),
+                ("Effect", Expression::String("Allow".to_string())),
+                (
+                    "Action",
+                    Expression::Array(vec![
+                        Expression::String("kms:Decrypt".to_string()),
+                        Expression::String("kms:GenerateDataKey".to_string()),
+                    ]),
+                ),
+                ("Resource", super::key::key_arn(key_label)),
+            ]));
+        }
+        fragment.resource_blocks.push(iam_role_policy_block(
+            &format!("{role_label}_{store}"),
+            role_label,
+            &format!("persistent-storage-{}", ctx.resource_id),
+            statements,
+        ));
+    }
+}
+
+/// The persistent storage half of the binding, as the CloudFormation emitter writes it.
+fn persistent_storage_binding(sandbox: &Sandbox, label: &str) -> Option<Expression> {
+    let storage = sandbox.persistent_storage.as_ref()?;
+    let mut fields = vec![
+        ("path", Expression::String(storage.path.clone())),
+        (
+            "store",
+            expr::object([
+                ("type", Expression::String("aws".to_string())),
+                (
+                    "bucket",
+                    expr::traversal(["aws_s3_bucket", &persistent_store_label(label), "bucket"]),
+                ),
+            ]),
+        ),
+    ];
+    if !storage.exclude.is_empty() {
+        fields.push((
+            "exclude",
+            Expression::Array(
+                storage
+                    .exclude
+                    .iter()
+                    .map(|path| Expression::String(path.clone()))
+                    .collect(),
+            ),
+        ));
+    }
+    if let Some(bytes) = storage.max_size_bytes().and_then(|b| i64::try_from(b).ok()) {
+        fields.push(("maxSizeBytes", Expression::Number(hcl::Number::from(bytes))));
+    }
+    Some(expr::object(fields))
 }
 
 /// The Terraform label of the `<profile>-sa` service account, whose role the profile's grants
@@ -1262,6 +1516,7 @@ mod tests {
             idle_pause_seconds: Some(600),
             max_lifetime_seconds: Some(1800),
             allow_egress: true,
+            persistent_storage: None,
         })
         .expect("the binding type serializes");
 

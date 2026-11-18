@@ -208,6 +208,18 @@ pub async fn validate_aws_sandbox_network(
                 if local {
                     continue;
                 }
+                // The S3 gateway endpoint setup added for sandboxes' persistent stores, on the
+                // connector subnets only; its policy admits nothing but those stores.
+                let store_endpoint = index == 0
+                    && declared.persistent_store_endpoint_id.is_some()
+                    && route.gateway_id == declared.persistent_store_endpoint_id
+                    && route.destination_prefix_list_id.is_some()
+                    && route.destination_cidr_block.is_none()
+                    && route.destination_ipv6_cidr_block.is_none()
+                    && route.state.as_deref() == Some("active");
+                if store_endpoint {
+                    continue;
+                }
                 let nat_default = index != 0
                     && route.destination_cidr_block.as_deref() == Some("0.0.0.0/0")
                     && route.destination_ipv6_cidr_block.is_none()
@@ -245,6 +257,7 @@ pub async fn validate_aws_sandbox_network(
         gateway_cidrs: cidrs(groups[1])?,
         workload_cidrs: cidrs(groups[2])?,
         vpc_cidrs: vpc_cidrs.into_iter().collect(),
+        persistent_store_endpoint_id: declared.persistent_store_endpoint_id.clone(),
     };
     // CloudFormation BYO setup uses explicit CIDRs for its Frozen connector SG. Never
     // accept a broader caller-supplied range merely because the selected subnet exists.
@@ -336,6 +349,16 @@ mod tests {
     use serde_json::{json, Value};
 
     fn fixture(extra: Option<Value>, nat: &str) -> (MockEc2Api, AwsSandboxNetwork) {
+        fixture_with(extra, None, nat)
+    }
+
+    /// `extra` goes on the gateway and workload table, `connector_extra` on the connector
+    /// subnets' (main) table.
+    fn fixture_with(
+        extra: Option<Value>,
+        connector_extra: Option<Value>,
+        nat: &str,
+    ) -> (MockEc2Api, AwsSandboxNetwork) {
         let mut client = MockEc2Api::new();
         client.expect_describe_vpcs().times(1).return_once(|_| Ok(serde_json::from_value(json!({
             "vpcSet":{"item":[{"vpcId":"vpc-test","cidrBlock":"10.0.0.0/16","cidrBlockAssociationSet":{"item":[{"cidrBlock":"198.18.0.0/16"}]}}]}
@@ -356,8 +379,10 @@ mod tests {
         if let Some(extra) = extra {
             workload_routes.push(extra);
         }
+        let mut connector_routes = vec![local];
+        connector_routes.extend(connector_extra);
         let pages = [
-            json!({"routeTableSet":{"item":[{"routeTableId":"main","vpcId":"vpc-test","routeSet":{"item":[local]},"associationSet":{"item":[{"main":true}]}}]},"nextToken":"page-two"}),
+            json!({"routeTableSet":{"item":[{"routeTableId":"main","vpcId":"vpc-test","routeSet":{"item":connector_routes},"associationSet":{"item":[{"main":true}]}}]},"nextToken":"page-two"}),
             json!({"routeTableSet":{"item":[{"routeTableId":"nat","vpcId":"vpc-test","routeSet":{"item":workload_routes},"associationSet":{"item":[{"subnetId":"gateway-a"},{"subnetId":"gateway-b"},{"subnetId":"workload"}]}}]}}),
         ];
         let mut pages = pages.into_iter();
@@ -380,6 +405,7 @@ mod tests {
             gateway_cidrs: vec![],
             workload_cidrs: vec![],
             vpc_cidrs: vec![],
+            persistent_store_endpoint_id: None,
         };
         (client, declared)
     }
@@ -425,6 +451,48 @@ mod tests {
             assert!(error.message.contains("route table 'nat'"), "{error}");
             assert!(error.message.contains("route "), "{error}");
         }
+    }
+
+    /// The connector subnets may carry exactly one more route: the S3 gateway endpoint setup
+    /// recorded for persistent stores. Any other endpoint there, the same endpoint when none was
+    /// recorded, or that endpoint on the gateway and workload subnets stays refused.
+    #[tokio::test]
+    async fn admits_only_the_recorded_store_endpoint_on_the_connector_subnets() {
+        let endpoint = |id: &str| json!({"destinationPrefixListId":"pl-7ba54012","gatewayId":id,"state":"active"});
+        let validate = |client: MockEc2Api, declared: AwsSandboxNetwork| async move {
+            validate_aws_sandbox_network(
+                &client,
+                "network",
+                "vpc-test",
+                &declared,
+                &["workload".into()],
+            )
+            .await
+        };
+
+        let (client, mut declared) = fixture_with(None, Some(endpoint("vpce-store")), "nat-shared");
+        declared.persistent_store_endpoint_id = Some("vpce-store".into());
+        let actual = validate(client, declared)
+            .await
+            .expect("the recorded endpoint");
+        assert_eq!(
+            actual.persistent_store_endpoint_id.as_deref(),
+            Some("vpce-store")
+        );
+
+        for recorded in [None, Some("vpce-other")] {
+            let (client, mut declared) =
+                fixture_with(None, Some(endpoint("vpce-store")), "nat-shared");
+            declared.persistent_store_endpoint_id = recorded.map(str::to_string);
+            let error = validate(client, declared).await.unwrap_err();
+            assert!(error.message.contains("connector-a"), "{error}");
+            assert!(error.message.contains("vpce-store"), "{error}");
+        }
+
+        let (client, mut declared) = fixture_with(Some(endpoint("vpce-store")), None, "nat-shared");
+        declared.persistent_store_endpoint_id = Some("vpce-store".into());
+        let error = validate(client, declared).await.unwrap_err();
+        assert!(error.message.contains("gateway-a"), "{error}");
     }
 
     #[tokio::test]

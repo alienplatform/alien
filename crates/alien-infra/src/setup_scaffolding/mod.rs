@@ -56,6 +56,21 @@ pub(crate) fn validate_setup_support(
     if platform != Platform::Aws {
         return Ok(());
     }
+    // Direct setup creates no persistent store and no path to one; the sandbox would only fail
+    // later, when a caller passes a storageKey.
+    for (resource_id, entry) in stack.resources() {
+        if entry
+            .config
+            .downcast_ref::<alien_core::Sandbox>()
+            .is_some_and(|sandbox| sandbox.persistent_storage.is_some())
+        {
+            return Err(AlienError::new(
+                ErrorData::SandboxPersistentStorageDirectSetupUnsupported {
+                    resource_id: resource_id.clone(),
+                },
+            ));
+        }
+    }
     let refusal: fn(String) -> ErrorData = match sandbox_egress_network(stack) {
         Err(SandboxEgressRefusal::DefaultVpc) => {
             |resource_id| ErrorData::SandboxInternetDefaultVpcUnsupported { resource_id }
@@ -647,5 +662,68 @@ mod key_consumer_tests {
             )
             .expect("a template setup applies the key itself");
         }
+    }
+}
+
+#[cfg(test)]
+mod persistent_storage_tests {
+    use super::*;
+    use alien_core::{
+        InitialSetupAuthority, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
+        SandboxPersistentStorage,
+    };
+
+    fn stack(declared: bool) -> Stack {
+        let mut sandbox = Sandbox::new("agents".into())
+            .code(SandboxCode::Image {
+                image: "s3://example/bundle.zip".into(),
+                bundled_from: None,
+            })
+            .egress(SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        if declared {
+            sandbox.persistent_storage = Some(SandboxPersistentStorage {
+                path: "/workspace".into(),
+                exclude: vec![],
+                max_size: None,
+                encryption_key: None,
+            });
+        }
+        Stack::new("s".into())
+            .add(sandbox, ResourceLifecycle::Live)
+            .build()
+    }
+
+    #[test]
+    fn an_aws_direct_setup_refuses_persistent_storage_before_creating_anything() {
+        let error = validate_setup_support(
+            &stack(true),
+            Platform::Aws,
+            InitialSetupAuthority::DirectSetup,
+        )
+        .expect_err("direct setup creates no store");
+        assert_eq!(
+            error.code,
+            "SANDBOX_PERSISTENT_STORAGE_DIRECT_SETUP_UNSUPPORTED"
+        );
+        assert!(error.to_string().contains("CloudFormation or Terraform"));
+        assert!(error.to_string().contains("agents"));
+
+        validate_setup_support(
+            &stack(false),
+            Platform::Aws,
+            InitialSetupAuthority::DirectSetup,
+        )
+        .expect("a sandbox without persistent storage is unchanged");
+        validate_setup_support(
+            &stack(true),
+            Platform::Aws,
+            InitialSetupAuthority::ImportedHandoff,
+        )
+        .expect("a CloudFormation or Terraform setup creates the store");
     }
 }
