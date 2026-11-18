@@ -106,7 +106,7 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 .await
                 .expect("a remote sandbox session runs an interactive command");
         }
-        TestApp::SandboxStorage => {
+        TestApp::SandboxStorage | TestApp::SandboxStorageInternet => {
             common::sandbox_storage::check_persistent_storage(&ctx.deployment, ctx.platform)
                 .await
                 .expect("persistent storage round-trips through the deployment's binding");
@@ -1198,6 +1198,20 @@ distribution_test_context!(
 #[test_context(TerraformAzurePushSandboxStorage)]
 #[tokio::test]
 async fn terraform_azure_push_sandbox_storage(ctx: &mut TerraformAzurePushSandboxStorage) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAzurePushSandboxStorageInternet,
+    DistributionFlow::TerraformAzurePush,
+    TestApp::SandboxStorageInternet
+);
+
+#[test_context(TerraformAzurePushSandboxStorageInternet)]
+#[tokio::test]
+async fn terraform_azure_push_sandbox_storage_internet(
+    ctx: &mut TerraformAzurePushSandboxStorageInternet,
+) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 

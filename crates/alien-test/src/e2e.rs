@@ -178,6 +178,9 @@ pub enum TestApp {
     /// A frozen remote sandbox that declares persistent storage, driven by the test
     /// (`tests/e2e/test-apps/sandbox-storage`).
     SandboxStorage,
+    /// The same sandbox with internet egress through the gateway
+    /// (`tests/e2e/test-apps/sandbox-storage/alien.internet.ts`).
+    SandboxStorageInternet,
 }
 
 impl std::fmt::Display for TestApp {
@@ -197,6 +200,7 @@ impl std::fmt::Display for TestApp {
             TestApp::SandboxSession => write!(f, "sandbox-session"),
             TestApp::SandboxRemote => write!(f, "sandbox-remote"),
             TestApp::SandboxStorage => write!(f, "sandbox-storage"),
+            TestApp::SandboxStorageInternet => write!(f, "sandbox-storage-internet"),
         }
     }
 }
@@ -432,7 +436,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::StorageNotifications => "test-apps/storage-notifications",
         TestApp::SandboxSession => "test-apps/sandbox-session",
         TestApp::SandboxRemote => "test-apps/sandbox-remote",
-        TestApp::SandboxStorage => "test-apps/sandbox-storage",
+        TestApp::SandboxStorage | TestApp::SandboxStorageInternet => "test-apps/sandbox-storage",
     }
 }
 
@@ -440,6 +444,15 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
 ///
 /// The default alien config file name used by all test apps.
 const CONFIG_FILE: &str = "alien.ts";
+
+/// The config file of `app`: [`CONFIG_FILE`] unless the app is a variant of another app's
+/// directory.
+fn config_file(app: TestApp) -> &'static str {
+    match app {
+        TestApp::SandboxStorageInternet => "alien.internet.ts",
+        _ => CONFIG_FILE,
+    }
+}
 
 fn deployment_environment_variables(
     app: TestApp,
@@ -455,7 +468,8 @@ fn deployment_environment_variables(
         | TestApp::StorageNotifications
         | TestApp::SandboxSession
         | TestApp::SandboxRemote
-        | TestApp::SandboxStorage => None,
+        | TestApp::SandboxStorage
+        | TestApp::SandboxStorageInternet => None,
         TestApp::ByoEncryptionKey | TestApp::ByoAi => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {
@@ -897,7 +911,7 @@ pub async fn deploy_test_app(
 ) -> anyhow::Result<(TestDeployment, Stack)> {
     let e2e_root = e2e_test_apps_root()?;
     let app_path = e2e_root.join(test_app_path(app));
-    let cfg_file = CONFIG_FILE;
+    let cfg_file = config_file(app);
 
     let deployment_name = format!(
         "e2e-{}-{}-{}-{}",
@@ -1137,7 +1151,7 @@ pub async fn developer_setup(
 ) -> anyhow::Result<DeveloperSetupResult> {
     let e2e_root = e2e_test_apps_root()?;
     let app_path = e2e_root.join(test_app_path(app));
-    let cfg_file = CONFIG_FILE;
+    let cfg_file = config_file(app);
 
     info!(
         app_path = %app_path.display(),

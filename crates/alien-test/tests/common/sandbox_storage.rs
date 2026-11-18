@@ -291,10 +291,18 @@ pub async fn check_persistent_storage(
             .and_then(|v| v.as_str())
             .context("the binding's store account")?
     );
+    let container = binding
+        .pointer("/persistentStorage/store/container")
+        .and_then(|v| v.as_str())
+        .context("the binding's store container")?
+        .to_string();
+    let internet = field("egress")? == "internet";
     let abrupt = Abrupt {
         plane,
         group,
         store_host,
+        container,
+        internet,
     };
 
     let token = alien_azure_clients::AzureTokenCache::new(match &client_config {
@@ -422,7 +430,17 @@ async fn all_checks(sandbox: &Arc<dyn Sandbox>, abrupt: &Abrupt) -> anyhow::Resu
     ] {
         let mut live: Vec<String> = Vec::new();
         let outcome = match check {
-            Check::Main => run_checks(sandbox, &abrupt.store_host, &key, &mut live).await,
+            Check::Main => {
+                run_checks(
+                    sandbox,
+                    &abrupt.store_host,
+                    &abrupt.container,
+                    abrupt.internet,
+                    &key,
+                    &mut live,
+                )
+                .await
+            },
             Check::MaxSize => max_size(sandbox, &key, &mut live).await,
             Check::Kills => kills(sandbox, abrupt, &key, *KILLS, &mut live).await,
         };
@@ -465,6 +483,9 @@ struct Abrupt {
     group: String,
     /// The store account's blob host, which the platform opens for the agent only.
     store_host: String,
+    container: String,
+    /// The sandbox's egress is `internet` (through the gateway), not `none`.
+    internet: bool,
 }
 
 impl Abrupt {
@@ -613,6 +634,8 @@ PY");
 async fn run_checks(
     sandbox: &Arc<dyn Sandbox>,
     store_host: &str,
+    container: &str,
+    internet: bool,
     key: &str,
     live: &mut Vec<String>,
 ) -> anyhow::Result<()> {
@@ -633,46 +656,66 @@ async fn run_checks(
     );
     eprintln!("synced head {:?}", synced.head);
 
-    // 2. The command's uid sees no rights and reaches nothing outside, the store included: by
-    //    name, and by the address the test host resolves it to (no DNS needed in the guest).
+    // 2. The command's uid sees no rights and opens no direct connection, to the store or
+    //    anywhere: by name, and by the address the test host resolves the store to (no DNS
+    //    needed in the guest). Under `internet` the command's proxy (the gateway) still reaches
+    //    the internet, and the store answers it without access, as it would anyone without a SAS.
     let store_ip = tokio::net::lookup_host((store_host, 443))
         .await
         .context("resolve the store host")?
         .find(|a| a.is_ipv4())
         .context("the store host has no IPv4 address")?
         .ip();
-    let store_probe = format!(
-        "curl -sS -m 8 -o /dev/null https://{store_host}/ && echo REACHED_STORE || echo store-refused; \
-curl -sS -m 8 -o /dev/null --resolve {store_host}:443:{store_ip} https://{store_host}/ && echo REACHED_STORE || echo store-ip-refused; "
+    let direct = "curl --noproxy '*' -sS -m 8 -o /dev/null";
+    let mut script = format!(
+        "echo uid=$(id -u); \
+{direct} https://{store_host}/ && echo REACHED_STORE || echo store-refused; \
+{direct} --resolve {store_host}:443:{store_ip} https://{store_host}/ && echo REACHED_STORE || echo store-ip-refused; \
+{direct} https://www.microsoft.com/ && echo REACHED_DIRECT || echo direct-refused; "
     );
-    let probe = sh(
-        sandbox,
-        &first,
-        &(store_probe + r#"id -u; env | grep -c 'sig=' || true; cat /proc/1/environ >/dev/null 2>&1 && echo READ_PID1_ENV || echo pid1-env-denied; echo begin-grep;
-grep -rls 'sig=' /proc/[0-9]*/environ /proc/[0-9]*/cmdline /tmp /workspace /opt/alien 2>/dev/null | head -5; echo end-grep;
-curl -sS -m 8 -o /dev/null https://management.azure.com/ && echo REACHED_OUT || echo outbound-refused;
-curl -sS -m 8 -o /dev/null https://www.microsoft.com/ && echo REACHED_OUT || echo outbound-refused"#),
-    )
-    .await?;
+    if internet {
+        script += &format!(
+            "curl -sS -m 20 -o /dev/null https://www.microsoft.com/ && echo gateway-ok || echo GATEWAY_FAILED; \
+echo store-via-gateway=$(curl -s -m 20 -o /dev/null -w '%{{http_code}}' https://{store_host}/{container}/{key}/HEAD); "
+        );
+    } else {
+        script += "curl -sS -m 8 -o /dev/null https://management.azure.com/ && echo REACHED_OUT || echo outbound-refused; ";
+    }
+    script += r#"env | grep -c 'sig=' || true; cat /proc/1/environ >/dev/null 2>&1 && echo READ_PID1_ENV || echo pid1-env-denied; echo begin-grep;
+grep -rls 'sig=' /proc/[0-9]*/environ /proc/[0-9]*/cmdline /tmp /workspace /opt/alien 2>/dev/null | head -5; echo end-grep"#;
+    let probe = sh(sandbox, &first, &script).await?;
     eprintln!("command-uid probe:\n{}{}", probe.stdout, probe.stderr);
+    let says = |line: &str| probe.stdout.lines().any(|l| l == line);
     ensure!(
-        !probe.stdout.contains("REACHED_STORE")
-            && probe.stdout.contains("store-refused")
-            && probe.stdout.contains("store-ip-refused"),
-        "a command reached the store account"
+        !probe.stdout.contains("REACHED_STORE") && says("store-refused") && says("store-ip-refused"),
+        "a command opened a direct connection to the store account"
     );
     ensure!(
-        probe.stdout.lines().nth(2) != Some("0"),
-        "commands run as root"
+        !probe.stdout.contains("REACHED_DIRECT") && says("direct-refused"),
+        "a command opened a direct connection past the gateway"
     );
+    ensure!(!says("uid=0"), "commands run as root");
     ensure!(
         !probe.stdout.contains("READ_PID1_ENV"),
         "a command read the agent's environment"
     );
-    ensure!(
-        !probe.stdout.contains("REACHED_OUT"),
-        "a command reached out under egress none"
-    );
+    if internet {
+        ensure!(says("gateway-ok"), "internet through the gateway failed");
+        let code = probe
+            .stdout
+            .lines()
+            .find_map(|l| l.strip_prefix("store-via-gateway="))
+            .unwrap_or_default();
+        ensure!(
+            code != "200" && code != "201",
+            "a command read the key's HEAD through the gateway ({code})"
+        );
+    } else {
+        ensure!(
+            !probe.stdout.contains("REACHED_OUT"),
+            "a command reached out under egress none"
+        );
+    }
     let found: Vec<&str> = probe
         .stdout
         .lines()
