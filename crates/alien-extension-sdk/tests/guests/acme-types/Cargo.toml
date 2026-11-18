@@ -1,0 +1,13 @@
+# The types crate of the docs' full example (Build a full extension): the DNS zone's config,
+# outputs and saved fields, shared by its hooks and its controller.
+[package]
+name = "acme-types"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+alien-extension-sdk = { workspace = true }
+bon = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+utoipa = { workspace = true }

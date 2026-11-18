@@ -1,0 +1,20 @@
+{
+  "id": "acme/dns-zone/records-write",
+  "description": "Write the zone's DNS records",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets"]
+        },
+        // Covers every hosted zone in the account, not only this zone: Route53 names a zone by
+        // an id it assigns at create, which no binding variable holds, and a hosted zone takes
+        // no tag condition.
+        "binding": {
+          "stack": { "resources": ["arn:aws:route53:::hostedzone/*"] },
+          "resource": { "resources": ["arn:aws:route53:::hostedzone/*"] }
+        }
+      }
+    ]
+  }
+}

@@ -51,6 +51,13 @@ members = [
   "crates/alien-operator",
   "crates/alien-deploy-cli",
   "crates/alien-hooks-runtime",
+  "crates/alien-extension-sdk",
+  "crates/alien-extension-sdk/tests/guests/acme",
+  "crates/alien-extension-sdk/tests/guests/acme-controller",
+  "crates/alien-extension-sdk/tests/guests/acme-types",
+  "crates/alien-extension-sdk/tests/guests/backups",
+  "crates/alien-extension-sdk/tests/guests/order",
+  "crates/alien-extension-sdk/tests/guests/steered",
   "client-sdks/manager/rust",
   "client-sdks/platform/rust",
   "crates/workspace-hack",
@@ -133,6 +140,7 @@ alien-cloudformation = { path = "crates/alien-cloudformation", version = "3.3.69
 alien-terraform = { path = "crates/alien-terraform", version = "3.3.69" }
 alien-helm = { path = "crates/alien-helm", version = "3.3.69" }
 alien-hooks-runtime = { path = "crates/alien-hooks-runtime", version = "3.3.69" }
+alien-extension-sdk = { path = "crates/alien-extension-sdk", version = "3.3.69" }
 alien-manager = { path = "crates/alien-manager", version = "3.3.69" }
 alien-observer = { path = "crates/alien-observer", version = "3.3.69" }
 alien-deploy-cli = { path = "crates/alien-deploy-cli" }

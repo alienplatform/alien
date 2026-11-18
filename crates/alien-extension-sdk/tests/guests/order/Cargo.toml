@@ -1,0 +1,13 @@
+# A hooks crate whose interceptor reads what acme's left on the same call, so a test can tell the
+# order a stack's extensions ran in.
+[package]
+name = "order-hooks"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+alien-extension-sdk = { workspace = true }
