@@ -137,6 +137,29 @@ fn store_grants(body: &hcl::Body) -> Vec<(String, String, String, String)> {
         .collect()
 }
 
+/// The `azapi_resource` blocks of the store: the account, then its container.
+fn store_blocks<'a>(body: &'a hcl::Body) -> Vec<&'a hcl::Block> {
+    resources(body, "azapi_resource")
+        .filter(|block| block.labels()[1].as_str().contains("_store"))
+        .collect()
+}
+
+fn store_account<'a>(body: &'a hcl::Body) -> &'a hcl::Block {
+    store_blocks(body)
+        .into_iter()
+        .find(|block| block.labels()[1].as_str() == "agents_store")
+        .expect("the store account")
+}
+
+/// An attribute with its whitespace and quotes removed, so `{ "a" = true }` reads `{a=true}`.
+fn compact(block: &hcl::Block, name: &str) -> String {
+    attribute(block, name)
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '"')
+        .collect()
+}
+
 fn execute_on_agents() -> PermissionProfile {
     PermissionProfile::new().resource("agents", ["sandbox/execute"])
 }
@@ -152,26 +175,34 @@ fn a_declared_sandbox_gets_its_own_hns_store() {
     );
     let body = body(&module);
 
-    let accounts: Vec<_> = resources(&body, "azurerm_storage_account")
-        .filter(|block| block.labels()[1].as_str() != "default_storage_account")
-        .collect();
-    assert_eq!(accounts.len(), 1, "one store, for `agents` only");
-    let account = accounts[0];
-    assert_eq!(account.labels()[1].as_str(), "agents_store");
-    for (name, value) in [
-        ("is_hns_enabled", "true"),
-        ("shared_access_key_enabled", "false"),
-        ("default_to_oauth_authentication", "true"),
-        ("allow_nested_items_to_be_public", "false"),
-        ("https_traffic_only_enabled", "true"),
-        ("min_tls_version", "\"TLS1_2\""),
-        ("account_kind", "\"StorageV2\""),
+    let blocks = store_blocks(&body);
+    assert_eq!(blocks.len(), 2, "one store account and container, for `agents` only");
+    let account = store_account(&body);
+    assert_eq!(
+        compact(account, "type"),
+        "Microsoft.Storage/storageAccounts@2023-05-01"
+    );
+    // Created through ARM alone: no azurerm storage resource reads it with an account key.
+    assert_eq!(
+        resources(&body, "azurerm_storage_account")
+            .filter(|block| block.labels()[1].as_str() != "default_storage_account")
+            .count(),
+        0
+    );
+    assert_eq!(resources(&body, "azurerm_storage_container")
+        .filter(|block| block.labels()[1].as_str().contains("_store"))
+        .count(), 0);
+    let properties = compact(account, "body");
+    for setting in [
+        "kind=StorageV2",
+        "isHnsEnabled=true",
+        "allowSharedKeyAccess=false",
+        "defaultToOAuthAuthentication=true",
+        "allowBlobPublicAccess=false",
+        "supportsHttpsTrafficOnly=true",
+        "minimumTlsVersion=TLS1_2",
     ] {
-        assert_eq!(
-            attribute(account, name).as_deref(),
-            Some(value),
-            "store account `{name}`"
-        );
+        assert!(properties.contains(setting), "store account lacks `{setting}`: {properties}");
     }
     let account_name = attribute(account, "name").expect("name");
     assert!(
@@ -179,16 +210,16 @@ fn a_declared_sandbox_gets_its_own_hns_store() {
         "{account_name}"
     );
 
-    let containers: Vec<_> = resources(&body, "azurerm_storage_container").collect();
-    assert_eq!(containers.len(), 1);
+    let container = blocks
+        .iter()
+        .find(|block| block.labels()[1].as_str() == "agents_store_keys")
+        .expect("the store container");
     assert_eq!(
-        attribute(containers[0], "storage_account_id").as_deref(),
-        Some("azurerm_storage_account.agents_store.id")
+        compact(container, "parent_id"),
+        "${azapi_resource.agents_store.id}/blobServices/default"
     );
-    assert_eq!(
-        attribute(containers[0], "container_access_type").as_deref(),
-        Some("\"private\"")
-    );
+    assert_eq!(compact(container, "name"), "keys");
+    assert!(compact(container, "body").contains("publicAccess=None"));
     assert_terraform_valid(&module, "azure sandbox store");
 }
 
@@ -210,13 +241,13 @@ fn the_creating_identity_gets_delegator_on_the_account_and_data_on_the_container
         [
             (
                 "agents_store-execution_sa-data".to_string(),
-                "azurerm_storage_container.agents_store.resource_manager_id".to_string(),
+                "azapi_resource.agents_store_keys.id".to_string(),
                 DATA_CONTRIBUTOR.to_string(),
                 principal.to_string(),
             ),
             (
                 "agents_store-execution_sa-delegator".to_string(),
-                "azurerm_storage_account.agents_store.id".to_string(),
+                "azapi_resource.agents_store.id".to_string(),
                 DELEGATOR.to_string(),
                 principal.to_string(),
             ),
@@ -255,7 +286,7 @@ fn an_identity_that_creates_no_sandbox_gets_no_store_grant() {
         StackSettings::default(),
     );
     let body = body(&module);
-    assert_eq!(resources(&body, "azurerm_storage_account").count(), 1);
+    assert_eq!(store_blocks(&body).len(), 2);
     assert!(store_grants(&body).is_empty());
 }
 
@@ -269,7 +300,7 @@ fn an_undeclared_sandbox_renders_no_store() {
         StackSettings::default(),
     );
     let body = body(&module);
-    assert_eq!(resources(&body, "azurerm_storage_container").count(), 0);
+    assert!(store_blocks(&body).is_empty());
     assert!(store_grants(&body).is_empty());
     for (name, contents) in &module.files {
         assert!(
@@ -292,21 +323,24 @@ fn a_declared_encryption_key_encrypts_the_store() {
         StackSettings::default(),
     );
     let body = body(&module);
-    let account = resources(&body, "azurerm_storage_account")
-        .find(|block| block.labels()[1].as_str() == "agents_store")
-        .expect("the store account");
-    let cmk = account
+    let account = store_account(&body);
+    let properties = compact(account, "body");
+    for setting in [
+        "keySource=Microsoft.Keyvault",
+        "userAssignedIdentity=azurerm_user_assigned_identity.agents_store_encryption.id",
+        "keyname=azurerm_key_vault_key.store_key.name",
+        "azurerm_key_vault_key.store_key.versionless_id",
+    ] {
+        assert!(properties.contains(setting), "store encryption lacks `{setting}`: {properties}");
+    }
+    let identity = account
         .body()
         .blocks()
-        .find(|block| block.identifier() == "customer_managed_key")
-        .expect("the store encrypts with the declared key");
+        .find(|block| block.identifier() == "identity")
+        .expect("the store account has the encryption identity");
     assert_eq!(
-        attribute(cmk, "key_vault_key_id").as_deref(),
-        Some("azurerm_key_vault_key.store_key.versionless_id")
-    );
-    assert_eq!(
-        attribute(cmk, "user_assigned_identity_id").as_deref(),
-        Some("azurerm_user_assigned_identity.agents_store_encryption.id")
+        compact(identity, "identity_ids"),
+        "[azurerm_user_assigned_identity.agents_store_encryption.id]"
     );
     let depends_on = attribute(account, "depends_on").expect("depends_on");
     assert!(
@@ -336,10 +370,9 @@ fn an_undeclared_encryption_key_leaves_the_store_on_microsoft_managed_keys() {
         StackSettings::default(),
     );
     let body = body(&module);
-    let account = resources(&body, "azurerm_storage_account")
-        .find(|block| block.labels()[1].as_str() == "agents_store")
-        .expect("the store account");
+    let account = store_account(&body);
     assert!(account.body().blocks().next().is_none());
+    assert!(!compact(account, "body").contains("encryption"));
     assert_eq!(
         resources(&body, "azurerm_user_assigned_identity")
             .filter(|b| b.labels()[1].as_str().starts_with("agents_store"))
@@ -489,7 +522,7 @@ fn the_registration_hands_the_controller_the_store() {
     let agents = import_of("agents");
     assert!(agents.contains("persistentStorage"), "{agents}");
     assert!(
-        agents.contains("azurerm_storage_account.agents_store.name"),
+        agents.contains("azapi_resource.agents_store.name"),
         "{agents}"
     );
     assert!(agents.contains("\"keys\""), "{agents}");

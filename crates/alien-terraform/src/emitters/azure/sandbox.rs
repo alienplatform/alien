@@ -1092,8 +1092,8 @@ mod tests {
                 let label = block.labels.get(1).map(|l| l.as_str()).unwrap_or_default();
                 let item = match kind {
                     "azapi_resource" if label.ends_with("_vnet") => "vnet-connection",
+                    "azapi_resource" if label.contains("_store") => "storage-store",
                     "azapi_resource" => "sandbox-group",
-                    "azurerm_storage_account" | "azurerm_storage_container" => "storage-store",
                     "azurerm_role_assignment" if label.contains("_store-") => {
                         "role-assignment:storage-store"
                     }
