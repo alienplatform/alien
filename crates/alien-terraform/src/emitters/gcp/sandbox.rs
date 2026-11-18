@@ -869,7 +869,13 @@ mod tests {
                 .permission("empty", PermissionProfile::new())
                 .build();
             let mut names = names();
-            for profile in ["named", "wildcard", "other-sandbox", "heartbeat-only", "empty"] {
+            for profile in [
+                "named",
+                "wildcard",
+                "other-sandbox",
+                "heartbeat-only",
+                "empty",
+            ] {
                 names.insert(
                     format!("{profile}-sa"),
                     format!("{}_sa", profile.replace('-', "_")),
@@ -892,7 +898,8 @@ mod tests {
                 .resource_blocks
                 .iter()
                 .filter(|b| {
-                    b.labels.first().map(|l| l.as_str()) == Some("google_service_account_iam_member")
+                    b.labels.first().map(|l| l.as_str())
+                        == Some("google_service_account_iam_member")
                 })
                 .map(|b| attribute(b, "member"))
                 .collect();

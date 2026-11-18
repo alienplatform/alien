@@ -167,10 +167,8 @@ fn old_automatic_setup_install() -> (Stack, StackState, ResourceRef) {
         (Resource::new(uploads), ResourceLifecycle::Live),
     ] {
         let id = resource.id().to_string();
-        let mut entry = ResourceEntry::new(
-            Storage::new("placeholder".to_string()).build(),
-            lifecycle,
-        );
+        let mut entry =
+            ResourceEntry::new(Storage::new("placeholder".to_string()).build(), lifecycle);
         entry.config = resource.clone();
         entry.dependencies = vec![management_ref.clone()];
         stack.resources.insert(id.clone(), entry);
@@ -211,7 +209,10 @@ fn live_bucket_provider() -> MockPlatformServiceProvider {
     let mut provider = MockPlatformServiceProvider::new();
     let mut s3 = alien_aws_clients::s3::MockS3Api::new();
     s3.expect_put_bucket_policy().returning(|bucket, _| {
-        assert!(bucket.ends_with("-uploads"), "only the Live bucket: {bucket}");
+        assert!(
+            bucket.ends_with("-uploads"),
+            "only the Live bucket: {bucket}"
+        );
         Ok(())
     });
     let s3 = Arc::new(s3);
@@ -256,10 +257,19 @@ fn an_ordinary_run_under_direct_setup_records_ordering_edges_and_updates_nothing
         .map(|id| id.as_str().unwrap().to_string())
         .collect();
     for id in ["management", "execution-sa"] {
-        assert!(recorded.contains(&id.to_string()), "{id} recorded: {ordinary}");
-        assert!(ordinary["updates"].get(id).is_none(), "{id} not updated: {ordinary}");
+        assert!(
+            recorded.contains(&id.to_string()),
+            "{id} recorded: {ordinary}"
+        );
+        assert!(
+            ordinary["updates"].get(id).is_none(),
+            "{id} not updated: {ordinary}"
+        );
     }
-    assert!(ordinary["dependencyUpdatePending"].as_array().unwrap().is_empty());
+    assert!(ordinary["dependencyUpdatePending"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 /// The same state, a setup run: management and what follows it update, as they did.
@@ -313,7 +323,12 @@ fn the_stuck_state_plans_its_dependents_for_their_ordinary_updates_after_the_ret
         record.dependencies = vec![management_ref.clone()];
         record.dependency_update_pending = true;
     }
-    assert!(state.resources.get_mut("management").unwrap().retry_failed().unwrap());
+    assert!(state
+        .resources
+        .get_mut("management")
+        .unwrap()
+        .retry_failed()
+        .unwrap());
     let executor = executor_for_run(&stack, InitialSetupAuthority::DirectSetup, false, true);
     let plan = executor.plan(&state).unwrap();
     let mut updates: Vec<_> = plan.updates.keys().cloned().collect();
@@ -324,7 +339,10 @@ fn the_stuck_state_plans_its_dependents_for_their_ordinary_updates_after_the_ret
     let mut owed: Vec<_> = plan.updates.keys().cloned().collect();
     owed.extend(plan.dependency_update_pending.iter().cloned());
     for id in ["execution-sa", "objects", "vault", "uploads"] {
-        assert!(owed.contains(&id.to_string()), "{id} owes its update: {updates:?}");
+        assert!(
+            owed.contains(&id.to_string()),
+            "{id} owes its update: {updates:?}"
+        );
     }
 }
 
@@ -361,12 +379,14 @@ async fn a_failed_management_update_recovers_on_retry_and_unblocks_the_live_reso
         }
     }
     for (id, resource) in &current.resources {
-        assert_eq!(resource.status, ResourceStatus::Running, "{id}: {:?}", resource.error);
+        assert_eq!(
+            resource.status,
+            ResourceStatus::Running,
+            "{id}: {:?}",
+            resource.error
+        );
     }
-    assert_eq!(
-        current.resources["management"].internal_state,
-        settled
-    );
+    assert_eq!(current.resources["management"].internal_state, settled);
     assert!(executor.is_synced(&current));
 }
 
@@ -387,9 +407,7 @@ fn a_stored_state_plans_as_an_ordinary_run_under_direct_setup() {
     for record in state.resources.values_mut() {
         let id = record.config.id().to_string();
         let stand_in = match record.resource_type.as_str() {
-            "compute-cluster" => Some(Resource::new(
-                alien_core::ArtifactRegistry::new(id).build(),
-            )),
+            "compute-cluster" => Some(Resource::new(alien_core::ArtifactRegistry::new(id).build())),
             "daemon" => Some(Resource::new(Storage::new(id).build())),
             _ => None,
         };
@@ -407,10 +425,8 @@ fn a_stored_state_plans_as_an_ordinary_run_under_direct_setup() {
         .map(|(id, _)| id.clone());
     for (id, record) in &state.resources {
         let lifecycle = record.lifecycle.unwrap_or(ResourceLifecycle::Frozen);
-        let mut entry = ResourceEntry::new(
-            Storage::new("placeholder".to_string()).build(),
-            lifecycle,
-        );
+        let mut entry =
+            ResourceEntry::new(Storage::new("placeholder".to_string()).build(), lifecycle);
         entry.config = record.config.clone();
         entry.dependencies = record.dependencies.clone();
         if record.resource_type == "remote-stack-management" {
