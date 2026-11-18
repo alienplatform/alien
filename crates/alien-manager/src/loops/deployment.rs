@@ -236,6 +236,9 @@ pub struct DeploymentLoop {
     /// Acquisition backoff shared by deployment and heartbeat ticks. The retry
     /// deadline itself comes from persisted retry state, never from this cache.
     deferred: Mutex<HashMap<String, DeferredDeployment>>,
+    /// Deployments whose last machine-list refresh failed, so a failure that repeats every
+    /// minute is logged once and its recovery once.
+    membership_failing: Mutex<std::collections::HashSet<String>>,
     /// Holds the values of deployments whose config carries `valueSlots`.
     values: Option<Arc<crate::values::ValueStore>>,
     /// Where the commands key of command receivers built before capability
@@ -337,6 +340,7 @@ impl DeploymentLoop {
             local_bindings_cache: Mutex::new(HashMap::new()),
             settled_stack_cache: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
+            membership_failing: Mutex::new(std::collections::HashSet::new()),
             values: None,
             commands_keys: None,
             release_channels: None,
@@ -770,6 +774,35 @@ impl DeploymentLoop {
         .await;
     }
 
+    /// Reports a failed machine-list refresh once per streak (the next attempt is a minute
+    /// away, and repeating the same line would bury everything else), and its recovery.
+    fn note_membership_result<T, E: std::fmt::Display>(
+        &self,
+        deployment_id: &str,
+        result: &Result<T, E>,
+    ) {
+        let mut failing = self
+            .membership_failing
+            .lock()
+            .expect("membership_failing poisoned");
+        match result {
+            Err(error) => {
+                if failing.insert(deployment_id.to_string()) {
+                    error!(
+                        %deployment_id,
+                        %error,
+                        "Could not update the machines the deployment's cluster admits; keeping the list as it is (further failures are not logged until it recovers)"
+                    );
+                }
+            }
+            Ok(_) => {
+                if failing.remove(deployment_id) {
+                    info!(%deployment_id, "Updating the machines the deployment's cluster admits works again");
+                }
+            }
+        }
+    }
+
     /// Process a single deployment: step until stable, reconcile, release.
     ///
     /// Returns `true` when acquisition should wait before trying this deployment again.
@@ -971,6 +1004,11 @@ impl DeploymentLoop {
             target_release_id,
         );
         recorded_state.current_release = current_release.clone();
+        // A failed update that only refreshes the machines its cluster admits. Whatever goes
+        // wrong before that refresh is logged and the lease released: nothing here may replace
+        // the update's own error or write a checkpoint.
+        let membership_only = status == DeploymentStatus::UpdateFailed
+            && alien_deployment::membership_tick_wanted(&recorded_state);
         if let Some(next_status) = alien_deployment::destroy_without_runtime(&recorded_state) {
             info!(
                 deployment_id = %deployment_id,
@@ -1036,6 +1074,15 @@ impl DeploymentLoop {
             Ok(resolved) => resolved,
             Err(e) => {
                 let e = crate::providers::credential_errors::classify_credential_error(e);
+                if membership_only {
+                    warn!(
+                        deployment_id = %deployment_id,
+                        error_code = %e.code,
+                        error = %e,
+                        "Credentials unavailable; not updating the machines the failed deployment's cluster admits"
+                    );
+                    return Ok(None);
+                }
                 let now = chrono::Utc::now();
                 let retry_remaining = credential_error_retry_remaining(&deployment, &e, now);
                 let waiting_for_driver = should_wait_for_credential_handoff(status, &deployment);
@@ -1212,6 +1259,9 @@ impl DeploymentLoop {
                     error = %error,
                     "Management identity unavailable for a setup render"
                 );
+                if membership_only {
+                    return Ok(None);
+                }
                 return self
                     .checkpoint_phase_failure(PhaseFailure {
                         deployment: &deployment,
@@ -1258,6 +1308,9 @@ impl DeploymentLoop {
                     error = %error,
                     "Held values could not be loaded for the deployment"
                 );
+                if membership_only {
+                    return Ok(None);
+                }
                 return self
                     .checkpoint_phase_failure(PhaseFailure {
                         deployment: &deployment,
@@ -1413,6 +1466,29 @@ impl DeploymentLoop {
         }));
 
         let mut config = config;
+
+        // A failed update takes no step, and a failed cluster takes a step that does
+        // nothing, so neither would refresh the machines the cluster admits. That is
+        // all this tick does: it writes nothing to the deployment, and a request to
+        // retry is never read here (such a deployment takes the normal step below).
+        if alien_deployment::membership_tick_wanted(&state) {
+            let tick = alien_deployment::run_membership_tick(
+                &state,
+                &config,
+                &client_config,
+                &deployment_id,
+                &transport,
+                service_provider.clone(),
+            )
+            .await;
+            self.note_membership_result(&deployment_id, &tick);
+            if state.status == DeploymentStatus::UpdateFailed {
+                // Nothing is checkpointed, not even a cleared credential-retry window. A
+                // failed refresh was reported above and changes nothing, so it is no error here.
+                return Ok(None);
+            }
+        }
+
         let runner_result = if options.require_heartbeats_enabled {
             alien_deployment::runner::run_running_refresh_step_loop(
                 &mut state,
@@ -3671,6 +3747,15 @@ mod tests {
                 runner: &DeploymentLoop,
                 change: impl FnOnce(&mut DeploymentRecord),
             ) {
+                self.process_with_options(runner, change, None).await;
+            }
+
+            async fn process_with_options(
+                &self,
+                runner: &DeploymentLoop,
+                change: impl FnOnce(&mut DeploymentRecord),
+                options: Option<ProcessOptions>,
+            ) {
                 let acquired = self
                     .manager
                     .deployment_store
@@ -3698,12 +3783,15 @@ mod tests {
                         item.deployment,
                         item.execution_claim,
                         "test-session",
-                        ProcessOptions {
-                            max_steps: 1,
-                            require_heartbeats_enabled: matches!(
-                                self.record().await.status.as_str(),
-                                "running" | "refresh-failed"
-                            ),
+                        match options {
+                            Some(options) => options,
+                            None => ProcessOptions {
+                                max_steps: 1,
+                                require_heartbeats_enabled: matches!(
+                                    self.record().await.status.as_str(),
+                                    "running" | "refresh-failed" | "update-failed"
+                                ),
+                            },
                         },
                     )
                     .await;
@@ -3806,6 +3894,105 @@ mod tests {
             assert_eq!(saved.source.expect("resolver error").message, cause.message);
         }
 
+        /// A failed update whose machine list is refreshed on the heartbeat must keep the
+        /// update's own error when something goes wrong before the refresh can start: no
+        /// credentials, no management identity. Nothing is checkpointed, not even a credential
+        /// retry window.
+        #[tokio::test]
+        async fn a_failed_update_keeps_its_error_when_the_membership_refresh_cannot_start() {
+            for platform in [Platform::Local, Platform::Azure] {
+                let fixture = Fixture::new_for_platform(
+                    DeploymentStatus::UpdateFailed,
+                    transient_error(),
+                    platform,
+                )
+                .await;
+                if platform == Platform::Azure {
+                    without_azure_management(&fixture);
+                }
+                let original = serde_json::to_value(AlienError::new(GenericError {
+                    message: "the update failed".to_string(),
+                }))
+                .unwrap();
+                fixture
+                    .db
+                    .execute(&format!(
+                        "UPDATE deployments SET error = '{}'",
+                        original.to_string().replace('\'', "''")
+                    ))
+                    .await
+                    .unwrap();
+                let before = fixture.record().await;
+                let writes = fixture.writes().await;
+                let runner = fixture.runner();
+
+                // The record the loop receives carries an open credential retry window, which a
+                // checkpoint would write back.
+                fixture
+                    .process_with(&runner, |record| {
+                        record.runtime_metadata.as_mut().unwrap().credential_retry =
+                            Some(alien_core::CredentialRetry {
+                                started_at: Utc::now(),
+                                status: DeploymentStatus::UpdateFailed,
+                            });
+                    })
+                    .await;
+
+                let after = fixture.record().await;
+                assert_eq!(after.status, "update-failed", "{platform:?}");
+                assert_eq!(after.error, Some(original), "{platform:?}");
+                assert!(
+                    after.runtime_metadata.unwrap().credential_retry.is_none(),
+                    "{platform:?}: no retry window may be written"
+                );
+                assert_eq!(after.updated_at, before.updated_at, "{platform:?}");
+                assert!(
+                    fixture.writes().await - writes <= 2,
+                    "{platform:?}: only acquire and release may write"
+                );
+            }
+        }
+
+        /// The deployment loop can be handed a failed update with no retry waiting (a control
+        /// plane gives any runtime acquire that claim). It does the same machine-list refresh
+        /// as the heartbeat: credentials missing means nothing is written, and the update's
+        /// own error stays.
+        #[tokio::test]
+        async fn the_deployment_loop_refreshes_a_failed_update_and_writes_nothing() {
+            let fixture = Fixture::new(DeploymentStatus::UpdateFailed, transient_error()).await;
+            let original = serde_json::to_value(AlienError::new(GenericError {
+                message: "the update failed".to_string(),
+            }))
+            .unwrap();
+            fixture
+                .db
+                .execute(&format!(
+                    "UPDATE deployments SET error = '{}'",
+                    original.to_string().replace('\'', "''")
+                ))
+                .await
+                .unwrap();
+            let before = fixture.record().await;
+            let writes = fixture.writes().await;
+
+            fixture
+                .process_with_options(
+                    &fixture.runner(),
+                    |_| {},
+                    Some(ProcessOptions::deployment_tick()),
+                )
+                .await;
+
+            let after = fixture.record().await;
+            assert_eq!(after.status, "update-failed");
+            assert_eq!(after.error, Some(original));
+            assert_eq!(after.updated_at, before.updated_at);
+            assert!(
+                fixture.writes().await - writes <= 2,
+                "only acquire and release may write"
+            );
+        }
+
         fn config_naming_slots(
             slots: Vec<alien_core::ValueSlotRef>,
         ) -> alien_core::DeploymentConfig {
@@ -3882,6 +4069,74 @@ mod tests {
             assert!(saved.message.contains("env:API_TOKEN"), "{}", saved.message);
             let saved_text = serde_json::to_string(&saved).unwrap();
             assert!(!saved_text.contains("s3cret"), "{saved_text}");
+        }
+
+        /// A failed update whose machine list is refreshed keeps the update's own error when a
+        /// held value changed after planning: the refresh does not start, and nothing is saved.
+        #[tokio::test]
+        async fn a_failed_update_keeps_its_error_when_a_held_value_cannot_be_loaded() {
+            alien_deployment::set_ephemeral_secrets_digest_key();
+            let fixture = Fixture::new(DeploymentStatus::UpdateFailed, transient_error()).await;
+            fixture
+                .credentials
+                .unavailable
+                .store(false, Ordering::SeqCst);
+            let original = serde_json::to_value(AlienError::new(GenericError {
+                message: "the update failed".to_string(),
+            }))
+            .unwrap();
+            fixture
+                .db
+                .execute(&format!(
+                    "UPDATE deployments SET error = '{}'",
+                    original.to_string().replace('\'', "''")
+                ))
+                .await
+                .unwrap();
+            let store = fixture
+                .manager
+                .values
+                .clone()
+                .expect("standalone value store");
+            let scope = crate::values::ValueScope::deployment(&fixture.id).unwrap();
+            let slot: crate::values::ValueSlot = "env:API_TOKEN".parse().unwrap();
+            let planned = store
+                .put(
+                    &scope,
+                    &slot,
+                    crate::values::ValueKind::Secret,
+                    "first".into(),
+                )
+                .await
+                .unwrap();
+            store
+                .put(
+                    &scope,
+                    &slot,
+                    crate::values::ValueKind::Secret,
+                    "second".into(),
+                )
+                .await
+                .unwrap();
+            let config = config_naming_slots(vec![alien_core::ValueSlotRef {
+                slot: "env:API_TOKEN".to_string(),
+                kind: alien_core::EnvironmentVariableType::Secret,
+                digest: planned.digest,
+                env_name: None,
+                targets: None,
+            }]);
+            let before = fixture.record().await;
+
+            fixture
+                .process_with(&fixture.runner(), |record| {
+                    record.deployment_config = Some(config)
+                })
+                .await;
+
+            let after = fixture.record().await;
+            assert_eq!(after.status, "update-failed");
+            assert_eq!(after.error, Some(original));
+            assert_eq!(after.updated_at, before.updated_at);
         }
 
         /// A held value that still matches its digest does not stop the step.
