@@ -41,6 +41,9 @@ fn token_file_name(sandbox: &str) -> String {
 pub struct CreateSessionBody {
     /// Session id within the sandbox
     pub session_id: String,
+    /// The key whose persistent storage the session holds, when the sandbox declares it.
+    #[serde(default)]
+    pub storage_key: Option<String>,
 }
 
 /// A request to run a command.
@@ -96,6 +99,9 @@ pub struct SessionBody {
     /// Whether the session's container is running. One that stopped, as when a command that
     /// would not stop had its session killed, does not run again.
     pub running: bool,
+    /// The persistent storage key the session holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_key: Option<String>,
 }
 
 /// One output frame.
@@ -599,7 +605,12 @@ async fn create_session(
 
     let handle = state
         .manager
-        .create_session(&state.sandbox, &body.session_id, &template)
+        .create_session_with_storage(
+            &state.sandbox,
+            &body.session_id,
+            &template,
+            body.storage_key.as_deref(),
+        )
         .await
         .map_err(failed)?;
 
@@ -607,6 +618,7 @@ async fn create_session(
         session_id: handle.session_id,
         container_id: handle.container_id,
         running: handle.running,
+        storage_key: handle.storage_key,
     }))
 }
 
@@ -629,6 +641,7 @@ async fn list_sessions(
                 session_id: handle.session_id,
                 container_id: handle.container_id,
                 running: handle.running,
+                storage_key: handle.storage_key,
             })
             .collect(),
     ))

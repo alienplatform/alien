@@ -231,7 +231,10 @@ impl AzureSandboxController {
     /// Tags the group this deployment just created (a 201 on the create-only write). Saved
     /// state already says it is ours, so a failure here retries this step only.
     #[handler(state = TaggingGroup, on_failure = ProvisionFailed, status = ResourceStatus::Provisioning)]
-    async fn tagging_group(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+    async fn tagging_group(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         let (group, region, resource_group) = self.identity(&config.id)?;
         let tags: std::collections::BTreeMap<String, String> = [(
@@ -1429,7 +1432,8 @@ impl AzureSandboxController {
                     if matches!(
                         error.error,
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) => {
+                    ) =>
+                {
                     self.group_absent = true;
                 }
                 Err(error) => {
@@ -3449,7 +3453,8 @@ mod direct_setup_tests {
             .expect_create_or_update_sandbox_group()
             .times(1)
             .withf(|_, _, _, tags| {
-                tags.get(GROUP_OWNER_TAG).map(String::as_str)
+                tags.get(GROUP_OWNER_TAG)
+                    .map(String::as_str)
                     .is_some_and(|tag| tag.ends_with("@dep_test"))
             })
             .returning(|_, _, _, _| Ok(group("Succeeded")));

@@ -29,6 +29,9 @@ pub struct LocalSandboxController {
     /// File the route's bearer token is written to. The binding carries the path, never the
     /// token, so no secret lands in deployment state.
     pub(crate) token_path: Option<String>,
+    /// The declared persistent storage, with the host directory its keys live in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) persistent_storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
 }
 
 #[controller]
@@ -48,6 +51,7 @@ impl LocalSandboxController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
         let manager = sandbox_manager(ctx)?;
+        let storage_dir = manager.storage_dir(&config.id);
 
         // Reaping here rather than only at delete: a CLI restart leaves the previous run's
         // containers behind, and a session that outlives the process that owned it can never
@@ -82,6 +86,7 @@ impl LocalSandboxController {
 
         self.route_url = Some(route.base_url.clone());
         self.token_path = Some(route.token_path.display().to_string());
+        self.persistent_storage = local_persistent_storage(&config, &storage_dir);
         self.egress = Some(config.into());
 
         info!(sandbox_id = %config.id, route = %route.base_url, "Local sandbox ready");
@@ -105,6 +110,7 @@ impl LocalSandboxController {
         // something binds it again, at the same address when it is free, because running
         // workloads hold that URL. Idempotent by sandbox id.
         let manager = sandbox_manager(ctx)?;
+        let storage_dir = manager.storage_dir(&config.id);
         let route = alien_local::SandboxRoute::ensure_at(
             Arc::clone(&manager),
             &config.id,
@@ -118,6 +124,7 @@ impl LocalSandboxController {
         })?;
         self.route_url = Some(route.base_url);
         self.token_path = Some(route.token_path.display().to_string());
+        self.persistent_storage = local_persistent_storage(&config, &storage_dir);
         self.egress = Some(config.into());
 
         // "Healthy" on a platform with nothing durable means the runtime is still there to
@@ -180,6 +187,7 @@ impl LocalSandboxController {
         // The address is recorded here too: after a manager restart the update may be the first
         // step to serve the route, and the workloads updated after it are given this binding.
         let manager = sandbox_manager(ctx)?;
+        let storage_dir = manager.storage_dir(&config.id);
         let route = alien_local::SandboxRoute::ensure_at(
             manager,
             &config.id,
@@ -193,6 +201,7 @@ impl LocalSandboxController {
         })?;
         self.route_url = Some(route.base_url);
         self.token_path = Some(route.token_path.display().to_string());
+        self.persistent_storage = local_persistent_storage(&config, &storage_dir);
         self.egress = Some(config.into());
 
         info!(sandbox_id = %config.id, "Updated local sandbox configuration");
@@ -224,6 +233,7 @@ impl LocalSandboxController {
         self.token_path = None;
 
         let manager = sandbox_manager(ctx)?;
+        let storage_dir = manager.storage_dir(&config.id);
         let reaped = manager
             .reap(&config.id)
             .await
@@ -293,6 +303,7 @@ impl LocalSandboxController {
                 .egress
                 .as_ref()
                 .and_then(|value| value.default_policy().cloned());
+            value.persistent_storage = self.persistent_storage.clone();
         }
 
         Ok(Some(
@@ -304,6 +315,25 @@ impl LocalSandboxController {
             )?,
         ))
     }
+}
+
+/// Local persistent storage: one host directory per key, bind-mounted into the session.
+#[cfg(feature = "local")]
+fn local_persistent_storage(
+    sandbox: &Sandbox,
+    storage_dir: &std::path::Path,
+) -> Option<alien_core::bindings::SandboxPersistentStorageBinding> {
+    let declared = sandbox.persistent_storage.as_ref()?;
+    Some(alien_core::bindings::SandboxPersistentStorageBinding {
+        path: declared.path.clone(),
+        store: alien_core::bindings::PersistentStoreLocator::Local {
+            dir: alien_core::bindings::BindingValue::value(storage_dir.display().to_string()),
+        },
+        exclude: declared.exclude.clone(),
+        max_size_bytes: declared
+            .max_size_bytes()
+            .and_then(|bytes| u64::try_from(bytes).ok()),
+    })
 }
 
 /// Turns the declaration's ceilings into what Docker is given.
@@ -347,6 +377,10 @@ fn session_template(sandbox: &Sandbox) -> Result<alien_local::SandboxSessionConf
         egress,
         preview_ports: sandbox.preview_ports.clone(),
         env: std::collections::HashMap::new(),
+        persistent_storage: sandbox
+            .persistent_storage
+            .as_ref()
+            .map(|storage| storage.path.clone()),
     })
 }
 

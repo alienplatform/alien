@@ -61,6 +61,7 @@ pub mod sandbox_image;
 pub mod sandbox_setup_inputs;
 pub mod sandbox_setup_parity;
 pub mod sandbox_signal;
+pub mod sandbox_storage_network;
 
 #[cfg(feature = "sandbox-process")]
 pub mod sandbox_process;

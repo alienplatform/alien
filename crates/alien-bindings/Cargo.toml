@@ -106,3 +106,6 @@ sec = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 hickory-resolver = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
