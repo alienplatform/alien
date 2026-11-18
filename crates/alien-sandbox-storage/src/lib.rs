@@ -38,7 +38,9 @@ mod read;
 mod rights;
 mod store;
 
-pub use commit::{CommitOutcome, Committer, FileSource, TreeEntry, TreeEntryKind, MAX_PACK_BYTES};
+pub use commit::{
+    CommitOutcome, Committer, FileSource, TreeEntry, TreeEntryKind, MAX_PACK_BYTES, UNKNOWN_CHANGE,
+};
 pub use error::{ErrorData, Result};
 pub use gc::{collect_garbage, GcReport};
 pub use layout::{

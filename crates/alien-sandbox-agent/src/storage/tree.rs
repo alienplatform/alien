@@ -16,7 +16,7 @@ use std::path::Path;
 use alien_error::AlienError;
 use alien_sandbox_storage::{
     Entry, ErrorData as StorageError, FileSource, Manifest, Result as StorageResult, TreeEntry,
-    TreeEntryKind, TreeSink,
+    TreeEntryKind, TreeSink, UNKNOWN_CHANGE,
 };
 
 fn tree_io(operation: &str, path: &str, error: io::Error) -> AlienError<StorageError> {
@@ -198,6 +198,8 @@ pub fn names_git_objects(path: &str) -> bool {
 /// recorded; other kinds (sockets, FIFOs, devices) and other file systems mounted inside are
 /// skipped. Nothing is followed.
 pub fn walk(root: &OwnedFd, exclude: &[String]) -> io::Result<Vec<TreeEntry>> {
+    // File timestamps come from the coarse clock; a file changed in this tick gets no token.
+    let started = coarse_now_ns();
     let device = fstat(root.as_raw_fd())?.st_dev;
     let mut entries = Vec::new();
     let mut first_name: HashMap<(u64, u64), String> = HashMap::new();
@@ -261,7 +263,10 @@ pub fn walk(root: &OwnedFd, exclude: &[String]) -> io::Result<Vec<TreeEntry>> {
                             }
                             TreeEntryKind::File {
                                 size: st.st_size as u64,
-                                change_token: ctime_ns(&st),
+                                change_token: match ctime_ns(&st) {
+                                    ctime if ctime >= started => UNKNOWN_CHANGE,
+                                    ctime => ctime,
+                                },
                             }
                         }
                     }
@@ -279,6 +284,15 @@ pub fn walk(root: &OwnedFd, exclude: &[String]) -> io::Result<Vec<TreeEntry>> {
         }
     }
     Ok(entries)
+}
+
+/// The clock the kernel stamps inode times with.
+fn coarse_now_ns() -> i64 {
+    // SAFETY: zeroed timespec is a valid out-parameter.
+    let mut now: libc::timespec = unsafe { std::mem::zeroed() };
+    // SAFETY: now is a valid pointer; CLOCK_REALTIME_COARSE always exists on Linux.
+    unsafe { libc::clock_gettime(libc::CLOCK_REALTIME_COARSE, &mut now) };
+    now.tv_sec.saturating_mul(1_000_000_000) + now.tv_nsec
 }
 
 fn dup(fd: &OwnedFd) -> io::Result<OwnedFd> {
@@ -328,7 +342,10 @@ pub fn changed_files<'a>(walk: &'a [TreeEntry], head: Option<&Manifest>) -> Vec<
                         size: old_size,
                         change_token: old_token,
                         ..
-                    } if old_size == size && old_token == change_token && old.mtime_ns == item.mtime_ns
+                    } if old_size == size
+                        && old_token == change_token
+                        && change_token != UNKNOWN_CHANGE
+                        && old.mtime_ns == item.mtime_ns
                 )
             })
         })

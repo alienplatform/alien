@@ -27,6 +27,12 @@ pub struct TreeEntry {
     pub mtime_ns: i64,
 }
 
+/// A change token that matches nothing, not even itself: the file is reread at every commit
+/// until a walk can give it a token. A walk gives it to a file changed in the clock tick the
+/// walk started in, because a second change in that tick, of the same size, would leave size,
+/// ctime and mtime as they were and could never be told apart from no change.
+pub const UNKNOWN_CHANGE: i64 = 0;
+
 /// The kind of a [`TreeEntry`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeEntryKind {
@@ -37,6 +43,7 @@ pub enum TreeEntryKind {
         /// Length when walked.
         size: u64,
         /// ctime in nanoseconds, or any token that changes whenever the content may have.
+        /// [`UNKNOWN_CHANGE`] means the token cannot be trusted and the file is always reread.
         change_token: i64,
     },
     /// A symbolic link.
@@ -169,6 +176,7 @@ impl Committer {
                                 change_token: old_token,
                             } if *old_size == size
                                 && *old_token == change_token
+                                && change_token != UNKNOWN_CHANGE
                                 && old.mtime_ns == item.mtime_ns =>
                             {
                                 Some(old_chunks.clone())
