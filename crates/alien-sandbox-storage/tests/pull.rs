@@ -474,3 +474,55 @@ async fn a_second_puller_of_the_same_sandbox_publishes_rather_than_stopping_it()
     assert!(!sandbox.spool.is_superseded());
     assert_eq!(files_at_head(&store).await, third.files());
 }
+
+/// Runs a whole pull by another puller just before the first read, as a second binding
+/// instance would between this one's `pending` and its reads.
+struct RacedBy<'a> {
+    spool: &'a Spool,
+    store: &'a MemoryStore,
+    other: tokio::sync::Mutex<Option<Puller>>,
+}
+
+#[async_trait]
+impl PullChannel for RacedBy<'_> {
+    async fn pending(&self) -> Result<Option<Pending>> {
+        Ok(self.spool.pending())
+    }
+    async fn read(&self, object: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
+        if let Some(mut other) = self.other.lock().await.take() {
+            other
+                .pull(self.spool, self.store, "engine-42")
+                .await
+                .unwrap();
+        }
+        self.spool.read(object, offset, len)
+    }
+    async fn ack(&self, generation: u64, outcome: AckOutcome) -> Result<()> {
+        self.spool.ack(generation, outcome)
+    }
+    async fn seed(&self, object: &str, offset: u64, bytes: Vec<u8>, last: bool) -> Result<()> {
+        self.spool.seed(object, offset, &bytes, last)
+    }
+}
+
+/// The objects a puller is reading are dropped from the spool when another puller publishes
+/// them first. That is not a failure: the commit is in the store, so the pull is idle.
+#[tokio::test]
+async fn a_pull_overtaken_by_another_puller_is_idle_not_failed() {
+    let store = MemoryStore::new();
+    let mut sandbox = sandbox(&store, "sandbox-1").await;
+    let start = read_head(&store).await.unwrap().unwrap().1;
+    sandbox.commit(&sample()).await.unwrap();
+    let channel = RacedBy {
+        spool: &sandbox.spool,
+        store: &store,
+        other: tokio::sync::Mutex::new(Some(Puller::new("sandbox-1", start.clone(), PAGE))),
+    };
+    let mut puller = Puller::new("sandbox-1", start, PAGE);
+    assert_eq!(
+        puller.pull(&channel, &store, "engine-42").await.unwrap(),
+        PullOutcome::Idle
+    );
+    assert_eq!(files_at_head(&store).await, sample().files());
+    assert!(!sandbox.spool.is_superseded());
+}

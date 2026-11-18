@@ -512,7 +512,18 @@ impl Puller {
         let mut copied = 0u64;
         for object in &pending.objects {
             let name = spooled_name(&object.name)?;
-            let bytes = self.read_object(channel, object).await?;
+            let bytes = match self.read_object(channel, object).await {
+                Ok(bytes) => bytes,
+                // Another puller of this sandbox (a second binding instance) published this
+                // snapshot meanwhile, and its ack dropped the objects from the spool: the commit
+                // is in the store, nothing is left for this pull.
+                Err(error) => match channel.pending().await {
+                    Ok(now) if now.as_ref().map(|p| p.generation) != Some(pending.generation) => {
+                        return Ok(PullOutcome::Idle);
+                    }
+                    _ => return Err(error),
+                },
+            };
             if chunk_hash(&bytes) != name.hash {
                 return Err(AlienError::new(ErrorData::Corrupt {
                     object: object.name.clone(),
