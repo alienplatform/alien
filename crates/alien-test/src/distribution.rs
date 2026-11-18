@@ -2991,6 +2991,7 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
                 | TestApp::AutomaticSetup
                 | TestApp::StorageNotifications
                 | TestApp::SandboxRemote
+                | TestApp::SandboxStorage
         )
         && matches!(
             ctx.platform,

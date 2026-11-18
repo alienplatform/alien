@@ -106,6 +106,11 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 .await
                 .expect("a remote sandbox session runs an interactive command");
         }
+        TestApp::SandboxStorage => {
+            common::sandbox_storage::check_persistent_storage(&ctx.deployment, ctx.platform)
+                .await
+                .expect("persistent storage round-trips through the deployment's binding");
+        }
         TestApp::AutomaticSetup => {
             let installed = ctx
                 .manager
@@ -1181,6 +1186,18 @@ distribution_test_context!(
 #[test_context(TerraformAzurePushSandboxRemote)]
 #[tokio::test]
 async fn terraform_azure_push_sandbox_remote(ctx: &mut TerraformAzurePushSandboxRemote) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAzurePushSandboxStorage,
+    DistributionFlow::TerraformAzurePush,
+    TestApp::SandboxStorage
+);
+
+#[test_context(TerraformAzurePushSandboxStorage)]
+#[tokio::test]
+async fn terraform_azure_push_sandbox_storage(ctx: &mut TerraformAzurePushSandboxStorage) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 

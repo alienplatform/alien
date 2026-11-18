@@ -26,13 +26,26 @@ use std::error::Error as StdError;
 use tokio::time::sleep;
 use tracing::warn;
 
-/// The sandbox agent layered onto a GCP sandbox, released with the same version as
-/// `alien-build`, so a build never layers an agent from a different release than the CLI's.
+/// Names another agent image to layer, for testing an agent that is not released yet. The
+/// image must be pullable without credentials. It is part of the build's cache identity, so an
+/// image built with it is never reused without it.
+pub const SANDBOX_AGENT_IMAGE_ENV: &str = "ALIEN_SANDBOX_AGENT_IMAGE";
+
+/// The sandbox agent layered onto a sandbox image: the one released with the same version as
+/// `alien-build`, so a build never layers an agent from a different release than the CLI's,
+/// unless [`SANDBOX_AGENT_IMAGE_ENV`] names another.
 pub fn sandbox_agent_image() -> String {
-    format!(
-        "ghcr.io/alienplatform/alien-sandbox-agent:v{}",
-        env!("CARGO_PKG_VERSION")
-    )
+    agent_image_from(std::env::var(SANDBOX_AGENT_IMAGE_ENV).ok())
+}
+
+fn agent_image_from(overridden: Option<String>) -> String {
+    match overridden.map(|image| image.trim().to_string()) {
+        Some(image) if !image.is_empty() => image,
+        _ => format!(
+            "ghcr.io/alienplatform/alien-sandbox-agent:v{}",
+            env!("CARGO_PKG_VERSION")
+        ),
+    }
 }
 
 /// A layered sandbox image and the agent it was layered from.
@@ -504,6 +517,20 @@ fn merge_identity(base: Option<&str>, root_line: &str, exec_line: &str, exec_id:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_released_agent_unless_another_is_named() {
+        let released = format!(
+            "ghcr.io/alienplatform/alien-sandbox-agent:v{}",
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(agent_image_from(None), released);
+        assert_eq!(agent_image_from(Some("  ".to_string())), released);
+        assert_eq!(
+            agent_image_from(Some("registry.example.com/agent:test".to_string())),
+            "registry.example.com/agent:test"
+        );
+    }
     use dockdash::test_utils::setup_local_registry;
     use dockdash::PushOptions;
     use httpmock::Method::GET;

@@ -175,6 +175,9 @@ pub enum TestApp {
     /// A frozen, remotely published sandbox the test drives itself, with no Worker
     /// (`tests/e2e/test-apps/sandbox-remote`).
     SandboxRemote,
+    /// A frozen remote sandbox that declares persistent storage, driven by the test
+    /// (`tests/e2e/test-apps/sandbox-storage`).
+    SandboxStorage,
 }
 
 impl std::fmt::Display for TestApp {
@@ -193,6 +196,7 @@ impl std::fmt::Display for TestApp {
             TestApp::StorageNotifications => write!(f, "storage-notifications"),
             TestApp::SandboxSession => write!(f, "sandbox-session"),
             TestApp::SandboxRemote => write!(f, "sandbox-remote"),
+            TestApp::SandboxStorage => write!(f, "sandbox-storage"),
         }
     }
 }
@@ -428,6 +432,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::StorageNotifications => "test-apps/storage-notifications",
         TestApp::SandboxSession => "test-apps/sandbox-session",
         TestApp::SandboxRemote => "test-apps/sandbox-remote",
+        TestApp::SandboxStorage => "test-apps/sandbox-storage",
     }
 }
 
@@ -449,7 +454,8 @@ fn deployment_environment_variables(
         | TestApp::AutomaticSetup
         | TestApp::StorageNotifications
         | TestApp::SandboxSession
-        | TestApp::SandboxRemote => None,
+        | TestApp::SandboxRemote
+        | TestApp::SandboxStorage => None,
         TestApp::ByoEncryptionKey | TestApp::ByoAi => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {
