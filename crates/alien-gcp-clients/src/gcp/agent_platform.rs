@@ -1380,7 +1380,7 @@ mod tests {
     fn the_disk_is_the_declared_path_sized_by_max_size_in_whole_gb() {
         let storage = |max_size: Option<&str>| alien_core::SandboxPersistentStorage {
             path: "/home/agent/work".to_string(),
-            storage: alien_core::ResourceRef::new(alien_core::Storage::RESOURCE_TYPE, "workspaces"),
+            encryption_key: None,
             exclude: vec![],
             max_size: max_size.map(str::to_string),
         };

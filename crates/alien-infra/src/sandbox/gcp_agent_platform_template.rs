@@ -1812,7 +1812,7 @@ mod tests {
         let mut sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
         sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
             path: "/workspace".to_string(),
-            storage: ResourceRef::new(alien_core::Storage::RESOURCE_TYPE, "workspaces"),
+            encryption_key: None,
             exclude: vec!["tmp".to_string()],
             max_size: max_size.map(str::to_string),
         });
