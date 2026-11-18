@@ -336,3 +336,92 @@ mod create_tests {
         assert_eq!(keyed.code, "OPERATION_NOT_SUPPORTED", "{keyed}");
     }
 }
+
+/// Against a real hierarchical-namespace account (`AZURE_PERSISTENT_STORAGE_ACCOUNT`, container
+/// `store`), with the binding's identity holding Blob Data Contributor on that container only:
+///
+/// ```text
+/// AZURE_TARGET_SUBSCRIPTION_ID=… AZURE_TARGET_TENANT_ID=… AZURE_TARGET_CLIENT_ID=… \
+/// AZURE_TARGET_CLIENT_SECRET=… AZURE_PERSISTENT_STORAGE_ACCOUNT=… \
+/// cargo test -p alien-bindings --lib azure_storage::live -- --ignored
+/// ```
+#[cfg(test)]
+mod live {
+    use super::*;
+    use alien_sandbox_storage::{AzureBlobStore, ObjectStore, Precondition, PutOutcome};
+
+    fn env(name: &str) -> String {
+        std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set"))
+    }
+
+    /// The binding claims a key through `object_store` with its own identity (conditional puts
+    /// on an HNS account), mints the agent's grant, and the grant writes and reads inside the
+    /// key; the binding then reads what the grant wrote, lists the key and erases it.
+    #[tokio::test]
+    #[ignore = "needs a live Azure hierarchical-namespace account"]
+    async fn the_binding_claims_grants_reads_and_erases_a_key() {
+        let config = alien_core::AzureClientConfig {
+            subscription_id: env("AZURE_TARGET_SUBSCRIPTION_ID"),
+            tenant_id: env("AZURE_TARGET_TENANT_ID"),
+            region: Some("eastus".to_string()),
+            credentials: alien_core::AzureCredentials::ServicePrincipal {
+                client_id: env("AZURE_TARGET_CLIENT_ID"),
+                client_secret: env("AZURE_TARGET_CLIENT_SECRET"),
+            },
+            service_overrides: None,
+        };
+        let grants = AzureGrants::new(
+            env("AZURE_PERSISTENT_STORAGE_ACCOUNT"),
+            "store".to_string(),
+            config,
+        )
+        .expect("the store builds");
+        let key = format!("binding-{}", Utc::now().timestamp_millis());
+        let store = grants.key_store(&key).expect("a key store");
+
+        let claim = alien_sandbox_storage::takeover(&store, "sandbox-1")
+            .await
+            .expect("the binding claims the key");
+        assert!(claim.manifest.is_none());
+        let second = alien_sandbox_storage::takeover(&store, "sandbox-2")
+            .await
+            .expect("a second claim takes over");
+        assert_ne!(claim.head_version, second.head_version);
+
+        let StorageGrant::AzureSas { key_url, sas, .. } =
+            grants.grant(&key).await.expect("the grant mints")
+        else {
+            panic!("an Azure grant")
+        };
+        let agent = AzureBlobStore::new(&key_url, &sas.0).expect("the agent's store");
+        assert!(matches!(
+            agent
+                .put_if("packs/1-test", b"pack".to_vec(), Precondition::Absent)
+                .await
+                .expect("the grant writes in the key"),
+            PutOutcome::Written { .. }
+        ));
+        assert!(matches!(
+            agent
+                .put_if(
+                    "HEAD",
+                    b"stale".to_vec(),
+                    Precondition::Matches(claim.head_version)
+                )
+                .await
+                .expect("answered"),
+            PutOutcome::Conflict
+        ));
+        assert_eq!(
+            store.get("packs/1-test").await.unwrap().unwrap().bytes,
+            b"pack"
+        );
+        let mut listed = store.list("").await.expect("the binding lists the key");
+        listed.sort();
+        assert_eq!(listed, ["HEAD", "packs/1-test"]);
+        for object in listed {
+            store.delete(&object).await.expect("the binding erases");
+        }
+        assert!(store.list("").await.unwrap().is_empty());
+    }
+}
