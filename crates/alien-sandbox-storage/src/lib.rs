@@ -34,6 +34,7 @@ mod layout;
 mod manifest;
 mod pack;
 mod read;
+mod rights;
 mod store;
 
 pub use commit::{CommitOutcome, Committer, FileSource, TreeEntry, TreeEntryKind};
@@ -46,6 +47,7 @@ pub use layout::{
 pub use manifest::{ChunkLocation, Entry, EntryKind, Manifest, MANIFEST_VERSION};
 pub use pack::{chunk_hash, PackBuilder, CHUNK_SIZE};
 pub use read::{read_file, read_head, read_manifest, restore, takeover, Takeover, TreeSink};
+pub use rights::{S3PostPolicy, StorageGrant};
 pub use store::{
     create, MemoryStore, ObjectStore, ObjectVersion, Precondition, PutOutcome, StoredObject,
 };

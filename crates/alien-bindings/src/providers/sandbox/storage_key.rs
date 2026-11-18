@@ -53,7 +53,10 @@ mod tests {
     fn declared() -> SandboxPersistentStorageBinding {
         SandboxPersistentStorageBinding {
             path: "/workspace".to_string(),
-            bucket: BindingValue::from("bucket"),
+            store: alien_core::bindings::PersistentStoreLocator::Aws {
+                bucket: BindingValue::from("bucket"),
+                prefix: String::new(),
+            },
             exclude: Vec::new(),
             max_size_bytes: None,
         }
