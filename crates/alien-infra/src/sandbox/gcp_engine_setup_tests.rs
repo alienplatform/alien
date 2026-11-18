@@ -488,7 +488,7 @@ async fn a_signer_account_this_setup_did_not_make_is_refused_and_never_deleted()
 #[tokio::test]
 async fn a_signer_account_an_earlier_attempt_made_is_adopted_by_the_retry() {
     let calls = Arc::new(Mutex::new(Calls::default()));
-    let marker = crate::sandbox::gcp_engine_setup::signer_marker("test", "box");
+    let marker = crate::sandbox::gcp_engine_setup::signer_marker("test", "box", "dep_test");
     let (iam, platform) = clients_with_signer(&calls, Some(format!("Signs. {marker}")));
     let mut executor = executor(iam, platform, true).await;
     executor.run_until_terminal().await.expect("create runs");
@@ -503,12 +503,17 @@ async fn a_signer_account_an_earlier_attempt_made_is_adopted_by_the_retry() {
 /// marker stays.
 #[tokio::test]
 async fn a_signer_the_state_forgot_is_removed_only_when_it_carries_this_deployments_marker() {
-    let marker = crate::sandbox::gcp_engine_setup::signer_marker("test", "box");
+    let marker = crate::sandbox::gcp_engine_setup::signer_marker("test", "box", "dep_test");
     for (description, removed) in [
         (format!("Signs. {marker}"), 1),
         ("made by hand".to_string(), 0),
         (
-            crate::sandbox::gcp_engine_setup::signer_marker("other", "box"),
+            crate::sandbox::gcp_engine_setup::signer_marker("other", "box", "dep_test"),
+            0,
+        ),
+        // Same prefix and sandbox, another deployment: never this deployment's to delete.
+        (
+            crate::sandbox::gcp_engine_setup::signer_marker("test", "box", "dep_other"),
             0,
         ),
     ] {

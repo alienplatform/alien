@@ -113,7 +113,11 @@ impl GcpAgentPlatformEngineController {
                 client
                     .create_engine(
                         &display_name,
-                        Some(engine_marker(ctx.resource_prefix, &config.id)),
+                        Some(engine_marker(
+                            ctx.resource_prefix,
+                            &config.id,
+                            ctx.setup_owner_deployment_id()?,
+                        )),
                     )
                     .await
                     .context(ErrorData::CloudPlatformError {
@@ -342,9 +346,18 @@ impl GcpAgentPlatformEngineController {
 
 /// Text in the engine's description that only a direct setup of this deployment writes. It
 /// proves ownership when the controller state lost `created_here` (an older manager rewrote it).
-// The marker is `prefix/id`; the resource prefix is unique per deployment, so it names one.
-pub(crate) fn engine_marker(resource_prefix: &str, resource_id: &str) -> String {
-    format!("Alien setup owner: {resource_prefix}/{resource_id}.")
+// The marker names the deployment (`prefix/id@deployment id`), so a second deployment that
+// reuses a prefix never matches it; it is compared exactly.
+pub(crate) fn engine_marker(
+    resource_prefix: &str,
+    resource_id: &str,
+    deployment_id: &str,
+) -> String {
+    crate::setup_owner::description_marker(&crate::setup_owner::owner_value(
+        resource_prefix,
+        resource_id,
+        deployment_id,
+    ))
 }
 
 impl GcpAgentPlatformEngineController {
@@ -361,7 +374,11 @@ impl GcpAgentPlatformEngineController {
         let client = ctx
             .service_provider
             .get_gcp_agent_platform_client(ctx.get_gcp_config()?)?;
-        let marker = engine_marker(ctx.resource_prefix, resource_id);
+        let owner = crate::setup_owner::owner_value(
+            ctx.resource_prefix,
+            resource_id,
+            ctx.setup_owner_deployment_id()?,
+        );
         let engines = client
             .list_engines()
             .await
@@ -374,7 +391,7 @@ impl GcpAgentPlatformEngineController {
                 && candidate
                     .description
                     .as_deref()
-                    .is_some_and(|text| text.contains(&marker))
+                    .is_some_and(|text| crate::setup_owner::description_names_owner(text, &owner))
         }))
     }
 
@@ -573,7 +590,10 @@ mod tests {
     async fn a_frozen_engine_without_this_deployments_marker_is_left_alone() {
         for description in [
             None,
-            Some("Alien setup owner: other/orders-engine."),
+            Some("Alien setup owner: other/orders-engine@dep_test."),
+            // Same prefix and id, another deployment; and the earlier, deployment-less form.
+            Some("Alien setup owner: test/orders-engine@dep_other."),
+            Some("Alien setup owner: test/orders-engine."),
             Some("made by hand"),
         ] {
             let mut m = MockAgentPlatformApi::new();
@@ -626,8 +646,8 @@ mod tests {
         let mut m = MockAgentPlatformApi::new();
         m.expect_list_engines().returning(|| {
             Ok(vec![
-                listed("eng-1", Some("Alien setup owner: test/orders-engine.")),
-                listed("eng-42", Some("Alien setup owner: test/orders-engine.")),
+                listed("eng-1", Some("Alien setup owner: test/orders-engine@dep_test.")),
+                listed("eng-42", Some("Alien setup owner: test/orders-engine@dep_test.")),
             ])
         });
         m.expect_delete_engine()
@@ -656,7 +676,7 @@ mod tests {
         let mut m = MockAgentPlatformApi::new();
         m.expect_create_engine()
             .withf(|_, description| {
-                description.as_deref() == Some("Alien setup owner: test/orders-engine.")
+                description.as_deref() == Some("Alien setup owner: test/orders-engine@dep_test.")
             })
             .times(1)
             .returning(|_, _| Ok(pending_op()));

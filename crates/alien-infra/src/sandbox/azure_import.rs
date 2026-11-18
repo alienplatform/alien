@@ -91,6 +91,7 @@ impl ResourceImporter for AzureSandboxImporter {
             reconciled_grants: None,
             group_assignment_ids: Vec::new(),
             group_create_intent: false,
+            group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: sandbox.default_policy.clone(),
             _internal_stay_count: None,

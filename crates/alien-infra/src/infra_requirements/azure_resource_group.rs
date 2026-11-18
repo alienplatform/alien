@@ -64,7 +64,14 @@ impl AzureResourceGroupController {
         // it with everything in it. Only an absent group, or one this deployment tagged (an
         // earlier attempt of its own), is used. A state that already records the name is a
         // retry or an install an older build made, which tagged nothing.
-        let marker = owner_marker(&ctx.resource_prefix, &config.id);
+        let marker = owner_marker(
+            &ctx.resource_prefix,
+            &config.id,
+            ctx.setup_owner_deployment_id()?,
+        );
+        // True when nothing existed under the name, so the create below must not take over a
+        // group somebody else makes between this read and the write.
+        let mut absent = false;
         if self.resource_group_name.is_none() {
             match client.get_resource_group(&group_name).await {
                 Ok(found) => {
@@ -87,7 +94,10 @@ impl AzureResourceGroupController {
                     if matches!(
                         e.error,
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) => {}
+                    ) =>
+                {
+                    absent = true;
+                }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to read resource group '{group_name}'."),
@@ -101,16 +111,43 @@ impl AzureResourceGroupController {
             .tags
             .insert(RESOURCE_GROUP_OWNER_TAG.to_string(), marker);
 
-        let rg = client
-            .create_or_update_resource_group(&group_name, &resource_group)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create or update resource group '{}'.",
-                    group_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let created = if absent {
+            client
+                .create_resource_group_if_absent(&group_name, &resource_group)
+                .await
+        } else {
+            client
+                .create_or_update_resource_group(&group_name, &resource_group)
+                .await
+        };
+        let rg = match created {
+            Ok(rg) => rg,
+            Err(e)
+                if absent
+                    && matches!(
+                        e.error,
+                        Some(CloudClientErrorData::RemoteResourceConflict { .. })
+                    ) =>
+            {
+                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Azure resource group '{group_name}' was created by someone else while \
+                         this deployment was setting up, and setup will not take it over. Pick \
+                         another deployment name or delete the group."
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+            Err(e) => {
+                return Err(e.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create or update resource group '{}'.",
+                        group_name
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        };
 
         self.resource_group_name = Some(group_name.clone());
         self.location = Some(rg.location.clone());
@@ -300,7 +337,11 @@ impl AzureResourceGroupController {
 
         // A group tagged for another deployment is never ours to delete. An untagged one is an
         // install an older build made (it adopted nothing it did not create only from now on).
-        let marker = owner_marker(&ctx.resource_prefix, &config.id);
+        let marker = owner_marker(
+            &ctx.resource_prefix,
+            &config.id,
+            ctx.setup_owner_deployment_id()?,
+        );
         match client.get_resource_group(group_name).await {
             Ok(found) => {
                 let owner = found.tags.get(RESOURCE_GROUP_OWNER_TAG);
@@ -535,8 +576,8 @@ fn managed_tags(tags: &HashMap<String, String>) -> BTreeMap<String, String> {
 /// retried and on teardown.
 const RESOURCE_GROUP_OWNER_TAG: &str = "alien-setup-owner";
 
-fn owner_marker(resource_prefix: &str, id: &str) -> String {
-    format!("{resource_prefix}/{id}")
+fn owner_marker(resource_prefix: &str, id: &str, deployment_id: &str) -> String {
+    crate::setup_owner::owner_value(resource_prefix, id, deployment_id)
 }
 
 impl AzureResourceGroupController {
@@ -634,7 +675,7 @@ mod tests {
     }
 
     fn marker_for(executor_prefix: &str) -> String {
-        owner_marker(executor_prefix, "default-resource-group")
+        owner_marker(executor_prefix, "default-resource-group", "dep_test")
     }
 
     /// A pre-existing group with the deployment's name and no tag is refused, and nothing is
@@ -654,22 +695,72 @@ mod tests {
         assert_ne!(executor.status(), ResourceStatus::Running);
     }
 
-    /// An absent group is created with the owner tag.
+    /// An absent group is created create-only, with the owner tag naming this deployment.
     #[tokio::test]
     async fn an_absent_group_is_created_with_the_owner_tag() {
         let mut api = MockResourcesApi::new();
         api.expect_get_resource_group()
             .returning(|_| Err(not_found()));
-        api.expect_create_or_update_resource_group()
+        api.expect_create_or_update_resource_group().times(0);
+        api.expect_create_resource_group_if_absent()
             .times(1)
             .withf(|_, body| {
-                body.tags
-                    .get(RESOURCE_GROUP_OWNER_TAG)
-                    .is_some_and(|tag| tag.ends_with("/default-resource-group"))
+                body.tags.get(RESOURCE_GROUP_OWNER_TAG).map(String::as_str)
+                    == Some(marker_for("test").as_str())
             })
             .returning(|_, body| Ok(body.clone()));
         let mut executor = executor(api, AzureResourceGroupController::default()).await;
         executor.step().await.expect("create starts");
+    }
+
+    /// A group somebody else creates between the read and the write is refused, not taken over.
+    #[tokio::test]
+    async fn a_group_created_by_someone_else_in_between_is_refused() {
+        let mut api = MockResourcesApi::new();
+        api.expect_get_resource_group()
+            .returning(|_| Err(not_found()));
+        api.expect_create_resource_group_if_absent()
+            .times(1)
+            .returning(|_, _| {
+                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+                    resource_type: "Azure resource group".to_string(),
+                    resource_name: "g".to_string(),
+                    message: "the resource group already exists".to_string(),
+                }))
+            });
+        api.expect_create_or_update_resource_group().times(0);
+        let mut executor = executor(api, AzureResourceGroupController::default()).await;
+        let result = executor.step().await;
+        let message = format!("{:?}", result.err());
+        assert!(
+            message.contains("created by someone else"),
+            "{message}"
+        );
+        assert_ne!(executor.status(), ResourceStatus::Running);
+    }
+
+    /// Two deployments that reuse one prefix: the group the first made (tagged with its
+    /// deployment id) is refused to the second, and destroying the second deletes nothing.
+    #[tokio::test]
+    async fn a_group_tagged_by_another_deployment_with_the_same_prefix_is_refused_and_kept() {
+        let other = owner_marker("test", "default-resource-group", "dep_first");
+        let mut api = MockResourcesApi::new();
+        let create_tag = other.clone();
+        api.expect_get_resource_group()
+            .returning(move |_| Ok(group(Some(&create_tag))));
+        api.expect_create_or_update_resource_group().times(0);
+        api.expect_create_resource_group_if_absent().times(0);
+        api.expect_delete_resource_group().times(0);
+        let mut executor = executor(api, AzureResourceGroupController::default()).await;
+        let result = executor.step().await;
+        assert!(format!("{:?}", result.err()).contains("did not create it"));
+        assert_ne!(executor.status(), ResourceStatus::Running);
+        executor.delete().expect("delete starts");
+        executor.step().await.expect("delete step");
+        executor
+            .run_until_status(ResourceStatus::Deleted)
+            .await
+            .expect("destroying the refused deployment deletes nothing");
     }
 
     /// A group this deployment tagged is an earlier attempt's own: setup converges on it.

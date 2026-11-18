@@ -178,6 +178,7 @@ fn config(stack_settings: StackSettings) -> DeploymentConfig {
         allow_frozen_changes: false,
         setup_run: false,
         setup_run_id: None,
+        deployment_id: None,
         domain_metadata: None,
         public_endpoints: None,
         monitoring: None,

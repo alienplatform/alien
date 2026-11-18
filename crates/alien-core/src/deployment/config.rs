@@ -33,6 +33,13 @@ pub struct DeploymentConfig {
     #[cfg_attr(feature = "openapi", schema(ignore))]
     #[builder(default)]
     pub setup_run: bool,
+    /// The deployment this configuration runs for. The runner sets it from the deployment it
+    /// holds on every step; a stored or supplied configuration cannot choose it. Controllers
+    /// put it in the ownership marker of what they create, so a second deployment that reuses
+    /// a resource prefix is never mistaken for the owner.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub deployment_id: Option<String>,
     /// Identifies this setup run, set together with `setup_run`. Every setup run gets a new
     /// one, so a controller can tell a result recorded earlier in this run from one recorded in
     /// an earlier run.

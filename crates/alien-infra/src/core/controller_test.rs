@@ -324,6 +324,9 @@ pub const MAX_SUGGESTED_DELAY: Duration = Duration::from_secs(10 * 60);
 ///     assert_eq!(executor.status(), ResourceStatus::Deleted);
 /// }
 /// ```
+/// The deployment id the harness runs every controller under.
+pub const TEST_DEPLOYMENT_ID: &str = "dep_test";
+
 pub struct SingleControllerExecutor {
     // The controller being tested
     controller: Box<dyn ResourceController>,
@@ -421,6 +424,7 @@ impl SingleControllerExecutor {
                 .input_values(self.input_values.clone())
                 .setup_run(self.setup_run)
                 .maybe_setup_run_id(self.setup_run_id.clone())
+                .deployment_id(TEST_DEPLOYMENT_ID.to_string())
                 .maybe_management_config(self.management_config.clone())
                 .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
                 .maybe_compute_backend(self.compute_backend.clone())
@@ -689,6 +693,7 @@ impl SingleControllerExecutor {
             .input_values(self.input_values.clone())
             .setup_run(self.setup_run)
             .maybe_setup_run_id(self.setup_run_id.clone())
+            .deployment_id(TEST_DEPLOYMENT_ID.to_string())
             .maybe_management_config(self.management_config.clone())
             .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
             .maybe_compute_backend(self.compute_backend.clone())
@@ -1446,6 +1451,7 @@ impl SingleControllerExecutorBuilder {
             .stack_settings(self.stack_settings.clone())
             .setup_run(self.setup_run)
             .maybe_setup_run_id(setup_run_id.clone())
+            .deployment_id(TEST_DEPLOYMENT_ID.to_string())
             .maybe_management_config(management_config.clone())
             .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
             .maybe_compute_backend(self.compute_backend.clone())

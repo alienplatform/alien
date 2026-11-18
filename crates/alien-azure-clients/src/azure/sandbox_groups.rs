@@ -82,6 +82,18 @@ pub trait SandboxGroupsApi: Send + Sync + std::fmt::Debug {
         tags: std::collections::BTreeMap<String, String>,
     ) -> Result<SandboxGroup>;
 
+    /// Creates a sandbox group only when none exists under that name. The API ignores
+    /// `If-None-Match: *` (live: 200 on an existing group), so an existing group is told apart
+    /// by the status: 201 created it, 200 means it was already there, which is reported as
+    /// `RemoteResourceConflict` instead of adopting it.
+    async fn create_sandbox_group_if_absent(
+        &self,
+        resource_group: &str,
+        name: &str,
+        location: &str,
+        tags: std::collections::BTreeMap<String, String>,
+    ) -> Result<SandboxGroup>;
+
     /// Reads a sandbox group. A 404 surfaces as an error, which is how deletion is confirmed.
     async fn get_sandbox_group(&self, resource_group: &str, name: &str) -> Result<SandboxGroup>;
 
@@ -130,6 +142,64 @@ impl AzureSandboxGroupsClient {
 impl AzureSandboxGroupsClient {
     /// Reads a response body and parses it, naming the operation so a parse failure says which
     /// call produced the body rather than only that some JSON was wrong.
+    async fn put_group(
+        &self,
+        resource_group: &str,
+        name: &str,
+        location: &str,
+        tags: std::collections::BTreeMap<String, String>,
+        create_only: bool,
+    ) -> Result<SandboxGroup> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope(ARM_SCOPE)
+            .await?;
+
+        let url = self.base.build_url(
+            &self.group_path(resource_group, name),
+            Some(vec![("api-version", API_VERSION.into())]),
+        );
+
+        let group = SandboxGroup {
+            id: None,
+            name: None,
+            location: location.to_string(),
+            properties: None,
+            tags,
+        };
+
+        let body = serde_json::to_string(&group).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!("Failed to serialize sandbox group '{name}'"),
+            },
+        )?;
+
+        let mut request = AzureRequestBuilder::new(Method::PUT, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body);
+        if create_only {
+            request = request.header("If-None-Match", "*");
+        }
+        let request = request.build()?;
+
+        let signed = self.base.sign_request(request, &bearer_token).await?;
+        let response = self
+            .base
+            .execute_request(signed, "CreateOrUpdateSandboxGroup", name)
+            .await?;
+        if create_only && response.status().as_u16() == 200 {
+            return Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceConflict {
+                    resource_type: "Azure sandbox group".to_string(),
+                    resource_name: name.to_string(),
+                    message: "the sandbox group already exists".to_string(),
+                },
+            ));
+        }
+        Self::parse(response, "CreateOrUpdateSandboxGroup", name).await
+    }
+
     async fn parse<T: serde::de::DeserializeOwned>(
         response: reqwest::Response,
         operation: &str,
@@ -160,42 +230,17 @@ impl SandboxGroupsApi for AzureSandboxGroupsClient {
         location: &str,
         tags: std::collections::BTreeMap<String, String>,
     ) -> Result<SandboxGroup> {
-        let bearer_token = self
-            .token_cache
-            .get_bearer_token_with_scope(ARM_SCOPE)
-            .await?;
+        self.put_group(resource_group, name, location, tags, false).await
+    }
 
-        let url = self.base.build_url(
-            &self.group_path(resource_group, name),
-            Some(vec![("api-version", API_VERSION.into())]),
-        );
-
-        let group = SandboxGroup {
-            id: None,
-            name: None,
-            location: location.to_string(),
-            properties: None,
-            tags,
-        };
-
-        let body = serde_json::to_string(&group).into_alien_error().context(
-            ErrorData::SerializationError {
-                message: format!("Failed to serialize sandbox group '{name}'"),
-            },
-        )?;
-
-        let request = AzureRequestBuilder::new(Method::PUT, url)
-            .content_type_json()
-            .content_length(&body)
-            .body(body)
-            .build()?;
-
-        let signed = self.base.sign_request(request, &bearer_token).await?;
-        let response = self
-            .base
-            .execute_request(signed, "CreateOrUpdateSandboxGroup", name)
-            .await?;
-        Self::parse(response, "CreateOrUpdateSandboxGroup", name).await
+    async fn create_sandbox_group_if_absent(
+        &self,
+        resource_group: &str,
+        name: &str,
+        location: &str,
+        tags: std::collections::BTreeMap<String, String>,
+    ) -> Result<SandboxGroup> {
+        self.put_group(resource_group, name, location, tags, true).await
     }
 
     async fn get_sandbox_group(&self, resource_group: &str, name: &str) -> Result<SandboxGroup> {

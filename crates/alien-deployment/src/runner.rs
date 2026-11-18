@@ -354,6 +354,9 @@ async fn run_step_loop_body(
     on_progress: Option<&ProgressCallback>,
     allow_initial_running_step: bool,
 ) -> Result<RunnerResult> {
+    // Controllers mark what they create with the deployment's own id; a stored or supplied
+    // configuration cannot choose it.
+    config.deployment_id = Some(deployment_id.to_string());
     if !state.has_desired() {
         let service_provider = service_provider
             .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
@@ -2173,6 +2176,7 @@ mod tests {
             allow_frozen_changes: false,
             setup_run: false,
             setup_run_id: None,
+            deployment_id: None,
             domain_metadata: None,
             public_endpoints: None,
             monitoring: None,

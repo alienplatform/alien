@@ -1861,6 +1861,7 @@ pub(super) async fn prepare_setup_stack(
         allow_frozen_changes: false,
         setup_run: false,
         setup_run_id: None,
+        deployment_id: None,
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
         base_platform: req.base_platform,

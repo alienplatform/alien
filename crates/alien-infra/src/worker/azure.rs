@@ -8201,6 +8201,7 @@ mod tests {
                 reconciled_grants: None,
                 group_assignment_ids: Vec::new(),
                 group_create_intent: false,
+                group_absent: false,
                 group_role_definitions: Vec::new(),
                 default_policy: None,
                 _internal_stay_count: None,

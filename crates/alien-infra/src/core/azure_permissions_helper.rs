@@ -28,6 +28,11 @@ use alien_permissions::{
 use tracing::{info, warn};
 use uuid::Uuid;
 
+/// Description on every role assignment this helper writes; it is how a replace tells its own
+/// earlier assignment from one somebody else made.
+const RUNTIME_ROLE_ASSIGNMENT_DESCRIPTION: &str =
+    "Runtime-managed role assignment for resource-scoped permissions";
+
 /// Helper for applying Azure resource-scoped permissions
 pub struct AzurePermissionsHelper;
 
@@ -856,9 +861,7 @@ impl AzurePermissionsHelper {
                 condition: None,
                 condition_version: None,
                 delegated_managed_identity_resource_id: None,
-                description: Some(
-                    "Runtime-managed role assignment for resource-scoped permissions".to_string(),
-                ),
+                description: Some(RUNTIME_ROLE_ASSIGNMENT_DESCRIPTION.to_string()),
                 created_by: None,
                 created_on: None,
                 updated_by: None,
@@ -871,13 +874,19 @@ impl AzurePermissionsHelper {
             .await;
 
         // Assignment ids are numbered by position, so a changed grant list can land a different
-        // role on an id that already holds one. Azure refuses to change the role, principal or
-        // scope of an existing assignment: remove the old one, then create the new one.
+        // role on an id that already holds one. Azure answers that with exactly
+        // `RoleAssignmentUpdateNotPermitted` (it refuses to change the role, principal or scope
+        // of an assignment). Only then, and only for an assignment this helper wrote (its
+        // description is read first), the old one is removed and the new one created. Any other
+        // error, and any assignment somebody else made under that id, is left as it is.
         if let Err(error) = &result {
-            if Self::is_role_assignment_update_refused(error) {
+            if Self::is_role_assignment_update_refused(error)
+                && Self::assignment_is_runtime_managed(authorization_client, &full_assignment_id)
+                    .await
+            {
                 warn!(
                     role_assignment_id = %full_assignment_id,
-                    "Azure refused to change an existing role assignment; replacing it"
+                    "Azure refused to change an existing role assignment this helper made; replacing it"
                 );
                 authorization_client
                     .delete_role_assignment_by_id(full_assignment_id.clone())
@@ -930,13 +939,36 @@ impl AzurePermissionsHelper {
         Ok(full_assignment_id)
     }
 
-    /// Azure's answer to changing the role, principal or scope of an assignment id in use
-    /// (`RoleAssignmentUpdateNotPermitted`).
+    /// Azure's answer to changing the role, principal or scope of an assignment id in use: the
+    /// exact code `RoleAssignmentUpdateNotPermitted` in the error body, nothing looser.
     fn is_role_assignment_update_refused(error: &AlienError<CloudClientErrorData>) -> bool {
-        let text = format!("{error} {:?}", error.error).to_ascii_lowercase();
-        text.contains("roleassignmentupdatenotpermitted")
-            || text.contains("not allowed to be updated")
-            || text.contains("cannot be updated")
+        const CODE: &str = "RoleAssignmentUpdateNotPermitted";
+        match error.error.as_ref() {
+            Some(CloudClientErrorData::RemoteResourceConflict { message, .. })
+            | Some(CloudClientErrorData::GenericError { message }) => message.contains(CODE),
+            Some(CloudClientErrorData::HttpResponseError {
+                http_response_text, ..
+            }) => http_response_text
+                .as_deref()
+                .is_some_and(|text| text.contains(CODE)),
+            _ => false,
+        }
+    }
+
+    /// True when the assignment at `id` carries this helper's description, so it is one this
+    /// helper made. A read that fails, or an assignment without it, is not ours to remove.
+    async fn assignment_is_runtime_managed(
+        authorization_client: &Arc<dyn AuthorizationApi>,
+        id: &str,
+    ) -> bool {
+        authorization_client
+            .get_role_assignment_by_id(id.to_string())
+            .await
+            .ok()
+            .and_then(|found| found.properties)
+            .and_then(|properties| properties.description)
+            .as_deref()
+            == Some(RUNTIME_ROLE_ASSIGNMENT_DESCRIPTION)
     }
 
     fn is_existing_role_assignment_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
@@ -2004,6 +2036,10 @@ mod tests {
                 }
             });
         authorization
+            .expect_get_role_assignment_by_id()
+            .times(1)
+            .returning(|_| Ok(assignment_described_as(RUNTIME_ROLE_ASSIGNMENT_DESCRIPTION)));
+        authorization
             .expect_delete_role_assignment_by_id()
             .times(1)
             .returning(|_| Ok(None));
@@ -2018,6 +2054,90 @@ mod tests {
         )
         .await
         .expect("the changed grant replaces the old assignment");
+    }
+
+    fn assignment_described_as(description: &str) -> RoleAssignment {
+        RoleAssignment {
+            id: None,
+            name: None,
+            type_: None,
+            properties: Some(RoleAssignmentProperties {
+                principal_id: "principal-123".to_string(),
+                role_definition_id: "role-definition-old".to_string(),
+                scope: None,
+                principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                condition: None,
+                condition_version: None,
+                delegated_managed_identity_resource_id: None,
+                description: Some(description.to_string()),
+                created_by: None,
+                created_on: None,
+                updated_by: None,
+                updated_on: None,
+            }),
+        }
+    }
+
+    /// An error that only resembles the refusal is not turned into delete and recreate: the
+    /// original error comes back and nothing is deleted.
+    #[tokio::test]
+    async fn an_unrelated_error_is_not_turned_into_delete_and_recreate() {
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .times(1)
+            .returning(|_, _| {
+                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+                    resource_type: "role assignment".to_string(),
+                    resource_name: "assignment-123".to_string(),
+                    message: "the value cannot be updated while the policy is locked".to_string(),
+                }))
+            });
+        authorization.expect_get_role_assignment_by_id().times(0);
+        authorization.expect_delete_role_assignment_by_id().times(0);
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+
+        AzurePermissionsHelper::create_role_assignment_at_scope(
+            &authorization,
+            "/subscriptions/sub-123/resourceGroups/rg-123",
+            "assignment-123",
+            "principal-123",
+            "role-definition-new",
+        )
+        .await
+        .expect_err("an unrelated error stays an error");
+    }
+
+    /// The exact refusal on an assignment somebody else made under that id deletes nothing.
+    #[tokio::test]
+    async fn a_refused_change_on_an_assignment_this_helper_did_not_make_is_left_alone() {
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .times(1)
+            .returning(|_, _| {
+                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+                    resource_type: "role assignment".to_string(),
+                    resource_name: "assignment-123".to_string(),
+                    message: "RoleAssignmentUpdateNotPermitted: scope are not allowed to be updated.".to_string(),
+                }))
+            });
+        authorization
+            .expect_get_role_assignment_by_id()
+            .times(1)
+            .returning(|_| Ok(assignment_described_as("made by hand")));
+        authorization.expect_delete_role_assignment_by_id().times(0);
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+
+        AzurePermissionsHelper::create_role_assignment_at_scope(
+            &authorization,
+            "/subscriptions/sub-123/resourceGroups/rg-123",
+            "assignment-123",
+            "principal-123",
+            "role-definition-new",
+        )
+        .await
+        .expect_err("someone else's assignment is not replaced");
     }
 
     /// A user's object ID must be declared a User, as the token says.

@@ -5149,6 +5149,7 @@ pub(in crate::routes) mod tests {
             allow_frozen_changes: false,
             setup_run: false,
             setup_run_id: None,
+            deployment_id: None,
             compute_backend: None,
             external_bindings: ExternalBindings::default(),
             base_platform: None,

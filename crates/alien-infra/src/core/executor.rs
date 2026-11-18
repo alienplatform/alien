@@ -3740,11 +3740,19 @@ impl StackExecutor {
         // A dependency that is Running but asks for an update to publish what its dependents
         // read (a sandbox that has not built its image yet has no binding) holds their creation
         // too: a dependent created now would be built without it, and nothing updates it later.
+        // Only a controller that says so does (`needs_update_holds_dependent_creation`): for any
+        // other dependency an update that is blocked (for instance on setup) must not stop a
+        // new, unrelated dependent from being created.
         resource_cfg.dependencies.iter().all(|dep_ref| {
             let id = dep_ref.id();
             self.dependency_settled(id, state)
                 && match (self.resources.get(id), state.resources.get(id)) {
-                    (Some(desired), Some(current)) => {
+                    (Some(desired), Some(current))
+                        if matches!(
+                            current.get_internal_controller(),
+                            Ok(Some(controller)) if controller.needs_update_holds_dependent_creation(id)
+                        ) =>
+                    {
                         !self.needs_update_requested(id, desired, current, state)
                     }
                     _ => true,

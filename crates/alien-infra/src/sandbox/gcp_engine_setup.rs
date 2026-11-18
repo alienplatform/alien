@@ -54,8 +54,16 @@ pub(crate) struct EngineSetupRecord {
 
 /// Text in the signer's description that only this deployment's setup writes; it is how a
 /// retry tells its own earlier signer from an account somebody else made under the same name.
-pub(crate) fn signer_marker(resource_prefix: &str, sandbox_id: &str) -> String {
-    format!("Alien setup owner: {resource_prefix}/{sandbox_id}.")
+pub(crate) fn signer_marker(
+    resource_prefix: &str,
+    sandbox_id: &str,
+    deployment_id: &str,
+) -> String {
+    crate::setup_owner::description_marker(&crate::setup_owner::owner_value(
+        resource_prefix,
+        sandbox_id,
+        deployment_id,
+    ))
 }
 
 /// Account id of the signing identity: readable, at most 30 characters, deterministic.
@@ -175,7 +183,12 @@ pub(crate) async fn set_up_engine_access(
             "{account_id}@{}.iam.gserviceaccount.com",
             gcp_config.project_id
         );
-        let marker = signer_marker(ctx.resource_prefix, &sandbox.id);
+        let owner = crate::setup_owner::owner_value(
+            ctx.resource_prefix,
+            &sandbox.id,
+            ctx.setup_owner_deployment_id()?,
+        );
+        let marker = crate::setup_owner::description_marker(&owner);
         let created = iam
             .create_service_account(
                 account_id.clone(),
@@ -214,7 +227,9 @@ pub(crate) async fn set_up_engine_access(
                 if existing
                     .description
                     .as_deref()
-                    .is_some_and(|description| description.contains(&marker))
+                    .is_some_and(|description| {
+                        crate::setup_owner::description_names_owner(description, &owner)
+                    })
                 {
                     record.signer_created = Some(email.clone());
                 } else {
@@ -461,7 +476,11 @@ pub(crate) async fn remove_marked_signer(
         "{account_id}@{}.iam.gserviceaccount.com",
         gcp_config.project_id
     );
-    let marker = signer_marker(ctx.resource_prefix, sandbox_id);
+    let owner = crate::setup_owner::owner_value(
+        ctx.resource_prefix,
+        sandbox_id,
+        ctx.setup_owner_deployment_id()?,
+    );
     let existing = match iam.get_service_account(email.clone()).await {
         Ok(account) => account,
         Err(error)
@@ -480,7 +499,7 @@ pub(crate) async fn remove_marked_signer(
     if existing
         .description
         .as_deref()
-        .is_some_and(|text| text.contains(&marker))
+        .is_some_and(|text| crate::setup_owner::description_names_owner(text, &owner))
     {
         if let Err(error) = iam.delete_service_account(email.clone()).await {
             if !matches!(
