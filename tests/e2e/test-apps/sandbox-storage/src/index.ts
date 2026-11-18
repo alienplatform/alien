@@ -9,7 +9,9 @@ import { ISOLATION, OVERSIZE, prepare, RESTORED, VERIFY, writer } from "./script
 // a commit for a later request to publish.
 
 const app = new Hono()
-const agents = sandbox("agents")
+const sandboxes = { agents: sandbox("agents"), open: sandbox("open") }
+type Handle = (typeof sandboxes)["agents"]
+const agents = sandboxes.agents
 const SANDBOX_MS = 1_200_000
 const COMMAND_MS = 600_000
 const KEY = /^[A-Za-z0-9._-]{1,128}$/
@@ -37,7 +39,8 @@ interface Body {
   mib?: number
   rounds?: number
   path?: string
-  egress?: "none" | "internet"
+  /** `open` for the sandbox declared with direct internet access; `agents` otherwise. */
+  sandbox?: "agents" | "open"
   sandboxId?: string
 }
 
@@ -58,11 +61,11 @@ function requireKey(b: Body): string {
   return b.key
 }
 
-async function run(sandboxId: string, script: string) {
+async function run(handle: Handle, sandboxId: string, script: string) {
   let stdout = ""
   let stderr = ""
   let exitCode: number | null = null
-  for await (const frame of agents.runCommand(sandboxId, "sh", {
+  for await (const frame of handle.runCommand(sandboxId, "sh", {
     timeoutMs: COMMAND_MS,
     args: ["-c", script],
   })) {
@@ -73,46 +76,47 @@ async function run(sandboxId: string, script: string) {
   return { exitCode, stdout, stderr }
 }
 
+/** The sandbox a request names: `open` (direct internet access) or `agents` (egress none). */
+function pick(b: Body): Handle {
+  return b.sandbox === "open" ? sandboxes.open : sandboxes.agents
+}
+
 /** Opens a sandbox on `key`, runs `script`, syncs, ends the sandbox and reports all of it. */
-async function withKey(key: string, script: string, egress?: "none" | "internet") {
+async function withKey(handle: Handle, key: string, script: string) {
   const started = Date.now()
-  const session = await agents.create({
-    timeoutMs: SANDBOX_MS,
-    storageKey: key,
-    ...(egress === "none" ? { egress: { allow: [] } } : egress ? { egress: "internet" } : {}),
-  })
+  const session = await handle.create({ timeoutMs: SANDBOX_MS, storageKey: key })
   const restoredMs = Date.now() - started
   try {
-    const result = await run(session.sandboxId, script)
-    const synced = await agents.syncStorage(session.sandboxId)
+    const result = await run(handle, session.sandboxId, script)
+    const synced = await handle.syncStorage(session.sandboxId)
     return { sandboxId: session.sandboxId, restoredMs, ...result, synced }
   } finally {
-    await agents.terminate(session.sandboxId)
+    await handle.terminate(session.sandboxId)
   }
 }
 
 // Builds the round-trip tree under `key` and reports its manifest, synced.
 app.post("/s/prepare", async c => {
   const b = await body(c)
-  return c.json(await withKey(requireKey(b), prepare(b.files ?? 1000, b.mib ?? 16), b.egress))
+  return c.json(await withKey(pick(b), requireKey(b), prepare(b.files ?? 1000, b.mib ?? 16)))
 })
 
 // Restores `key` in a new sandbox and reports the same manifest plus git, SQLite and link checks.
 app.post("/s/verify", async c => {
   const b = await body(c)
-  return c.json(await withKey(requireKey(b), VERIFY, b.egress))
+  return c.json(await withKey(pick(b), requireKey(b), VERIFY))
 })
 
 // What a restore after a kill holds.
 app.post("/s/restored", async c => {
   const b = await body(c)
-  return c.json(await withKey(requireKey(b), RESTORED, b.egress))
+  return c.json(await withKey(pick(b), requireKey(b), RESTORED))
 })
 
 // What the command's user can reach, and two symlinks aimed out of the tree for the next sync.
 app.post("/s/isolation", async c => {
   const b = await body(c)
-  return c.json(await withKey(requireKey(b), ISOLATION, b.egress))
+  return c.json(await withKey(pick(b), requireKey(b), ISOLATION))
 })
 
 // A tree above maxSize: the sync must not publish it.
@@ -121,7 +125,7 @@ app.post("/s/oversize", async c => {
   const key = requireKey(b)
   const session = await agents.create({ timeoutMs: SANDBOX_MS, storageKey: key })
   try {
-    const result = await run(session.sandboxId, OVERSIZE)
+    const result = await run(agents, session.sandboxId, OVERSIZE)
     let synced: unknown
     try {
       synced = await agents.syncStorage(session.sandboxId)
@@ -129,7 +133,7 @@ app.post("/s/oversize", async c => {
       synced = { error: error instanceof Error ? error.message : String(error) }
     }
     const status = await agents.storageStatus(session.sandboxId)
-    await run(session.sandboxId, "rm -f /workspace/oversize.bin")
+    await run(agents, session.sandboxId, "rm -f /workspace/oversize.bin")
     return c.json({ sandboxId: session.sandboxId, ...result, synced, status })
   } finally {
     await agents.terminate(session.sandboxId)
@@ -183,14 +187,14 @@ app.post("/s/takeover", async c => {
   const key = requireKey(b)
   const first = await agents.create({ timeoutMs: SANDBOX_MS, storageKey: key })
   try {
-    await run(first.sandboxId, "echo first > /workspace/owner")
+    await run(agents, first.sandboxId, "echo first > /workspace/owner")
     await agents.syncStorage(first.sandboxId)
     const second = await agents.create({ timeoutMs: SANDBOX_MS, storageKey: key })
     try {
-      await run(second.sandboxId, "echo second > /workspace/owner")
+      await run(agents, second.sandboxId, "echo second > /workspace/owner")
       await agents.syncStorage(second.sandboxId)
       // The stale sandbox writes after losing the key; its sync must not publish.
-      await run(first.sandboxId, "echo stale > /workspace/owner")
+      await run(agents, first.sandboxId, "echo stale > /workspace/owner")
       let staleSync: unknown
       try {
         staleSync = await agents.syncStorage(first.sandboxId)
@@ -219,7 +223,7 @@ app.post("/s/read", async c => {
   const b = await body(c)
   if (!b.path || b.path.includes("..")) throw new Error("bad path")
   try {
-    const bytes = await agents.readStorageFile(requireKey(b), b.path)
+    const bytes = await pick(b).readStorageFile(requireKey(b), b.path)
     return c.json({ found: true, base64: bytes.toString("base64") })
   } catch (error) {
     return c.json({ found: false, error: error instanceof Error ? error.message : String(error) })
@@ -228,7 +232,7 @@ app.post("/s/read", async c => {
 
 app.post("/s/delete", async c => {
   const b = await body(c)
-  await agents.deleteStorage(requireKey(b))
+  await pick(b).deleteStorage(requireKey(b))
   return c.json({ deleted: true })
 })
 

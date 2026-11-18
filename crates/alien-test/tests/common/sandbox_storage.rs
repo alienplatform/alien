@@ -89,13 +89,24 @@ fn fresh_key(ctx: &TestContext, purpose: &str) -> String {
     format!("{purpose}-{id}-{suffix:08x}")
 }
 
+/// The app's sandbox declared with `egress`: `agents` for `none`, `open` for `allow` (direct
+/// internet access). A runtime per-create policy needs the egress gateway, which this test does
+/// not set up, so the policies are two declarations.
+fn sandbox_for(egress: &str) -> &'static str {
+    if egress == "allow" {
+        "open"
+    } else {
+        "agents"
+    }
+}
+
 /// Every acceptance check of the design the app can drive (items 1 to 6). The full round trip runs
-/// under egress `none`, a smaller one and the isolation check under both policies.
+/// under egress `none`, a smaller one and the isolation check under both declared policies.
 pub async fn check_persistent_storage(ctx: &TestContext) -> anyhow::Result<()> {
     check_round_trip(ctx, "none", 10_000, 1024).await?;
-    check_round_trip(ctx, "internet", 1_000, 16).await?;
+    check_round_trip(ctx, "allow", 1_000, 16).await?;
     check_isolation(ctx, "none").await?;
-    check_isolation(ctx, "internet").await?;
+    check_isolation(ctx, "allow").await?;
     check_takeover(ctx).await?;
     check_oversize(ctx).await?;
     check_kill_runs(ctx).await?;
@@ -115,7 +126,7 @@ pub async fn check_round_trip(
     let prepared = post(
         ctx,
         "/s/prepare",
-        json!({ "key": key, "files": files, "mib": mib, "egress": egress }),
+        json!({ "key": key, "files": files, "mib": mib, "sandbox": sandbox_for(egress) }),
     )
     .await?;
     ensure_ran("/s/prepare", &prepared)?;
@@ -128,7 +139,12 @@ pub async fn check_round_trip(
     );
 
     let started = Instant::now();
-    let verified = post(ctx, "/s/verify", json!({ "key": key, "egress": egress })).await?;
+    let verified = post(
+        ctx,
+        "/s/verify",
+        json!({ "key": key, "sandbox": sandbox_for(egress) }),
+    )
+    .await?;
     ensure_ran("/s/verify", &verified)?;
     let restored = fields(&verified);
     eprintln!(
@@ -163,13 +179,28 @@ pub async fn check_round_trip(
         "tmp/ replicated"
     );
 
-    let read = post(ctx, "/s/read", json!({ "key": key, "path": "linked-a" })).await?;
+    let read = post(
+        ctx,
+        "/s/read",
+        json!({ "key": key, "path": "linked-a", "sandbox": sandbox_for(egress) }),
+    )
+    .await?;
     ensure!(read["found"] == json!(true), "readStorageFile: {read}");
     let bytes = base64_decode(read["base64"].as_str().unwrap_or_default())?;
     ensure!(bytes == b"linked\n", "readStorageFile returned {bytes:?}");
 
-    post(ctx, "/s/delete", json!({ "key": key })).await?;
-    let gone = post(ctx, "/s/read", json!({ "key": key, "path": "linked-a" })).await?;
+    post(
+        ctx,
+        "/s/delete",
+        json!({ "key": key, "sandbox": sandbox_for(egress) }),
+    )
+    .await?;
+    let gone = post(
+        ctx,
+        "/s/read",
+        json!({ "key": key, "path": "linked-a", "sandbox": sandbox_for(egress) }),
+    )
+    .await?;
     ensure!(
         gone["found"] == json!(false),
         "the key outlived deleteStorage: {gone}"
@@ -182,7 +213,12 @@ pub async fn check_round_trip(
 /// symlinks, not as the files they point at.
 pub async fn check_isolation(ctx: &TestContext, egress: &str) -> anyhow::Result<()> {
     let key = fresh_key(ctx, "isolation");
-    let answer = post(ctx, "/s/isolation", json!({ "key": key, "egress": egress })).await?;
+    let answer = post(
+        ctx,
+        "/s/isolation",
+        json!({ "key": key, "sandbox": sandbox_for(egress) }),
+    )
+    .await?;
     ensure_ran("/s/isolation", &answer)?;
     let seen = fields(&answer);
     eprintln!("isolation under {egress}: {seen:?}");
@@ -197,7 +233,7 @@ pub async fn check_isolation(ctx: &TestContext, egress: &str) -> anyhow::Result<
     // curl reports 000 when nothing answers.
     let token = seen.get("metadata_token").map(String::as_str).unwrap_or("");
     ensure!(token != "200", "the command read a metadata server token");
-    if egress == "none" {
+    if sandbox_for(egress) == "agents" {
         let api = seen.get("storage_api").map(String::as_str).unwrap_or("");
         ensure!(
             api == "000" || api.is_empty(),
@@ -207,14 +243,19 @@ pub async fn check_isolation(ctx: &TestContext, egress: &str) -> anyhow::Result<
     let escaped = post(
         ctx,
         "/s/read",
-        json!({ "key": key, "path": "escape/root/etc/passwd" }),
+        json!({ "key": key, "path": "escape/root/etc/passwd", "sandbox": sandbox_for(egress) }),
     )
     .await?;
     ensure!(
         escaped["found"] == json!(false),
         "a symlink redirected the walk out of the tree: {escaped}"
     );
-    post(ctx, "/s/delete", json!({ "key": key })).await?;
+    post(
+        ctx,
+        "/s/delete",
+        json!({ "key": key, "sandbox": sandbox_for(egress) }),
+    )
+    .await?;
     Ok(())
 }
 
