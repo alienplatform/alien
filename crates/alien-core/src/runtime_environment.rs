@@ -36,9 +36,10 @@ pub const ENV_ALIEN_SANDBOX_NODE_SELECTOR: &str = "ALIEN_SANDBOX_NODE_SELECTOR";
 /// (NetworkPolicy and the gateway), so the agent skips in-pod firewall setup. Agent-read only.
 pub const ENV_ALIEN_SANDBOX_NETWORK_ENFORCER: &str = "ALIEN_SANDBOX_NETWORK_ENFORCER";
 /// Set by the Azure binding on a sandbox whose platform policy opens a host the agent needs (a
-/// persistent storage store) that commands must not reach. `none`: the agent marks guest sockets
-/// and drops their egress before image code starts. Agent-read only; any other value refuses
-/// to start.
+/// persistent storage store) that commands must not reach. The agent marks guest sockets and,
+/// before image code starts, drops every direct connection they open except to the listed
+/// addresses: `none` (no address) or `only:<ipv4>,<ipv4>...` (under `internet`: the gateway
+/// replicas and the platform resolver). Agent-read only; any other value refuses to start.
 pub const ENV_ALIEN_SANDBOX_GUEST_EGRESS: &str = "ALIEN_SANDBOX_GUEST_EGRESS";
 /// JSON array of tolerations for sandbox pods (`sandbox.tolerations`).
 pub const ENV_ALIEN_SANDBOX_TOLERATIONS: &str = "ALIEN_SANDBOX_TOLERATIONS";

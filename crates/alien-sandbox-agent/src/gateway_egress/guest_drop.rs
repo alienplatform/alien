@@ -1,11 +1,15 @@
-//! No egress for guest sockets, without conntrack.
+//! No direct egress for guest sockets beyond a fixed set of addresses, without conntrack.
 //!
 //! Used where the platform must let the agent reach one host (a persistent storage store) that
 //! commands must not reach, on a guest kernel with no connection tracking (Azure). Every socket a
 //! command opens carries the guest mark, set at creation by the guest cgroup's program. Leaving
-//! any interface but loopback, a marked packet that opens a TCP connection (SYN without ACK) or
-//! carries UDP is dropped. Replies on connections that reached a command from outside (SYN-ACK
-//! and later) still leave, as without the rule. The agent's own sockets are unmarked and pass.
+//! any interface but loopback for an address not in the allowed set (under `internet`: the
+//! gateway replicas and the platform resolver; under `none`: nothing), a marked packet that opens
+//! a TCP connection (SYN without ACK) or carries UDP is dropped. Replies on connections that
+//! reached a command from outside (SYN-ACK and later) still leave, as without the rule. The
+//! agent's own sockets are unmarked and pass.
+
+use std::net::Ipv4Addr;
 
 use nlink::netlink::{
     nftables::{
@@ -24,8 +28,8 @@ const TCP_FLAGS_OFFSET: u32 = 13;
 const TCP_SYN: u8 = 0x02;
 const TCP_ACK: u8 = 0x10;
 
-/// The two drop rules, in order: new TCP connections, then UDP.
-pub(super) fn rules() -> Vec<Rule> {
+/// One accept per allowed address, then the two drop rules: new TCP connections, then UDP.
+pub(super) fn rules(allowed: &[Ipv4Addr]) -> Vec<Rule> {
     let guest_leaving = || {
         Rule::new(TABLE, CHAIN)
             .family(Family::Ip)
@@ -40,7 +44,11 @@ pub(super) fn rules() -> Vec<Rule> {
             })
             .match_oif_not("lo")
     };
-    vec![
+    let mut rules: Vec<Rule> = allowed
+        .iter()
+        .map(|address| guest_leaving().match_daddr_v4(*address, 32).accept())
+        .collect();
+    rules.extend([
         guest_leaving()
             .match_l4proto(libc::IPPROTO_TCP as u8)
             .expr(Expr::Payload {
@@ -65,12 +73,13 @@ pub(super) fn rules() -> Vec<Rule> {
         guest_leaving()
             .match_l4proto(libc::IPPROTO_UDP as u8)
             .drop(),
-    ]
+    ]);
+    rules
 }
 
 /// Installs the rules in a table of their own, replacing an earlier copy in one transaction.
-pub(super) fn install() -> std::io::Result<()> {
-    crate::netfilter::install(async {
+pub(super) fn install(allowed: Vec<Ipv4Addr>) -> std::io::Result<()> {
+    crate::netfilter::install(async move {
         let conn = Connection::<Nftables>::new()?;
         let mut batch = conn.transaction();
         if conn
@@ -89,7 +98,7 @@ pub(super) fn install() -> std::io::Result<()> {
                 .priority(Priority::Filter)
                 .policy(Policy::Accept),
         );
-        for rule in rules() {
+        for rule in rules(&allowed) {
             batch = batch.add_rule(rule);
         }
         batch.commit(&conn).await
@@ -106,7 +115,7 @@ mod tests {
     /// store, by name or by address, while the agent can).
     #[test]
     fn the_rules_drop_new_guest_connections_and_guest_udp_only() {
-        let rendered: Vec<String> = rules().iter().map(|rule| format!("{rule:?}")).collect();
+        let rendered: Vec<String> = rules(&[]).iter().map(|rule| format!("{rule:?}")).collect();
         assert_eq!(rendered.len(), 2);
         let guest_mark = format!(
             "Meta {{ dreg: R0, key: Mark }}, Cmp {{ sreg: R0, op: Eq, data: {:?} }}",
@@ -138,5 +147,19 @@ mod tests {
             "{}",
             rendered[1]
         );
+    }
+
+    /// An allowed address is accepted for guest sockets before either drop, and only that one.
+    #[test]
+    fn allowed_addresses_come_first() {
+        let gateway = Ipv4Addr::new(10, 0, 6, 4);
+        let rendered: Vec<String> = rules(&[gateway])
+            .iter()
+            .map(|rule| format!("{rule:?}"))
+            .collect();
+        assert_eq!(rendered.len(), 3);
+        assert!(rendered[0].contains("[10, 0, 6, 4]"), "{}", rendered[0]);
+        assert!(rendered[0].contains("Verdict(Accept)"), "{}", rendered[0]);
+        assert!(rendered[1].contains("Verdict(Drop)") && rendered[2].contains("Verdict(Drop)"));
     }
 }

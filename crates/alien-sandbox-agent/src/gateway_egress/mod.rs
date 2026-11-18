@@ -127,11 +127,14 @@ pub fn isolate_image_devices() -> Result<()> {
 /// by a rule that needs no connection tracking, which the Azure guest kernel lacks. Commands
 /// cannot open IPv6 sockets either. Installed once, before capabilities are reduced; this
 /// replaces `isolate_image_devices`, whose device filter it also installs.
-pub fn isolate_guest_without_egress() -> Result<()> {
+///
+/// `allowed` are the only addresses guest sockets may still open connections to directly (under
+/// `internet`: the gateway replicas and the platform resolver).
+pub fn isolate_guest_without_egress(allowed: Vec<std::net::Ipv4Addr>) -> Result<()> {
     guest_network::install(true)
         .into_alien_error()
         .context(failed("isolate guest sockets before starting image code"))?;
-    guest_drop::install()
+    guest_drop::install(allowed)
         .into_alien_error()
         .context(failed("drop guest egress before starting image code"))?;
     crate::privilege::block_command_ipv6();

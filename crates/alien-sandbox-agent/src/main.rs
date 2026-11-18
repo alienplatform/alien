@@ -133,14 +133,16 @@ fn main() -> Result<()> {
     #[cfg(target_os = "linux")]
     if image_command_enabled()? && std::env::var(ENV_AUTHORIZATION).as_deref() == Ok("native-file")
     {
-        match std::env::var(alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS).as_deref() {
+        match std::env::var(alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS) {
             Err(_) => alien_sandbox_agent::gateway_egress::isolate_image_devices()?,
-            Ok("none") => alien_sandbox_agent::gateway_egress::isolate_guest_without_egress()?,
-            Ok(_) => {
-                return Err(invalid(
-                    alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS,
-                    "the only guest egress the agent enforces is `none`",
-                ))
+            Ok(value) => {
+                let allowed = guest_egress_allowed(&value).ok_or_else(|| {
+                    invalid(
+                        alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS,
+                        "expected `none` or `only:` followed by comma-separated IPv4 addresses",
+                    )
+                })?;
+                alien_sandbox_agent::gateway_egress::isolate_guest_without_egress(allowed)?
             }
         }
     }
@@ -579,6 +581,19 @@ where
         .map_err(|error| invalid(name, &format!("{error}")))
 }
 
+/// `none` allows guest sockets no direct destination; `only:a,b` allows those addresses alone.
+fn guest_egress_allowed(value: &str) -> Option<Vec<std::net::Ipv4Addr>> {
+    if value == "none" {
+        return Some(Vec::new());
+    }
+    value
+        .strip_prefix("only:")?
+        .split(',')
+        .map(|address| address.parse().ok())
+        .collect::<Option<Vec<_>>>()
+        .filter(|addresses| !addresses.is_empty())
+}
+
 fn invalid(name: &str, reason: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::ConfigInvalid {
         setting: name.to_string(),
@@ -596,6 +611,23 @@ fn failed(operation: &str, reason: String) -> ErrorData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The guest egress the Azure binding asks for: nothing, or a fixed set of addresses.
+    /// Anything else, including an empty list, refuses to start.
+    #[test]
+    fn guest_egress_reads_none_or_a_fixed_address_list() {
+        assert_eq!(super::guest_egress_allowed("none"), Some(Vec::new()));
+        assert_eq!(
+            super::guest_egress_allowed("only:10.0.6.4,168.63.129.16"),
+            Some(vec![
+                std::net::Ipv4Addr::new(10, 0, 6, 4),
+                std::net::Ipv4Addr::new(168, 63, 129, 16)
+            ])
+        );
+        for refused in ["", "all", "only:", "only:10.0.6.4,", "only:host.example", "only:::1"] {
+            assert_eq!(super::guest_egress_allowed(refused), None, "{refused}");
+        }
+    }
 
     fn exec(uid: u32, gid: u32) -> ExecIdentity {
         ExecIdentity { uid, gid }
