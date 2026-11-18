@@ -25,6 +25,21 @@ pub struct ImageProcess {
     image_user: bool,
     shutdown: tokio::sync::watch::Sender<bool>,
     monitor: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    restore: Mutex<RestoreGate>,
+}
+
+/// Persistent storage holds the image command until the key's tree is in place.
+#[derive(Default)]
+enum RestoreGate {
+    /// No persistent storage: the command starts when everything else allows.
+    #[default]
+    NotRequired,
+    /// Waiting for the restore; a start asked for meanwhile is remembered, not refused, so the
+    /// lifecycle paths that start the image (Run hook, activation, first session call) keep
+    /// working and the start happens once the tree is restored.
+    Pending(Option<(std::path::PathBuf, ExecIdentity, BTreeMap<String, String>)>),
+    /// Restored; the gate is open for good.
+    Done,
 }
 
 impl Default for ImageProcess {
@@ -34,6 +49,7 @@ impl Default for ImageProcess {
             image_user: false,
             shutdown: tokio::sync::watch::channel(false).0,
             monitor: Mutex::new(None),
+            restore: Mutex::new(RestoreGate::NotRequired),
         }
     }
 }
@@ -46,6 +62,8 @@ pub enum ImageStatus {
     NotConfigured,
     /// The provider lifecycle hook or native-file binding has not activated this boot.
     AwaitingActivation,
+    /// Persistent storage is declared and the key's tree is not restored yet.
+    AwaitingRestore,
     /// Waiting for network checks and, when required, gateway identity delivery.
     #[default]
     Pending,
@@ -81,6 +99,35 @@ impl ImageProcess {
         }
     }
 
+    /// Holds the image command until [`ImageProcess::restored`].
+    pub fn awaiting_restore(self) -> Self {
+        *self.restore.lock().expect("fresh mutex") = RestoreGate::Pending(None);
+        self
+    }
+
+    /// Whether the key's tree is still to be restored.
+    pub fn restore_pending(&self) -> Result<bool> {
+        Ok(matches!(
+            *self.restore.lock().map_err(|_| monitor_failed())?,
+            RestoreGate::Pending(_)
+        ))
+    }
+
+    /// Opens the restore gate and starts the image if a start was asked for while it was shut.
+    pub fn restored(&self) -> Result<()> {
+        let requested = {
+            let mut gate = self.restore.lock().map_err(|_| monitor_failed())?;
+            match std::mem::replace(&mut *gate, RestoreGate::Done) {
+                RestoreGate::Pending(requested) => requested,
+                _ => None,
+            }
+        };
+        match requested {
+            Some((path, identity, env)) => self.start_once_from(&path, identity, &env),
+            None => Ok(()),
+        }
+    }
+
     pub fn activate(&self) -> Result<()> {
         let mut status = self.status.lock().map_err(|_| monitor_failed())?;
         if *status == ImageStatus::AwaitingActivation {
@@ -108,10 +155,15 @@ impl ImageProcess {
     }
 
     pub fn status(&self) -> Result<ImageStatus> {
-        self.status
+        let status = self
+            .status
             .lock()
             .map(|status| status.clone())
-            .map_err(|_| monitor_failed())
+            .map_err(|_| monitor_failed())?;
+        if status == ImageStatus::Pending && self.restore_pending()? {
+            return Ok(ImageStatus::AwaitingRestore);
+        }
+        Ok(status)
     }
 
     /// Forward shutdown to the boot process group, then wait for its bounded cleanup.
@@ -147,6 +199,15 @@ impl ImageProcess {
         identity: ExecIdentity,
         env: &BTreeMap<String, String>,
     ) -> Result<()> {
+        {
+            let mut gate = self.restore.lock().map_err(|_| monitor_failed())?;
+            if let RestoreGate::Pending(requested) = &mut *gate {
+                if *self.status.lock().map_err(|_| monitor_failed())? == ImageStatus::Pending {
+                    *requested = Some((path.to_path_buf(), identity, env.clone()));
+                    return Ok(());
+                }
+            }
+        }
         let mut status = self.status.lock().map_err(|_| monitor_failed())?;
         if *self.shutdown.borrow() {
             return Err(monitor_failed());
@@ -588,6 +649,51 @@ mod tests {
                 }
             );
         }
+    }
+
+    /// Persistent storage: a start asked for before the restore is remembered and happens once,
+    /// right after the tree is in place; the status says why it waits.
+    #[tokio::test]
+    async fn the_image_waits_for_the_restore_and_then_starts_once() {
+        let (temp, path, identity) = process_fixture(vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf started >> starts; sleep 5".into(),
+        ]);
+        let process = ImageProcess::default().awaiting_restore();
+        assert_eq!(process.status().unwrap(), ImageStatus::AwaitingRestore);
+        process
+            .start_once_from(&path, identity, &Default::default())
+            .expect("a start before the restore is deferred, not refused");
+        process
+            .start_once_from(&path, identity, &Default::default())
+            .expect("deferred again");
+        assert!(!temp.path().join("starts").exists());
+        assert!(process.restore_pending().unwrap());
+
+        process.restored().expect("restored");
+        assert_eq!(process.status().unwrap(), ImageStatus::Running);
+        process
+            .restored()
+            .expect("a second restore signal is a no-op");
+        process
+            .start_once_from(&path, identity, &Default::default())
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert_eq!(
+            fs::read_to_string(temp.path().join("starts")).unwrap(),
+            "started"
+        );
+        process.shutdown().await.unwrap();
+    }
+
+    /// Without a deferred start, the restore opens the gate and starts nothing.
+    #[test]
+    fn a_restore_without_a_requested_start_starts_nothing() {
+        let process = ImageProcess::default().awaiting_restore();
+        process.restored().unwrap();
+        assert!(!process.restore_pending().unwrap());
+        assert_eq!(process.status().unwrap(), ImageStatus::Pending);
     }
 
     /// A non-root agent reading a root-only file from an older build gets the cause and the fix.

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { Key } from "../key.js"
 import { Sandbox, SandboxConfigSchema, type SandboxEgress } from "../sandbox.js"
 import { Storage } from "../storage.js"
 
@@ -54,23 +55,30 @@ describe("Sandbox", () => {
     expect(r.config.defaultPolicy).toEqual({ allow: ["example.com"] })
   })
 
-  it("links persistent storage to a Storage by reference", () => {
-    const workspaces = new Storage("workspaces").build()
+  it("declares persistent storage with its own store", () => {
+    const key = new Key("workspace-key").build()
     const r = complete()
       .persistentStorage({
         path: "/workspace",
-        storage: workspaces,
         exclude: ["tmp/"],
         maxSize: "8Gi",
+        encryptionKey: key,
       })
       .build()
 
     expect(r.config.persistentStorage).toEqual({
       path: "/workspace",
-      storage: { type: "storage", id: "workspaces" },
       exclude: ["tmp/"],
       maxSize: "8Gi",
+      encryptionKey: { type: "key", id: "workspace-key" },
     })
+  })
+
+  it("refuses an encryption key that is not a Key", () => {
+    const storage = new Storage("not-a-key").build()
+    expect(() =>
+      complete().persistentStorage({ path: "/workspace", encryptionKey: storage }),
+    ).toThrow()
   })
 
   // A sandbox without persistent storage must build exactly as before.
