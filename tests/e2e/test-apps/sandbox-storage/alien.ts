@@ -37,7 +37,7 @@ const api = new alien.Worker("api")
     toolchain: { type: "typescript", entrypoint: "dist/index.js" },
   })
   .memoryMb(1024)
-  .timeoutSeconds(900)
+  .timeoutSeconds(3600)
   .publicEndpoint("api")
   .readinessProbe({ method: "GET", path: "/health" })
   .link(agents)

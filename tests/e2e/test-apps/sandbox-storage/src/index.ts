@@ -95,49 +95,77 @@ async function withKey(handle: Handle, key: string, script: string) {
   }
 }
 
+/**
+ * Answers with `work`'s JSON, preceded by a space every 20 seconds: the Worker runtime gives up on
+ * a request that sends nothing for 300 seconds, and a large round trip takes longer. Leading
+ * whitespace is valid JSON. A failure is answered as `{ "error": ... }` with the same 200, since
+ * the status is sent before the work ends.
+ */
+function streamed(work: () => Promise<unknown>): Response {
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const beat = setInterval(() => controller.enqueue(encoder.encode(" ")), 20_000)
+      let answer: unknown
+      try {
+        answer = await work()
+      } catch (error) {
+        answer = { error: error instanceof Error ? (error.stack ?? error.message) : String(error) }
+      } finally {
+        clearInterval(beat)
+      }
+      controller.enqueue(encoder.encode(JSON.stringify(answer)))
+      controller.close()
+    },
+  })
+  return new Response(stream, { headers: { "content-type": "application/json" } })
+}
+
 // Builds the round-trip tree under `key` and reports its manifest, synced.
 app.post("/s/prepare", async c => {
   const b = await body(c)
-  return c.json(await withKey(pick(b), requireKey(b), prepare(b.files ?? 1000, b.mib ?? 16)))
+  return streamed(() => withKey(pick(b), requireKey(b), prepare(b.files ?? 1000, b.mib ?? 16)))
 })
 
 // Restores `key` in a new sandbox and reports the same manifest plus git, SQLite and link checks.
 app.post("/s/verify", async c => {
   const b = await body(c)
-  return c.json(await withKey(pick(b), requireKey(b), VERIFY))
+  return streamed(() => withKey(pick(b), requireKey(b), VERIFY))
 })
 
 // What a restore after a kill holds.
 app.post("/s/restored", async c => {
   const b = await body(c)
-  return c.json(await withKey(pick(b), requireKey(b), RESTORED))
+  return streamed(() => withKey(pick(b), requireKey(b), RESTORED))
 })
 
 // What the command's user can reach, and two symlinks aimed out of the tree for the next sync.
 app.post("/s/isolation", async c => {
   const b = await body(c)
-  return c.json(await withKey(pick(b), requireKey(b), ISOLATION))
+  return streamed(() => withKey(pick(b), requireKey(b), ISOLATION))
 })
 
 // A tree above maxSize: the sync must not publish it.
 app.post("/s/oversize", async c => {
   const b = await body(c)
   const key = requireKey(b)
-  const session = await agents.create({ timeoutMs: SANDBOX_MS, storageKey: key })
-  try {
-    const result = await run(agents, session.sandboxId, OVERSIZE)
-    let synced: unknown
+  return streamed(async () => {
+    const session = await agents.create({ timeoutMs: SANDBOX_MS, storageKey: key })
     try {
-      synced = await agents.syncStorage(session.sandboxId)
-    } catch (error) {
-      synced = { error: error instanceof Error ? error.message : String(error) }
+      const result = await run(agents, session.sandboxId, OVERSIZE)
+      let synced: unknown
+      try {
+        synced = await agents.syncStorage(session.sandboxId)
+      } catch (error) {
+        synced = { error: error instanceof Error ? error.message : String(error) }
+      }
+      const status = await agents.storageStatus(session.sandboxId)
+      await run(agents, session.sandboxId, "rm -f /workspace/oversize.bin")
+      return { sandboxId: session.sandboxId, ...result, synced, status }
+    } finally {
+      await agents.terminate(session.sandboxId)
     }
-    const status = await agents.storageStatus(session.sandboxId)
-    await run(agents, session.sandboxId, "rm -f /workspace/oversize.bin")
-    return c.json({ sandboxId: session.sandboxId, ...result, synced, status })
-  } finally {
-    await agents.terminate(session.sandboxId)
-  }
+  })
 })
 
 // Streams the writer's acknowledged rounds as NDJSON while the test kills the sandbox from outside.
@@ -185,31 +213,33 @@ app.post("/s/writer", async c => {
 app.post("/s/takeover", async c => {
   const b = await body(c)
   const key = requireKey(b)
-  const first = await agents.create({ timeoutMs: SANDBOX_MS, storageKey: key })
-  try {
-    await run(agents, first.sandboxId, "echo first > /workspace/owner")
-    await agents.syncStorage(first.sandboxId)
-    const second = await agents.create({ timeoutMs: SANDBOX_MS, storageKey: key })
+  return streamed(async () => {
+    const first = await agents.create({ timeoutMs: SANDBOX_MS, storageKey: key })
     try {
-      await run(agents, second.sandboxId, "echo second > /workspace/owner")
-      await agents.syncStorage(second.sandboxId)
-      // The stale sandbox writes after losing the key; its sync must not publish.
-      await run(agents, first.sandboxId, "echo stale > /workspace/owner")
-      let staleSync: unknown
+      await run(agents, first.sandboxId, "echo first > /workspace/owner")
+      await agents.syncStorage(first.sandboxId)
+      const second = await agents.create({ timeoutMs: SANDBOX_MS, storageKey: key })
       try {
-        staleSync = await agents.syncStorage(first.sandboxId)
-      } catch (error) {
-        staleSync = { error: error instanceof Error ? error.message : String(error) }
+        await run(agents, second.sandboxId, "echo second > /workspace/owner")
+        await agents.syncStorage(second.sandboxId)
+        // The stale sandbox writes after losing the key; its sync must not publish.
+        await run(agents, first.sandboxId, "echo stale > /workspace/owner")
+        let staleSync: unknown
+        try {
+          staleSync = await agents.syncStorage(first.sandboxId)
+        } catch (error) {
+          staleSync = { error: error instanceof Error ? error.message : String(error) }
+        }
+        const firstStatus = await agents.storageStatus(first.sandboxId)
+        const owner = (await agents.readStorageFile(key, "owner")).toString()
+        return { firstStatus, staleSync, owner }
+      } finally {
+        await agents.terminate(second.sandboxId)
       }
-      const firstStatus = await agents.storageStatus(first.sandboxId)
-      const owner = (await agents.readStorageFile(key, "owner")).toString()
-      return c.json({ firstStatus, staleSync, owner })
     } finally {
-      await agents.terminate(second.sandboxId)
+      await agents.terminate(first.sandboxId)
     }
-  } finally {
-    await agents.terminate(first.sandboxId)
-  }
+  })
 })
 
 app.post("/s/status", async c => {
@@ -226,7 +256,7 @@ app.post("/s/read", async c => {
     const bytes = await pick(b).readStorageFile(requireKey(b), b.path)
     return c.json({ found: true, base64: bytes.toString("base64") })
   } catch (error) {
-    return c.json({ found: false, error: error instanceof Error ? error.message : String(error) })
+    return c.json({ found: false, reason: error instanceof Error ? error.message : String(error) })
   }
 })
 

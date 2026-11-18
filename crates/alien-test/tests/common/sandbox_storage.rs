@@ -36,13 +36,15 @@ fn url(ctx: &TestContext) -> anyhow::Result<String> {
         .to_string())
 }
 
-/// Posts to one of the Worker's check endpoints and returns its JSON answer.
+/// Posts to one of the Worker's check endpoints and returns its JSON answer. Long checks answer
+/// 200 with whitespace heartbeats before the JSON, so a failure arrives as `{ "error": ... }`.
 async fn post(ctx: &TestContext, path: &str, body: Value) -> anyhow::Result<Value> {
+    let started = Instant::now();
     let response = reqwest::Client::new()
         .post(format!("{}{path}", url(ctx)?))
         .bearer_auth(&ctx.deployment.id)
         .json(&body)
-        .timeout(Duration::from_secs(900))
+        .timeout(Duration::from_secs(3600))
         .send()
         .await
         .with_context(|| format!("POST {path}"))?;
@@ -51,8 +53,14 @@ async fn post(ctx: &TestContext, path: &str, body: Value) -> anyhow::Result<Valu
         .text()
         .await
         .with_context(|| format!("read {path}"))?;
+    eprintln!("{path} took {:.1} s", started.elapsed().as_secs_f64());
     ensure!(status.is_success(), "{path} answered {status}: {text}");
-    serde_json::from_str(&text).with_context(|| format!("parse {path} answer: {text}"))
+    let answer: Value =
+        serde_json::from_str(&text).with_context(|| format!("parse {path} answer: {text}"))?;
+    if let Some(error) = answer.get("error").and_then(Value::as_str) {
+        anyhow::bail!("{path} failed: {error}");
+    }
+    Ok(answer)
 }
 
 /// `name=value` lines of a check's stdout.
