@@ -26,13 +26,49 @@ use std::error::Error as StdError;
 use tokio::time::sleep;
 use tracing::warn;
 
+/// Replaces the released agent image, like `ALIEN_OVERRIDE_TYPESCRIPT_WORKER_BASE` replaces the
+/// Worker base: for testing an agent built from source before it is released.
+pub const SANDBOX_AGENT_IMAGE_OVERRIDE: &str = "ALIEN_OVERRIDE_SANDBOX_AGENT_IMAGE";
+
 /// The sandbox agent layered onto a GCP sandbox, released with the same version as
 /// `alien-build`, so a build never layers an agent from a different release than the CLI's.
+/// [`SANDBOX_AGENT_IMAGE_OVERRIDE`], when set and not empty, names another image; the push
+/// cache key holds the reference, so an override never reuses a push of the released agent.
 pub fn sandbox_agent_image() -> String {
-    format!(
-        "ghcr.io/alienplatform/alien-sandbox-agent:v{}",
-        env!("CARGO_PKG_VERSION")
-    )
+    agent_image_or_override(std::env::var(SANDBOX_AGENT_IMAGE_OVERRIDE).ok())
+}
+
+/// An overriding agent image on a loopback registry (`localhost:5000/...`) is pulled over plain
+/// HTTP, as Docker treats such registries; every other registry keeps `protocol`.
+pub fn with_loopback_agent_registry(protocol: ClientProtocol, agent_image: &str) -> ClientProtocol {
+    let Ok(reference) = Reference::try_from(agent_image) else {
+        return protocol;
+    };
+    let registry = reference.registry().to_string();
+    let host = registry.split(':').next().unwrap_or_default();
+    if !matches!(host, "localhost" | "127.0.0.1") {
+        return protocol;
+    }
+    match protocol {
+        ClientProtocol::Https => ClientProtocol::HttpsExcept(vec![registry]),
+        ClientProtocol::HttpsExcept(mut hosts) => {
+            if !hosts.contains(&registry) {
+                hosts.push(registry);
+            }
+            ClientProtocol::HttpsExcept(hosts)
+        }
+        ClientProtocol::Http => ClientProtocol::Http,
+    }
+}
+
+fn agent_image_or_override(over: Option<String>) -> String {
+    match over {
+        Some(image) if !image.trim().is_empty() => image.trim().to_string(),
+        _ => format!(
+            "ghcr.io/alienplatform/alien-sandbox-agent:v{}",
+            env!("CARGO_PKG_VERSION")
+        ),
+    }
 }
 
 /// A layered sandbox image and the agent it was layered from.
@@ -518,6 +554,41 @@ mod tests {
     use httpmock::Method::GET;
     use oci_client::client::{Client, ClientConfig};
     use std::io::Read;
+
+    #[test]
+    fn only_a_loopback_agent_registry_is_pulled_over_http() {
+        let local = with_loopback_agent_registry(ClientProtocol::Https, "localhost:5000/agent:dev");
+        assert!(
+            matches!(&local, ClientProtocol::HttpsExcept(hosts) if hosts == &vec!["localhost:5000".to_string()])
+        );
+        let kept = with_loopback_agent_registry(
+            ClientProtocol::HttpsExcept(vec!["registry.local:80".to_string()]),
+            "127.0.0.1:5000/agent:dev",
+        );
+        assert!(matches!(&kept, ClientProtocol::HttpsExcept(hosts) if hosts.len() == 2));
+        let remote = with_loopback_agent_registry(
+            ClientProtocol::Https,
+            "ghcr.io/alienplatform/alien-sandbox-agent:v1",
+        );
+        assert!(matches!(remote, ClientProtocol::Https));
+        let lookalike =
+            with_loopback_agent_registry(ClientProtocol::Https, "localhost.example.com/agent:v1");
+        assert!(matches!(lookalike, ClientProtocol::Https));
+    }
+
+    #[test]
+    fn the_agent_image_is_the_released_one_unless_overridden() {
+        let released = format!(
+            "ghcr.io/alienplatform/alien-sandbox-agent:v{}",
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(agent_image_or_override(None), released);
+        assert_eq!(agent_image_or_override(Some(" ".to_string())), released);
+        assert_eq!(
+            agent_image_or_override(Some("localhost:5000/agent:dev".to_string())),
+            "localhost:5000/agent:dev"
+        );
+    }
 
     /// An amd64 image holding `files`, pushed to `reference`; also returned, as the local copy a
     /// release reads the base's identity files from.
