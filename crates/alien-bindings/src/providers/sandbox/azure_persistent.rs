@@ -98,6 +98,73 @@ impl AzureSandbox {
         Ok(())
     }
 
+    /// Mints a fresh SAS for `key` and hands it to the agent of `sandbox_id`, replacing the one it
+    /// holds. Like the first, it ends no later than the sandbox's own deadline label.
+    async fn renew_grant(&self, sandbox_id: &str, key: &str, operation: &str) -> Result<()> {
+        let failed = |reason: String| {
+            AlienError::new(ErrorData::SandboxUnreachable {
+                operation: operation.to_string(),
+                reason,
+            })
+        };
+        let grants = self
+            .persistent_grants
+            .as_ref()
+            .ok_or_else(|| failed("the binding has no persistent store to renew".to_string()))?;
+        let sandbox = self
+            .read_sandbox(operation, sandbox_id)
+            .await?
+            .ok_or_else(|| failed("the sandbox is gone".to_string()))?;
+        let deadline = sandbox
+            .labels
+            .get(alien_core::SANDBOX_EXPIRY_LABEL)
+            .and_then(|millis| millis.parse::<i64>().ok())
+            .and_then(chrono::DateTime::from_timestamp_millis);
+        let grant = grants
+            .grant(key, deadline)
+            .await
+            .map_err(|e| failed(format!("could not sign the storage grant: {e}")))?;
+        let request = self
+            .request(sandbox_id, reqwest::Method::PUT, "/v1/storage/grant")
+            .await?
+            .json(&serde_json::json!({ "grant": grant }));
+        let response = self
+            .send(sandbox_id, request, operation)
+            .await
+            .map_err(|e| failed(format!("could not renew the storage grant: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(failed(format!(
+                "the agent refused the renewed grant ({status}): {}",
+                text.chars().take(500).collect::<String>()
+            )));
+        }
+        Ok(())
+    }
+
+    /// The agent's storage state, after renewing its grant when it is past half its life or
+    /// denied. Every storage call of the binding goes through here, so a live workload keeps the
+    /// grant fresh.
+    pub(super) async fn fresh_storage_status(
+        &self,
+        sandbox_id: &str,
+        operation: &str,
+    ) -> Result<SandboxStorageStatus> {
+        let status = self
+            .agent_storage(sandbox_id, reqwest::Method::GET, "/v1/storage", operation)
+            .await?;
+        let renewed = crate::providers::sandbox::persistent_store::refresh_if_past_half(&status, |key| async move {
+            self.renew_grant(sandbox_id, &key, operation).await
+        })
+        .await?;
+        if !renewed {
+            return Ok(status);
+        }
+        self.agent_storage(sandbox_id, reqwest::Method::GET, "/v1/storage", operation)
+            .await
+    }
+
     pub(super) async fn agent_storage(
         &self,
         sandbox_id: &str,

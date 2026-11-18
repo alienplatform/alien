@@ -735,7 +735,22 @@ impl Sandbox for AzureSandbox {
             }
             return Ok(None);
         }
-        self.get_as_declared(sandbox_id).await
+        let instance = self.get_as_declared(sandbox_id).await?;
+        // A caller that keeps reaching its sandbox keeps the grant fresh. Best effort: `get`
+        // reports the sandbox whether or not its agent answers.
+        if self.persistent_storage.is_some()
+            && instance
+                .as_ref()
+                .is_some_and(|i| i.state == SandboxState::Running)
+        {
+            if let Err(error) = self
+                .fresh_storage_status(sandbox_id, "sandbox.get")
+                .await
+            {
+                tracing::warn!(sandbox = sandbox_id, %error, "could not check the persistent storage grant");
+            }
+        }
+        Ok(instance)
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
@@ -1185,14 +1200,9 @@ impl Sandbox for AzureSandbox {
             return Ok(None);
         }
         Self::checked_sandbox_id("sandbox.persistentStorage", sandbox_id)?;
-        self.agent_storage(
-            sandbox_id,
-            reqwest::Method::GET,
-            "/v1/storage",
-            "sandbox.persistentStorage",
-        )
-        .await
-        .map(Some)
+        self.fresh_storage_status(sandbox_id, "sandbox.persistentStorage")
+            .await
+            .map(Some)
     }
 
     async fn sync_storage(&self, sandbox_id: &str) -> Result<SandboxStorageStatus> {
@@ -1203,6 +1213,9 @@ impl Sandbox for AzureSandbox {
             }));
         }
         Self::checked_sandbox_id("sandbox.sync", sandbox_id)?;
+        // The agent refuses a sync on an expired grant, so the grant is checked (and renewed when
+        // past half its life or denied) before the sync, not after.
+        self.fresh_storage_status(sandbox_id, "sandbox.sync").await?;
         self.agent_storage(
             sandbox_id,
             reqwest::Method::POST,
