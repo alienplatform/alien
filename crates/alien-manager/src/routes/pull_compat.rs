@@ -19,8 +19,9 @@
 //! development build) is treated as current.
 //!
 //! To add a feature: add a [`Feature`] with the first release that reads it
-//! ([`NEXT_RELEASE`] until it ships), detect it in [`apply`], and add that
-//! version's definitions to the older-shape fixture in `tests`.
+//! (the current [`NEXT_RELEASE`] value, written as a literal), detect it in
+//! [`apply`], and add that version's definitions to the older-shape fixture in
+//! `tests`.
 
 use alien_core::{
     Ai, ArtifactRegistry, Container, Daemon, Postgres, Sandbox, Stack, Storage, Worker,
@@ -30,9 +31,10 @@ use alien_core::{
 const OLDEST_OPERATOR: &str = "3.3.31";
 
 /// The release that first ships features that are on main but in no tag: the
-/// version after the newest release tag. Bump it with each release, and give a
-/// feature its literal version once it ships. CI fails when this is not newer
-/// than the latest tag.
+/// version after the newest release tag. The release prepare step bumps it
+/// (`.github/scripts/bump-next-release.sh`); CI fails when it is not newer than
+/// the latest tag. Feature gates always carry a literal version: for a feature
+/// not yet released, write this value, never the constant itself.
 pub(crate) const NEXT_RELEASE: &str = "3.3.70";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
