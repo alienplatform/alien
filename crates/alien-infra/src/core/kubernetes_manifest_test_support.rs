@@ -320,8 +320,8 @@ pub(crate) fn managed_certificate_config(
 /// Drives a controller that is in its public endpoint state (`controller`) through a managed
 /// certificate that is still being issued, as every Kubernetes workload controller must:
 /// it waits past the 60 polls other endpoint waits get, still waits well inside the saved
-/// 30-minute bound, fails with a timeout once the bound passes, and fails at once when issuance
-/// failed. `backdate` moves the saved start of the certificate wait to a unix time.
+/// 30-minute bound, fails with a timeout once the bound passes, and keeps waiting on a status the issuer
+/// reports as failed (it retries). `backdate` moves the saved start of the certificate wait to a unix time.
 pub(crate) async fn check_certificate_wait<C>(
     harness: &mut KubernetesManifestTestHarness,
     controller: C,
@@ -362,19 +362,16 @@ pub(crate) async fn check_certificate_wait<C>(
         .expect_err("the saved bound has passed");
     assert!(error.to_string().contains("managed certificate"), "{error}");
 
-    // A failed issuance fails at once, naming the resource.
+    // A status the issuer reports as failed is retried by the issuer: it still waits.
     managed_certificate_config(
         harness.deployment_config_mut(),
         resource_id,
         CertificateStatus::Failed,
         false,
     );
-    let error = controller
+    controller
         .step(&harness.ctx())
         .await
-        .expect_err("issuance failed");
-    assert!(
-        error.to_string().contains("Certificate issuance failed"),
-        "{error}"
-    );
+        .expect("a failed status waits like pending");
+    assert_eq!(controller.get_status(), status);
 }
