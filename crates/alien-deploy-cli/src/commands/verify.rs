@@ -13,12 +13,12 @@ use alien_aws_clients::{AwsClientConfig, AwsCredentialProvider, AwsCredentials};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::embedded_config::DeployCliConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_signing::{
-    display_fingerprint, settings::names, InstallId, Ledger, ReleaseBody,
-    SignedStatement, SignerKind, SigningSettings, Trust,
-};
 #[cfg(test)]
 use alien_signing::Kind;
+use alien_signing::{
+    display_fingerprint, settings::names, InstallId, Ledger, ReleaseBody, SignedStatement,
+    SignerKind, SigningSettings, Trust,
+};
 use aws_credential_types::provider::ProvideCredentials;
 use chrono::{DateTime, Utc};
 use clap::Args;

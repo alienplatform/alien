@@ -3192,10 +3192,9 @@ platform = "aws"
                         .path("/v1/initialize")
                         .json_body_partial(r#"{"name":"subdomain-app"}"#)
                         .matches(|req| {
-                            let body: serde_json::Value = serde_json::from_slice(
-                                req.body.as_deref().unwrap_or_default(),
-                            )
-                            .unwrap_or_default();
+                            let body: serde_json::Value =
+                                serde_json::from_slice(req.body.as_deref().unwrap_or_default())
+                                    .unwrap_or_default();
                             body.get("setupCapabilities")
                                 .and_then(|v| v.as_array())
                                 .map_or(true, |v| v.is_empty())
@@ -3256,7 +3255,9 @@ platform = "{platform}"
             .mock_async(|when, then| {
                 when.method(httpmock::Method::POST)
                     .path("/v1/initialize")
-                    .json_body_partial(r#"{"name":"subdomain-app","setupCapabilities":["create-keys"]}"#);
+                    .json_body_partial(
+                        r#"{"name":"subdomain-app","setupCapabilities":["create-keys"]}"#,
+                    );
                 then.status(409).json_body(serde_json::json!({
                     "code": "STOP_AFTER_INITIALIZE",
                     "message": "stop after initialize",
