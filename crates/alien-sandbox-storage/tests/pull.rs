@@ -56,7 +56,7 @@ impl Tree {
 }
 
 impl FileSource for &Tree {
-    fn open(&mut self, path: &str) -> Result<Box<dyn Read + '_>> {
+    fn open(&mut self, path: &str) -> Result<Box<dyn Read + Send + '_>> {
         Ok(Box::new(&self.content[path][..]))
     }
 }

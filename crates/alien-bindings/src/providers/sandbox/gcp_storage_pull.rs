@@ -300,7 +300,7 @@ mod tests {
 
     struct Bytes(Vec<u8>);
     impl FileSource for Bytes {
-        fn open(&mut self, _: &str) -> StorageResult<Box<dyn std::io::Read + '_>> {
+        fn open(&mut self, _: &str) -> StorageResult<Box<dyn std::io::Read + Send + '_>> {
             Ok(Box::new(&self.0[..]))
         }
     }

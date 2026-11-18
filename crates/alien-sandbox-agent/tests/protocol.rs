@@ -3038,7 +3038,7 @@ impl alien_sandbox_storage::PullChannel for EnvelopeChannel<'_> {
 struct OneFile(Vec<u8>);
 
 impl alien_sandbox_storage::FileSource for OneFile {
-    fn open(&mut self, _: &str) -> alien_sandbox_storage::Result<Box<dyn std::io::Read + '_>> {
+    fn open(&mut self, _: &str) -> alien_sandbox_storage::Result<Box<dyn std::io::Read + Send + '_>> {
         Ok(Box::new(&self.0[..]))
     }
 }
