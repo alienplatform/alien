@@ -31,6 +31,7 @@ pub mod resource_enabled_valid;
 pub mod resource_id_pattern;
 pub mod resource_name_length;
 pub mod resource_references_exist;
+pub mod azure_single_build_profile;
 pub mod sandbox_build_role_name;
 pub mod sandbox_image_permissions;
 pub mod sandbox_grants_placeable;

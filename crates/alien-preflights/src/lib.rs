@@ -397,6 +397,9 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::SingleQueueTriggerCheck));
         registry.add_compile_time_check(Box::new(compile_time::LinkEnvironmentCheck));
         registry.add_compile_time_check(Box::new(
+            compile_time::azure_single_build_profile::AzureSingleBuildProfileCheck,
+        ));
+        registry.add_compile_time_check(Box::new(
             compile_time::ServiceAccountImpersonateValidationCheck,
         ));
         registry.add_compile_time_check(Box::new(compile_time::NetworkSettingsPlatformCheck));
