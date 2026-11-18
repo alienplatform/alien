@@ -55,7 +55,7 @@ pub enum TreeEntryKind {
 /// symlinks and copies SQLite databases through the online backup API.
 pub trait FileSource {
     /// A reader over the file's current content.
-    fn open(&mut self, path: &str) -> Result<Box<dyn Read + '_>>;
+    fn open(&mut self, path: &str) -> Result<Box<dyn Read + Send + '_>>;
 }
 
 /// What a commit did.
@@ -74,7 +74,12 @@ pub enum CommitOutcome {
 
 /// The one writer of a key: builds commits from walks and publishes them with a conditional
 /// put on HEAD.
+/// Largest pack a commit builds before it uploads it and starts the next. Bounds the writer's
+/// memory, each upload and each object a reader fetches.
+pub const MAX_PACK_BYTES: usize = 64 << 20;
+
 pub struct Committer {
+    pack_cap: usize,
     writer: String,
     head_version: ObjectVersion,
     head: Option<Manifest>,
@@ -92,12 +97,19 @@ impl Committer {
         max_size: Option<u64>,
     ) -> Self {
         Self {
+            pack_cap: MAX_PACK_BYTES,
             writer: writer.into(),
             head_version,
             head,
             max_size,
             superseded: false,
         }
+    }
+
+    /// Closes packs at `cap` bytes instead of [`MAX_PACK_BYTES`] (tests).
+    pub fn with_pack_cap(mut self, cap: usize) -> Self {
+        self.pack_cap = cap.max(1);
+        self
     }
 
     /// Whether another writer took the key over; every later commit is refused.
@@ -138,14 +150,8 @@ impl Committer {
         self.check_size(walked_size)?;
 
         let seq = self.head.as_ref().map_or(0, |m| m.seq) + 1;
-        // New chunks point at this commit's pack, whose name is its hash and so only known
-        // once the pack is finished; they carry this placeholder until then.
-        let name = ObjectName {
-            seq,
-            hash: String::new(),
-        };
         let previous = self.head.as_ref();
-        let mut pack = PackBuilder::new();
+        let mut packs = Packs::new(seq, self.pack_cap);
         let mut chunks: BTreeMap<String, ChunkLocation> = BTreeMap::new();
         let mut entries = Vec::with_capacity(walk.len());
         for item in walk {
@@ -181,7 +187,8 @@ impl Committer {
                             (size, file_chunks)
                         }
                         None => {
-                            read_file(source, &item.path, &name, previous, &mut pack, &mut chunks)?
+                            read_file(store, source, &item.path, previous, &mut packs, &mut chunks)
+                                .await?
                         }
                     };
                     EntryKind::File {
@@ -212,19 +219,9 @@ impl Committer {
         if previous.is_some_and(|old| old.entries == manifest.entries) {
             return Ok(CommitOutcome::Unchanged);
         }
+        packs.flush(store, &mut manifest.chunks).await?;
+        let pack_bytes = packs.uploaded;
 
-        let pack_empty = pack.is_empty();
-        let pack_bytes = pack.finish();
-        let pack_len = pack_bytes.len() as u64;
-        if !pack_empty {
-            let pack_name = ObjectName::of(seq, &pack_bytes);
-            for location in manifest.chunks.values_mut() {
-                if location.pack == name {
-                    location.pack = pack_name.clone();
-                }
-            }
-            create_named(store, &pack_name.pack(), pack_bytes).await?;
-        }
         let manifest_bytes = serde_json::to_vec(&manifest).expect("a manifest serializes");
         let name = ObjectName::of(seq, &manifest_bytes);
         create_named(store, &name.manifest(), manifest_bytes).await?;
@@ -246,7 +243,7 @@ impl Committer {
                 self.head = Some(manifest);
                 Ok(CommitOutcome::Committed {
                     commit: name,
-                    pack_bytes: if pack_empty { 0 } else { pack_len },
+                    pack_bytes,
                 })
             }
             PutOutcome::Conflict => {
@@ -339,13 +336,69 @@ fn order_hard_links(walk: Vec<TreeEntry>) -> Vec<TreeEntry> {
     out
 }
 
-/// Reads a file in fixed chunks, adding the ones no earlier pack holds.
-fn read_file(
-    source: &mut dyn FileSource,
+/// The packs one commit writes: chunks go into the open pack, which is uploaded and replaced
+/// once it reaches the cap. Chunks in a pack not yet uploaded point at a placeholder name until
+/// its hash, and so its name, is known.
+struct Packs {
+    seq: u64,
+    cap: usize,
+    open: PackBuilder,
+    placeholder: ObjectName,
+    closed: usize,
+    uploaded: u64,
+}
+
+impl Packs {
+    fn new(seq: u64, cap: usize) -> Self {
+        Self {
+            seq,
+            cap,
+            open: PackBuilder::new(),
+            placeholder: Self::placeholder(seq, 0),
+            closed: 0,
+            uploaded: 0,
+        }
+    }
+
+    fn placeholder(seq: u64, index: usize) -> ObjectName {
+        ObjectName {
+            seq,
+            hash: format!("open-{index}"),
+        }
+    }
+
+    /// Uploads the open pack, if it holds anything, and points its chunks at its real name.
+    async fn flush(
+        &mut self,
+        store: &dyn ObjectStore,
+        chunks: &mut BTreeMap<String, ChunkLocation>,
+    ) -> Result<()> {
+        if self.open.is_empty() {
+            return Ok(());
+        }
+        let pack = std::mem::take(&mut self.open).finish();
+        let name = ObjectName::of(self.seq, &pack);
+        self.uploaded += pack.len() as u64;
+        create_named(store, &name.pack(), pack).await?;
+        for location in chunks.values_mut() {
+            if location.pack == self.placeholder {
+                location.pack = name.clone();
+            }
+        }
+        self.closed += 1;
+        self.placeholder = Self::placeholder(self.seq, self.closed);
+        Ok(())
+    }
+}
+
+/// Reads a file in fixed chunks, adding the ones no earlier pack holds, and uploads a pack
+/// whenever it reaches the cap, so a large file never sits whole in memory.
+async fn read_file(
+    store: &dyn ObjectStore,
+    source: &mut (dyn FileSource + Send),
     path: &str,
-    name: &ObjectName,
     previous: Option<&Manifest>,
-    pack: &mut PackBuilder,
+    packs: &mut Packs,
     chunks: &mut BTreeMap<String, ChunkLocation>,
 ) -> Result<(u64, Vec<String>)> {
     let io = |e: std::io::Error| {
@@ -377,15 +430,18 @@ fn read_file(
             let location = match previous.and_then(|m| m.chunks.get(&hash)) {
                 Some(location) => location.clone(),
                 None => {
-                    let (_, offset, len) = pack.add(bytes);
+                    let (_, offset, len) = packs.open.add(bytes);
                     ChunkLocation {
-                        pack: name.clone(),
+                        pack: packs.placeholder.clone(),
                         offset,
                         len,
                     }
                 }
             };
             chunks.insert(hash.clone(), location);
+            if packs.open.len() >= packs.cap {
+                packs.flush(store, chunks).await?;
+            }
         }
         hashes.push(hash);
         size += filled as u64;
