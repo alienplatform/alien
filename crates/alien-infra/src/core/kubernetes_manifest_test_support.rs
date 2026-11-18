@@ -376,3 +376,31 @@ pub(crate) async fn check_certificate_wait<C>(
         .expect("a failed status waits like pending");
     assert_eq!(controller.get_status(), status);
 }
+
+/// Add a compute cluster whose capacity group pins an architecture, so the stack gives every
+/// workload a pool/stack `kubernetes.io/arch` node selector of its own.
+pub(crate) fn add_x86_64_pool(stack: &mut alien_core::Stack) {
+    let compute = alien_core::ComputeCluster::new("compute".to_string())
+        .capacity_group(alien_core::CapacityGroup {
+            group_id: "apps".to_string(),
+            instance_type: None,
+            profile: Some(alien_core::MachineProfile {
+                cpu: "2".to_string(),
+                memory_bytes: 4 << 30,
+                ephemeral_storage_bytes: 20 << 30,
+                architecture: Some(alien_core::instance_catalog::Architecture::X86_64),
+                gpu: None,
+                data_disk: None,
+            }),
+            min_size: 1,
+            max_size: 3,
+            scale_policy: None,
+            nested_virtualization: None,
+            data_disk_gib_range: None,
+        })
+        .build();
+    let pool_stack = alien_core::Stack::new("pool".to_string())
+        .add(compute, alien_core::ResourceLifecycle::Frozen)
+        .build();
+    stack.resources.extend(pool_stack.resources);
+}

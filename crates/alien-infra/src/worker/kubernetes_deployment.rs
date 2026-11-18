@@ -39,6 +39,14 @@ pub(super) fn desired_node_selector(
     })
 }
 
+/// The one architecture the release recorded for this worker, if any.
+pub(super) fn recorded_architecture(
+    ctx: &ResourceControllerContext<'_>,
+    config_id: &str,
+) -> Option<alien_core::instance_catalog::Architecture> {
+    alien_core::single_built_architecture(ctx.desired_stack.built_architectures_of(config_id))
+}
+
 pub(super) async fn build_worker_deployment(
     controller: &KubernetesWorkerController,
     config: &Worker,

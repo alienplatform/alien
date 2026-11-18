@@ -30,7 +30,7 @@ use super::kubernetes_command_service::{
     delete_command_service, reconcile_command_service, reconcile_ready_command_service,
 };
 use super::kubernetes_deployment::{
-    build_worker_deployment, desired_node_selector, kubernetes_namespace, worker_labels,
+    build_worker_deployment, kubernetes_namespace, recorded_architecture, worker_labels,
     WORKER_CONTAINER_NAME,
 };
 
@@ -68,11 +68,12 @@ pub struct KubernetesWorkerController {
     pub(crate) last_recovery_check_unix: Option<i64>,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
-    /// Node selector applied to the pod spec last. The architecture a build recorded is read at
-    /// pod-spec build time, so a release that records one for an existing worker is invisible
-    /// to config diffing.
+    /// The single architecture the release recorded when the pod spec was last applied (None: no
+    /// record, or several). It is read at pod-spec build time, so a release that records one for
+    /// an existing worker is invisible to config diffing. Only this is compared, never the whole
+    /// selector, so a pool's selector cannot make an unrecorded workload roll.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) applied_node_selector: Option<std::collections::BTreeMap<String, String>>,
+    pub(crate) applied_architecture: Option<alien_core::instance_catalog::Architecture>,
 }
 
 #[controller]
@@ -230,7 +231,7 @@ impl KubernetesWorkerController {
             ctx,
         )
         .await?;
-        self.applied_node_selector = desired_node_selector(ctx, config)?;
+        self.applied_architecture = recorded_architecture(ctx, &config.id);
 
         self.expected_generation = None;
         if let Some(mut existing) = existing_deployment {
@@ -825,7 +826,7 @@ impl KubernetesWorkerController {
             ctx,
         )
         .await?;
-        self.applied_node_selector = desired_node_selector(ctx, config)?;
+        self.applied_architecture = recorded_architecture(ctx, &config.id);
         new_deployment.metadata.resource_version = resource_version;
 
         let updated = deployment_client
@@ -1342,7 +1343,7 @@ impl KubernetesWorkerController {
             return Ok(false);
         }
         let config = ctx.desired_resource_config::<Worker>()?;
-        Ok(desired_node_selector(ctx, config)? != self.applied_node_selector)
+        Ok(recorded_architecture(ctx, &config.id) != self.applied_architecture)
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
@@ -1439,7 +1440,7 @@ impl KubernetesWorkerController {
             expected_generation: None,
             zero_ready_observed: false,
             rollout_watch: None,
-            applied_node_selector: None,
+            applied_architecture: None,
             recovery_checks: 0,
             recovering: false,
             last_recovery_check_unix: None,
@@ -1467,6 +1468,9 @@ mod tests {
         let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
         let mut controller = KubernetesWorkerController::mock_ready("api", "ns");
         let mut stack = harness.ctx().desired_stack.clone();
+        // The stack also pins a node selector of its own (the pool architecture): it must
+        // not make a workload with no record, or a multi-architecture one, roll.
+        crate::core::kubernetes_manifest_test_support::add_x86_64_pool(&mut stack);
         let id = config.id.clone();
         let wants_update = |controller: &KubernetesWorkerController, stack: &alien_core::Stack| {
             let mut ctx = harness.ctx();
@@ -1484,13 +1488,10 @@ mod tests {
         // A release that records one architecture updates the existing workload once.
         stack.built_architectures.insert(id.clone(), vec![X86_64]);
         assert!(wants_update(&controller, &stack));
-        controller.applied_node_selector = Some(std::collections::BTreeMap::from([(
-            "kubernetes.io/arch".to_string(),
-            "amd64".to_string(),
-        )]));
+        controller.applied_architecture = Some(X86_64);
         assert!(!wants_update(&controller, &stack));
 
-        // A later release that changes it updates again; one that drops it removes the selector.
+        // A later release that changes it updates again; one that drops it updates once more.
         stack.built_architectures.insert(id.clone(), vec![Arm64]);
         assert!(wants_update(&controller, &stack));
         stack.built_architectures.clear();
@@ -2053,7 +2054,7 @@ mod tests {
             expected_generation: None,
             zero_ready_observed: false,
             rollout_watch: None,
-            applied_node_selector: None,
+            applied_architecture: None,
             recovery_checks: 0,
             recovering: false,
             last_recovery_check_unix: None,
@@ -2098,7 +2099,7 @@ mod tests {
             expected_generation: None,
             zero_ready_observed: false,
             rollout_watch: None,
-            applied_node_selector: None,
+            applied_architecture: None,
             recovery_checks: 0,
             recovering: false,
             last_recovery_check_unix: None,
