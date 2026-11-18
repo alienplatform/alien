@@ -28,7 +28,8 @@ fn fresh_trust(keys: &Keys, chain: &[alien_signing::SignedStatement], ledger: &L
 fn accept(trust: &Trust, ledger: &mut Ledger, sequence: u64) -> alien_signing::Result<()> {
     let keys = keys();
     let verified = trust.verify_release(&release(&keys, sequence), now())?;
-    trust.record(ledger, &[&verified.digest])
+    let _ = verified;
+    trust.record(ledger)
 }
 
 /// A list that drops CI, signed by both admins of version 2. `keep` is what the
@@ -99,38 +100,6 @@ fn a_removed_signer_keeps_only_what_the_list_keeps() {
     let chain = [genesis(&keys), version_2(&keys), chain[2].clone(), denying];
     let trust = fresh_trust(&keys, &chain, &ledger);
     assert_eq!(code(trust.verify_release(&by_ci, now())), "SIGNING_DENIED");
-}
-
-#[test]
-fn a_ledger_entry_makes_nothing_verify() {
-    let keys = keys();
-    // Digests written into the ledger by hand, or by an enforcer, never let
-    // a statement of a removed signer, or an unsigned one, run.
-    let mut ledger = Ledger::new(PREFIX);
-    let unsigned = alien_signing::SignedStatement {
-        signatures: Vec::new(),
-        ..release(&keys, 10)
-    };
-    let by_ci = release(&keys, 11);
-    for forged in [&unsigned, &by_ci] {
-        ledger.accept(&forged.open().unwrap().digest).unwrap();
-    }
-    let base = fresh_trust(
-        &keys,
-        &[genesis(&keys), version_2(&keys)],
-        &Ledger::new(PREFIX),
-    );
-    let dropped = without_ci(&keys, &base, &[], &[]);
-    let chain = [genesis(&keys), version_2(&keys), dropped];
-    let trust = Trust::new(settings(&keys), install(), &chain, &ledger).unwrap();
-    assert_eq!(
-        code(trust.verify_release(&unsigned, now())),
-        "SIGNING_UNSIGNED"
-    );
-    assert_eq!(
-        code(trust.verify_release(&by_ci, now())),
-        "SIGNING_SIGNATURE_REFUSED"
-    );
 }
 
 #[test]
@@ -699,5 +668,65 @@ fn a_live_gcp_queue_and_kv_are_named_the_way_their_controllers_name_them() {
             "databaseId": "(default)",
             "collectionName": "kv-acme-prod-meta-data",
         })
+    );
+}
+
+#[test]
+fn an_older_list_with_the_removed_key_is_refused_by_the_version_floor() {
+    let keys = keys();
+    let mut ledger = Ledger::new(PREFIX);
+    let base = [genesis(&keys), version_2(&keys)];
+    let trust = fresh_trust(&keys, &base, &ledger);
+    let by_ci = release(&keys, 10);
+    let dropped = without_ci(&keys, &trust, &[], &[keep_of(&by_ci)]);
+    let chain = [base[0].clone(), base[1].clone(), dropped];
+    let current = fresh_trust(&keys, &chain, &ledger);
+    current.record(&mut ledger).unwrap();
+
+    // Replaying the older list, which still has CI, is refused: the install
+    // accepted version 3.
+    let error = Trust::new(settings(&keys), install(), &base, &ledger)
+        .expect_err("the older list must be refused");
+    assert_eq!(error.code, "SIGNING_SIGNER_LIST_MISSING", "{error:?}");
+
+    // CI's new signatures are refused on the list that dropped it.
+    assert_eq!(
+        code(current.verify_release(&release(&keys, 11), now())),
+        "SIGNING_SIGNATURE_REFUSED"
+    );
+    // And what the list keeps still runs.
+    current.verify_release(&by_ci, now()).unwrap();
+}
+
+#[test]
+fn a_keep_entry_for_another_install_or_project_lets_nothing_through() {
+    let keys = keys();
+    let ledger = Ledger::new(PREFIX);
+    let base = fresh_trust(&keys, &[genesis(&keys), version_2(&keys)], &ledger);
+    let other_install = statement(
+        "config/v1",
+        PROJECT,
+        Some("aws:444455556666:us-east-1:acme-prod"),
+        3,
+        1,
+        alien_signing::ConfigBody::default(),
+    )
+    .sign_with("ci", &keys.ci)
+    .unwrap();
+    let other_project = statement("release/v2", "prj_other", None, 12, 1, release_body())
+        .sign_with("ci", &keys.ci)
+        .unwrap();
+    let mut kept_config = keep_of(&other_install);
+    kept_config.kind = alien_signing::KeptKind::Config;
+    let dropped = without_ci(&keys, &base, &[], &[kept_config, keep_of(&other_project)]);
+    let chain = [genesis(&keys), version_2(&keys), dropped];
+    let trust = fresh_trust(&keys, &chain, &ledger);
+    assert_eq!(
+        code(trust.verify_config(&other_install, &release_body(), now())),
+        "SIGNING_WRONG_INSTALL"
+    );
+    assert_eq!(
+        code(trust.verify_release(&other_project, now())),
+        "SIGNING_WRONG_PROJECT"
     );
 }

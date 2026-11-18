@@ -1346,13 +1346,6 @@ async fn rotating_a_key_keeps_what_runs_and_revoke_keeps_nothing() {
         .verify_release(&by_old_key, chrono::Utc::now())
         .unwrap_err();
     assert_eq!(error.code, "SIGNING_SIGNATURE_REFUSED", "{error:?}");
-    let mut by_hand = Ledger::new("acme-prod");
-    by_hand.accept(&by_old_key.open().unwrap().digest).unwrap();
-    let with_ledger = protected_trust(&fingerprint, &lists_now, &by_hand);
-    let error = with_ledger
-        .verify_release(&by_old_key, chrono::Utc::now())
-        .unwrap_err();
-    assert_eq!(error.code, "SIGNING_SIGNATURE_REFUSED", "{error:?}");
 
     // The new key signs the next release, which is current from now on.
     let ci2_key = std::fs::read_to_string(&ci2_file).unwrap();

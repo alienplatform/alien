@@ -170,17 +170,14 @@ fn release(channel: &str, sequence: u64, template: &str, by: (&str, u8)) -> Sign
     )
 }
 
-fn ledger(running: Option<&SignedStatement>) -> Vec<u8> {
-    let mut ledger = serde_json::json!({
+fn ledger() -> Vec<u8> {
+    let ledger = serde_json::json!({
         "prefix": PREFIX,
         "created": true,
         "fingerprint": fingerprint(),
         "install": format!("aws:111122223333:us-east-1:{PREFIX}"),
         "signerList": { "sequence": 1, "digest": genesis().open().unwrap().digest },
     });
-    if let Some(running) = running {
-        ledger["accepted"] = serde_json::json!([running.open().unwrap().digest]);
-    }
     ledger.to_string().into_bytes()
 }
 
@@ -209,7 +206,7 @@ fn observed() -> Observed {
             .into_bytes(),
             Some(now() - Duration::days(1)),
         )),
-        ledger: Some(ledger(Some(&running))),
+        ledger: Some(ledger()),
         signer_lists: vec![genesis()],
         releases: vec![
             ("2026-11-04.3".to_string(), running),

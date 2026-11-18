@@ -6789,19 +6789,12 @@ mod tests {
         fn the_machine_ledger_comes_from_horizonds_state_and_never_fails_open() {
             let root = tempfile::tempdir().unwrap();
             let settings = signing_settings(&genesis().1);
-            assert!(read_machine_ledger(root.path(), &settings)
-                .unwrap()
-                .accepted
-                .is_empty());
+            read_machine_ledger(root.path(), &settings).unwrap();
             let state = root.path().join(MACHINE_STATE_FILE);
             std::fs::create_dir_all(state.parent().unwrap()).unwrap();
-            let digest = format!("sha256:{}", "a".repeat(64));
-            let mut ledger = Ledger::new(&settings.prefix);
-            ledger.accept(&digest).unwrap();
+            let ledger = Ledger::new(&settings.prefix);
             std::fs::write(&state, format!(r#"{{"ledger":{}}}"#, ledger.to_json())).unwrap();
-            assert!(read_machine_ledger(root.path(), &settings)
-                .unwrap()
-                .accepted(&digest));
+            read_machine_ledger(root.path(), &settings).unwrap();
             std::fs::write(&state, b"not json").unwrap();
             read_machine_ledger(root.path(), &settings).unwrap_err();
         }

@@ -190,7 +190,7 @@ impl SigningHome {
         let key = DeviceKey::create(backend, &self.device_dir())?;
         if backend == Backend::Software {
             eprintln!(
-                "Software key at {}: anyone who can read it can sign.",
+                "Warning: This key is stored in a file, not in hardware: anyone who can read {} can sign as an admin.",
                 self.device_dir().join(device::software::KEY_FILE).display()
             );
         }

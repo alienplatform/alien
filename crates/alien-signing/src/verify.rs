@@ -89,14 +89,13 @@ impl Trust {
         self.chain.extend(statements)
     }
 
-    /// Record this trust in `ledger`: the trust root, the chain's version and
-    /// the digests of the statements the install now accepts.
-    pub fn record(&self, ledger: &mut Ledger, accepted: &[&str]) -> Result<()> {
+    /// Record this trust in `ledger`: the trust root and the chain's version.
+    pub fn record(&self, ledger: &mut Ledger) -> Result<()> {
         ledger.check_root(Some(&self.settings.fingerprint), &self.install)?;
         ledger.check_chain(&self.chain)?;
         ledger.adopt_root(&self.settings.fingerprint, &self.install);
         ledger.record_chain(&self.chain);
-        ledger.accept_running(accepted)
+        ledger.check_size()
     }
 
     /// Run the checks for a statement of `kind` and parse its body: project

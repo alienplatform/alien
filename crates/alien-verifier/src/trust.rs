@@ -186,11 +186,8 @@ pub fn accept(
         )?),
         None => None,
     };
-    let digests: Vec<&str> = std::iter::once(release.digest.as_str())
-        .chain(config.iter().map(|config| config.digest.as_str()))
-        .collect();
     trust
-        .record(&mut ledger, &digests)
+        .record(&mut ledger)
         .context(ErrorData::Refused {
             reason: "the ledger refused this trust".to_string(),
         })?;

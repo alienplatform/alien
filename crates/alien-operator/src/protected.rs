@@ -546,10 +546,7 @@ impl ReleaseSigning {
                 (config.body, Some(config.sequence), Some(config.digest))
             }
         };
-        let digests: Vec<&str> = std::iter::once(verified.digest.as_str())
-            .chain(config_digest.as_deref())
-            .collect();
-        verified.trust.record(&mut ledger, &digests)?;
+        verified.trust.record(&mut ledger)?;
         let kept = OperatorTrust {
             ledger,
             signer_lists: verified.trust.chain().statements().to_vec(),
@@ -1290,15 +1287,8 @@ pub(crate) mod tests {
         // A new Operator instance with an empty ledger accepts them from the list alone.
         accept(&fresh(), &kept).expect("a new instance needs nothing from the ledger");
 
-        // A list that keeps nothing refuses what the removed key signed, even when the
-        // ledger holds its digest (written by hand).
-        let mut by_hand = fresh();
-        for statement in [accepted_release.signed.as_ref().unwrap(), &config] {
-            by_hand
-                .ledger
-                .accept(&statement.open().unwrap().digest)
-                .unwrap();
-        }
+        // A list that keeps nothing refuses what the removed key signed.
+        let by_hand = fresh();
         let mut dropped = accepted.clone();
         dropped.release_info.signer_lists =
             vec![signer_list(), test_signer_list_without_ci("shop")];

@@ -615,21 +615,6 @@ fn a_denied_release_id_refuses_every_platform_statement_of_it() {
     trust
         .verify::<ReleaseBody>(&release(&keys, 11), Kind::Release, now())
         .unwrap();
-
-    // One the install already accepted is refused too: a rollback to it.
-    let mut ledger = Ledger::new(PREFIX);
-    ledger.accept(&aws.open().unwrap().digest).unwrap();
-    let with_ledger = Trust::new(
-        settings(&keys),
-        install(),
-        &[genesis(&keys), trust.chain().statements()[1].clone()],
-        &ledger,
-    )
-    .unwrap();
-    assert_eq!(
-        code(with_ledger.verify::<ReleaseBody>(&aws, Kind::Release, now())),
-        "SIGNING_DENIED"
-    );
 }
 
 #[test]
