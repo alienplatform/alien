@@ -17,4 +17,8 @@ pub struct GcpSandboxImportData {
     /// the sandbox declares preview ports; the controller carries it into the binding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_service_account: Option<String>,
+    /// Cloud Storage bucket setup created for persistent storage. Present only when the sandbox
+    /// declares persistent storage; the controller carries it into the binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistent_storage_bucket: Option<String>,
 }
