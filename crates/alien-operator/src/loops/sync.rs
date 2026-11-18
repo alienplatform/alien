@@ -1046,20 +1046,22 @@ pub(crate) async fn accept_target(
             _ => true,
         };
 
-    // Save state and config
-    state.db.set_deployment_state(&deployment_state).await?;
-    state
-        .db
-        .set_deployment_config(&target_deployment.config)
-        .await?;
-    if changed {
-        // Written last: the loop reads the config together with the target.
-        state.db.request_deployment();
-    }
-
-    // Handle deployment approval if required. A refresh changes nothing that
-    // was not already approved.
-    if !refresh && state.config.requires_deployment_approval() {
+    // Open the approval before the target is saved: the deployment loop treats a
+    // release with no approval record as approved, so the pending record must
+    // exist by the time the target can be read or the loop is woken. A refresh
+    // changes nothing that was not already approved. A target sent again while
+    // its approval is still pending keeps that record: a newer one would hide
+    // the decision on the first.
+    let release_id = target_deployment
+        .release_info
+        .release_id
+        .as_deref()
+        .unwrap_or_default();
+    if !refresh
+        && state.config.requires_deployment_approval()
+        && state.db.get_approval_status_for_release(release_id).await?
+            != Some(ApprovalStatus::Pending)
+    {
         let apr_id = format!("apr_{}", Uuid::new_v4().simple());
         let approval = Approval {
             id: apr_id.clone(),
@@ -1078,6 +1080,18 @@ pub(crate) async fn accept_target(
             "Created approval for new target release"
         );
     }
+
+    // Save state and config
+    state.db.set_deployment_state(&deployment_state).await?;
+    state
+        .db
+        .set_deployment_config(&target_deployment.config)
+        .await?;
+    if changed {
+        // Written last: the loop reads the config together with the target.
+        state.db.request_deployment();
+    }
+
     Ok(())
 }
 
@@ -2600,6 +2614,132 @@ mod tests {
             .await
             .unwrap();
         assert!(deployment_woken(&db).await);
+    }
+
+    fn approval_required_state(data_dir: &std::path::Path, db: Arc<OperatorDb>) -> OperatorState {
+        OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .maybe_stack_settings(Some(alien_core::StackSettings {
+                    airgapped: false,
+                    updates: alien_core::UpdatesMode::ApprovalRequired,
+                    telemetry: alien_core::TelemetryMode::Auto,
+                    heartbeats: alien_core::HeartbeatsMode::On,
+                    deployment_model: alien_core::DeploymentModel::Pull,
+                    network: None,
+                    domains: None,
+                    kubernetes: None,
+                    external_bindings: None,
+                    compute: None,
+                    public_endpoints: None,
+                    quota_warning_overrides: Vec::new(),
+                    endpoint_access: alien_core::EndpointAccess::Internet,
+                    setup_management: alien_core::SetupManagement::Manual,
+                    signing: None,
+                }))
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    /// With manual approval, the pending approval exists by the time the new
+    /// target can be read or the deployment loop is woken, so a pass that runs
+    /// at the earliest moment sees Pending and deploys nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_pending_approval_exists_before_the_target_is_readable() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = approval_required_state(data_dir.path(), db.clone());
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let release_id = release.release_id.clone().unwrap();
+
+        // The loop's earliest pass: woken, it reads the approval for the target.
+        let watcher_db = db.clone();
+        let watcher_release = release_id.clone();
+        let watcher = tokio::spawn(async move {
+            watcher_db.wait_for_deployment().await;
+            watcher_db
+                .get_approval_status_for_release(&watcher_release)
+                .await
+                .unwrap()
+        });
+        // A poll that does not wait for a wake sees the target as soon as it is saved.
+        let poller_db = db.clone();
+        let poller_release = release_id.clone();
+        let poller = tokio::spawn(async move {
+            loop {
+                if poller_db
+                    .get_deployment_state()
+                    .await
+                    .unwrap()
+                    .is_some_and(|s| s.target_release.is_some())
+                {
+                    return poller_db
+                        .get_approval_status_for_release(&poller_release)
+                        .await
+                        .unwrap();
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+
+        super::accept_target(&state, &fixtures::target(release, vec![]), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            watcher.await.unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+        assert_eq!(
+            poller.await.unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+    }
+
+    /// A target sent again before a decision keeps the one pending approval: a
+    /// second, newer record would hide the decision on the first.
+    #[tokio::test]
+    async fn a_replayed_target_keeps_one_pending_approval() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = approval_required_state(data_dir.path(), db.clone());
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let target = fixtures::target(release, vec![]);
+        super::accept_target(&state, &target, false).await.unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        assert_eq!(pending.len(), 1);
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let release_id = target.release_info.release_id.clone().unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Approved)
+        );
     }
 
     #[tokio::test]
