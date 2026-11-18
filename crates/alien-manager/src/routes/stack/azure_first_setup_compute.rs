@@ -4,6 +4,7 @@
 
 use super::*;
 use alien_core::{Container, ContainerCode, PermissionProfile, ResourceSpec, Storage, Vault};
+use alien_infra::StackResourceStateExt as _;
 
 fn source_stack(ephemeral_storage: Option<&str>) -> Stack {
     source_stack_with_memory("512Mi", ephemeral_storage)
@@ -321,27 +322,59 @@ async fn imported_first_setup_hands_the_same_cluster_from_step_to_step() {
         "the registered cluster equals the picked one"
     );
 
-    // 4. the next setup step (`StackExecutor::continue_imported`) refuses a registered resource
-    // whose config or dependencies differ from the stack it plans from. The executor itself
-    // cannot run here (the Azure cluster controller is not part of this repository), so its
-    // comparison is made directly, for every setup-owned resource.
-    for (id, entry) in &picked.resources {
-        if entry.lifecycle != ResourceLifecycle::Frozen {
-            continue;
-        }
-        let registered = &state.resources[id];
-        assert_eq!(registered.config, entry.config, "{id}: config");
-        assert_eq!(
-            registered.dependencies,
-            entry.combined_dependencies(),
-            "{id}: dependencies"
+    // 4. the next setup step: the real `StackExecutor::continue_imported`, built as
+    // `initial_setup.rs` builds it (Frozen filter, imported handoff). It refuses a registered
+    // resource whose config or dependencies differ from the stack it plans from, with
+    // IMPORTED_SETUP_STATE_INVALID. The Azure cluster controller is not exercised here: a
+    // stand-in controller is registered for the cluster, so whatever the step does after the
+    // comparison may fail, and only the comparison's verdict is asserted.
+    let mut registry = alien_infra::ResourceRegistry::with_built_ins();
+    registry
+        .register::<alien_core::ComputeCluster>(alien_core::ComputeCluster::RESOURCE_TYPE)
+        .with_controller::<alien_infra::TestStorageController>(Platform::Azure);
+    let mut compute_state = state.resources["compute"].clone();
+    compute_state
+        .set_internal_controller(Some(
+            Box::new(alien_infra::TestStorageController::default()),
+        ))
+        .unwrap();
+    state.resources.insert("compute".to_string(), compute_state);
+    let setup_config = deploy_config(&settings);
+    let executor = alien_infra::StackExecutor::builder(
+        &picked,
+        alien_core::ClientConfig::Azure(Box::new(<alien_azure_clients::AzureClientConfig as alien_azure_clients::AzureClientConfigExt>::mock())),
+    )
+    .deployment_config(&setup_config)
+    .resource_registry(std::sync::Arc::new(registry))
+    .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+    .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+    .running_resource_policy(alien_infra::RunningResourcePolicy::OptIn)
+    .step_out_of_scope_resources(false)
+    .build()
+    .unwrap();
+    if let Err(error) = executor.continue_imported(state.clone()).await {
+        assert_ne!(
+            error.code, "IMPORTED_SETUP_STATE_INVALID",
+            "the setup step refused the registered state: {error:?}"
         );
     }
 
-    // 5. the first deployment plans the same release against the installed state
+    // 5. the first deployment plans the same release against the installed state. It does not
+    // read the stack the setup picked: it starts from the STORED settings (the operator's) and
+    // chooses again from the quota, as `choose_machines_with_room` does, with the injected room
+    // standing in for the quota read over HTTP.
     let runner = alien_preflights::runner::PreflightRunner::new();
-    let mut picked_config = deploy_config(&settings);
-    picked_config.stack_settings = chosen.stack_settings.clone();
+    let stored_config = deploy_config(&settings);
+    let rechosen = alien_preflights::mutations::ComputeClusterMutation
+        .choose_pool_machines(
+            source.clone(),
+            &state,
+            &stored_config,
+            &QuotaRoom(|machine| machine == "Standard_D2s_v5"),
+        )
+        .unwrap();
+    let mut picked_config = stored_config;
+    picked_config.stack_settings = rechosen.stack_settings.clone();
     let planned = runner
         .apply_mutations(source, &state, &picked_config)
         .await
