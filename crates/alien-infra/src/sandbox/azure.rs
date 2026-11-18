@@ -812,6 +812,26 @@ fn uses_gateway(ctx: &ResourceControllerContext<'_>, config: &Sandbox) -> bool {
         && alien_core::sandbox_egress::has_sandbox_gateway(ctx.desired_stack)
 }
 
+
+/// Why a direct setup cannot create this sandbox, if it cannot: what it needs only the Terraform
+/// setup package creates.
+fn direct_setup_refusal(config: &Sandbox) -> Option<&'static str> {
+    if matches!(config.egress, SandboxEgress::Internet) {
+        return Some(
+            "an Azure sandbox with internet egress needs the dedicated sandbox subnets the \
+             Terraform setup package creates; set it up with the package, or declare egress none \
+             or allow",
+        );
+    }
+    if config.persistent_storage.is_some() {
+        return Some(
+            "an Azure sandbox with persistent storage needs the store account, its container and \
+             their grants, which the Terraform setup package creates; set it up with the package",
+        );
+    }
+    None
+}
+
 impl AzureSandboxController {
     /// Azure has no identity renewal agent. Reconcile only new gateway-mode groups;
     /// legacy deployments retain their existing lifetime behavior. A stopped controller
@@ -1392,12 +1412,9 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
         config: &Sandbox,
     ) -> Result<AzureSandboxHandlerAction> {
-        if matches!(config.egress, SandboxEgress::Internet) {
+        if let Some(message) = direct_setup_refusal(config) {
             return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: "an Azure sandbox with internet egress needs the dedicated sandbox \
-                          subnets the Terraform setup package creates; set it up with the \
-                          package, or declare egress none or allow"
-                    .to_string(),
+                message: message.to_string(),
                 resource_id: Some(config.id.clone()),
             }));
         }
@@ -1473,12 +1490,9 @@ impl AzureSandboxController {
         })?;
         // The dedicated sandbox subnets an internet-egress group connects to are created by the
         // setup package; a direct setup has no network that carries them.
-        if matches!(config.egress, SandboxEgress::Internet) {
+        if let Some(message) = direct_setup_refusal(config) {
             return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: "an Azure sandbox with internet egress needs the dedicated sandbox \
-                          subnets the Terraform setup package creates; set it up with the \
-                          package, or declare egress none or allow"
-                    .to_string(),
+                message: message.to_string(),
                 resource_id: Some(config.id.clone()),
             }));
         }
@@ -4428,6 +4442,24 @@ mod direct_setup_tests {
         .await;
         drive(&mut executor).await;
         assert_ne!(executor.status(), ResourceStatus::Running);
+    }
+
+    /// Persistent storage needs the store the package creates, so a direct setup refuses it as it
+    /// refuses internet egress; a plain sandbox is not refused.
+    #[test]
+    fn a_persistent_storage_sandbox_needs_the_package() {
+        let mut declared = sandbox(SandboxEgress::None);
+        assert_eq!(direct_setup_refusal(&declared), None);
+        declared.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+            path: "/workspace".into(),
+            exclude: Vec::new(),
+            max_size: None,
+            encryption_key: None,
+        });
+        assert!(direct_setup_refusal(&declared)
+            .is_some_and(|message| message.contains("persistent storage")));
+        assert!(direct_setup_refusal(&sandbox(SandboxEgress::Internet))
+            .is_some_and(|message| message.contains("internet egress")));
     }
 
     /// Delete removes a group this controller created, and leaves an imported one to its package.

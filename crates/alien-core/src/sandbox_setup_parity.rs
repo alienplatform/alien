@@ -45,15 +45,17 @@ pub const AZURE_SANDBOX_ITEMS: &[(&str, DirectSetup)] = &[
     ("role-assignment:workload", DirectSetup::Creates),
     (
         "storage-store",
-        DirectSetup::Pending(
-            "the Azure sandbox controller creating the persistent storage account and container",
+        DirectSetup::PackageOnly(
+            "persistent storage needs the store account and container the package creates; a \
+             direct setup run refuses it and names the package",
         ),
     ),
     (
         "role-assignment:storage-store",
-        DirectSetup::Pending(
-            "the Azure sandbox controller granting the creating identities Blob Delegator on the \
-             store account and Blob Data Contributor on its container",
+        DirectSetup::PackageOnly(
+            "the store's grants (Blob Delegator on the account, Blob Data Contributor on its \
+             container) come with the package's store; a direct setup run refuses persistent \
+             storage",
         ),
     ),
 ];
