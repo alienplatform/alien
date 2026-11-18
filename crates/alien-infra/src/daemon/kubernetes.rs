@@ -64,9 +64,41 @@ pub struct KubernetesDaemonController {
     /// pod-spec build time, so a Helm upgrade that changes it is invisible to config diffing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) applied_priority_class: Option<String>,
+    /// Node selector applied to the pod spec last. The architecture a build recorded is read at
+    /// pod-spec build time, so a release that records one for an existing daemon is invisible
+    /// to config diffing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_node_selector: Option<BTreeMap<String, String>>,
     /// Kubernetes' explanation for a DaemonSet that cannot create pods.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) workload_failure: Option<String>,
+}
+
+/// The `nodeSelector` the Pods get: the pool or stack architecture, else the single
+/// architecture the build recorded for this daemon.
+fn desired_node_selector(
+    ctx: &ResourceControllerContext<'_>,
+    config: &Daemon,
+) -> Result<Option<BTreeMap<String, String>>> {
+    let pool =
+        alien_core::kubernetes_daemon_pool(ctx.desired_stack, config).map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
+    let node_selector = alien_core::kubernetes_compute_node_selector(
+        ctx.desired_stack,
+        pool,
+        ctx.desired_stack.built_architectures_of(&config.id),
+    )
+    .map_err(|message| {
+        AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: config.id.clone(),
+            message,
+        })
+    })?;
+    Ok(node_selector)
 }
 
 #[controller]
@@ -216,6 +248,7 @@ impl KubernetesDaemonController {
                 message,
             })
         })?;
+        self.applied_node_selector = desired_node_selector(ctx, config)?;
 
         let daemonset = self
             .build_daemonset(
@@ -637,6 +670,7 @@ impl KubernetesDaemonController {
                 message,
             })
         })?;
+        self.applied_node_selector = desired_node_selector(ctx, config)?;
 
         let mut new_daemonset = self
             .build_daemonset(
@@ -1003,6 +1037,9 @@ impl KubernetesDaemonController {
         if desired_priority_class != self.applied_priority_class {
             return Ok(true);
         }
+        if desired_node_selector(ctx, config)? != self.applied_node_selector {
+            return Ok(true);
+        }
         let monitoring_headers = direct_monitoring_auth_headers(ctx);
         Ok(self.env_secret.drifted_with_additional_secrets(
             &config.id,
@@ -1276,24 +1313,7 @@ impl KubernetesDaemonController {
             image_pull_secret_name,
         );
 
-        let pool =
-            alien_core::kubernetes_daemon_pool(ctx.desired_stack, config).map_err(|message| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: config.id.clone(),
-                    message,
-                })
-            })?;
-        let node_selector = alien_core::kubernetes_compute_node_selector(
-            ctx.desired_stack,
-            pool,
-            ctx.desired_stack.built_architectures_of(&config.id),
-        )
-        .map_err(|message| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: config.id.clone(),
-                message,
-            })
-        })?;
+        let node_selector = desired_node_selector(ctx, config)?;
         let priority_class_name = alien_core::kubernetes_priority_class_name(config.priority)
             .map_err(|message| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -1940,6 +1960,43 @@ mod tests {
             pod_template_checksum_annotation(&daemonsets[2].spec.as_ref().expect("spec").template),
             "rotating a secret value must change the pod template (rollout)"
         );
+    }
+
+    #[test]
+    fn needs_update_follows_the_built_architecture_a_release_records() {
+        use alien_core::instance_catalog::Architecture::{Arm64, X86_64};
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let mut controller = manifest_test_controller();
+        let mut stack = harness.ctx().desired_stack.clone();
+        let id = config.id.clone();
+        let wants_update = |controller: &KubernetesDaemonController, stack: &alien_core::Stack| {
+            let mut ctx = harness.ctx();
+            ctx.desired_stack = stack;
+            controller.needs_update(&ctx).expect("needs_update")
+        };
+
+        // A release without the record, or a multi-architecture one: nothing to apply.
+        assert!(!wants_update(&controller, &stack));
+        stack
+            .built_architectures
+            .insert(id.clone(), vec![X86_64, Arm64]);
+        assert!(!wants_update(&controller, &stack));
+
+        // A release that records one architecture updates the existing workload once.
+        stack.built_architectures.insert(id.clone(), vec![X86_64]);
+        assert!(wants_update(&controller, &stack));
+        controller.applied_node_selector = Some(std::collections::BTreeMap::from([(
+            "kubernetes.io/arch".to_string(),
+            "amd64".to_string(),
+        )]));
+        assert!(!wants_update(&controller, &stack));
+
+        // A later release that changes it updates again; one that drops it removes the selector.
+        stack.built_architectures.insert(id.clone(), vec![Arm64]);
+        assert!(wants_update(&controller, &stack));
+        stack.built_architectures.clear();
+        assert!(wants_update(&controller, &stack));
     }
 
     #[test]

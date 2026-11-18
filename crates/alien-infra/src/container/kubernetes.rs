@@ -250,6 +250,38 @@ pub struct KubernetesContainerController {
     /// pod-spec build time, so a Helm upgrade that changes it is invisible to config diffing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) applied_priority_class: Option<String>,
+    /// Node selector applied to the pod spec last. The architecture a build recorded is read at
+    /// pod-spec build time, so a release that records one for an existing container is invisible
+    /// to config diffing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_node_selector: Option<BTreeMap<String, String>>,
+}
+
+/// The `nodeSelector` the Pod gets: the pool or stack architecture, else the single
+/// architecture the build recorded for this container.
+fn desired_node_selector(
+    ctx: &ResourceControllerContext<'_>,
+    config: &Container,
+) -> Result<Option<BTreeMap<String, String>>> {
+    let pool =
+        alien_core::kubernetes_container_pool(ctx.desired_stack, config).map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
+    let node_selector = alien_core::kubernetes_compute_node_selector(
+        ctx.desired_stack,
+        pool,
+        ctx.desired_stack.built_architectures_of(&config.id),
+    )
+    .map_err(|message| {
+        AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: config.id.clone(),
+            message,
+        })
+    })?;
+    Ok(node_selector)
 }
 
 #[controller]
@@ -453,6 +485,7 @@ impl KubernetesContainerController {
                 message,
             })
         })?;
+        self.applied_node_selector = desired_node_selector(ctx, config)?;
         self.reconcile_network_policy(config, &container_name, &namespace, ctx)
             .await?;
         self.reconcile_internal_service(config, &container_name, &namespace, ctx)
@@ -1534,6 +1567,7 @@ impl KubernetesContainerController {
                 message,
             })
         })?;
+        self.applied_node_selector = desired_node_selector(ctx, config)?;
         self.service_port = first_declared_container_port(config);
         self.reconcile_network_policy(config, workload_name, namespace, ctx)
             .await?;
@@ -2359,6 +2393,9 @@ impl KubernetesContainerController {
         if desired_priority_class != self.applied_priority_class {
             return Ok(true);
         }
+        if desired_node_selector(ctx, config)? != self.applied_node_selector {
+            return Ok(true);
+        }
         let monitoring_headers = direct_monitoring_auth_headers(ctx);
         Ok(self.env_secret.drifted_with_additional_secrets(
             &config.id,
@@ -2439,6 +2476,7 @@ mod output_tests {
             update_generation: None,
             workload_failure: None,
             applied_priority_class: None,
+            applied_node_selector: None,
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
@@ -2513,6 +2551,7 @@ mod output_tests {
             update_generation: None,
             workload_failure: None,
             applied_priority_class: None,
+            applied_node_selector: None,
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
@@ -2586,6 +2625,7 @@ impl KubernetesContainerController {
             update_generation: None,
             workload_failure: None,
             applied_priority_class: None,
+            applied_node_selector: None,
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
@@ -3101,25 +3141,7 @@ impl KubernetesContainerController {
 
         volumes.extend(security.volumes);
 
-        let pool = alien_core::kubernetes_container_pool(ctx.desired_stack, config).map_err(
-            |message| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: config.id.clone(),
-                    message,
-                })
-            },
-        )?;
-        let node_selector = alien_core::kubernetes_compute_node_selector(
-            ctx.desired_stack,
-            pool,
-            ctx.desired_stack.built_architectures_of(&config.id),
-        )
-        .map_err(|message| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: config.id.clone(),
-                message,
-            })
-        })?;
+        let node_selector = desired_node_selector(ctx, config)?;
         let priority_class_name = alien_core::kubernetes_priority_class_name(config.priority)
             .map_err(|message| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -4455,6 +4477,7 @@ mod tests {
             update_generation: None,
             workload_failure: None,
             applied_priority_class: None,
+            applied_node_selector: None,
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
@@ -5651,6 +5674,45 @@ mod tests {
         assert!(!controller
             .needs_update(&harness.ctx())
             .expect("needs_update"));
+    }
+
+    #[test]
+    fn needs_update_follows_the_built_architecture_a_release_records() {
+        use alien_core::instance_catalog::Architecture::{Arm64, X86_64};
+        let config = manifest_test_container(&[], false);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let mut controller = manifest_test_controller();
+        controller.applied_priority_class = None;
+        let mut stack = harness.ctx().desired_stack.clone();
+        let id = config.id.clone();
+        let wants_update = |controller: &KubernetesContainerController,
+                            stack: &alien_core::Stack| {
+            let mut ctx = harness.ctx();
+            ctx.desired_stack = stack;
+            controller.needs_update(&ctx).expect("needs_update")
+        };
+
+        // A release without the record, or a multi-architecture one: nothing to apply.
+        assert!(!wants_update(&controller, &stack));
+        stack
+            .built_architectures
+            .insert(id.clone(), vec![X86_64, Arm64]);
+        assert!(!wants_update(&controller, &stack));
+
+        // A release that records one architecture updates the existing workload once.
+        stack.built_architectures.insert(id.clone(), vec![X86_64]);
+        assert!(wants_update(&controller, &stack));
+        controller.applied_node_selector = Some(BTreeMap::from([(
+            "kubernetes.io/arch".to_string(),
+            "amd64".to_string(),
+        )]));
+        assert!(!wants_update(&controller, &stack));
+
+        // A later release that changes it updates again; one that drops it removes the selector.
+        stack.built_architectures.insert(id.clone(), vec![Arm64]);
+        assert!(wants_update(&controller, &stack));
+        stack.built_architectures.clear();
+        assert!(wants_update(&controller, &stack));
     }
 
     #[test]

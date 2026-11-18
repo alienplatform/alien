@@ -20,6 +20,25 @@ use super::kubernetes::KubernetesWorkerController;
 /// Name of the worker's container in its pod template.
 pub(super) const WORKER_CONTAINER_NAME: &str = "worker";
 
+/// The `nodeSelector` the Pods get: the stack architecture, else the single architecture
+/// the build recorded for this worker.
+pub(super) fn desired_node_selector(
+    ctx: &ResourceControllerContext<'_>,
+    config: &Worker,
+) -> Result<Option<BTreeMap<String, String>>> {
+    alien_core::kubernetes_compute_node_selector(
+        ctx.desired_stack,
+        None,
+        ctx.desired_stack.built_architectures_of(&config.id),
+    )
+    .map_err(|message| {
+        AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: config.id.clone(),
+            message,
+        })
+    })
+}
+
 pub(super) async fn build_worker_deployment(
     controller: &KubernetesWorkerController,
     config: &Worker,
@@ -119,17 +138,7 @@ pub(super) async fn build_worker_deployment(
 
     // Source images share the stack build target. Workers do not select a
     // compute pool, but must still run on nodes compatible with that image.
-    let node_selector = alien_core::kubernetes_compute_node_selector(
-        ctx.desired_stack,
-        None,
-        ctx.desired_stack.built_architectures_of(&config.id),
-    )
-    .map_err(|message| {
-        AlienError::new(ErrorData::ResourceControllerConfigError {
-            resource_id: config.id.clone(),
-            message,
-        })
-    })?;
+    let node_selector = desired_node_selector(ctx, config)?;
     let mut pod_spec = PodSpec {
         node_selector,
         service_account_name: Some(service_account_name.to_string()),
