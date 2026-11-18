@@ -16,11 +16,22 @@ const SANDBOX_MS = 1_200_000
 const COMMAND_MS = 600_000
 const KEY = /^[A-Za-z0-9._-]{1,128}$/
 
+/** An error with its whole chain: an AlienError keeps the cause (an `:execute` failure, an agent's
+ * refusal) on `source`, which the top message leaves out. */
+function describe(error: unknown): string {
+  const parts: string[] = []
+  let current: unknown = error
+  for (let depth = 0; current && depth < 8; depth++) {
+    const e = current as { code?: string; message?: string; source?: unknown; cause?: unknown }
+    parts.push(e.code ? `${e.code}: ${e.message ?? ""}` : String(e.message ?? current))
+    current = e.source ?? e.cause
+  }
+  return parts.join(" <- ")
+}
+
 app.get("/health", c => c.json({ status: "ok" }))
 
-app.onError((error, c) =>
-  c.json({ error: error instanceof Error ? (error.stack ?? error.message) : String(error) }, 500),
-)
+app.onError((error, c) => c.json({ error: describe(error) }, 500))
 
 // The endpoints are public: the caller must present the deployment's own id, which the test knows
 // and a stranger reaching the URL does not.
@@ -110,7 +121,7 @@ function streamed(work: () => Promise<unknown>): Response {
       try {
         answer = await work()
       } catch (error) {
-        answer = { error: error instanceof Error ? (error.stack ?? error.message) : String(error) }
+        answer = { error: describe(error) }
       } finally {
         clearInterval(beat)
       }
