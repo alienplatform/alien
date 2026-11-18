@@ -35,10 +35,10 @@ use crate::error::{ErrorData, Result};
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
 /// How long the managed certificate may take to issue before the wait ends with a retryable-by-
-/// the-deployment timeout: the wall-clock length of the former 60 polls of 10 seconds. A first
-/// install on the pull path keeps the configuration it received with its operation, so it cannot
-/// see the certificate become issued; ending the operation lets the deployment's automatic retry
-/// start with fresh configuration.
+/// the-deployment timeout: the wall-clock length of the former 60 polls of 10 seconds. The pull
+/// path receives the live certificate status on every sync, so a first install sees the
+/// certificate become issued within about one sync; this bound is the backstop, and ending the
+/// operation lets the deployment's automatic retry start with fresh configuration.
 const CERTIFICATE_WAIT_BOUND: Duration = Duration::from_secs(10 * 60);
 /// The poll limit the certificate wait had before it was bounded by time; reported in its
 /// timeout error.
