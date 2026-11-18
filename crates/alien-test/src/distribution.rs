@@ -462,6 +462,16 @@ async fn cleanup_retained_cloudformation_resources(
                     })?;
                 cleanup_retained_ecr_repository(env, &data.repository_prefix, &data.region).await?;
             }
+            // A sandbox's persistent store is kept when its stack goes, like a Storage's bucket.
+            "sandbox" => {
+                if let Some(bucket) = resource
+                    .import_data
+                    .pointer("/persistentStorage/store/bucket")
+                    .and_then(Value::as_str)
+                {
+                    cleanup_retained_s3_bucket(env, bucket).await?;
+                }
+            }
             _ => {}
         }
     }
