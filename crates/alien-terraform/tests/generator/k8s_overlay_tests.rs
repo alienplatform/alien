@@ -9,8 +9,9 @@
 //! `terraform fmt -check` + `terraform validate` against the cloud providers.
 
 use super::helpers::{
-    assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, gate_input,
-    prepare_for_target, render, snapshot_module,
+    assert_terraform_formatted, assert_terraform_valid,
+    assert_terraform_variable_plan_invalid_contains, gate_input, prepare_for_target, render,
+    snapshot_module,
 };
 use alien_core::{
     ArtifactRegistry, AzureResourceGroup, AzureStorageAccount, CapacityGroup, ComputeCluster,
@@ -3217,4 +3218,68 @@ run "gate_on" {{
     );
     super::helpers::test_utils::terraform_test(&files)
         .assert_ok("EKS chart-bound gated plan, mocked providers");
+}
+
+/// The modules that install the chart pass `terraform fmt -check` as rendered and
+/// `terraform validate` with the registration provider swapped for the stand-in the
+/// verified-setup tests use (the real one cannot be installed here); its `helm_values` are a
+/// fixed string.
+#[test]
+fn the_modules_that_install_the_chart_are_formatted_and_valid() {
+    for (target, provider) in [
+        (TerraformTarget::Eks, KubernetesClusterProvider::Eks),
+        (TerraformTarget::Gke, KubernetesClusterProvider::Gke),
+        (TerraformTarget::Aks, KubernetesClusterProvider::Aks),
+    ] {
+        let stack = chart_bound_stack("chart-helm-valid", provider, true);
+        for product in [false, true] {
+            let context = format!("{target:?} product={product}");
+            let module = render_registered_with_helm(&stack, target, product);
+            // As rendered: formatting needs no provider.
+            assert_terraform_formatted(&module, &context);
+            // The stand-in registration provider is `terraform_data`.
+            let registry = TfRegistry::built_in();
+            let options = TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
+                display_name: None,
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                registration: Some(TerraformRegistration {
+                    provider_name: "terraform".to_string(),
+                    provider_source: "registry.example.com/acme/app".to_string(),
+                    provider_version: "1.0.0".to_string(),
+                    resource_type: "data".to_string(),
+                    release_id: Some("rel-test".to_string()),
+                    setup_target: "kubernetes".to_string(),
+                    setup_fingerprint: "test".to_string(),
+                    setup_fingerprint_version: 1,
+                    destroy_guard: false,
+                }),
+                helm_install: Some(TerraformHelmInstall {
+                    chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+                    release_name: "acme-operator".to_string(),
+                }),
+                supported_aws_regions: Vec::new(),
+            };
+            let stood_in = if product {
+                generate_product_terraform_module(&stack, target, options, false)
+            } else {
+                generate_terraform_module(&stack, target, options)
+            }
+            .expect("module should render");
+            let mut files = super::verified_setup_tests::stand_in_files(&stood_in);
+            let helm = files.get("helm.tf").expect("helm.tf").clone();
+            assert!(helm.contains("terraform_data.this.helm_values"), "{helm}");
+            files.insert(
+                "helm.tf".to_string(),
+                helm.replace(
+                    "terraform_data.this.helm_values",
+                    "\"infrastructure: null\\n\"",
+                ),
+            );
+            super::helpers::test_utils::terraform_validate(&files)
+                .assert_ok(format!("{context} terraform validate"));
+        }
+    }
 }
