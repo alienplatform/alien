@@ -129,7 +129,7 @@ checksum = "250f629c0161ad8107cf89319e990051fae62832fd343083bea452d93e2205fd"
 
 [[package]]
 name = "alien-ai-gateway"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "alien-aws-clients"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-client-core",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-clients"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-azure-model-generator",
  "alien-azure-models-1",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-model-generator"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "openapiv3",
  "prettyplease 0.2.37",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-1"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -275,7 +275,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-2"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-3"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-4"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-5"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings-node"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -412,7 +412,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings-python"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-ai-gateway",
  "alien-bindings",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "alien-build"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-build",
  "alien-core",
@@ -474,7 +474,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-bindings",
@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli-common"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-cloudformation",
  "alien-core",
@@ -592,7 +592,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-config"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-core"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-error",
  "anyhow",
@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cloudformation"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands-client"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-core",
  "base64 0.23.1",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "alien-core"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-error",
  "alien-macros",
@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deploy-cli"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -815,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deployment"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -855,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "alien-egress-gateway"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-bindings",
@@ -899,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-error-derive",
  "anyhow",
@@ -914,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error-derive"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -924,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "alien-gcp-clients"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -959,7 +959,7 @@ dependencies = [
 
 [[package]]
 name = "alien-helm"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -984,7 +984,7 @@ dependencies = [
 
 [[package]]
 name = "alien-infra"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1054,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "alien-k8s-clients"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -1085,7 +1085,7 @@ dependencies = [
 
 [[package]]
 name = "alien-local"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -1142,7 +1142,7 @@ dependencies = [
 
 [[package]]
 name = "alien-macros"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1151,7 +1151,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "aegis",
  "aes-gcm 0.10.3",
@@ -1236,7 +1236,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager-api"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-error",
  "chrono",
@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "alien-observer"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1276,7 +1276,7 @@ dependencies = [
 
 [[package]]
 name = "alien-operations-sdk"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1293,7 +1293,7 @@ dependencies = [
 
 [[package]]
 name = "alien-operator"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "aegis",
  "alien-aws-clients",
@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permission-types"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "indexmap 2.14.1",
  "serde",
@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permissions"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "alien-platform-api"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "alien-preflights"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sandbox-agent"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1445,27 +1445,31 @@ dependencies = [
  "futures",
  "hex",
  "hmac 0.12.1",
+ "http-body-util",
  "httparse",
  "hyper 1.11.1",
  "hyper-util",
  "libc",
  "nlink",
  "reqwest 0.12.28",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "subtle",
  "tempfile",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "webpki-roots 1.0.10",
  "workspace-hack",
 ]
 
 [[package]]
 name = "alien-sandbox-conformance"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -1482,7 +1486,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sandbox-storage"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-azure-clients",
  "alien-error",
@@ -1502,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sdk"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -1525,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "alien-signing"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-error",
  "base64 0.22.1",
@@ -1545,7 +1549,7 @@ dependencies = [
 
 [[package]]
 name = "alien-stack-toml"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1563,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "alien-terraform"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-cloudformation",
  "alien-core",
@@ -1587,7 +1591,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-ai-gateway",
  "alien-aws-clients",
@@ -1643,7 +1647,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test-app"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-error",
  "alien-sdk",
@@ -1691,7 +1695,7 @@ dependencies = [
 
 [[package]]
 name = "alien-verifier"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1719,7 +1723,7 @@ dependencies = [
 
 [[package]]
 name = "alien-worker-protocol"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-error",
  "async-stream",
@@ -1739,7 +1743,7 @@ dependencies = [
 
 [[package]]
 name = "alien-worker-runtime"
-version = "3.3.68"
+version = "3.3.69"
 dependencies = [
  "alien-aws-clients",
  "alien-bindings",
@@ -4903,6 +4907,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
 
 [[package]]
+name = "fallible-streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
+
+[[package]]
 name = "fancy-regex"
 version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5487,6 +5497,9 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
+dependencies = [
+ "ahash",
+]
 
 [[package]]
 name = "hashbrown"
@@ -5517,6 +5530,15 @@ dependencies = [
  "allocator-api2 0.2.21",
  "equivalent",
  "foldhash 0.2.0",
+]
+
+[[package]]
+name = "hashlink"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ba4ff7128dee98c7dc9794b6a411377e1404dba1c97deb8d1a55297bd25d8af"
+dependencies = [
+ "hashbrown 0.14.5",
 ]
 
 [[package]]
@@ -6902,6 +6924,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2026a5056764a10b2bf5d56488cba40da507f5493a6a429340e2004d9ed085fa"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "libsqlite3-sys"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -9841,6 +9874,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusqlite"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7753b721174eb8ff87a9a0e799e2d7bc3749323e773db92e0984debb00019d6e"
+dependencies = [
+ "bitflags 2.13.1",
+ "fallible-iterator 0.3.0",
+ "fallible-streaming-iterator",
+ "hashlink 0.9.1",
+ "libsqlite3-sys",
+ "smallvec",
+]
+
+[[package]]
 name = "rust-ini"
 version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10981,7 +11028,7 @@ dependencies = [
  "futures-io",
  "futures-util",
  "hashbrown 0.16.1",
- "hashlink",
+ "hashlink 0.11.1",
  "indexmap 2.14.1",
  "log",
  "memchr",
@@ -13417,6 +13464,7 @@ dependencies = [
 name = "workspace-hack"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "anstyle-parse 1.0.0",
  "aws-config",
  "aws-credential-types",
@@ -13467,6 +13515,7 @@ dependencies = [
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "getrandom 0.4.3",
+ "hashbrown 0.14.5",
  "hashbrown 0.15.5",
  "hashbrown 0.17.1",
  "heck 0.4.1",
@@ -13677,7 +13726,7 @@ checksum = "631a50d867fafb7093e709d75aaee9e0e0d5deb934021fcea25ac2fe09edc51e"
 dependencies = [
  "arraydeque",
  "encoding_rs",
- "hashlink",
+ "hashlink 0.11.1",
 ]
 
 [[package]]

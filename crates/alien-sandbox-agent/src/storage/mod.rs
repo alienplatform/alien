@@ -3,23 +3,28 @@
 //!
 //! The layout, the one-writer rule and integrity checks are `alien-sandbox-storage`'s. This
 //! module is the part only the agent can do: read and write the directory as root without
-//! following anything a command placed there, and freeze the guest for the instant a commit
-//! copies changed files to staging.
+//! following anything a command placed there, and copy changed files to staging consistently
+//! while commands keep writing: files that name git objects first, an SQLite database with its
+//! journal, and a file changed in the tick a walk starts in reread next time. There is no
+//! freeze: one path on every platform, and nothing can leave a sandbox stopped.
 
 pub mod attach;
-pub mod freeze;
+mod http;
 pub mod push;
+mod sqlite;
 pub mod tree;
 
+use std::collections::HashSet;
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use alien_sandbox_storage::{
     CommitOutcome, Committer, ErrorData as StorageError, Manifest, ObjectStore,
     Result as StorageResult, TreeEntry, TreeEntryKind,
 };
 
-use self::freeze::{Freezer, FREEZE_BOUND};
 use self::tree::Staging;
 
 /// Where commits stage changed files: agent-only, outside the session root.
@@ -39,8 +44,9 @@ pub struct Replicator {
     root: OwnedFd,
     exclude: Vec<String>,
     staging: PathBuf,
-    freezer: Option<Freezer>,
     committer: Committer,
+    /// Since when an SQLite database has kept HEAD's copy because it changed during every copy.
+    deferred_since: Mutex<Option<Instant>>,
 }
 
 impl Replicator {
@@ -50,7 +56,6 @@ impl Replicator {
         root: OwnedFd,
         exclude: Vec<String>,
         staging: PathBuf,
-        freezer: Option<Freezer>,
         committer: Committer,
     ) -> Self {
         Self {
@@ -58,8 +63,29 @@ impl Replicator {
             root,
             exclude,
             staging,
-            freezer,
             committer,
+            deferred_since: Mutex::new(None),
+        }
+    }
+
+    /// How long an SQLite database has been left at HEAD's copy because it changed during every
+    /// copy; `None` when the last commit took every database.
+    pub fn deferred_for(&self) -> Option<Duration> {
+        self.deferred_since
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map(|since| since.elapsed())
+    }
+
+    fn note_deferred(&self, deferred: bool) {
+        let mut since = self
+            .deferred_since
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        match (deferred, *since) {
+            (true, None) => *since = Some(Instant::now()),
+            (false, _) => *since = None,
+            (true, Some(_)) => {}
         }
     }
 
@@ -73,38 +99,98 @@ impl Replicator {
         self.committer.is_superseded()
     }
 
-    /// Walks the directory and copies every changed file to staging, with the guest frozen
-    /// where the platform has a freezer. Blocking.
+    /// Walks the directory and copies every changed file to staging. Blocking.
+    ///
+    /// Commands keep running: each file is copied as it was when read, files that name git
+    /// objects are taken first,
+    /// and an SQLite database is copied together with its journal: see
+    /// [`Replicator::stage_unfrozen`].
     pub fn stage(&self) -> StorageResult<(Vec<TreeEntry>, Staging)> {
-        let mut staging = Staging::new(&self.staging).map_err(|e| io_error("stage", e))?;
-        let frozen = match &self.freezer {
-            Some(freezer) => Some(
-                freezer
-                    .freeze(FREEZE_BOUND)
-                    .map_err(|e| io_error("freeze the guest", e))?,
-            ),
-            None => None,
+        self.stage_with(&mut |_| {})
+    }
+
+    fn stage_with(
+        &self,
+        between: &mut dyn FnMut(Phase),
+    ) -> StorageResult<(Vec<TreeEntry>, Staging)> {
+        let staging = Staging::new(&self.staging).map_err(|e| io_error("stage", e))?;
+        self.stage_unfrozen(staging, between)
+    }
+
+    /// A ref copied after the objects were listed can name an object written
+    /// in between, and the commit would hold a repository whose ref points at nothing. So the
+    /// files that name git objects (refs, HEADs, the index) are walked and copied first, then
+    /// everything else is walked and copied: every object a copied ref names already existed
+    /// when the second walk listed the objects. Git writes an object before anything names it
+    /// and never rewrites one, so the order holds for any number of repositories in the
+    /// directory. A ref that appears only in the second walk is left for the next commit.
+    ///
+    /// Each SQLite database is copied with its `-wal` or `-journal` and kept only if the
+    /// database did not change across the copies (see [`sqlite`]).
+    fn stage_unfrozen(
+        &self,
+        mut staging: Staging,
+        between: &mut dyn FnMut(Phase),
+    ) -> StorageResult<(Vec<TreeEntry>, Staging)> {
+        let first = tree::walk(&self.root, &self.exclude).map_err(|e| io_error("walk", e))?;
+        let names_objects = |entry: &TreeEntry| {
+            !matches!(entry.kind, TreeEntryKind::Dir) && tree::names_git_objects(&entry.path)
         };
-        let mut walk = tree::walk(&self.root, &self.exclude).map_err(|e| io_error("walk", e))?;
-        let changed: Vec<String> = tree::changed_files(&walk, self.committer.head())
-            .into_iter()
-            .map(|entry| entry.path.clone())
-            .collect();
-        for path in &changed {
+        let refs: Vec<TreeEntry> = first.iter().filter(|e| names_objects(e)).cloned().collect();
+        let mut changed = HashSet::new();
+        self.copy_changed(&refs, &mut staging, &mut changed, &HashSet::new())?;
+        between(Phase::RefsCopied);
+
+        let second = tree::walk(&self.root, &self.exclude).map_err(|e| io_error("walk", e))?;
+        let mut entries: Vec<TreeEntry> =
+            second.into_iter().filter(|e| !names_objects(e)).collect();
+        between(Phase::SecondWalk);
+        let groups = sqlite::stage(
+            &self.root,
+            &self.exclude,
+            &mut entries,
+            self.committer.head(),
+            &mut staging,
+            between,
+        )
+        .map_err(|e| io_error("copy a database to staging", e))?;
+        self.copy_changed(&entries, &mut staging, &mut changed, &groups.handled)?;
+        self.note_deferred(groups.deferred > 0);
+
+        // A ref kept from the first walk keeps its directories, even if they went in between.
+        let mut paths: HashSet<String> = entries.iter().map(|e| e.path.clone()).collect();
+        for item in &refs {
+            let mut parent = item.path.as_str();
+            while let Some((dir, _)) = parent.rsplit_once('/') {
+                parent = dir;
+                if paths.insert(dir.to_string()) {
+                    if let Some(dir_entry) = first.iter().find(|e| e.path == dir) {
+                        entries.push(dir_entry.clone());
+                    }
+                }
+            }
+        }
+        entries.extend(refs);
+        Ok((drop_vanished(entries, &changed, &staging), staging))
+    }
+
+    fn copy_changed(
+        &self,
+        walk: &[TreeEntry],
+        staging: &mut Staging,
+        changed: &mut HashSet<String>,
+        skip: &HashSet<String>,
+    ) -> StorageResult<()> {
+        for entry in tree::changed_files(walk, self.committer.head()) {
+            if skip.contains(&entry.path) {
+                continue;
+            }
+            changed.insert(entry.path.clone());
             staging
-                .copy(&self.root, path)
+                .copy(&self.root, &entry.path)
                 .map_err(|e| io_error("copy to staging", e))?;
         }
-        if let Some(frozen) = frozen {
-            frozen.thaw().map_err(|e| io_error("thaw the guest", e))?;
-        }
-        // A file that vanished between the walk and its copy is not in this commit.
-        walk.retain(|entry| {
-            !matches!(entry.kind, TreeEntryKind::File { .. })
-                || !changed.contains(&entry.path)
-                || staging.contains(&entry.path)
-        });
-        Ok((walk, staging))
+        Ok(())
     }
 
     /// Whether the directory differs from what HEAD names, by a walk without freezing.
@@ -129,7 +215,11 @@ impl Replicator {
                         change_token: old_token,
                         ..
                     },
-                ) => size == old_size && change_token == old_token,
+                ) => {
+                    size == old_size
+                        && change_token == old_token
+                        && *change_token != alien_sandbox_storage::UNKNOWN_CHANGE
+                }
                 (
                     TreeEntryKind::Symlink { target },
                     alien_sandbox_storage::EntryKind::Symlink { target: old_target },
@@ -156,6 +246,32 @@ impl Replicator {
             .commit(store, &self.key, walk, &mut staging)
             .await
     }
+}
+
+/// Points in an unfrozen stage where a test can change the directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    /// The first walk's refs are copied; the second walk has not started.
+    RefsCopied,
+    /// The second walk is listed; its files are not copied yet.
+    SecondWalk,
+    /// A database is copied; its sidecars are not yet.
+    DatabaseCopied,
+}
+
+/// A changed file that vanished between the walk and its copy is not in this commit; the next
+/// walk sees the new state.
+fn drop_vanished(
+    mut walk: Vec<TreeEntry>,
+    changed: &HashSet<String>,
+    staging: &Staging,
+) -> Vec<TreeEntry> {
+    walk.retain(|entry| {
+        !matches!(entry.kind, TreeEntryKind::File { .. })
+            || !changed.contains(&entry.path)
+            || staging.contains(&entry.path)
+    });
+    walk
 }
 
 #[cfg(test)]

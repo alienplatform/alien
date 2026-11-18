@@ -526,6 +526,34 @@ class SandboxPreview:
     subprotocols: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class SandboxStorageStatus:
+    """How far a sandbox's persistent storage is durable.
+
+    ``replicating``: every change seen is committed or in flight. ``behind``: the last commit
+    failed and is retried. ``denied``: the sandbox's grant to its store lapsed; it resumes once
+    renewed. ``stopped``: another sandbox claimed the key. ``awaitingRestore``: the key is being
+    restored. Times are RFC 3339."""
+
+    key: str | None
+    state: Literal["awaitingRestore", "replicating", "behind", "stopped", "denied"]
+    last_synced_at: str | None
+    head: int | None
+    last_error: str | None
+    grant_expires_at: str | None
+
+
+def _storage_status(value: Any) -> SandboxStorageStatus:
+    return SandboxStorageStatus(
+        value.key,
+        value.state,
+        value.last_synced_at,
+        value.head,
+        value.last_error,
+        value.grant_expires_at,
+    )
+
+
 def _sandbox_info(value: Any) -> SandboxInfo:
     return SandboxInfo(value.sandbox_id, value.state, value.generation)
 
@@ -779,8 +807,30 @@ class Sandbox:
         )
 
     @translate_errors
-    async def terminate(self, sandbox_id: str) -> None:
-        await (await self._handle.get()).terminate(sandbox_id)
+    async def terminate(self, sandbox_id: str, *, discard: bool = False) -> None:
+        """Destroys a sandbox, committing its persistent storage first unless ``discard``."""
+        await (await self._handle.get()).terminate(sandbox_id, discard)
+
+    @translate_errors
+    async def storage_status(self, sandbox_id: str) -> SandboxStorageStatus | None:
+        """The sandbox's persistent storage, or ``None`` where it declares none."""
+        value = await (await self._handle.get()).storage_status(sandbox_id)
+        return None if value is None else _storage_status(value)
+
+    @translate_errors
+    async def sync_storage(self, sandbox_id: str) -> SandboxStorageStatus:
+        """Commits everything written so far; returns once it is durable."""
+        return _storage_status(await (await self._handle.get()).sync_storage(sandbox_id))
+
+    @translate_errors
+    async def read_storage_file(self, key: str, path: str) -> bytes:
+        """Reads one file of a storage key without a sandbox, as of its last commit."""
+        return bytes(await (await self._handle.get()).read_storage_file(key, path))
+
+    @translate_errors
+    async def delete_storage(self, key: str) -> None:
+        """Erases a storage key. Refused while a running sandbox holds it."""
+        await (await self._handle.get()).delete_storage(key)
 
 
 def storage(name: str) -> Storage:

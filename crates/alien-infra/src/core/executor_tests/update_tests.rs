@@ -272,6 +272,7 @@ fn import_aws_sandbox(
         egress_connector_arns: Vec::new(),
         preview_ports: Vec::new(),
         allow_egress: true,
+        persistent_storage: None,
     };
     crate::sandbox::AwsSandboxImporter
         .import(data, &ctx)

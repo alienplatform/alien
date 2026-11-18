@@ -35,9 +35,6 @@ pub const ENV_ALIEN_SANDBOX_NODE_SELECTOR: &str = "ALIEN_SANDBOX_NODE_SELECTOR";
 /// Set by the Kubernetes operator on root-boot pods: the egress limit is enforced outside the pod
 /// (NetworkPolicy and the gateway), so the agent skips in-pod firewall setup. Agent-read only.
 pub const ENV_ALIEN_SANDBOX_NETWORK_ENFORCER: &str = "ALIEN_SANDBOX_NETWORK_ENFORCER";
-/// Set on a sandbox that declares persistent storage: `{ path, exclude, maxSizeBytes }` as JSON,
-/// the agent's half of the declaration (the store and its rights arrive at attach).
-pub const ENV_ALIEN_SANDBOX_PERSISTENT_STORAGE: &str = "ALIEN_SANDBOX_PERSISTENT_STORAGE";
 /// Set by the Azure binding on a sandbox whose platform policy opens a host the agent needs (a
 /// persistent storage store) that commands must not reach. The agent marks guest sockets and,
 /// before image code starts, drops every direct connection they open except to the listed

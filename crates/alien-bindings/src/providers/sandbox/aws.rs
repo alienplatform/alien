@@ -742,6 +742,106 @@ fn sandbox_state(state: Option<&str>) -> SandboxState {
 }
 
 impl AwsSandbox {
+    /// Terminates the MicroVM and removes its egress policy, without touching persistent storage.
+    async fn terminate_microvm(&self, sandbox_id: &str) -> Result<()> {
+        let state = match self
+            .fetched_microvm("sandbox.terminate", sandbox_id)
+            .await?
+        {
+            None => {
+                if let Some(manager) = &self.egress_manager {
+                    manager.delete(sandbox_id).await?;
+                }
+                return Ok(());
+            }
+            Some(microvm) if !self.owns(&microvm) => {
+                return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.terminate".to_string(),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
+                    ),
+                }))
+            }
+            Some(microvm) => microvm.state,
+        };
+
+        let policy_cleanup = match &self.egress_manager {
+            Some(manager) => manager.delete(sandbox_id).await,
+            None => Ok(()),
+        };
+
+        // A retry after an unconfirmed terminate finds the request already in flight or done.
+        // Asking AWS again could be refused for a sandbox that is gone or going.
+        if !matches!(state.as_deref(), Some("TERMINATING" | "TERMINATED")) {
+            match self.microvms.terminate_microvm(sandbox_id).await {
+                Ok(()) => {}
+                // Reaped between the read and the request; the poll below confirms it.
+                Err(error)
+                    if matches!(
+                        &error.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err::<(), _>(error).unreachable(
+                        "sandbox.terminate",
+                        &format!("could not terminate MicroVM '{sandbox_id}'"),
+                    )
+                }
+            }
+        }
+
+        // TerminateMicrovm returns once AWS accepts it, not once the MicroVM is gone. Returning
+        // here would report containment while the code inside is still running. Only `TERMINATED`
+        // or an absent record confirms it. Each read is bounded by the deadline; one that fails
+        // (after the client's own retries) says nothing about the sandbox, so it becomes the
+        // error's source rather than a confirmation.
+        let deadline = std::time::Instant::now() + SANDBOX_TERMINATED_TIMEOUT;
+        let unconfirmed = |last_seen: &str| ErrorData::SandboxUnreachable {
+            operation: "sandbox.terminate".to_string(),
+            reason: format!(
+                "termination of MicroVM '{sandbox_id}' was accepted, but {last_seen}; it may \
+                 still be running"
+            ),
+        };
+        let mut last_state: Option<String> = None;
+        loop {
+            // Checked before each read as well as after it: a sleep that ends past the deadline
+            // would otherwise send a read with no time left, and report that rather than the
+            // state last seen.
+            if let Some(state) = &last_state {
+                if std::time::Instant::now() >= deadline {
+                    return Err(AlienError::new(unconfirmed(&format!(
+                        "after {}s it was still {state}",
+                        SANDBOX_TERMINATED_TIMEOUT.as_secs()
+                    ))));
+                }
+            }
+            let read = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                self.fetched_microvm("sandbox.terminate", sandbox_id),
+            )
+            .await;
+            let state = match read {
+                Ok(Ok(None)) => break,
+                Ok(Ok(Some(microvm))) => microvm.state,
+                Ok(Err(error)) => {
+                    return Err(error).context(unconfirmed("its record could not be read"))
+                }
+                Err(_) => {
+                    return Err(AlienError::new(unconfirmed(
+                        "its record could not be read before the deadline",
+                    )))
+                }
+            };
+            if state.as_deref() == Some("TERMINATED") {
+                break;
+            }
+            last_state = Some(state.unwrap_or_else(|| "in a state it did not report".to_string()));
+            tokio::time::sleep(SANDBOX_TERMINATED_POLL).await;
+        }
+        policy_cleanup
+    }
+
     /// Reads one of this binding's own sandboxes, or `None` if there is no such sandbox.
     ///
     /// `operation` is the verb the caller invoked, not this lookup: `get_or_create` reconnects
@@ -1530,102 +1630,11 @@ impl Sandbox for AwsSandbox {
                 warn!(sandbox = sandbox_id, %error, "could not sync persistent storage before terminating");
             }
         }
-        let state = match self
-            .fetched_microvm("sandbox.terminate", sandbox_id)
-            .await?
-        {
-            None => {
-                if let Some(manager) = &self.egress_manager {
-                    manager.delete(sandbox_id).await?;
-                }
-                return Ok(());
-            }
-            Some(microvm) if !self.owns(&microvm) => {
-                return Err(AlienError::new(ErrorData::SandboxUnreachable {
-                    operation: "sandbox.terminate".to_string(),
-                    reason: format!(
-                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
-                    ),
-                }))
-            }
-            Some(microvm) => microvm.state,
-        };
+        self.terminate_microvm(sandbox_id).await
+    }
 
-        let policy_cleanup = match &self.egress_manager {
-            Some(manager) => manager.delete(sandbox_id).await,
-            None => Ok(()),
-        };
-
-        // A retry after an unconfirmed terminate finds the request already in flight or done.
-        // Asking AWS again could be refused for a sandbox that is gone or going.
-        if !matches!(state.as_deref(), Some("TERMINATING" | "TERMINATED")) {
-            match self.microvms.terminate_microvm(sandbox_id).await {
-                Ok(()) => {}
-                // Reaped between the read and the request; the poll below confirms it.
-                Err(error)
-                    if matches!(
-                        &error.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) => {}
-                Err(error) => {
-                    return Err::<(), _>(error).unreachable(
-                        "sandbox.terminate",
-                        &format!("could not terminate MicroVM '{sandbox_id}'"),
-                    )
-                }
-            }
-        }
-
-        // TerminateMicrovm returns once AWS accepts it, not once the MicroVM is gone. Returning
-        // here would report containment while the code inside is still running. Only `TERMINATED`
-        // or an absent record confirms it. Each read is bounded by the deadline; one that fails
-        // (after the client's own retries) says nothing about the sandbox, so it becomes the
-        // error's source rather than a confirmation.
-        let deadline = std::time::Instant::now() + SANDBOX_TERMINATED_TIMEOUT;
-        let unconfirmed = |last_seen: &str| ErrorData::SandboxUnreachable {
-            operation: "sandbox.terminate".to_string(),
-            reason: format!(
-                "termination of MicroVM '{sandbox_id}' was accepted, but {last_seen}; it may \
-                 still be running"
-            ),
-        };
-        let mut last_state: Option<String> = None;
-        loop {
-            // Checked before each read as well as after it: a sleep that ends past the deadline
-            // would otherwise send a read with no time left, and report that rather than the
-            // state last seen.
-            if let Some(state) = &last_state {
-                if std::time::Instant::now() >= deadline {
-                    return Err(AlienError::new(unconfirmed(&format!(
-                        "after {}s it was still {state}",
-                        SANDBOX_TERMINATED_TIMEOUT.as_secs()
-                    ))));
-                }
-            }
-            let read = tokio::time::timeout_at(
-                tokio::time::Instant::from_std(deadline),
-                self.fetched_microvm("sandbox.terminate", sandbox_id),
-            )
-            .await;
-            let state = match read {
-                Ok(Ok(None)) => break,
-                Ok(Ok(Some(microvm))) => microvm.state,
-                Ok(Err(error)) => {
-                    return Err(error).context(unconfirmed("its record could not be read"))
-                }
-                Err(_) => {
-                    return Err(AlienError::new(unconfirmed(
-                        "its record could not be read before the deadline",
-                    )))
-                }
-            };
-            if state.as_deref() == Some("TERMINATED") {
-                break;
-            }
-            last_state = Some(state.unwrap_or_else(|| "in a state it did not report".to_string()));
-            tokio::time::sleep(SANDBOX_TERMINATED_POLL).await;
-        }
-        policy_cleanup
+    async fn terminate_discarding(&self, sandbox_id: &str) -> Result<()> {
+        self.terminate_microvm(sandbox_id).await
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -2072,6 +2081,49 @@ mod tests {
             .terminate("already-down")
             .await
             .expect("a terminated record is the end state terminate wants");
+    }
+
+    /// `terminate` commits persistent storage first (its read of the MicroVM is the sync's first
+    /// step); `terminate { discard }` goes straight to the MicroVM. Against a sandbox that is
+    /// already gone, the discard reads once and the plain terminate twice.
+    #[tokio::test]
+    async fn a_discarding_terminate_skips_the_persistent_storage_sync() {
+        for (discard, expected_reads) in [(true, 1), (false, 2)] {
+            let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut client = MockLambdaMicrovmsApi::new();
+            let counter = reads.clone();
+            client.expect_get_microvm().returning(move |id| {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "Microvm".to_string(),
+                        resource_name: id.to_string(),
+                    },
+                ))
+            });
+            let mut sandbox = sandbox(client);
+            sandbox.persistent_storage =
+                Some(alien_core::bindings::SandboxPersistentStorageBinding {
+                    path: "/workspace".to_string(),
+                    store: alien_core::bindings::PersistentStoreLocator::Aws {
+                        bucket: alien_core::bindings::BindingValue::value("store".to_string()),
+                        prefix: String::new(),
+                    },
+                    exclude: vec![],
+                    max_size_bytes: None,
+                });
+            if discard {
+                sandbox.terminate_discarding("gone").await
+            } else {
+                sandbox.terminate("gone").await
+            }
+            .expect("an absent sandbox is terminated");
+            assert_eq!(
+                reads.load(std::sync::atomic::Ordering::SeqCst),
+                expected_reads,
+                "discard: {discard}"
+            );
+        }
     }
 
     /// A request already in flight is waited on rather than repeated.

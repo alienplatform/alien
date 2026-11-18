@@ -220,6 +220,73 @@ pub fn aws_sandbox_agent_environment(
     environment
 }
 
+/// Why AWS cannot give this sandbox persistent storage, if it cannot.
+///
+/// Behind a session connector the store is opened to the connector (an S3 gateway endpoint and
+/// a rule to S3), and only the agent's in-guest redirect keeps commands' sockets off it. The
+/// agent installs that redirect when its environment carries the `none` or `internet` policy;
+/// a sandbox without it (no `imageUser`, a privileged supervisor, or a domain list) would open
+/// the store's network path to its commands, so it is refused at plan time.
+pub fn aws_persistent_storage_refusal(stack: &Stack, sandbox: &Sandbox) -> Option<String> {
+    sandbox.persistent_storage.as_ref()?;
+    if !sandbox_needs_connector(stack, sandbox) {
+        return None;
+    }
+    let environment = aws_sandbox_agent_environment(stack, sandbox);
+    if !matches!(
+        environment.get("ALIEN_SANDBOX_EGRESS").map(String::as_str),
+        Some("\"none\"") | Some("\"internet\"")
+    ) {
+        return Some(format!(
+            "sandbox '{}' declares persistent storage on AWS, which needs the agent to keep \
+             commands off the store's network path: declare `imageUser` (the image command \
+             contract), no privileged supervisor, and egress `none` or `internet`",
+            sandbox.id
+        ));
+    }
+    // Setup routes the connector subnets to the store through a gateway endpoint on their route
+    // table, which only exists when setup created the VPC.
+    if matches!(
+        sandbox_egress_network(stack).map(|network| network.vpc),
+        Ok(SandboxEgressVpc::BroughtByCustomer)
+    ) {
+        return Some(format!(
+            "sandbox '{}' declares persistent storage on AWS, which is not available in a VPC \
+             the deployment brings: setup routes the sandbox subnets to the store through an \
+             S3 gateway endpoint on a route table it creates. Let setup create the network",
+            sandbox.id
+        ));
+    }
+    None
+}
+
+/// Whether AWS setup opens this sandbox's connector to its persistent store: it declares one and
+/// its sessions run behind a connector (a sandbox without one reaches S3 as any workload does).
+pub fn aws_sandbox_has_store_path(stack: &Stack, sandbox: &Sandbox) -> bool {
+    sandbox.persistent_storage.is_some() && sandbox_needs_connector(stack, sandbox)
+}
+
+/// Ids of the sandboxes whose connector AWS setup opens to their persistent store, sorted.
+pub fn aws_sandboxes_with_store_path(stack: &Stack) -> Vec<&str> {
+    stack
+        .resources()
+        .filter(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .is_some_and(|sandbox| aws_sandbox_has_store_path(stack, sandbox))
+        })
+        .map(|(id, _)| id.as_str())
+        .collect()
+}
+
+/// Whether this sandbox's connector sits in the dedicated sandbox subnets: an `internet` sandbox's
+/// always does, and so does one with a path to its persistent store, since the store's gateway
+/// endpoint goes on the dedicated route table and nothing else may be routed through it.
+pub fn aws_sandbox_uses_dedicated_subnets(stack: &Stack, sandbox: &Sandbox) -> bool {
+    sandbox.egress == SandboxEgress::Internet || aws_sandbox_has_store_path(stack, sandbox)
+}
+
 /// The agent variable that declares persistent storage and holds the image command until the
 /// key is restored. Absent unless declared, so other sandboxes' images are unchanged.
 pub const ENV_PERSISTENT_STORAGE: &str = "ALIEN_SANDBOX_PERSISTENT_STORAGE";
@@ -481,6 +548,88 @@ mod tests {
                 sandbox_egress_network(&stack).expect("a created or brought VPC is attachable");
             assert_eq!((found.id, found.vpc), ("first", expected));
         }
+    }
+
+    /// Persistent storage behind a connector needs the agent's in-guest redirect, which only
+    /// the image command contract with an unprivileged supervisor installs under `none`.
+    #[test]
+    fn aws_persistent_storage_needs_the_agents_redirect_under_none() {
+        let sandbox = |image_user: Option<u32>, privileged: bool, storage: bool| {
+            let mut sandbox = Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "s3://acme/agents/bundle.zip".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            sandbox.image_user = image_user;
+            if privileged {
+                sandbox.privileged_supervisor =
+                    Some(crate::SandboxPrivilegedSupervisor { command_uid: 1001 });
+            }
+            if storage {
+                sandbox.persistent_storage = Some(crate::SandboxPersistentStorage {
+                    path: "/workspace".to_string(),
+                    exclude: vec![],
+                    max_size: None,
+                    encryption_key: None,
+                });
+            }
+            sandbox
+        };
+        let stack = Stack::new("acme".to_string()).build();
+        assert_eq!(
+            aws_persistent_storage_refusal(&stack, &sandbox(Some(1001), false, true)),
+            None
+        );
+        assert_eq!(
+            aws_persistent_storage_refusal(&stack, &sandbox(None, false, false)),
+            None,
+            "nothing to refuse without persistent storage"
+        );
+        let reason = aws_persistent_storage_refusal(&stack, &sandbox(None, false, true))
+            .expect("no imageUser: no redirect, refused");
+        assert!(reason.contains("imageUser"), "{reason}");
+        // A privileged supervisor runs without a session connector (its egress is enforced in
+        // the guest), so setup opens nothing to S3 for it and there is nothing to refuse here.
+        assert_eq!(
+            aws_persistent_storage_refusal(&stack, &sandbox(Some(0), true, true)),
+            None
+        );
+
+        let network = |settings: NetworkSettings| {
+            Stack::new("acme".to_string())
+                .add(
+                    Network::new("net".to_string()).settings(settings).build(),
+                    crate::ResourceLifecycle::Frozen,
+                )
+                .build()
+        };
+        let created = network(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        });
+        assert_eq!(
+            aws_persistent_storage_refusal(&created, &sandbox(Some(1001), false, true)),
+            None
+        );
+        let brought = network(NetworkSettings::ByoVpcAws {
+            vpc_id: "vpc-1".to_string(),
+            public_subnet_ids: vec![],
+            private_subnet_ids: vec!["subnet-1".to_string(), "subnet-2".to_string()],
+            security_group_ids: vec![],
+        });
+        let reason = aws_persistent_storage_refusal(&brought, &sandbox(Some(1001), false, true))
+            .expect("a brought VPC has no route table setup may add the endpoint to");
+        assert!(reason.contains("VPC the deployment brings"), "{reason}");
+        assert_eq!(
+            aws_persistent_storage_refusal(&brought, &sandbox(Some(1001), false, false)),
+            None
+        );
     }
 
     #[test]

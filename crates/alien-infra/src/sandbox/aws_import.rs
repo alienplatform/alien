@@ -46,6 +46,7 @@ impl ResourceImporter for AwsSandboxImporter {
             egress: Some(sandbox.into()),
             egress_connector_arns: data.egress_connector_arns,
             allow_egress: data.allow_egress,
+            persistent_storage: data.persistent_storage,
             preview_ports: data.preview_ports,
             idle_pause_seconds: sandbox.lifecycle.idle_pause_seconds,
             max_lifetime_seconds: sandbox.lifecycle.max_lifetime_seconds,
@@ -232,6 +233,9 @@ impl ResourceImporter for AwsSandboxImporter {
                 .or(existing_controller.granted_bundle_uri.clone()),
             egress_connector_arns: imported_controller.egress_connector_arns,
             allow_egress: imported_controller.allow_egress,
+            // The store is setup's: a re-import carries one setup just created (a declaration
+            // added in an update) or removed.
+            persistent_storage: imported_controller.persistent_storage,
             preview_ports: imported_controller.preview_ports,
             region: imported_controller
                 .region
@@ -336,6 +340,7 @@ mod tests {
             ],
             allow_egress: false,
             preview_ports: vec![],
+            persistent_storage: None,
         };
         let importer = AwsSandboxImporter;
         let existing = importer.import(frozen("1.0"), &ctx).expect("first import");

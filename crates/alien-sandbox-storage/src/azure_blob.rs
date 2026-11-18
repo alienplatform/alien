@@ -6,12 +6,12 @@
 //! The SAS can neither list nor delete, and cannot reach another key's directory: Azure answers
 //! 403, which this store reports as a failure, never as an absent object or a lost race.
 
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use alien_error::AlienError;
 use async_trait::async_trait;
-use reqwest::{header, Client, StatusCode};
+use reqwest::{header, header::HeaderMap, Method, StatusCode};
 
 use crate::error::{ErrorData, Result};
 use crate::layout::validate_tree_path;
@@ -22,9 +22,63 @@ const VERSION: &str = "2026-10-06";
 /// Largest blob one `Put Blob` can write.
 const MAX_PUT_BYTES: usize = 5000 * 1024 * 1024;
 
+/// An answer read to its end.
+pub struct BlobResponse {
+    pub status: StatusCode,
+    pub headers: HeaderMap,
+    pub body: Vec<u8>,
+}
+
+/// Sends one request and reads the whole answer. The URL carries the SAS: an implementation must
+/// never put it into an error.
+#[async_trait]
+pub trait BlobTransport: Send + Sync {
+    async fn send(
+        &self,
+        method: Method,
+        url: &str,
+        headers: &[(&str, String)],
+        body: Vec<u8>,
+    ) -> std::io::Result<BlobResponse>;
+}
+
+/// The default transport: a plain reqwest client.
+struct ReqwestTransport(reqwest::Client);
+
+#[async_trait]
+impl BlobTransport for ReqwestTransport {
+    async fn send(
+        &self,
+        method: Method,
+        url: &str,
+        headers: &[(&str, String)],
+        body: Vec<u8>,
+    ) -> std::io::Result<BlobResponse> {
+        let mut request = self.0.request(method, url).body(body);
+        for (name, value) in headers {
+            request = request.header(*name, value);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|e| std::io::Error::other(e.without_url().to_string()))?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| std::io::Error::other(e.without_url().to_string()))?;
+        Ok(BlobResponse {
+            status,
+            headers,
+            body: body.to_vec(),
+        })
+    }
+}
+
 /// A key's directory in a container, with the SAS that reaches it.
 pub struct AzureBlobStore {
-    client: Client,
+    transport: Arc<dyn BlobTransport>,
     /// `https://<account>.blob.core.windows.net/<container>/<key root>/`, ending in `/`.
     key_url: String,
     sas: RwLock<String>,
@@ -43,30 +97,34 @@ impl std::fmt::Debug for AzureBlobStore {
 
 impl AzureBlobStore {
     /// A store for the key at `key_url` (HTTPS, ending in `/`), authorized by `sas` (a query
-    /// string without the leading `?`).
+    /// string without the leading `?`), reached with a plain HTTP client.
     pub fn new(key_url: &str, sas: &str) -> Result<Self> {
-        let invalid = |reason: &str| {
-            AlienError::new(ErrorData::StoreFailed {
-                operation: "configure".to_string(),
-                object: key_url.to_string(),
-                reason: reason.to_string(),
-            })
-        };
-        let parsed = url::Url::parse(key_url).map_err(|_| invalid("not a URL"))?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(300))
+            .build()
+            .map_err(|e| invalid(key_url, &e.without_url().to_string()))?;
+        Self::with_transport(key_url, sas, Arc::new(ReqwestTransport(client)))
+    }
+
+    /// As [`AzureBlobStore::new`], with every request sent through `transport` (the agent's
+    /// own marked sockets, which the guest drop rule lets through).
+    pub fn with_transport(
+        key_url: &str,
+        sas: &str,
+        transport: Arc<dyn BlobTransport>,
+    ) -> Result<Self> {
+        let parsed = url::Url::parse(key_url).map_err(|_| invalid(key_url, "not a URL"))?;
         if parsed.scheme() != "https" {
-            return Err(invalid("the key URL must be HTTPS"));
+            return Err(invalid(key_url, "the key URL must be HTTPS"));
         }
         if parsed.query().is_some() || parsed.fragment().is_some() || !key_url.ends_with('/') {
             return Err(invalid(
+                key_url,
                 "the key URL must end in '/' and carry no query; the SAS is passed apart",
             ));
         }
-        let client = Client::builder()
-            .timeout(Duration::from_secs(300))
-            .build()
-            .map_err(|e| invalid(&e.without_url().to_string()))?;
         Ok(Self {
-            client,
+            transport,
             key_url: key_url.to_string(),
             sas: RwLock::new(sas.trim_start_matches('?').to_string()),
             denied: std::sync::atomic::AtomicBool::new(false),
@@ -97,20 +155,39 @@ impl AzureBlobStore {
         &self,
         operation: &str,
         object: &str,
-        request: reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response> {
-        request
-            .header("x-ms-version", VERSION)
-            .send()
+        method: Method,
+        headers: &[(&str, String)],
+        body: Vec<u8>,
+    ) -> Result<BlobResponse> {
+        let url = self.url(object)?;
+        let mut all = vec![("x-ms-version", VERSION.to_string())];
+        all.extend_from_slice(headers);
+        let response = self
+            .transport
+            .send(method, &url, &all, body)
             .await
-            // The URL carries the SAS, so it never goes into an error.
-            .map_err(|e| failed(operation, object, &e.without_url().to_string()))
-            .inspect(|response| {
-                if response.status() == StatusCode::FORBIDDEN {
-                    self.denied
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                }
-            })
+            .map_err(|e| failed(operation, object, &redact(&e.to_string(), &url)))?;
+        if response.status == StatusCode::FORBIDDEN {
+            self.denied
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        Ok(response)
+    }
+}
+
+fn invalid(key_url: &str, reason: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::StoreFailed {
+        operation: "configure".to_string(),
+        object: key_url.to_string(),
+        reason: reason.to_string(),
+    })
+}
+
+/// A transport error with the request's query (the SAS) cut out, should it carry the URL.
+fn redact(reason: &str, url: &str) -> String {
+    match url.split_once('?') {
+        Some((_, query)) if !query.is_empty() => reason.replace(query, "<sas>"),
+        _ => reason.to_string(),
     }
 }
 
@@ -123,28 +200,22 @@ fn failed(operation: &str, object: &str, reason: &str) -> AlienError<ErrorData> 
 }
 
 /// A refusal Azure answered, with its error code and never the request URL.
-async fn refused(
-    operation: &str,
-    object: &str,
-    response: reqwest::Response,
-) -> AlienError<ErrorData> {
-    let status = response.status();
+fn refused(operation: &str, object: &str, response: &BlobResponse) -> AlienError<ErrorData> {
     let code = response
-        .headers()
+        .headers
         .get("x-ms-error-code")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("no error code")
-        .to_string();
+        .unwrap_or("no error code");
     failed(
         operation,
         object,
-        &format!("Azure answered {status} ({code})"),
+        &format!("Azure answered {} ({code})", response.status),
     )
 }
 
-fn etag(response: &reqwest::Response, operation: &str, object: &str) -> Result<String> {
+fn etag(response: &BlobResponse, operation: &str, object: &str) -> Result<String> {
     response
-        .headers()
+        .headers
         .get(header::ETAG)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string)
@@ -155,22 +226,18 @@ fn etag(response: &reqwest::Response, operation: &str, object: &str) -> Result<S
 impl ObjectStore for AzureBlobStore {
     async fn get(&self, object: &str) -> Result<Option<StoredObject>> {
         let response = self
-            .send("get", object, self.client.get(self.url(object)?))
+            .send("get", object, Method::GET, &[], Vec::new())
             .await?;
-        match response.status() {
+        match response.status {
             StatusCode::OK => {
                 let etag = etag(&response, "get", object)?;
-                let bytes = response
-                    .bytes()
-                    .await
-                    .map_err(|e| failed("get", object, &e.without_url().to_string()))?;
                 Ok(Some(StoredObject {
-                    bytes: bytes.to_vec(),
+                    bytes: response.body,
                     version: ObjectVersion::etag(etag),
                 }))
             }
             StatusCode::NOT_FOUND => Ok(None),
-            _ => Err(refused("get", object, response).await),
+            _ => Err(refused("get", object, &response)),
         }
     }
 
@@ -183,18 +250,14 @@ impl ObjectStore for AzureBlobStore {
             .send(
                 "get",
                 object,
-                self.client
-                    .get(self.url(object)?)
-                    .header(header::RANGE, format!("bytes={offset}-{last}")),
+                Method::GET,
+                &[("range", format!("bytes={offset}-{last}"))],
+                Vec::new(),
             )
             .await?;
-        match response.status() {
-            StatusCode::PARTIAL_CONTENT | StatusCode::OK => response
-                .bytes()
-                .await
-                .map(|b| b.to_vec())
-                .map_err(|e| failed("get", object, &e.without_url().to_string())),
-            _ => Err(refused("get", object, response).await),
+        match response.status {
+            StatusCode::PARTIAL_CONTENT | StatusCode::OK => Ok(response.body),
+            _ => Err(refused("get", object, &response)),
         }
     }
 
@@ -211,24 +274,25 @@ impl ObjectStore for AzureBlobStore {
                 "larger than the 5000 MiB one Azure Put Blob can write",
             ));
         }
-        let (name, value) = match &precondition {
-            Precondition::Absent => (header::IF_NONE_MATCH, "*".to_string()),
+        let condition = match &precondition {
+            Precondition::Absent => ("if-none-match", "*".to_string()),
             // Azure has no version beside the ETag, so the ETag is the whole precondition.
-            Precondition::Matches(version) => (header::IF_MATCH, version.etag.clone()),
+            Precondition::Matches(version) => ("if-match", version.etag.clone()),
         };
         let response = self
             .send(
                 "put",
                 object,
-                self.client
-                    .put(self.url(object)?)
-                    .header("x-ms-blob-type", "BlockBlob")
-                    .header(header::CONTENT_LENGTH, bytes.len())
-                    .header(name, value)
-                    .body(bytes),
+                Method::PUT,
+                &[
+                    ("x-ms-blob-type", "BlockBlob".to_string()),
+                    ("content-length", bytes.len().to_string()),
+                    condition,
+                ],
+                bytes,
             )
             .await?;
-        match response.status() {
+        match response.status {
             StatusCode::CREATED => Ok(PutOutcome::Written {
                 version: ObjectVersion::etag(etag(&response, "put", object)?),
             }),
@@ -239,7 +303,7 @@ impl ObjectStore for AzureBlobStore {
             StatusCode::NOT_FOUND if matches!(precondition, Precondition::Matches(_)) => {
                 Ok(PutOutcome::Conflict)
             }
-            _ => Err(refused("put", object, response).await),
+            _ => Err(refused("put", object, &response)),
         }
     }
 
@@ -307,5 +371,99 @@ mod tests {
         )
         .unwrap();
         assert!(!format!("{store:?}").contains("SECRET"));
+    }
+
+    /// Records requests and answers with a fixed status, or fails quoting the URL.
+    struct Fake {
+        status: Option<StatusCode>,
+        seen: std::sync::Mutex<Vec<(Method, String, Vec<(String, String)>)>>,
+    }
+
+    #[async_trait]
+    impl BlobTransport for Fake {
+        async fn send(
+            &self,
+            method: Method,
+            url: &str,
+            headers: &[(&str, String)],
+            _body: Vec<u8>,
+        ) -> std::io::Result<BlobResponse> {
+            self.seen.lock().unwrap().push((
+                method,
+                url.to_string(),
+                headers
+                    .iter()
+                    .map(|(n, v)| (n.to_string(), v.clone()))
+                    .collect(),
+            ));
+            let Some(status) = self.status else {
+                return Err(std::io::Error::other(format!("connect to {url} failed")));
+            };
+            let mut headers = HeaderMap::new();
+            headers.insert(header::ETAG, "\"0x1\"".parse().unwrap());
+            Ok(BlobResponse {
+                status,
+                headers,
+                body: Vec::new(),
+            })
+        }
+    }
+
+    const KEY: &str = "https://a.blob.core.windows.net/c/k/";
+
+    #[tokio::test]
+    async fn sends_through_its_transport_with_the_precondition() {
+        let fake = Arc::new(Fake {
+            status: Some(StatusCode::CREATED),
+            seen: Default::default(),
+        });
+        let store = AzureBlobStore::with_transport(KEY, "sig=x", fake.clone()).unwrap();
+        let outcome = store
+            .put_if("HEAD", b"h".to_vec(), Precondition::Absent)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, PutOutcome::Written { .. }));
+        let seen = fake.seen.lock().unwrap();
+        let (method, url, headers) = &seen[0];
+        assert_eq!(*method, Method::PUT);
+        assert_eq!(url, "https://a.blob.core.windows.net/c/k/HEAD?sig=x");
+        for expected in [
+            ("x-ms-version", VERSION),
+            ("x-ms-blob-type", "BlockBlob"),
+            ("if-none-match", "*"),
+            ("content-length", "1"),
+        ] {
+            assert!(
+                headers
+                    .iter()
+                    .any(|(n, v)| n == expected.0 && v == expected.1),
+                "{expected:?} in {headers:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_transport_error_never_carries_the_sas() {
+        let fake = Arc::new(Fake {
+            status: None,
+            seen: Default::default(),
+        });
+        let store = AzureBlobStore::with_transport(KEY, "sig=SECRET", fake).unwrap();
+        let error = store.get("HEAD").await.unwrap_err();
+        let printed = format!("{error:?} {error}");
+        assert!(!printed.contains("SECRET"), "{printed}");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_marks_the_store_denied_until_renewed() {
+        let fake = Arc::new(Fake {
+            status: Some(StatusCode::FORBIDDEN),
+            seen: Default::default(),
+        });
+        let store = AzureBlobStore::with_transport(KEY, "sig=x", fake).unwrap();
+        assert!(store.get("HEAD").await.is_err());
+        assert!(store.denied());
+        store.renew("sig=y");
+        assert!(!store.denied());
     }
 }

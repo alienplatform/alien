@@ -402,6 +402,10 @@ const sandboxMembers: Record<keyof RawSandboxHandle, true> = {
   startJob: true,
   terminate: true,
   writeFile: true,
+  storageStatus: true,
+  syncStorage: true,
+  readStorageFile: true,
+  deleteStorage: true,
 }
 
 /**

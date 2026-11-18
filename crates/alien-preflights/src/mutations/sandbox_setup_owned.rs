@@ -12,7 +12,8 @@ use alien_core::{DeploymentConfig, Platform, ResourceLifecycle, Sandbox, Stack, 
 use async_trait::async_trait;
 
 /// The build notice, shared with the compile-time check so both say the same thing.
-pub const SETUP_OWNED_SANDBOX_NOTICE: &str = "on Azure and Google Cloud a live sandbox is created by \
+pub const SETUP_OWNED_SANDBOX_NOTICE: &str =
+    "on Azure and Google Cloud a live sandbox is created by \
      setup, like frozen; changes to it go through setup";
 
 pub fn takes_setup_lifecycle(platform: Platform) -> bool {
@@ -100,7 +101,10 @@ mod tests {
                 .mutate(live, &state, &config())
                 .await
                 .unwrap();
-            assert_eq!(mutated.resources["box"].lifecycle, ResourceLifecycle::Frozen);
+            assert_eq!(
+                mutated.resources["box"].lifecycle,
+                ResourceLifecycle::Frozen
+            );
         }
         for platform in [Platform::Aws, Platform::Kubernetes] {
             let state = StackState::new(platform);

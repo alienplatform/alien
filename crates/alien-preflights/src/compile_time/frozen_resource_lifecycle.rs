@@ -1,7 +1,5 @@
 use crate::error::Result;
-use crate::mutations::sandbox_setup_owned::{
-    takes_setup_lifecycle, SETUP_OWNED_SANDBOX_NOTICE,
-};
+use crate::mutations::sandbox_setup_owned::{takes_setup_lifecycle, SETUP_OWNED_SANDBOX_NOTICE};
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{
     ownership_policy_for_resource_type, Container, Daemon, Key, Platform, Postgres,
@@ -590,7 +588,8 @@ mod tests {
         let mut stack = sandbox_stack(ResourceLifecycle::Live);
         let entry = stack.resources.get_mut("agents").expect("sandbox entry");
         let mut sandbox = entry.config.downcast_ref::<Sandbox>().unwrap().clone();
-        sandbox.private_base_image = Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1".to_string());
+        sandbox.private_base_image =
+            Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1".to_string());
         entry.config = alien_core::Resource::new(sandbox);
         for platform in [Platform::Azure, Platform::Gcp] {
             let result = FrozenResourceLifecycleCheck

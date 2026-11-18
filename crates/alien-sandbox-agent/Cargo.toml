@@ -25,8 +25,11 @@ chrono = { workspace = true }
 futures = { workspace = true }
 ed25519-compact = { workspace = true }
 axum = { workspace = true, features = ["tokio", "http1", "json", "query"] }
-hyper = { workspace = true, features = ["http1", "server"] }
+hyper = { workspace = true, features = ["http1", "server", "client"] }
 hyper-util = { workspace = true, features = ["tokio"] }
+tokio-rustls = { workspace = true }
+webpki-roots = { workspace = true }
+http-body-util = { workspace = true }
 httparse = "1.10"
 uuid = { workspace = true, features = ["v4"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
@@ -37,6 +40,8 @@ path = "src/main.rs"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# Tests write real databases; the agent itself links no SQLite.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nlink = { version = "0.32", features = ["sockdiag"] }
@@ -45,3 +50,5 @@ nlink = { version = "0.32", features = ["sockdiag"] }
 tempfile = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 libc = "0.2"
+# Tests write real databases; the agent itself links no SQLite.
+rusqlite = { version = "0.32", features = ["bundled"] }

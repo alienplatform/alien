@@ -463,6 +463,7 @@ mod tests {
             gateway_cidrs: vec!["10.0.9.0/24".into()],
             workload_cidrs: vec!["10.0.3.0/24".into()],
             vpc_cidrs: vec!["10.0.0.0/16".into(), "198.18.0.0/16".into()],
+            persistent_store_endpoint_id: None,
         };
         changed.sandbox_network = Some(sandbox_network.clone());
 

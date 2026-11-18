@@ -16,7 +16,7 @@ use std::path::Path;
 use alien_error::AlienError;
 use alien_sandbox_storage::{
     Entry, ErrorData as StorageError, FileSource, Manifest, Result as StorageResult, TreeEntry,
-    TreeEntryKind, TreeSink,
+    TreeEntryKind, TreeSink, UNKNOWN_CHANGE,
 };
 
 fn tree_io(operation: &str, path: &str, error: io::Error) -> AlienError<StorageError> {
@@ -82,7 +82,7 @@ fn fstatat(dir: RawFd, name: &str) -> io::Result<libc::stat> {
     Ok(st)
 }
 
-fn fstat(fd: RawFd) -> io::Result<libc::stat> {
+pub(super) fn fstat(fd: RawFd) -> io::Result<libc::stat> {
     // SAFETY: zeroed stat is a valid out-parameter.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     // SAFETY: fd is live, st a valid pointer.
@@ -151,7 +151,7 @@ fn mtime_ns(st: &libc::stat) -> i64 {
     st.st_mtime.saturating_mul(1_000_000_000) + st.st_mtime_nsec
 }
 
-fn ctime_ns(st: &libc::stat) -> i64 {
+pub(super) fn ctime_ns(st: &libc::stat) -> i64 {
     st.st_ctime.saturating_mul(1_000_000_000) + st.st_ctime_nsec
 }
 
@@ -168,10 +168,38 @@ pub fn excluded(path: &str, exclude: &[String]) -> bool {
     })
 }
 
+/// Whether `path` is a file through which git names objects: `HEAD`, `*_HEAD`, `packed-refs`,
+/// anything under `refs/`, or `index`, in a `.git` directory or one of its `worktrees/<name>/`.
+pub fn names_git_objects(path: &str) -> bool {
+    let mut rest = None;
+    let mut components = path.split('/');
+    while let Some(component) = components.next() {
+        if component == ".git" {
+            rest = Some(components.clone().collect::<Vec<_>>());
+            break;
+        }
+    }
+    let Some(mut rest) = rest else {
+        return false;
+    };
+    if rest.first() == Some(&"refs") {
+        return rest.len() > 1;
+    }
+    if rest.len() == 3 && rest[0] == "worktrees" {
+        rest.drain(..2);
+    }
+    matches!(rest.as_slice(), [name] if *name == "HEAD"
+        || *name == "packed-refs"
+        || *name == "index"
+        || name.ends_with("_HEAD"))
+}
+
 /// Walks the storage directory. Directories, regular files, symlinks and hard links are
 /// recorded; other kinds (sockets, FIFOs, devices) and other file systems mounted inside are
 /// skipped. Nothing is followed.
 pub fn walk(root: &OwnedFd, exclude: &[String]) -> io::Result<Vec<TreeEntry>> {
+    // File timestamps come from the coarse clock; a file changed in this tick gets no token.
+    let started = coarse_now_ns();
     let device = fstat(root.as_raw_fd())?.st_dev;
     let mut entries = Vec::new();
     let mut first_name: HashMap<(u64, u64), String> = HashMap::new();
@@ -235,7 +263,7 @@ pub fn walk(root: &OwnedFd, exclude: &[String]) -> io::Result<Vec<TreeEntry>> {
                             }
                             TreeEntryKind::File {
                                 size: st.st_size as u64,
-                                change_token: ctime_ns(&st),
+                                change_token: change_token(&st, started),
                             }
                         }
                     }
@@ -253,6 +281,45 @@ pub fn walk(root: &OwnedFd, exclude: &[String]) -> io::Result<Vec<TreeEntry>> {
         }
     }
     Ok(entries)
+}
+
+/// A regular file's change token: its ctime, unless it changed in the clock tick that started
+/// at `started`, when a second change could leave every stamp as it was.
+fn change_token(st: &libc::stat, started: i64) -> i64 {
+    match ctime_ns(st) {
+        ctime if ctime >= started => UNKNOWN_CHANGE,
+        ctime => ctime,
+    }
+}
+
+/// The entry for a regular file at `path`, from a stat of it taken after `started`.
+pub(super) fn file_entry(path: &str, st: &libc::stat, started: i64) -> TreeEntry {
+    TreeEntry {
+        path: path.to_string(),
+        kind: TreeEntryKind::File {
+            size: st.st_size as u64,
+            change_token: change_token(st, started),
+        },
+        mode: st.st_mode & 0o7777,
+        uid: st.st_uid,
+        gid: st.st_gid,
+        mtime_ns: mtime_ns(st),
+    }
+}
+
+/// The stat of what `path` names now, without following a symlink at any step.
+pub(super) fn stat_at(root: &OwnedFd, path: &str) -> io::Result<libc::stat> {
+    let (dir, name) = open_parent(root, path)?;
+    fstatat(dir.as_raw_fd(), &name)
+}
+
+/// The clock the kernel stamps inode times with.
+pub(super) fn coarse_now_ns() -> i64 {
+    // SAFETY: zeroed timespec is a valid out-parameter.
+    let mut now: libc::timespec = unsafe { std::mem::zeroed() };
+    // SAFETY: now is a valid pointer; CLOCK_REALTIME_COARSE always exists on Linux.
+    unsafe { libc::clock_gettime(libc::CLOCK_REALTIME_COARSE, &mut now) };
+    now.tv_sec.saturating_mul(1_000_000_000) + now.tv_nsec
 }
 
 fn dup(fd: &OwnedFd) -> io::Result<OwnedFd> {
@@ -302,7 +369,10 @@ pub fn changed_files<'a>(walk: &'a [TreeEntry], head: Option<&Manifest>) -> Vec<
                         size: old_size,
                         change_token: old_token,
                         ..
-                    } if old_size == size && old_token == change_token && old.mtime_ns == item.mtime_ns
+                    } if old_size == size
+                        && old_token == change_token
+                        && change_token != UNKNOWN_CHANGE
+                        && old.mtime_ns == item.mtime_ns
                 )
             })
         })
@@ -314,6 +384,8 @@ pub fn changed_files<'a>(walk: &'a [TreeEntry], head: Option<&Manifest>) -> Vec<
 pub struct Staging {
     dir: OwnedFd,
     files: HashMap<String, String>,
+    /// The next staged file's name; never reused, so a forgotten copy keeps its name.
+    next: usize,
 }
 
 impl Staging {
@@ -327,6 +399,7 @@ impl Staging {
         Ok(Self {
             dir: open_root(dir)?,
             files: HashMap::new(),
+            next: 0,
         })
     }
 
@@ -338,16 +411,27 @@ impl Staging {
             Err(error) if error.raw_os_error() == Some(libc::ENOENT) => return Ok(None),
             Err(error) => return Err(error),
         };
-        let staged = self.files.len().to_string();
+        self.copy_open(path, &mut source).map(Some)
+    }
+
+    /// Copies a file the caller opened (with [`open_file`]) from its current offset.
+    pub fn copy_open(&mut self, path: &str, source: &mut File) -> io::Result<u64> {
+        let staged = self.next.to_string();
+        self.next += 1;
         let mut target = File::from(openat(
             self.dir.as_raw_fd(),
             &staged,
             libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
             0o600,
         )?);
-        let copied = io::copy(&mut source, &mut target)?;
+        let copied = io::copy(source, &mut target)?;
         self.files.insert(path.to_string(), staged);
-        Ok(Some(copied))
+        Ok(copied)
+    }
+
+    /// Leaves a staged copy out of the commit.
+    pub fn forget(&mut self, path: &str) {
+        self.files.remove(path);
     }
 
     /// Whether `path` was staged.

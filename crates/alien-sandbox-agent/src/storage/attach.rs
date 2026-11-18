@@ -13,7 +13,6 @@ use alien_sandbox_storage::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::freeze::Freezer;
 use super::push::GrantStore;
 use super::tree::{self, DirSink};
 use super::{Replicator, STAGING_DIR};
@@ -22,11 +21,15 @@ use crate::exec::ExecIdentity;
 use crate::image_command::ImageProcess;
 
 /// Set by setup on a sandbox that declares persistent storage: `{ path, exclude, maxSizeBytes }`.
-pub const ENV_PERSISTENT_STORAGE: &str = alien_core::ENV_ALIEN_SANDBOX_PERSISTENT_STORAGE;
+pub const ENV_PERSISTENT_STORAGE: &str = alien_core::sandbox_egress::ENV_PERSISTENT_STORAGE;
 
 /// How often the directory is checked for changes. With one commit in flight at a time, a write
 /// is committed within about two of these plus the upload.
 const TICK: Duration = Duration::from_secs(1);
+
+/// How long an SQLite database may keep HEAD's copy (it changed during every copy)
+/// before the status says `behind`; the same bound as a pulled commit.
+const DATABASE_BEHIND_AFTER: Duration = Duration::from_secs(10);
 
 /// The declaration as the agent receives it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,7 +257,6 @@ impl PersistentStorage {
             open()?,
             self.config.exclude.clone(),
             self.staging.clone(),
-            Freezer::guest(),
             Committer::new(
                 request.writer,
                 request.head_version,
@@ -326,10 +328,26 @@ impl PersistentStorage {
         match live.replicator.commit(live.store.as_ref()).await {
             Ok(outcome) => {
                 let head = live.replicator.head().map(|m| m.seq);
+                let waiting = live
+                    .replicator
+                    .deferred_for()
+                    .filter(|waited| *waited >= DATABASE_BEHIND_AFTER);
                 Ok(self.update(|s| {
-                    s.state = ReplicationState::Replicating;
+                    match waiting {
+                        Some(waited) => {
+                            s.state = ReplicationState::Behind;
+                            s.last_error = Some(format!(
+                                "an SQLite database changed during every copy for {}s; the \
+                                 store keeps its last consistent copy until a quiet moment",
+                                waited.as_secs()
+                            ));
+                        }
+                        None => {
+                            s.state = ReplicationState::Replicating;
+                            s.last_error = None;
+                        }
+                    }
                     s.last_synced_at = Some(Utc::now());
-                    s.last_error = None;
                     s.head = head;
                     if let CommitOutcome::Committed { commit, .. } = outcome {
                         tracing::debug!(seq = commit.seq, "persistent storage committed");

@@ -2203,3 +2203,256 @@ fn aws_created_network_keeps_vpc_and_private_subnets_only_with_frozen_data() {
         }
     }
 }
+
+/// A sandbox with persistent storage run by an `execution` profile (`sandbox/execute`) next to
+/// a `watcher` profile (`sandbox/management` only), under Remote Stack Management.
+fn persistent_storage_module() -> alien_terraform::ModuleFiles {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let mut sandbox = sandbox_fixture(SandboxEgress::None);
+    sandbox.image_user = Some(1001);
+    sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+        path: "/workspace".to_string(),
+        exclude: vec![],
+        max_size: None,
+        encryption_key: None,
+    });
+    let execution = PermissionProfile::new().resource("agents", ["sandbox/execute"]);
+    let watcher = PermissionProfile::new().resource("agents", ["sandbox/management"]);
+    let account = |name: &str, profile: &PermissionProfile| {
+        ServiceAccount::from_permission_profile(name.to_string(), profile, |set| {
+            alien_permissions::get_permission_set(set).cloned()
+        })
+        .expect("registered sets")
+    };
+    let stack = Stack::new("acme-sandbox-grants".to_string())
+        .add(
+            account("execution-sa", &execution),
+            ResourceLifecycle::Frozen,
+        )
+        .add(account("watcher-sa", &watcher), ResourceLifecycle::Frozen)
+        .permission("execution", execution)
+        .permission("watcher", watcher)
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sandbox, ResourceLifecycle::Frozen)
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    render(&stack, TerraformTarget::Aws, settings)
+}
+
+/// As in the CloudFormation template: a private bucket of its own, kept, TLS only, its objects
+/// granted by exact ARN to the role that runs sessions, and to no other role.
+#[test]
+fn persistent_storage_gets_a_private_bucket_only_the_session_role_reaches() {
+    let module = persistent_storage_module();
+    let all: String = module.iter().map(|(_, contents)| contents).collect();
+    for expected in [
+        "resource \"aws_s3_bucket\" \"agents_persistent_store\"",
+        "resource \"aws_s3_bucket_public_access_block\" \"agents_persistent_store\"",
+        "resource \"aws_s3_bucket_policy\" \"agents_persistent_store\"",
+        "aws:SecureTransport",
+        "prevent_destroy = true",
+    ] {
+        assert!(all.contains(expected), "missing {expected}");
+    }
+    assert!(!all.contains("resource \"aws_s3_bucket_versioning\" \"agents_persistent_store\""));
+
+    let session: Vec<String> = role_policy_documents(&module, "execution_sa")
+        .into_iter()
+        .map(|(_, document)| document.to_string())
+        .filter(|text| text.contains("persistent_store"))
+        .collect();
+    assert_eq!(
+        session.len(),
+        1,
+        "one grant for the session role: {session:#?}"
+    );
+    for action in [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket",
+    ] {
+        assert!(session[0].contains(action), "{action}: {}", session[0]);
+    }
+    assert!(
+        session[0].contains("aws_s3_bucket.agents_persistent_store.arn}/*"),
+        "objects by exact ARN: {}",
+        session[0]
+    );
+
+    for role in ["watcher_sa", "management"] {
+        let documents = role_policy_documents(&module, role);
+        assert!(!documents.is_empty(), "{role} has policies to check");
+        for (address, document) in documents {
+            let text = document.to_string();
+            let reaches_store = text.contains("persistent_store")
+                || text.contains("-agents-ps")
+                || text.contains(":s3:::*");
+            let grants_objects = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:*"]
+                .iter()
+                .any(|action| text.contains(&format!("\"{action}\"")));
+            assert!(
+                !(reaches_store && grants_objects),
+                "{role}: {address} reaches the persistent store's objects: {text}"
+            );
+        }
+    }
+}
+
+/// The `importData` the module registers for one resource id, as HCL.
+fn registered_import_data(module: &alien_terraform::ModuleFiles, id: &str) -> Option<String> {
+    let locals: hcl::Body =
+        hcl::parse(module.get("locals.tf").expect("locals.tf renders")).expect("locals.tf parses");
+    let registered = locals
+        .blocks()
+        .flat_map(|block| block.body().attributes())
+        .find(|attribute| attribute.key() == "deployment_resources")
+        .expect("the registration list renders");
+    let hcl::Expression::Array(entries) = registered.expr() else {
+        panic!("the registration list is a list");
+    };
+    entries.iter().find_map(|entry| {
+        let hcl::Expression::Object(object) = entry else {
+            return None;
+        };
+        let field = |name: &str| {
+            object.iter().find_map(|(key, value)| {
+                matches!(key, hcl::ObjectKey::Identifier(key) if key.as_str() == name)
+                    .then_some(value)
+            })
+        };
+        (field("id") == Some(&hcl::Expression::String(id.to_string())))
+            .then(|| field("importData").expect("importData").to_string())
+    })
+}
+
+/// As in CloudFormation: the runtime controller publishes the binding the deployment's own
+/// workloads read and learns the store only from the registration, so a declaring sandbox's
+/// import data carries `persistentStorage` with the module's bucket; an undeclared one has none.
+#[test]
+fn the_registration_hands_the_controller_the_persistent_store() {
+    let declared = registered_import_data(&persistent_storage_module(), "agents")
+        .expect("the sandbox registers");
+    assert!(declared.contains("persistentStorage"), "{declared}");
+    assert!(
+        declared.contains("aws_s3_bucket.agents_persistent_store.bucket"),
+        "{declared}"
+    );
+
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("acme-sandbox-plain".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            sandbox_fixture(SandboxEgress::None),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let plain = registered_import_data(&render(&stack, TerraformTarget::Aws, settings), "agents")
+        .expect("the sandbox registers");
+    assert!(!plain.contains("persistentStorage"), "{plain}");
+}
+
+/// As in CloudFormation: the connector of a sandbox with persistent storage sits in the dedicated
+/// sandbox subnets, one S3 gateway endpoint on their route table admits object reads and writes
+/// on the persistent store alone, the connector's security group gains HTTPS to the region's S3
+/// prefix list, and a guard the connector waits on refuses a network the module does not create.
+#[test]
+fn persistent_storage_opens_only_the_store_path_to_the_connector() {
+    let module = persistent_storage_module();
+    let all: String = module
+        .iter()
+        .filter(|(name, _)| name.ends_with(".tf"))
+        .map(|(_, contents)| format!("{contents}\n"))
+        .collect();
+    let body: hcl::Body = hcl::parse(&all).expect("the module parses");
+    let block = |kind: &str, name: &str| {
+        body.blocks()
+            .find(|block| {
+                block.labels().len() == 2
+                    && block.labels()[0].as_str() == kind
+                    && block.labels()[1].as_str() == name
+            })
+            .unwrap_or_else(|| panic!("{kind}.{name} renders"))
+            .clone()
+    };
+    let text = |block: &hcl::Block| hcl::format::to_string(block).expect("formats");
+    let endpoints: Vec<_> = body
+        .blocks()
+        .filter(|block| {
+            block.identifier() == "resource" && block.labels()[0].as_str() == "aws_vpc_endpoint"
+        })
+        .collect();
+    assert_eq!(endpoints.len(), 1);
+    let network = endpoints[0].labels()[1]
+        .as_str()
+        .strip_suffix("_sandbox_store")
+        .expect("named for the network")
+        .to_string();
+    let endpoint = text(endpoints[0]);
+    for expected in [
+        "vpc_endpoint_type = \"Gateway\"".to_string(),
+        format!("aws_route_table.{network}_sandbox[0].id"),
+        "aws_s3_bucket.agents_persistent_store.arn}/*".to_string(),
+        "s3:GetObject".to_string(),
+        "s3:PutObject".to_string(),
+    ] {
+        assert!(endpoint.contains(&expected), "{expected}: {endpoint}");
+    }
+    assert!(
+        !endpoint.contains("s3:*") && !endpoint.contains("ListBucket"),
+        "{endpoint}"
+    );
+    block("aws_route_table", &format!("{network}_sandbox"));
+    let guard = text(&block(
+        "terraform_data",
+        &format!("{network}_sandbox_store_guard"),
+    ));
+    assert!(
+        guard.contains("var.network_mode == \"create-new\""),
+        "{guard}"
+    );
+
+    let security_group = text(&block("aws_security_group", "agents_egress"));
+    assert!(
+        security_group.contains(&format!("data.aws_prefix_list.{network}_s3.id")),
+        "{security_group}"
+    );
+    assert!(
+        security_group.contains("from_port = 443"),
+        "{security_group}"
+    );
+    let connector = text(&block("awscc_lambda_network_connector", "agents"));
+    assert!(
+        connector.contains(&format!("aws_subnet.{network}_sandbox[*].id")),
+        "{connector}"
+    );
+    assert!(
+        connector.contains(&format!("terraform_data.{network}_sandbox_store_guard")),
+        "{connector}"
+    );
+}

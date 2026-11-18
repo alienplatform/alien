@@ -40,8 +40,10 @@ mod rights;
 mod store;
 
 #[cfg(feature = "azure-blob")]
-pub use azure_blob::AzureBlobStore;
-pub use commit::{CommitOutcome, Committer, FileSource, TreeEntry, TreeEntryKind, MAX_PACK_BYTES};
+pub use azure_blob::{AzureBlobStore, BlobResponse, BlobTransport};
+pub use commit::{
+    CommitOutcome, Committer, FileSource, TreeEntry, TreeEntryKind, MAX_PACK_BYTES, UNKNOWN_CHANGE,
+};
 pub use error::{ErrorData, Result};
 pub use gc::{collect_garbage, GcReport};
 pub use layout::{

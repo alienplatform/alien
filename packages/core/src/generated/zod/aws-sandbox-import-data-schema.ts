@@ -16,6 +16,7 @@ export const AwsSandboxImportDataSchema = z.object({
 "imageArn": z.string().describe("MicroVM image ARN. Absent until a runtime-provisioned image has been built.").nullish(),
 "imageIdentifier": z.string().describe("MicroVM image identifier. Absent until a runtime-provisioned image has been built.").nullish(),
 "imageVersion": z.string().describe("Image version the sandboxes are scoped to. Re-imported on every image roll, and absent\nuntil a runtime-provisioned image has been built.").nullish(),
+"persistentStorage": z.optional(z.any().describe("The store setup created for a sandbox that declares persistent storage, as the binding\ncarries it. Absent for every other sandbox, so their import data is unchanged.")),
 "previewPorts": z.optional(z.array(z.int().min(0)).describe("Ports a preview capability may be minted for; empty means preview is not offered."))
     }).describe("AWS Sandbox ImportData.\n\nCarries the sandbox's parent from the setup emitter to the runtime controller. The image\n**version** is not decoration: `RunMicrovm` has no `tags`, so image plus version is the only\nsandbox identity there is, and a controller holding a stale version would enumerate the wrong\nset and orphan every sandbox started on the previous one.\n\nTwo shapes arrive here, and which fields are present says which. A Frozen sandbox is built by\nstack creation and names its image; a Live one is built by the controller after the deployment\nregisters, so it names the build role and bundle instead, leaving the image fields empty.")
 
