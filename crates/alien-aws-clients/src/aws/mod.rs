@@ -374,6 +374,11 @@ async fn resolve_region(environment_variables: &HashMap<String, String>) -> Resu
         Ok(None) => {}
         Err(profile_error) => {
             if let Some(imds_error) = imds_error {
+                // A transient metadata failure keeps its own error, so callers that retry
+                // can see it is retryable instead of a new permanent configuration error.
+                if imds_error.retryable {
+                    return Err(imds_error);
+                }
                 return Err(AlienError::new(ErrorData::InvalidClientConfig {
                     message: format!(
                         "Failed to resolve AWS region from IMDS and fallback profile '{}': {}; IMDS error: {}",
@@ -454,6 +459,11 @@ async fn resolve_credentials(
         Ok(_) => Ok(AwsCredentials::Profile { name: profile }),
         Err(profile_error) => {
             if let Some(imds_error) = imds_error {
+                // A transient metadata failure keeps its own error, so callers that retry
+                // can see it is retryable instead of a new permanent configuration error.
+                if imds_error.retryable {
+                    return Err(imds_error);
+                }
                 return Err(AlienError::new(ErrorData::InvalidClientConfig {
                     message: format!(
                         "Failed to resolve AWS credentials from IMDS and fallback profile '{}': {}; IMDS error: {}",
@@ -532,8 +542,23 @@ async fn load_imds_session_credentials(endpoint: Option<&str>) -> Result<AwsCred
             errors: None,
         })?;
 
+    let token = imds_token(&client, endpoint).await?;
+    match imds_role_credentials(&client, endpoint, &token).await {
+        Err((_, true)) => {
+            // A 401 means the token is no longer valid: get a new one and ask once more.
+            let token = imds_token(&client, endpoint).await?;
+            imds_role_credentials(&client, endpoint, &token)
+                .await
+                .map_err(|(error, _)| error)
+        }
+        other => other.map_err(|(error, _)| error),
+    }
+}
+
+/// Request an IMDSv2 token.
+async fn imds_token(client: &reqwest::Client, endpoint: &str) -> Result<String> {
     let token_url = format!("{endpoint}/latest/api/token");
-    let token = imds_response(
+    imds_response(
         client
             .put(&token_url)
             .timeout(AWS_IMDS_DISCOVERY_TIMEOUT)
@@ -541,14 +566,24 @@ async fn load_imds_session_credentials(endpoint: Option<&str>) -> Result<AwsCred
         "AWS IMDSv2 token",
         true,
     )
-    .await?
+    .await
+    .map_err(|(error, _)| error)?
     .text()
     .await
     .into_alien_error()
     .context(ErrorData::InvalidClientConfig {
         message: "Failed to read AWS IMDSv2 token".to_string(),
         errors: None,
-    })?;
+    })
+}
+
+/// Read the role name and its credentials with a token. The flag is true when IMDS answered 401.
+async fn imds_role_credentials(
+    client: &reqwest::Client,
+    endpoint: &str,
+    token: &str,
+) -> std::result::Result<AwsCredentials, (AlienError<ErrorData>, bool)> {
+    let not_unauthorized = |error: AlienError<ErrorData>| (error, false);
 
     // A 404 on the role list means no role is attached: a real misconfiguration.
     let role_url = format!("{endpoint}/latest/meta-data/iam/security-credentials/");
@@ -556,7 +591,7 @@ async fn load_imds_session_credentials(endpoint: Option<&str>) -> Result<AwsCred
         client
             .get(&role_url)
             .timeout(AWS_IMDS_DISCOVERY_TIMEOUT)
-            .header("X-aws-ec2-metadata-token", &token),
+            .header("X-aws-ec2-metadata-token", token),
         "AWS IMDS role name",
         false,
     )
@@ -567,17 +602,18 @@ async fn load_imds_session_credentials(endpoint: Option<&str>) -> Result<AwsCred
     .context(ErrorData::InvalidClientConfig {
         message: "Failed to read AWS IMDS role name".to_string(),
         errors: None,
-    })?;
+    })
+    .map_err(not_unauthorized)?;
 
     let role_name = role_name
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
         .ok_or_else(|| {
-            AlienError::new(ErrorData::InvalidClientConfig {
+            not_unauthorized(AlienError::new(ErrorData::InvalidClientConfig {
                 message: "AWS IMDS did not return an IAM role name".to_string(),
                 errors: None,
-            })
+            }))
         })?;
 
     let credentials_url = format!("{role_url}{role_name}");
@@ -585,7 +621,7 @@ async fn load_imds_session_credentials(endpoint: Option<&str>) -> Result<AwsCred
         client
             .get(&credentials_url)
             .timeout(AWS_IMDS_CREDENTIALS_TIMEOUT)
-            .header("X-aws-ec2-metadata-token", &token),
+            .header("X-aws-ec2-metadata-token", token),
         "AWS IMDS credentials",
         true,
     )
@@ -596,7 +632,8 @@ async fn load_imds_session_credentials(endpoint: Option<&str>) -> Result<AwsCred
     .context(ErrorData::InvalidClientConfig {
         message: "Failed to parse AWS IMDS credentials".to_string(),
         errors: None,
-    })?;
+    })
+    .map_err(not_unauthorized)?;
 
     Ok(AwsCredentials::SessionCredentials {
         access_key_id: credentials.access_key_id,
@@ -608,7 +645,8 @@ async fn load_imds_session_credentials(endpoint: Option<&str>) -> Result<AwsCred
 
 /// Send an IMDS request and classify a failure by whether asking again can help.
 ///
-/// A transport error, 5xx or 429 is transient. A 404 is transient only when
+/// A transport error, 5xx or 429 is transient. A 401 is too: the token is no longer valid and the
+/// caller can get a new one (the flag in the error is true for 401). A 404 is transient only when
 /// `not_found_is_transient` is set: right after a container starts, the host's metadata proxy may
 /// not know it yet and answers 404 until it does. Anything else (403, other 4xx) stays a
 /// configuration error.
@@ -616,32 +654,35 @@ async fn imds_response(
     request: reqwest::RequestBuilder,
     what: &str,
     not_found_is_transient: bool,
-) -> Result<reqwest::Response> {
-    let response =
-        request
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::HttpRequestFailed {
-                message: format!("Failed to request {what}"),
-            })?;
+) -> std::result::Result<reqwest::Response, (AlienError<ErrorData>, bool)> {
+    let response = request
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: format!("Failed to request {what}"),
+        })
+        .map_err(|error| (error, false))?;
     let status = response.status();
     if status.is_success() {
         return Ok(response);
     }
+    let unauthorized = status == reqwest::StatusCode::UNAUTHORIZED;
     let transient = status.is_server_error()
         || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || unauthorized
         || (not_found_is_transient && status == reqwest::StatusCode::NOT_FOUND);
-    if transient {
-        Err(AlienError::new(ErrorData::RemoteServiceUnavailable {
+    let error = if transient {
+        AlienError::new(ErrorData::RemoteServiceUnavailable {
             message: format!("{what} request failed with HTTP {status}"),
-        }))
+        })
     } else {
-        Err(AlienError::new(ErrorData::InvalidClientConfig {
+        AlienError::new(ErrorData::InvalidClientConfig {
             message: format!("{what} request failed with HTTP {status}"),
             errors: None,
-        }))
-    }
+        })
+    };
+    Err((error, unauthorized))
 }
 
 /// Fetch credentials from a container credentials endpoint.
@@ -1264,6 +1305,139 @@ mod tests {
         let error = load_imds_session_credentials(Some(&endpoint))
             .await
             .unwrap_err();
+        assert!(!error.retryable, "{error}");
+    }
+
+    #[tokio::test]
+    async fn imds_unauthorized_after_token_is_retryable() {
+        // Token succeeds, then the token-protected role list answers 401: the token expired.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = [0u8; 2048];
+                let n = stream.read(&mut buffer).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..n]).to_string();
+                let response = if request.starts_with("PUT /latest/api/token ") {
+                    "HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\ntoken".to_string()
+                } else {
+                    "HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n".to_string()
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        let error = load_imds_session_credentials(Some(&format!("http://{addr}")))
+            .await
+            .unwrap_err();
+        assert!(error.retryable, "{error}");
+    }
+
+    /// A mock IMDS that serves token and role name, and answers the role list with `role_list`
+    /// (called with the number of role-list requests seen so far) and credentials with
+    /// `credentials_status`.
+    async fn start_scripted_imds(
+        role_list_unauthorized_times: usize,
+        credentials_status: &'static str,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let role_list_requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = [0u8; 2048];
+                let n = stream.read(&mut buffer).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..n]).to_string();
+                let ok = |body: &str| {
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                };
+                let response = if request.starts_with("PUT /latest/api/token ") {
+                    ok("token")
+                } else if request.starts_with("GET /latest/meta-data/iam/security-credentials/ ") {
+                    let seen = role_list_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if seen < role_list_unauthorized_times {
+                        "HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n".to_string()
+                    } else {
+                        ok("test-role")
+                    }
+                } else if credentials_status == "200 OK" {
+                    ok(
+                        r#"{"AccessKeyId":"AKIAIMDS","SecretAccessKey":"secret","Token":"session","Expiration":"2099-01-01T00:00:00Z"}"#,
+                    )
+                } else {
+                    format!("HTTP/1.1 {credentials_status}\r\ncontent-length: 0\r\n\r\n")
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn imds_credentials_404_is_retryable() {
+        let endpoint = start_scripted_imds(0, "404 Not Found").await;
+        let error = load_imds_session_credentials(Some(&endpoint))
+            .await
+            .unwrap_err();
+        assert!(error.retryable, "{error}");
+    }
+
+    #[tokio::test]
+    async fn imds_unauthorized_once_gets_a_new_token_and_succeeds() {
+        let endpoint = start_scripted_imds(1, "200 OK").await;
+        let credentials = load_imds_session_credentials(Some(&endpoint))
+            .await
+            .unwrap();
+        assert!(matches!(
+            credentials,
+            AwsCredentials::SessionCredentials { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn imds_unauthorized_twice_is_retryable() {
+        let endpoint = start_scripted_imds(2, "200 OK").await;
+        let error = load_imds_session_credentials(Some(&endpoint))
+            .await
+            .unwrap_err();
+        assert!(error.retryable, "{error}");
+    }
+
+    #[tokio::test]
+    async fn resolve_credentials_keeps_a_retryable_metadata_failure() {
+        // Token request answers 404 and no profile exists: the error must stay retryable.
+        let endpoint = start_imds_with_status("404 Not Found").await;
+        let mut env = HashMap::new();
+        env.insert("AWS_EC2_METADATA_SERVICE_ENDPOINT".to_string(), endpoint);
+        env.insert(
+            "AWS_SHARED_CREDENTIALS_FILE".to_string(),
+            "/nonexistent/credentials".to_string(),
+        );
+        env.insert(
+            "AWS_CONFIG_FILE".to_string(),
+            "/nonexistent/config".to_string(),
+        );
+        let error = resolve_credentials(&env).await.unwrap_err();
+        assert!(error.retryable, "{error}");
+    }
+
+    #[tokio::test]
+    async fn resolve_credentials_keeps_a_permanent_metadata_failure_permanent() {
+        let endpoint = start_imds_with_status("403 Forbidden").await;
+        let mut env = HashMap::new();
+        env.insert("AWS_EC2_METADATA_SERVICE_ENDPOINT".to_string(), endpoint);
+        env.insert(
+            "AWS_SHARED_CREDENTIALS_FILE".to_string(),
+            "/nonexistent/credentials".to_string(),
+        );
+        env.insert(
+            "AWS_CONFIG_FILE".to_string(),
+            "/nonexistent/config".to_string(),
+        );
+        let error = resolve_credentials(&env).await.unwrap_err();
         assert!(!error.retryable, "{error}");
     }
 

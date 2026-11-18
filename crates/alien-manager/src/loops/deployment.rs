@@ -4942,14 +4942,41 @@ mod tests {
         }
 
         /// The metadata proxy not knowing a freshly started manager yet (HTTP 404 on the IMDSv2
-        /// token request) must keep an in-progress update in Updating, not fail it.
-        fn metadata_token_error() -> AlienError {
-            let error = AlienError::new(alien_aws_clients::ErrorData::RemoteServiceUnavailable {
-                message: "AWS IMDSv2 token request failed with HTTP 404 Not Found".to_string(),
-            })
-            .into_generic();
-            // The same wrappers the credential path adds around the loader's error.
+        /// token request) must keep an in-progress update in Updating, not fail it. The error is
+        /// produced by the real AWS loader against a mock metadata server.
+        async fn metadata_token_error() -> AlienError {
+            use alien_aws_clients::AwsClientConfigExt;
             use alien_error::ContextError;
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let mut buffer = [0u8; 2048];
+                    let _ = stream.read(&mut buffer).await;
+                    let _ = stream
+                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+                        .await;
+                }
+            });
+            let env = std::collections::HashMap::from([
+                ("AWS_REGION".to_string(), "us-east-1".to_string()),
+                ("AWS_EC2_METADATA_SERVICE_ENDPOINT".to_string(), endpoint),
+                (
+                    "AWS_SHARED_CREDENTIALS_FILE".to_string(),
+                    "/nonexistent/credentials".to_string(),
+                ),
+                (
+                    "AWS_CONFIG_FILE".to_string(),
+                    "/nonexistent/config".to_string(),
+                ),
+            ]);
+            let error = alien_aws_clients::AwsClientConfig::from_env(&env)
+                .await
+                .unwrap_err()
+                .into_generic();
+            // The same wrapper the credential path adds around the loader's error.
             error
                 .context(crate::error::ErrorData::CredentialMaterializationFailed {
                     platform: Platform::Aws,
@@ -4960,7 +4987,8 @@ mod tests {
 
         #[tokio::test]
         async fn metadata_token_failure_keeps_updating_then_fails_after_grace_period() {
-            let fixture = Fixture::new(DeploymentStatus::Updating, metadata_token_error()).await;
+            let fixture =
+                Fixture::new(DeploymentStatus::Updating, metadata_token_error().await).await;
             fixture.process(&fixture.runner()).await;
             let waiting = fixture.record().await;
             assert_eq!(waiting.status, "updating");
@@ -4985,7 +5013,8 @@ mod tests {
 
         #[tokio::test]
         async fn metadata_token_failure_past_grace_period_fails_the_update() {
-            let fixture = Fixture::new(DeploymentStatus::Updating, metadata_token_error()).await;
+            let fixture =
+                Fixture::new(DeploymentStatus::Updating, metadata_token_error().await).await;
             fixture.process(&fixture.runner()).await;
             assert_eq!(fixture.record().await.status, "updating");
             let mut metadata = fixture.record().await.runtime_metadata.unwrap();
