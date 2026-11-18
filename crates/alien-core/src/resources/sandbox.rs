@@ -1366,6 +1366,20 @@ impl Sandbox {
         }
 
         if let Some(storage) = &self.persistent_storage {
+            // Azure's platform policy opens the store's host to the whole sandbox; under `none`
+            // and `internet` the agent keeps commands from it by dropping all their direct
+            // egress, which an allow-list of domains cannot coexist with.
+            if platform == Platform::Azure
+                && matches!(self.egress, SandboxEgress::AllowDomains { .. })
+            {
+                return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                    capability: "persistentStorage with egress allowDomains (Azure keeps \
+                                 commands from the store by refusing all their direct egress; \
+                                 declare egress none or internet)"
+                        .to_string(),
+                    platform: platform.to_string(),
+                }));
+            }
             capabilities.require(SandboxCapability::PersistentStorage, platform)?;
             storage.validate(&self.id)?;
         }
@@ -2632,6 +2646,23 @@ mod tests {
                 error.message
             );
         }
+    }
+
+    /// On Azure the store's host is opened to the whole sandbox and commands are kept from it by
+    /// losing all direct egress, so an allow-list of domains is refused, with a reason that names
+    /// what to declare instead.
+    #[test]
+    fn azure_refuses_persistent_storage_with_allow_domains() {
+        let mut sandbox = with_storage(workspace());
+        sandbox.egress = SandboxEgress::AllowDomains {
+            domains: vec!["example.com".to_string()],
+        };
+        let error = sandbox
+            .validate_for_platform(Platform::Azure)
+            .expect_err("refused");
+        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+        assert!(error.message.contains("allowDomains"), "{}", error.message);
+        assert!(error.message.contains("none or internet"), "{}", error.message);
     }
 
     #[test]
