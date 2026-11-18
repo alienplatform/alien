@@ -31,6 +31,9 @@ bon = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
+hmac = { workspace = true }
+hex = { workspace = true }
+http = { workspace = true }
 object_store = { workspace = true, features = ["tls-webpki-roots"] }
 alien-error = { workspace = true }
 alien-sandbox-storage = { workspace = true }
