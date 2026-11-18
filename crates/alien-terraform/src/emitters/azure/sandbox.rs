@@ -168,8 +168,8 @@ impl TfEmitter for AzureSandboxEmitter {
         let store_holders = emit_workload_access(ctx, label, &mut fragment)?;
         // A published group cannot declare persistent storage (the core refuses it), so its
         // store holders are always the workload identities that create its sandboxes.
-        if sandbox.persistent_storage.is_some() {
-            sandbox_store::emit_store(ctx, label, &store_holders, &mut fragment);
+        if let Some(storage) = &sandbox.persistent_storage {
+            sandbox_store::emit_store(ctx, label, storage, &store_holders, &mut fragment)?;
         }
         Ok(fragment)
     }
@@ -1029,12 +1029,9 @@ mod tests {
                 let mut sandbox = base.egress(SandboxEgress::Internet).build();
                 sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
                     path: "/workspace".to_string(),
-                    storage: alien_core::ResourceRef::new(
-                        alien_core::Storage::RESOURCE_TYPE,
-                        "files",
-                    ),
                     exclude: Vec::new(),
                     max_size: None,
+                    encryption_key: None,
                 });
                 builder.add(sandbox, ResourceLifecycle::Frozen)
             };

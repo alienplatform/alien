@@ -15,7 +15,7 @@ use reqwest::{header, Client, StatusCode};
 
 use crate::error::{ErrorData, Result};
 use crate::layout::validate_tree_path;
-use crate::store::{ObjectStore, Precondition, PutOutcome, StoredObject};
+use crate::store::{ObjectStore, ObjectVersion, Precondition, PutOutcome, StoredObject};
 
 /// Storage service version every request is sent with.
 const VERSION: &str = "2026-10-06";
@@ -150,7 +150,7 @@ impl ObjectStore for AzureBlobStore {
                     .map_err(|e| failed("get", object, &e.without_url().to_string()))?;
                 Ok(Some(StoredObject {
                     bytes: bytes.to_vec(),
-                    etag,
+                    version: ObjectVersion::etag(etag),
                 }))
             }
             StatusCode::NOT_FOUND => Ok(None),
@@ -197,7 +197,8 @@ impl ObjectStore for AzureBlobStore {
         }
         let (name, value) = match &precondition {
             Precondition::Absent => (header::IF_NONE_MATCH, "*".to_string()),
-            Precondition::Matches(etag) => (header::IF_MATCH, etag.clone()),
+            // Azure has no version beside the ETag, so the ETag is the whole precondition.
+            Precondition::Matches(version) => (header::IF_MATCH, version.etag.clone()),
         };
         let response = self
             .send(
@@ -213,7 +214,7 @@ impl ObjectStore for AzureBlobStore {
             .await?;
         match response.status() {
             StatusCode::CREATED => Ok(PutOutcome::Written {
-                etag: etag(&response, "put", object)?,
+                version: ObjectVersion::etag(etag(&response, "put", object)?),
             }),
             // `If-None-Match: *` on an existing blob is 409 BlobAlreadyExists; `If-Match` on a
             // changed blob is 412, and on a deleted one (an erased key) 404 or 412: in every case

@@ -12,7 +12,7 @@
 //! anything on the store, and the guests never hold an Azure identity.
 
 use crate::{
-    block::{attr, resource_block},
+    block::{attr, block, nested, resource_block},
     emitter::TfFragment,
     emitters::azure::helpers::tags,
     expr,
@@ -54,42 +54,54 @@ fn account_name(resource_id: &str) -> Expression {
     ))
 }
 
-/// The account, its container, and the holders' two grants.
+/// The account, its container, and the holders' two grants; with a declared `encryptionKey`,
+/// the account encrypts with that Key Vault key through an identity of its own.
 pub(super) fn emit_store(
     ctx: &EmitContext<'_>,
     label: &str,
+    storage: &SandboxPersistentStorage,
     holders: &[StoreHolder],
     fragment: &mut TfFragment,
-) {
+) -> Result<()> {
     let store = store_label(label);
-    fragment.resource_blocks.push(resource_block(
-        "azurerm_storage_account",
-        &store,
-        [
-            attr("name", account_name(ctx.resource_id)),
-            attr(
-                "resource_group_name",
-                expr::raw("var.azure_resource_group_name"),
-            ),
-            attr("location", expr::raw("var.azure_location")),
-            attr("account_tier", Expression::String("Standard".to_string())),
-            attr(
-                "account_replication_type",
-                Expression::String("LRS".to_string()),
-            ),
-            attr("account_kind", Expression::String("StorageV2".to_string())),
-            attr("access_tier", Expression::String("Hot".to_string())),
-            // A directory SAS is honoured only with a hierarchical namespace.
-            attr("is_hns_enabled", Expression::Bool(true)),
-            // Every request is Entra or a user-delegation SAS: no account key signs anything.
-            attr("shared_access_key_enabled", Expression::Bool(false)),
-            attr("default_to_oauth_authentication", Expression::Bool(true)),
-            attr("allow_nested_items_to_be_public", Expression::Bool(false)),
-            attr("min_tls_version", Expression::String("TLS1_2".to_string())),
-            attr("https_traffic_only_enabled", Expression::Bool(true)),
-            attr("tags", tags(ctx, "sandbox-storage")),
-        ],
-    ));
+    let mut account = vec![
+        attr("name", account_name(ctx.resource_id)),
+        attr(
+            "resource_group_name",
+            expr::raw("var.azure_resource_group_name"),
+        ),
+        attr("location", expr::raw("var.azure_location")),
+        attr("account_tier", Expression::String("Standard".to_string())),
+        attr(
+            "account_replication_type",
+            Expression::String("LRS".to_string()),
+        ),
+        attr("account_kind", Expression::String("StorageV2".to_string())),
+        attr("access_tier", Expression::String("Hot".to_string())),
+        // A directory SAS is honoured only with a hierarchical namespace.
+        attr("is_hns_enabled", Expression::Bool(true)),
+        // Every request is Entra or a user-delegation SAS: no account key signs anything.
+        attr("shared_access_key_enabled", Expression::Bool(false)),
+        attr("default_to_oauth_authentication", Expression::Bool(true)),
+        attr("allow_nested_items_to_be_public", Expression::Bool(false)),
+        attr("min_tls_version", Expression::String("TLS1_2".to_string())),
+        attr("https_traffic_only_enabled", Expression::Bool(true)),
+        attr("tags", tags(ctx, "sandbox-storage")),
+    ];
+    if let Some(key) = &storage.encryption_key {
+        let key_label = ctx.name_for(&key.id).ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "persistentStorage.encryptionKey '{}' of sandbox '{}' is not in the stack",
+                    key.id, ctx.resource_id
+                ),
+            })
+        })?;
+        emit_customer_managed_key(ctx, &store, key_label, &mut account, fragment);
+    }
+    fragment
+        .resource_blocks
+        .push(resource_block("azurerm_storage_account", &store, account));
     fragment.resource_blocks.push(resource_block(
         "azurerm_storage_container",
         &store,
@@ -147,25 +159,119 @@ pub(super) fn emit_store(
             ));
         }
     }
+    Ok(())
+}
+
+/// The store account encrypts with the declared key: a user-assigned identity of its own holds
+/// Key Vault Crypto Service Encryption User on that key alone, and the account names both.
+fn emit_customer_managed_key(
+    ctx: &EmitContext<'_>,
+    store: &str,
+    key_label: &str,
+    account: &mut Vec<hcl::structure::Structure>,
+    fragment: &mut TfFragment,
+) {
+    let identity_label = format!("{store}_encryption");
+    let role_label = format!("{store}_encryption_key");
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_user_assigned_identity",
+        &identity_label,
+        [
+            attr(
+                "name",
+                expr::raw(format!(
+                    "\"${{local.resource_prefix}}-{}-storage-encryption\"",
+                    ctx.resource_id
+                )),
+            ),
+            attr(
+                "resource_group_name",
+                expr::raw("var.azure_resource_group_name"),
+            ),
+            attr("location", expr::raw("var.azure_location")),
+        ],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_role_assignment",
+        &role_label,
+        [
+            attr(
+                "scope",
+                expr::traversal([
+                    "azurerm_key_vault_key",
+                    key_label,
+                    "resource_versionless_id",
+                ]),
+            ),
+            attr(
+                "role_definition_name",
+                Expression::String("Key Vault Crypto Service Encryption User".to_string()),
+            ),
+            attr(
+                "principal_id",
+                expr::traversal([
+                    "azurerm_user_assigned_identity",
+                    identity_label.as_str(),
+                    "principal_id",
+                ]),
+            ),
+        ],
+    ));
+    account.push(nested(block(
+        "identity",
+        [
+            attr("type", Expression::String("UserAssigned".to_string())),
+            attr(
+                "identity_ids",
+                Expression::Array(vec![expr::traversal([
+                    "azurerm_user_assigned_identity",
+                    identity_label.as_str(),
+                    "id",
+                ])]),
+            ),
+        ],
+    )));
+    account.push(nested(block(
+        "customer_managed_key",
+        [
+            attr(
+                "key_vault_key_id",
+                expr::traversal(["azurerm_key_vault_key", key_label, "versionless_id"]),
+            ),
+            attr(
+                "user_assigned_identity_id",
+                expr::traversal([
+                    "azurerm_user_assigned_identity",
+                    identity_label.as_str(),
+                    "id",
+                ]),
+            ),
+        ],
+    )));
+    // Azure checks the key when the account is created, so the grant must stand first.
+    account.push(attr(
+        "depends_on",
+        Expression::Array(vec![expr::traversal([
+            "azurerm_role_assignment",
+            role_label.as_str(),
+        ])]),
+    ));
 }
 
 /// The binding's `persistentStorage`: the directory, and the store as the platform-neutral
-/// locator `{account, container, prefix}`. Keys live at `<prefix>/<key>/` in the container.
+/// locator. The store is the sandbox's own, so the prefix is empty and keys live at `<key>/`.
 pub(super) fn binding(label: &str, storage: &SandboxPersistentStorage) -> Result<Expression> {
     let mut fields = vec![
         ("path", Expression::String(storage.path.clone())),
         (
             "store",
             expr::object([
+                ("type", Expression::String("azure".to_string())),
                 (
                     "account",
                     expr::traversal(["azurerm_storage_account", &store_label(label), "name"]),
                 ),
                 ("container", Expression::String(STORE_CONTAINER.to_string())),
-                (
-                    "prefix",
-                    Expression::String(alien_core::PERSISTENT_STORAGE_PREFIX.to_string()),
-                ),
             ]),
         ),
     ];
@@ -198,7 +304,9 @@ pub(super) fn binding(label: &str, storage: &SandboxPersistentStorage) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{ResourceRef, Storage};
+    use alien_core::bindings::{
+        BindingValue, PersistentStoreLocator, SandboxPersistentStorageBinding,
+    };
     use hcl::eval::{Context, Evaluate};
 
     /// The binding carries the store as the platform-neutral locator, plus the declared directory,
@@ -207,7 +315,7 @@ mod tests {
     fn the_binding_carries_the_store_locator() {
         let storage = SandboxPersistentStorage {
             path: "/workspace".to_string(),
-            storage: ResourceRef::new(Storage::RESOURCE_TYPE, "files"),
+            encryption_key: None,
             exclude: vec!["tmp/".to_string()],
             max_size: Some("8Gi".to_string()),
         };
@@ -219,14 +327,25 @@ mod tests {
             hcl::value!({ agents_store = { name = "acmeagents1a2b3c4d" } }),
         );
         let value = expression.evaluate(&ctx).expect("the binding evaluates");
+        let json = serde_json::to_value(value).expect("the binding is JSON");
+        let parsed: SandboxPersistentStorageBinding =
+            serde_json::from_value(json.clone()).expect("the binding reads it");
         assert_eq!(
-            serde_json::to_value(value).expect("the binding is JSON"),
+            parsed.store,
+            PersistentStoreLocator::Azure {
+                account: BindingValue::Value("acmeagents1a2b3c4d".to_string()),
+                container: BindingValue::Value("keys".to_string()),
+                prefix: String::new(),
+            }
+        );
+        assert_eq!(
+            json,
             serde_json::json!({
                 "path": "/workspace",
                 "store": {
+                    "type": "azure",
                     "account": "acmeagents1a2b3c4d",
                     "container": "keys",
-                    "prefix": "sandbox-storage",
                 },
                 "exclude": ["tmp/"],
                 "maxSizeBytes": 8_589_934_592_u64,
@@ -239,7 +358,7 @@ mod tests {
     fn undeclared_options_are_absent_from_the_binding() {
         let storage = SandboxPersistentStorage {
             path: "/workspace".to_string(),
-            storage: ResourceRef::new(Storage::RESOURCE_TYPE, "files"),
+            encryption_key: None,
             exclude: Vec::new(),
             max_size: None,
         };

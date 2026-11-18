@@ -224,7 +224,7 @@ async fn live_commit_takeover_and_restore_through_a_key_sas() {
 
     let start = takeover(&first, "sandbox-1").await.unwrap();
     assert!(start.manifest.is_none());
-    let mut writer = Committer::new("sandbox-1", start.head_etag, None, None);
+    let mut writer = Committer::new("sandbox-1", start.head_version, None, None);
     let mut files = BTreeMap::new();
     files.insert("src/main.rs".to_string(), b"fn main() {}\n".to_vec());
     files.insert(
@@ -326,7 +326,7 @@ async fn live_conditional_puts_match_the_core() {
     let directory = format!("{}/engine-7", fresh_root());
     let store = AzureBlobStore::new(&key_url(&directory), &sas_for(&directory).await).unwrap();
 
-    let PutOutcome::Written { etag } = store
+    let PutOutcome::Written { version: etag } = store
         .put_if("HEAD", b"one".to_vec(), Precondition::Absent)
         .await
         .unwrap()
@@ -340,7 +340,7 @@ async fn live_conditional_puts_match_the_core() {
             .unwrap(),
         PutOutcome::Conflict
     );
-    let PutOutcome::Written { etag: moved } = store
+    let PutOutcome::Written { version: moved } = store
         .put_if("HEAD", b"two".to_vec(), Precondition::Matches(etag.clone()))
         .await
         .unwrap()

@@ -7,9 +7,9 @@
 
 use super::helpers::{assert_terraform_valid, render};
 use alien_core::{
-    AzureContainerAppsEnvironment, AzureResourceGroup, PermissionProfile, ResourceLifecycle,
+    AzureContainerAppsEnvironment, AzureResourceGroup, Key, PermissionProfile, ResourceLifecycle,
     ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
-    SandboxPersistentStorage, ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
+    SandboxPersistentStorage, ServiceAccount, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_terraform::{ModuleFiles, TerraformTarget};
 
@@ -19,9 +19,9 @@ const DATA_CONTRIBUTOR: &str = "ba92f5b4-2d11-453d-a403-e96b0029c9fe";
 fn declared() -> SandboxPersistentStorage {
     SandboxPersistentStorage {
         path: "/workspace".to_string(),
-        storage: ResourceRef::new(Storage::RESOURCE_TYPE, "files"),
         exclude: vec!["tmp/".to_string()],
         max_size: Some("8Gi".to_string()),
+        encryption_key: None,
     }
 }
 
@@ -44,6 +44,14 @@ fn sandbox(id: &str, storage: Option<SandboxPersistentStorage>) -> Sandbox {
 /// Two sandboxes, `agents` and `other`, a Live Worker linked to both, and the `execution` identity
 /// holding the profile's sets.
 fn stack(profile: PermissionProfile, agents_storage: Option<SandboxPersistentStorage>) -> Stack {
+    stack_with_key(profile, agents_storage, false)
+}
+
+fn stack_with_key(
+    profile: PermissionProfile,
+    agents_storage: Option<SandboxPersistentStorage>,
+    with_key: bool,
+) -> Stack {
     let agents = sandbox("agents", agents_storage);
     let other = sandbox("other", None);
     let worker = Worker::new("api".to_string())
@@ -59,8 +67,16 @@ fn stack(profile: PermissionProfile, agents_storage: Option<SandboxPersistentSto
             alien_permissions::get_permission_set(name).cloned()
         })
         .expect("built-in permission sets resolve");
-    Stack::new("sandbox-store".to_string())
-        .permission("execution", profile)
+    let stack = Stack::new("sandbox-store".to_string()).permission("execution", profile);
+    let stack = if with_key {
+        stack.add(
+            Key::new("store-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+    } else {
+        stack
+    };
+    stack
         .add(
             AzureResourceGroup::new("default-resource-group".to_string()).build(),
             ResourceLifecycle::Frozen,
@@ -261,4 +277,73 @@ fn an_undeclared_sandbox_renders_no_store() {
             "{name} mentions the store"
         );
     }
+}
+
+/// A declared `encryptionKey` encrypts the store with that Key Vault key: the account gets an
+/// identity of its own, that identity alone holds the crypto role on the key, and the account is
+/// created only after the grant stands.
+#[test]
+fn a_declared_encryption_key_encrypts_the_store() {
+    let mut storage = declared();
+    storage.encryption_key = Some(ResourceRef::new(Key::RESOURCE_TYPE, "store-key"));
+    let module = render(
+        &stack_with_key(execute_on_agents(), Some(storage), true),
+        TerraformTarget::Azure,
+        StackSettings::default(),
+    );
+    let body = body(&module);
+    let account = resources(&body, "azurerm_storage_account")
+        .find(|block| block.labels()[1].as_str() == "agents_store")
+        .expect("the store account");
+    let cmk = account
+        .body()
+        .blocks()
+        .find(|block| block.identifier() == "customer_managed_key")
+        .expect("the store encrypts with the declared key");
+    assert_eq!(
+        attribute(cmk, "key_vault_key_id").as_deref(),
+        Some("azurerm_key_vault_key.store_key.versionless_id")
+    );
+    assert_eq!(
+        attribute(cmk, "user_assigned_identity_id").as_deref(),
+        Some("azurerm_user_assigned_identity.agents_store_encryption.id")
+    );
+    let depends_on = attribute(account, "depends_on").expect("depends_on");
+    assert!(
+        depends_on.contains("azurerm_role_assignment.agents_store_encryption_key"),
+        "{depends_on}"
+    );
+    let grant = resources(&body, "azurerm_role_assignment")
+        .find(|block| block.labels()[1].as_str() == "agents_store_encryption_key")
+        .expect("the key grant");
+    assert_eq!(
+        attribute(grant, "scope").as_deref(),
+        Some("azurerm_key_vault_key.store_key.resource_versionless_id")
+    );
+    assert_eq!(
+        attribute(grant, "principal_id").as_deref(),
+        Some("azurerm_user_assigned_identity.agents_store_encryption.principal_id")
+    );
+    assert_terraform_valid(&module, "azure sandbox store with an encryption key");
+}
+
+/// Without an `encryptionKey` the store has no identity and Azure manages its key.
+#[test]
+fn an_undeclared_encryption_key_leaves_the_store_on_microsoft_managed_keys() {
+    let module = render(
+        &stack(execute_on_agents(), Some(declared())),
+        TerraformTarget::Azure,
+        StackSettings::default(),
+    );
+    let body = body(&module);
+    let account = resources(&body, "azurerm_storage_account")
+        .find(|block| block.labels()[1].as_str() == "agents_store")
+        .expect("the store account");
+    assert!(account.body().blocks().next().is_none());
+    assert_eq!(
+        resources(&body, "azurerm_user_assigned_identity")
+            .filter(|b| b.labels()[1].as_str().starts_with("agents_store"))
+            .count(),
+        0
+    );
 }
