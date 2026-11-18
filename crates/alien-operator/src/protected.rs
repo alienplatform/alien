@@ -811,6 +811,7 @@ fn protect_config(
         // protected installation runs without them.
         management_config: None,
         gcp_federation_scope: None,
+        deployment_id: None,
         compute_backend: None,
         domain_metadata: None,
         native_image_host: None,

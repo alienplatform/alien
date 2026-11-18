@@ -749,6 +749,31 @@ impl PreflightRunner {
             }
             (direct_setup, imported_setup_authorized)
         };
+        // A direct setup has no setup package, and an Azure sandbox with internet egress connects
+        // to dedicated subnets and a gateway that only the package creates. Refuse before setup
+        // creates anything, so the customer has no half-made install to clean up.
+        if direct_setup && platform == Platform::Azure {
+            for (id, entry) in mutated_stack.resources() {
+                let internet = entry
+                    .config
+                    .downcast_ref::<alien_core::Sandbox>()
+                    .is_some_and(|sandbox| sandbox.egress == alien_core::SandboxEgress::Internet);
+                if internet {
+                    return Err(AlienError::new(ErrorData::RuntimeCheckFailed {
+                        check_name: "An Azure sandbox with internet egress needs the setup package"
+                            .to_string(),
+                        message: format!(
+                            "Sandbox '{id}' declares egress internet, which on Azure needs the \
+                             dedicated sandbox subnets and gateway that the Terraform setup \
+                             package creates, and a direct setup creates neither. Nothing was \
+                             created. Install it with the Terraform setup package, or declare \
+                             egress none or allow for this sandbox"
+                        ),
+                        platform: Some("azure".to_string()),
+                    }));
+                }
+            }
+        }
         let setup_update_authorized = direct_setup || imported_setup_authorized;
 
         // Match the deployment values used by the IAM policy writers. Physical
@@ -1155,6 +1180,92 @@ mod setup_update_authorization_tests {
         );
         // Nothing to move once the pick matches the stack.
         assert!(PreflightRunner::with_chosen_machines(&updated, &state, &chosen).is_none());
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn a_direct_azure_setup_of_an_internet_sandbox_is_refused_before_anything_is_created() {
+        use alien_core::{Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let config = deployment_config();
+        let state = StackState::new(Platform::Azure);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".into(),
+        };
+        let stack = |egress: SandboxEgress| {
+            Stack::new("azure-sandbox".into())
+                .add(
+                    Sandbox::new("box".into())
+                        .code(SandboxCode::Image {
+                            image: "ubuntu".into(),
+                            bundled_from: None,
+                        })
+                        .egress(egress)
+                        .lifecycle(SandboxLifecyclePolicy {
+                            max_lifetime_seconds: None,
+                            idle_pause_seconds: None,
+                        })
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+        };
+
+        let error = runner
+            .run_deployment_time_preflights(
+                stack(SandboxEgress::Internet),
+                &state,
+                &config,
+                &client,
+                None,
+                None,
+                Some(alien_core::InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .expect_err("a direct setup cannot create the internet egress network");
+        assert_eq!(error.code, "RUNTIME_CHECK_FAILED", "{error}");
+        let text = format!("{error:?}");
+        assert!(
+            text.contains("Terraform setup"),
+            "names the package: {text}"
+        );
+        assert!(text.contains("Nothing was created"), "{text}");
+
+        // The same stack with a package-created network, and a direct setup of a sandbox that
+        // needs no such network, pass this check.
+        for (egress, authority) in [
+            (
+                SandboxEgress::Internet,
+                Some(alien_core::InitialSetupAuthority::ImportedHandoff),
+            ),
+            (
+                SandboxEgress::None,
+                Some(alien_core::InitialSetupAuthority::DirectSetup),
+            ),
+            (
+                SandboxEgress::Allow,
+                Some(alien_core::InitialSetupAuthority::DirectSetup),
+            ),
+        ] {
+            if let Err(error) = runner
+                .run_deployment_time_preflights(
+                    stack(egress.clone()),
+                    &state,
+                    &config,
+                    &client,
+                    None,
+                    None,
+                    authority,
+                )
+                .await
+            {
+                assert_ne!(
+                    error.code, "RUNTIME_CHECK_FAILED",
+                    "{egress:?} must not be refused by this check: {error}"
+                );
+            }
+        }
     }
 
     #[cfg(feature = "runtime-checks")]

@@ -146,17 +146,32 @@ impl AzureContainerAppsEnvironmentController {
             .service_provider
             .get_azure_long_running_operation_client(azure_config)?;
 
-        let status_result = operation_client
+        let status_result = match operation_client
             .check_status(
                 long_running_op,
                 "CreateManagedEnvironment",
                 environment_name,
             )
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure long-running operation failed".to_string(),
-                resource_id: Some(desired_config.id.clone()),
-            })?;
+        {
+            Ok(status) => status,
+            Err(AlienError {
+                error: Some(CloudClientErrorData::RemoteOperationFailed { .. }),
+                ..
+            }) if self.resource_is_not_failed(ctx, environment_name).await? => {
+                // A stored operation URL goes stale: after a failed run is retried, Azure can
+                // report the old operation as canceled although the environment itself
+                // finished creating. The environment's own provisioning state decides.
+                info!(environment_name=%environment_name, "Stored Azure operation reports failed or canceled; the environment exists and is not failed, checking the resource instead");
+                Some(String::new())
+            }
+            Err(e) => {
+                return Err(e.context(ErrorData::CloudPlatformError {
+                    message: "Azure long-running operation failed".to_string(),
+                    resource_id: Some(desired_config.id.clone()),
+                }))
+            }
+        };
 
         if status_result.is_some() {
             info!(environment_name=%environment_name, "Azure long-running operation completed successfully, now checking resource status");
@@ -762,6 +777,37 @@ fn emit_azure_container_apps_environment_heartbeat(
 
 // Separate impl block for helper methods
 impl AzureContainerAppsEnvironmentController {
+    /// True when the environment exists and Azure does not report its provisioning as failed.
+    async fn resource_is_not_failed(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        environment_name: &str,
+    ) -> Result<bool> {
+        let azure_config = ctx.get_azure_config()?;
+        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let client = ctx
+            .service_provider
+            .get_azure_container_apps_client(azure_config)?;
+        match client
+            .get_managed_environment(&resource_group_name, environment_name)
+            .await
+        {
+            Ok(env) => Ok(!matches!(
+                env.properties.and_then(|p| p.provisioning_state),
+                Some(ManagedEnvironmentPropertiesProvisioningState::Failed)
+            )),
+            Err(AlienError {
+                error: Some(CloudClientErrorData::RemoteResourceNotFound { .. }),
+                ..
+            }) => Ok(false),
+            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+                message: "Failed to check environment status after its operation failed"
+                    .to_string(),
+                resource_id: None,
+            })),
+        }
+    }
+
     // ─────────────── HELPER METHODS ────────────────────────────
     fn handle_creation_completed(
         &mut self,
@@ -1053,6 +1099,111 @@ mod tests {
                 |id| id.ends_with("/subnets/test-default-network-container-apps-subnet")
             ),
             "environment subnet: {subnet:?}"
+        );
+    }
+
+    /// Builds an executor whose create starts a long-running operation. The operation then
+    /// reports canceled, and the resource itself reports `state`.
+    async fn executor_with_canceled_operation(state: &'static str) -> SingleControllerExecutor {
+        use alien_azure_clients::long_running_operation::{
+            LongRunningOperation, MockLongRunningOperationApi,
+        };
+        use alien_azure_clients::models::managed_environments::ManagedEnvironment;
+        use alien_client_core::ErrorData as CloudClientErrorData;
+        use alien_error::AlienError;
+
+        let mut container_apps = MockContainerAppsApi::new();
+        container_apps
+            .expect_create_or_update_managed_environment()
+            .returning(|_, _, _| {
+                Ok(OperationResult::LongRunning(LongRunningOperation {
+                    url: "https://management.azure.com/operations/old".to_string(),
+                    retry_after: Some(std::time::Duration::from_millis(1)),
+                    location_url: None,
+                }))
+            });
+        container_apps
+            .expect_get_managed_environment()
+            .returning(move |_, name| {
+                Ok(
+                    serde_json::from_value::<ManagedEnvironment>(serde_json::json!({
+                        "name": name,
+                        "location": "eastus",
+                        "properties": { "provisioningState": state },
+                    }))
+                    .expect("environment fixture"),
+                )
+            });
+        let mut lro = MockLongRunningOperationApi::new();
+        lro.expect_check_status()
+            .returning(|_, operation, resource| {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteOperationFailed {
+                        operation: format!("Azure {operation}"),
+                        resource_name: resource.to_string(),
+                        status: "Canceled".to_string(),
+                        provider_code: Some("OperationFailed".to_string()),
+                        message: "Operation was canceled".to_string(),
+                    },
+                ))
+            });
+        let container_apps = Arc::new(container_apps);
+        let lro = Arc::new(lro);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_container_apps_client()
+            .returning(move |_| Ok(container_apps.clone()));
+        provider
+            .expect_get_azure_long_running_operation_client()
+            .returning(move |_| Ok(lro.clone()));
+
+        SingleControllerExecutor::builder()
+            .resource(
+                AzureContainerAppsEnvironment::new("default-container-env".to_string()).build(),
+            )
+            .controller(AzureContainerAppsEnvironmentController::default())
+            .platform(Platform::Azure)
+            .stack_settings(StackSettings::default())
+            .service_provider(Arc::new(provider))
+            .with_dependency(
+                test_azure_resource_group(),
+                AzureResourceGroupController::mock_ready("default-resource-group"),
+            )
+            .build()
+            .await
+            .expect("executor should build")
+    }
+
+    /// A retried run re-polls the operation URL stored by the failed run, and Azure reports it
+    /// canceled although the environment finished creating. The environment decides.
+    #[tokio::test]
+    async fn a_canceled_stored_operation_converges_when_the_environment_succeeded() {
+        let mut executor = executor_with_canceled_operation("Succeeded").await;
+        executor.step().await.expect("create starts the operation");
+        executor
+            .step()
+            .await
+            .expect("a canceled operation of a succeeded environment is not a failure");
+        let controller = executor
+            .internal_state::<AzureContainerAppsEnvironmentController>()
+            .expect("controller state");
+        assert!(controller.long_running_operation.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_canceled_stored_operation_fails_when_the_environment_failed() {
+        let mut executor = executor_with_canceled_operation("Failed").await;
+        executor.step().await.expect("create starts the operation");
+        let _ = executor.step().await;
+        let result = executor.run_until_terminal().await;
+        assert!(
+            result.is_err(),
+            "a failed environment must fail the resource"
+        );
+        let message = format!("{:?}", result.unwrap_err());
+        assert!(
+            message.contains("canceled"),
+            "operation error is kept: {message}"
         );
     }
 }

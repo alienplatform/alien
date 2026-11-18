@@ -742,11 +742,11 @@ pub async fn handle_initial_setup_failed(
         })
     })?;
 
-    if current.platform == alien_core::Platform::Local
-        && next.runtime_metadata.as_ref().is_some_and(|metadata| {
-            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
-        })
-    {
+    // A direct setup retries against the release the deployment now wants, so a
+    // corrective release replaces the one whose setup failed.
+    if next.runtime_metadata.as_ref().is_some_and(|metadata| {
+        metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+    }) {
         let metadata = next.runtime_metadata.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::MissingConfiguration {
                 message: "Direct local setup metadata is required for retry".to_string(),
@@ -763,15 +763,13 @@ pub async fn handle_initial_setup_failed(
             .await?,
         );
     }
-    if current.platform == alien_core::Platform::Local {
-        if let Some(metadata) = next.runtime_metadata.as_mut().filter(|metadata| {
-            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
-        }) {
-            metadata.pending_prepared_release_id = next
-                .target_release
-                .as_ref()
-                .and_then(|release| release.release_id.clone());
-        }
+    if let Some(metadata) = next.runtime_metadata.as_mut().filter(|metadata| {
+        metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+    }) {
+        metadata.pending_prepared_release_id = next
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.clone());
     }
     let runtime_metadata = next.runtime_metadata.as_ref().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
@@ -3138,6 +3136,51 @@ mod tests {
             state.stack_state.unwrap().resources["removed"].status,
             ResourceStatus::Deleted
         );
+    }
+
+    #[tokio::test]
+    async fn a_direct_setup_retry_prepares_the_current_release_not_the_failed_one() {
+        let failed_release = Stack::new("test".to_string())
+            .add(
+                Storage::new("removed".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut stack_state = deployed_test_stack(&failed_release).await;
+        let resource = stack_state.resources.get_mut("removed").unwrap();
+        let mut controller = resource.get_internal_controller().unwrap().unwrap();
+        controller.transition_to_delete_start().unwrap();
+        controller.transition_to_failure();
+        resource.status = controller.get_status();
+        resource.last_failed_state = resource.internal_state.clone();
+        resource.set_internal_controller(Some(controller)).unwrap();
+
+        let mut state = resumed_test_setup(stack_state, failed_release);
+        state.status = DeploymentStatus::InitialSetupFailed;
+        state.retry_requested = true;
+        // Direct setup, not an automatic grant, on a platform other than Local.
+        assert!(!state.runtime_metadata.as_ref().unwrap().automatic_setup);
+        let fixed_release = Stack::new("test".to_string()).build();
+        let state = handle_initial_setup_failed(
+            state,
+            fixed_release,
+            config(),
+            ClientConfig::Test,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .expect("retry against the new release")
+        .state;
+        assert_eq!(state.status, DeploymentStatus::InitialSetup);
+        assert!(!state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .as_ref()
+            .unwrap()
+            .resources
+            .contains_key("removed"));
     }
 
     #[tokio::test]

@@ -46,6 +46,22 @@ pub fn request_test_worker_update(identifier: &str, requested: bool) {
     }
 }
 
+/// Workers whose pending update also holds the creation of their dependents, as a sandbox's
+/// image build does. A worker not listed here does not: its update never blocks a new dependent.
+static HOLDS_DEPENDENT_CREATION: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Makes a pending update of the test controller of the worker with this identifier hold the
+/// creation of its dependents (`true`, as for a sandbox), or not (`false`, the default).
+pub fn hold_dependent_creation_of_test_worker(identifier: &str, holds: bool) {
+    let mut ids = HOLDS_DEPENDENT_CREATION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    ids.retain(|id| id != identifier);
+    if holds {
+        ids.push(identifier.to_string());
+    }
+}
+
 /// Workers whose update check fails, as one that cannot compute its inputs does.
 static UPDATE_CHECK_FAILING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -263,6 +279,14 @@ impl TestWorkerController {
 
     fn updates_during_dependency_change(&self, _dependency: &ResourceRef) -> bool {
         self.updates_during_dependency_change
+    }
+
+    fn needs_update_holds_dependent_creation(&self, resource_id: &str) -> bool {
+        HOLDS_DEPENDENT_CREATION
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .any(|id| id == resource_id)
     }
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {

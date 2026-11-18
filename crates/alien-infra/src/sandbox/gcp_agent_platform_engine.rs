@@ -63,6 +63,11 @@ pub struct GcpAgentPlatformEngineController {
     pub(crate) engine_id: Option<String>,
     /// The create long-running operation being polled to learn the engine's id.
     pub(crate) pending_operation: Option<String>,
+    /// Set when this controller created the engine. A Frozen engine a setup package created is
+    /// removed by that package's `terraform destroy`; one a direct setup created has no package,
+    /// so its own teardown has to remove it or it is orphaned and bills.
+    #[serde(default)]
+    pub(crate) created_here: bool,
 }
 
 #[controller]
@@ -106,7 +111,14 @@ impl GcpAgentPlatformEngineController {
             Some(name) => Some(name),
             None => {
                 client
-                    .create_engine(&display_name)
+                    .create_engine(
+                        &display_name,
+                        Some(engine_marker(
+                            ctx.resource_prefix,
+                            &config.id,
+                            ctx.setup_owner_deployment_id()?,
+                        )),
+                    )
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!("Failed to create reasoning engine '{display_name}'"),
@@ -196,6 +208,7 @@ impl GcpAgentPlatformEngineController {
         })?;
         self.engine_id = Some(last_segment(&name).to_string());
         self.pending_operation = None;
+        self.created_here = true;
         info!(id=%config.id, engine=%last_segment(&name), "reasoning engine ready");
 
         Ok(HandlerAction::Continue {
@@ -231,7 +244,51 @@ impl GcpAgentPlatformEngineController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<GcpAgentPlatformEngine>()?;
 
-        if !self.owns_engine_deletion(ctx, &config.id)? {
+        // A destroy that arrives before the create operation was collected holds only the
+        // operation name. This controller started that operation, so the engine it produces is
+        // ours: wait for it, record the id, and let the delete below remove it. Skipping it
+        // would report Deleted while the cloud finishes creating a billed engine.
+        if self.engine_id.is_none() {
+            if let Some(op_name) = self.pending_operation.clone() {
+                let client = ctx
+                    .service_provider
+                    .get_gcp_agent_platform_client(ctx.get_gcp_config()?)?;
+                let operation = client.get_operation(&op_name).await.context(
+                    ErrorData::CloudPlatformError {
+                        message: format!("Failed to poll engine operation '{op_name}'"),
+                        resource_id: Some(config.id.clone()),
+                    },
+                )?;
+                if operation.done != Some(true) {
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(150),
+                        suggested_delay: Some(Duration::from_secs(2)),
+                    });
+                }
+                self.pending_operation = None;
+                if let Some(OperationResult::Response { response }) = operation.result {
+                    let engine = serde_json::from_value::<ReasoningEngine>(response)
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: "engine create operation returned an unreadable resource"
+                                .to_string(),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                    if let Some(name) = engine.name {
+                        self.engine_id = Some(last_segment(&name).to_string());
+                        self.created_here = true;
+                    }
+                }
+                // A failed create produced no engine: nothing to remove.
+            }
+        }
+
+        let owned = self.owns_engine_deletion(ctx, &config.id)?;
+        // The ownership lookup runs only for a deployment installed by direct setup: a package
+        // install's engine is never ours, and the management identity has no list permission, so
+        // asking would turn a clean teardown into a 403.
+        let direct = ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup;
+        if !owned && !(direct && self.marked_as_ours(ctx, &config.id).await?) {
             return Ok(HandlerAction::Continue {
                 state: Deleted,
                 suggested_delay: None,
@@ -287,19 +344,70 @@ impl GcpAgentPlatformEngineController {
     }
 }
 
+/// Text in the engine's description that only a direct setup of this deployment writes. It
+/// proves ownership when the controller state lost `created_here` (an older manager rewrote it).
+// The marker names the deployment (`prefix/id@deployment id`), so a second deployment that
+// reuses a prefix never matches it; it is compared exactly.
+pub(crate) fn engine_marker(
+    resource_prefix: &str,
+    resource_id: &str,
+    deployment_id: &str,
+) -> String {
+    crate::setup_owner::description_marker(&crate::setup_owner::owner_value(
+        resource_prefix,
+        resource_id,
+        deployment_id,
+    ))
+}
+
 impl GcpAgentPlatformEngineController {
+    /// True only when the engine in state carries this deployment's marker in the cloud. An
+    /// engine without the marker (Terraform-made, or another deployment's) is left alone.
+    async fn marked_as_ours(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<bool> {
+        let Some(engine) = self.engine_id.as_deref() else {
+            return Ok(false);
+        };
+        let client = ctx
+            .service_provider
+            .get_gcp_agent_platform_client(ctx.get_gcp_config()?)?;
+        let owner = crate::setup_owner::owner_value(
+            ctx.resource_prefix,
+            resource_id,
+            ctx.setup_owner_deployment_id()?,
+        );
+        let engines = client
+            .list_engines()
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to list reasoning engines to check ownership".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+        Ok(engines.iter().any(|candidate| {
+            candidate.name.as_deref().map(last_segment) == Some(engine)
+                && candidate
+                    .description
+                    .as_deref()
+                    .is_some_and(|text| crate::setup_owner::description_names_owner(text, &owner))
+        }))
+    }
+
     fn owns_engine_deletion(
         &self,
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
     ) -> Result<bool> {
-        engine_deletion_is_runtime_owned(
+        let runtime_owned = engine_deletion_is_runtime_owned(
             ctx.state
                 .resources
                 .get(resource_id)
                 .and_then(|resource| resource.lifecycle),
             resource_id,
-        )
+        )?;
+        Ok(runtime_owned || self.created_here)
     }
 
     /// Creates a controller already holding a ready engine id, for tests that seed it as a
@@ -310,6 +418,7 @@ impl GcpAgentPlatformEngineController {
             state: GcpAgentPlatformEngineState::Ready,
             engine_id: Some(engine_id.to_string()),
             pending_operation: None,
+            created_here: false,
             _internal_stay_count: None,
         }
     }
@@ -321,7 +430,7 @@ mod tests {
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::MockPlatformServiceProvider;
     use alien_core::{Platform, ResourceLifecycle};
-    use alien_gcp_clients::agent_platform::MockAgentPlatformApi;
+    use alien_gcp_clients::agent_platform::{MockAgentPlatformApi, ReasoningEngine};
     use alien_gcp_clients::longrunning::Operation;
     use std::sync::Arc;
 
@@ -384,7 +493,7 @@ mod tests {
     #[tokio::test]
     async fn create_records_the_server_assigned_id_then_deletes_it() {
         let mut m = MockAgentPlatformApi::new();
-        m.expect_create_engine().returning(|_| Ok(pending_op()));
+        m.expect_create_engine().returning(|_, _| Ok(pending_op()));
         m.expect_get_operation()
             .returning(|_| Ok(done_engine_op("eng-42")));
         m.expect_delete_engine().times(1).returning(|_| Ok(()));
@@ -435,7 +544,7 @@ mod tests {
     #[tokio::test]
     async fn a_create_failure_lands_in_provision_failed() {
         let mut m = MockAgentPlatformApi::new();
-        m.expect_create_engine().returning(|_| {
+        m.expect_create_engine().returning(|_, _| {
             Err(AlienError::new(
                 alien_gcp_clients::agent_platform::AgentPlatformErrorData::RequestFailed {
                     operation: "create engine".to_string(),
@@ -462,16 +571,92 @@ mod tests {
         );
     }
 
-    /// A Frozen engine belongs to the setup stack. `terraform destroy` removes it, and the
-    /// controller deleting it first would take the parent of sessions the stack still owns — so
-    /// this asserts on the client, not on the status a wrong implementation would also reach.
+    fn listed(engine: &str, description: Option<&str>) -> ReasoningEngine {
+        ReasoningEngine {
+            name: Some(format!(
+                "projects/p/locations/us-central1/reasoningEngines/{engine}"
+            )),
+            display_name: None,
+            description: description.map(str::to_string),
+            extra: Default::default(),
+        }
+    }
+
+    /// A Frozen engine belongs to the setup stack unless the cloud object says this deployment
+    /// made it. `terraform destroy` removes a package engine, and the controller deleting it
+    /// first would take the parent of sessions the stack still owns, so an engine with no
+    /// marker (or another deployment's) is never deleted, asserted on the client.
     #[tokio::test]
-    async fn a_frozen_engine_is_torn_down_without_a_single_provider_call() {
-        let mut provider = MockPlatformServiceProvider::new();
-        provider.expect_get_gcp_agent_platform_client().never();
+    async fn a_frozen_engine_without_this_deployments_marker_is_left_alone() {
+        for description in [
+            None,
+            Some("Alien setup owner: other/orders-engine@dep_test."),
+            // Same prefix and id, another deployment; and the earlier, deployment-less form.
+            Some("Alien setup owner: test/orders-engine@dep_other."),
+            Some("Alien setup owner: test/orders-engine."),
+            Some("made by hand"),
+        ] {
+            let mut m = MockAgentPlatformApi::new();
+            m.expect_list_engines()
+                .returning(move || Ok(vec![listed("eng-42", description)]));
+            m.expect_delete_engine().never();
+
+            let mut executor = build_executor_with(
+                provider_with(Arc::new(m)),
+                ResourceLifecycle::Frozen,
+                GcpAgentPlatformEngineController::mock_ready("eng-42"),
+            )
+            .await;
+
+            executor.delete().expect("delete is accepted");
+            executor
+                .run_until_terminal()
+                .await
+                .expect("delete runs to terminal");
+            assert_eq!(executor.status(), ResourceStatus::Deleted);
+        }
+    }
+
+    /// A package-installed engine is never ours, and the management identity cannot list
+    /// engines: teardown must make no provider call at all (the mock has no expectation).
+    #[tokio::test]
+    async fn a_package_installed_engine_is_left_alone_without_any_provider_call() {
+        let m = MockAgentPlatformApi::new();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(GcpAgentPlatformEngine::new("orders-engine".to_string()).build())
+            .controller(GcpAgentPlatformEngineController::mock_ready("eng-42"))
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+            .service_provider(provider_with(Arc::new(m)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.delete().expect("delete is accepted");
+        executor.run_until_terminal().await.expect("terminal");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// An older manager rewrites the controller state without `created_here`. The marker this
+    /// setup wrote on the engine still proves the engine is its own, so teardown removes it.
+    #[tokio::test]
+    async fn a_frozen_engine_with_this_deployments_marker_is_deleted_when_the_state_lost_its_flag()
+    {
+        let mut m = MockAgentPlatformApi::new();
+        m.expect_list_engines().returning(|| {
+            Ok(vec![
+                listed("eng-1", Some("Alien setup owner: test/orders-engine@dep_test.")),
+                listed("eng-42", Some("Alien setup owner: test/orders-engine@dep_test.")),
+            ])
+        });
+        m.expect_delete_engine()
+            .withf(|engine| engine == "eng-42")
+            .times(1)
+            .returning(|_| Ok(()));
 
         let mut executor = build_executor_with(
-            Arc::new(provider),
+            provider_with(Arc::new(m)),
             ResourceLifecycle::Frozen,
             GcpAgentPlatformEngineController::mock_ready("eng-42"),
         )
@@ -482,6 +667,87 @@ mod tests {
             .run_until_terminal()
             .await
             .expect("delete runs to terminal");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// The marker is written when the engine is created.
+    #[tokio::test]
+    async fn the_engine_is_created_with_this_deployments_marker() {
+        let mut m = MockAgentPlatformApi::new();
+        m.expect_create_engine()
+            .withf(|_, description| {
+                description.as_deref() == Some("Alien setup owner: test/orders-engine@dep_test.")
+            })
+            .times(1)
+            .returning(|_, _| Ok(pending_op()));
+        m.expect_get_operation()
+            .returning(|_| Ok(done_engine_op("eng-42")));
+        let mut executor = build_executor_with(
+            provider_with(Arc::new(m)),
+            ResourceLifecycle::Frozen,
+            Default::default(),
+        )
+        .await;
+        executor.run_until_terminal().await.expect("create runs");
+    }
+
+    /// A direct setup has no package to run `terraform destroy`, so the engine its own controller
+    /// created is removed by its own teardown, Frozen or not. An imported one (never created
+    /// here) is still left to the package, which the test above pins.
+    #[tokio::test]
+    async fn a_frozen_engine_a_direct_setup_created_is_deleted_by_its_teardown() {
+        let mut m = MockAgentPlatformApi::new();
+        m.expect_create_engine().returning(|_, _| Ok(pending_op()));
+        m.expect_get_operation()
+            .returning(|_| Ok(done_engine_op("eng-42")));
+        m.expect_delete_engine()
+            .withf(|engine| engine == "eng-42")
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut executor = build_executor_with(
+            provider_with(Arc::new(m)),
+            ResourceLifecycle::Frozen,
+            Default::default(),
+        )
+        .await;
+        executor.run_until_terminal().await.expect("create runs");
+        let controller = executor
+            .internal_state::<GcpAgentPlatformEngineController>()
+            .expect("the controller downcasts");
+        assert!(controller.created_here);
+
+        executor.delete().expect("delete is accepted");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete runs to terminal");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// Destroy before the create operation was collected: only the operation name is in state.
+    /// The engine the operation produces is deleted, not orphaned.
+    #[tokio::test]
+    async fn delete_with_only_a_pending_create_operation_deletes_the_resulting_engine() {
+        let mut m = MockAgentPlatformApi::new();
+        m.expect_get_operation()
+            .returning(|_| Ok(done_engine_op("eng-77")));
+        m.expect_delete_engine()
+            .withf(|engine| engine == "eng-77")
+            .times(1)
+            .returning(|_| Ok(()));
+        let controller = GcpAgentPlatformEngineController {
+            pending_operation: Some("projects/p/locations/us-central1/operations/op1".into()),
+            ..Default::default()
+        };
+        let mut executor = build_executor_with(
+            provider_with(Arc::new(m)),
+            ResourceLifecycle::Frozen,
+            controller,
+        )
+        .await;
+        executor.delete().expect("delete is accepted");
+        executor.run_until_terminal().await.expect("terminal");
         assert_eq!(executor.status(), ResourceStatus::Deleted);
     }
 

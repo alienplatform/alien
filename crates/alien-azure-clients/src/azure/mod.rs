@@ -315,6 +315,43 @@ pub fn extract_oid_from_token(token: &str) -> Result<String> {
     })
 }
 
+/// Whether an Azure JWT access token belongs to a signed-in user rather than an application
+/// (service principal or managed identity). Role assignments must name the real type: Azure
+/// rejects a user's object ID that is declared a service principal.
+///
+/// An application token says `idtyp: "app"`. A user token carries delegated claims (`scp`,
+/// `upn`) or says `idtyp: "user"`. A token with none of these is treated as an application.
+pub fn token_is_user_principal(token: &str) -> Result<bool> {
+    use base64::Engine;
+
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return Err(AlienError::new(ErrorData::InvalidInput {
+            message: "Azure access token is not a valid JWT (expected 3 parts)".to_string(),
+            field_name: None,
+        }));
+    }
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .map_err(|e| {
+            AlienError::new(ErrorData::InvalidInput {
+                message: format!("Failed to base64-decode Azure JWT payload: {}", e),
+                field_name: None,
+            })
+        })?;
+    let claims: serde_json::Value = serde_json::from_slice(&payload_bytes).map_err(|e| {
+        AlienError::new(ErrorData::InvalidInput {
+            message: format!("Failed to parse Azure JWT payload: {}", e),
+            field_name: None,
+        })
+    })?;
+    Ok(match claims.get("idtyp").and_then(|v| v.as_str()) {
+        Some("app") => false,
+        Some("user") => true,
+        _ => claims.get("scp").is_some() || claims.get("upn").is_some(),
+    })
+}
+
 /// Trait for Azure platform configuration operations
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
@@ -761,5 +798,35 @@ mod tests {
             .await
             .expect_err("a token for another audience must not be reused");
         assert_eq!(error.code, "AUTHENTICATION_ERROR");
+    }
+}
+
+#[cfg(test)]
+mod token_principal_tests {
+    use super::token_is_user_principal;
+    use base64::Engine;
+
+    fn token(claims: serde_json::Value) -> String {
+        let enc = |v: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v);
+        format!("{}.{}.sig", enc(b"{}"), enc(claims.to_string().as_bytes()))
+    }
+
+    #[test]
+    fn user_and_application_tokens_are_told_apart() {
+        assert!(token_is_user_principal(&token(
+            serde_json::json!({"oid":"1","scp":"user_impersonation","upn":"a@b"})
+        ))
+        .unwrap());
+        assert!(
+            token_is_user_principal(&token(serde_json::json!({"oid":"1","idtyp":"user"}))).unwrap()
+        );
+        assert!(
+            !token_is_user_principal(&token(serde_json::json!({"oid":"1","idtyp":"app"}))).unwrap()
+        );
+        assert!(!token_is_user_principal(&token(
+            serde_json::json!({"oid":"1","idtyp":"app","scp":"x"})
+        ))
+        .unwrap());
+        assert!(!token_is_user_principal(&token(serde_json::json!({"oid":"1"}))).unwrap());
     }
 }

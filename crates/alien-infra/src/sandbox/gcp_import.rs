@@ -42,6 +42,7 @@ impl ResourceImporter for GcpAgentPlatformEngineImporter {
             state: GcpAgentPlatformEngineState::Ready,
             engine_id: Some(last_segment(&data.engine_id).to_string()),
             pending_operation: None,
+            created_here: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

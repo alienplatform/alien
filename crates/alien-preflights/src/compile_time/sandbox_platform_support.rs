@@ -105,20 +105,6 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                         sandbox.id()
                     ));
                 }
-                // Preview signs an edge credential as an identity setup creates beside the engine.
-                // A Live sandbox's engine is made by the runtime after setup, so nothing creates
-                // that identity and a deployed `preview()` would fail at the first call.
-                if platform == Platform::Gcp
-                    && lifecycle == ResourceLifecycle::Live
-                    && !sandbox.preview_ports.is_empty()
-                {
-                    return Some(format!(
-                        "Sandbox '{}': preview on GCP needs a signing identity that setup creates \
-                         next to the engine, and a Live sandbox's engine is created after setup; \
-                         declare the sandbox Frozen or remove its preview ports",
-                        sandbox.id()
-                    ));
-                }
                 // The edge credential is the caller's execute right, so a preview nobody holds
                 // execute for would have no one to sign it, and one that someone else could hold
                 // would be command access handed out as if it were port access.
@@ -251,10 +237,11 @@ mod tests {
         }
     }
 
-    /// GCP preview is signed as an identity setup creates beside the engine. A Live sandbox has
-    /// none, so the plan refuses it instead of leaving the first `preview()` to fail.
+    /// GCP preview is signed as an identity setup creates beside the engine. A Live sandbox on
+    /// GCP is created by setup like a Frozen one (`SandboxSetupOwnedMutation`), so both lifecycles
+    /// have that signer and the one declaration is accepted.
     #[tokio::test]
-    async fn a_live_gcp_sandbox_with_preview_ports_is_refused_and_a_frozen_one_passes() {
+    async fn a_live_gcp_sandbox_with_preview_ports_passes_like_a_frozen_one() {
         let with_ports = || {
             Sandbox::new("agent".to_string())
                 .code(SandboxCode::Image {
@@ -269,19 +256,17 @@ mod tests {
                 .preview_ports(vec![8080])
                 .build()
         };
+        let mut live_stack = stack_with_lifecycle(with_ports(), ResourceLifecycle::Live);
+        live_stack.permissions.profiles.insert(
+            "worker".to_string(),
+            alien_core::permissions::PermissionProfile::new()
+                .resource("agent", ["sandbox/execute"]),
+        );
         let live = SandboxPlatformSupportCheck
-            .check(
-                &stack_with_lifecycle(with_ports(), ResourceLifecycle::Live),
-                Platform::Gcp,
-            )
+            .check(&live_stack, Platform::Gcp)
             .await
             .expect("check runs");
-        assert!(!live.success, "a Live GCP preview has no signer");
-        let rendered = live.errors.join(" ");
-        assert!(
-            rendered.contains("agent") && rendered.contains("Frozen"),
-            "{rendered}"
-        );
+        assert!(live.success, "{:?}", live.errors);
 
         let mut owned = stack_with(with_ports());
         owned.permissions.profiles.insert(

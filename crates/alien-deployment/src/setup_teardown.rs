@@ -68,6 +68,11 @@ async fn run_setup_teardown_after_handoff_inner(
     transport: &dyn DeploymentLoopTransport,
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
 ) -> Result<Option<RunnerResult>> {
+    // Controllers mark and recognise what setup created by the deployment's own id; a stored
+    // or supplied configuration cannot choose it, and a checkpoint that replaces the
+    // configuration cannot drop it.
+    config.deployment_id = Some(deployment_id.to_string());
+
     if !matches!(
         state.status,
         DeploymentStatus::TeardownRequired
@@ -732,6 +737,7 @@ async fn checkpoint_setup_teardown_state(
             if let Some(updated_config) = reconciled.config {
                 *config = updated_config;
             }
+            config.deployment_id = Some(deployment_id.to_string());
             Ok(())
         }
         Err(error) => {
@@ -853,6 +859,68 @@ mod tests {
                 config: None,
             })
         }
+    }
+
+    /// A checkpoint that answers with the stored configuration, which never holds the id.
+    struct ReplacingTransport;
+
+    #[async_trait::async_trait]
+    impl DeploymentLoopTransport for ReplacingTransport {
+        async fn reconcile_step(
+            &self,
+            _deployment_id: &str,
+            _state: &DeploymentState,
+            config: &DeploymentConfig,
+            _update_heartbeat: bool,
+            _suggested_delay_ms: Option<u64>,
+            _heartbeats: Vec<alien_core::ResourceHeartbeat>,
+            _observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
+        ) -> std::result::Result<StepReconcileResult, AlienError> {
+            let mut stored = config.clone();
+            stored.deployment_id = None;
+            Ok(StepReconcileResult {
+                state: None,
+                config: Some(stored),
+            })
+        }
+    }
+
+    /// Teardown started from a configuration without the deployment id (the deploy CLI's
+    /// deletion and a resumed destroy build one) sets it, and a checkpoint that replaces the
+    /// configuration cannot drop it: controllers recognise what setup created by that id.
+    #[tokio::test]
+    async fn teardown_sets_the_deployment_id_and_keeps_it_through_a_checkpoint() {
+        let mut state = DeploymentState {
+            runtime_metadata: None,
+            ..teardown_required(InitialSetupAuthority::DirectSetup)
+        };
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        assert!(config.deployment_id.is_none());
+        run_setup_teardown_after_handoff(
+            &mut state,
+            &mut config,
+            &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            "dep_test",
+            &RunnerPolicy {
+                operation: LoopOperation::Delete,
+                delay_strategy: DelayStrategy::Inline,
+                ..Default::default()
+            },
+            &ReplacingTransport,
+            Some(Arc::new(MockPlatformServiceProvider::new())),
+        )
+        .await
+        .expect("teardown runs");
+        assert_eq!(config.deployment_id.as_deref(), Some("dep_test"));
     }
 
     /// Setup teardown with nothing left to delete: no scaffolding, no setup-owned resources.

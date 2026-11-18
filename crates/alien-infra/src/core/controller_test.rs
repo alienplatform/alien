@@ -324,6 +324,9 @@ pub const MAX_SUGGESTED_DELAY: Duration = Duration::from_secs(10 * 60);
 ///     assert_eq!(executor.status(), ResourceStatus::Deleted);
 /// }
 /// ```
+/// The deployment id the harness runs every controller under.
+pub const TEST_DEPLOYMENT_ID: &str = "dep_test";
+
 pub struct SingleControllerExecutor {
     // The controller being tested
     controller: Box<dyn ResourceController>,
@@ -421,6 +424,7 @@ impl SingleControllerExecutor {
                 .input_values(self.input_values.clone())
                 .setup_run(self.setup_run)
                 .maybe_setup_run_id(self.setup_run_id.clone())
+                .deployment_id(TEST_DEPLOYMENT_ID.to_string())
                 .maybe_management_config(self.management_config.clone())
                 .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
                 .maybe_compute_backend(self.compute_backend.clone())
@@ -689,6 +693,7 @@ impl SingleControllerExecutor {
             .input_values(self.input_values.clone())
             .setup_run(self.setup_run)
             .maybe_setup_run_id(self.setup_run_id.clone())
+            .deployment_id(TEST_DEPLOYMENT_ID.to_string())
             .maybe_management_config(self.management_config.clone())
             .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
             .maybe_compute_backend(self.compute_backend.clone())
@@ -769,6 +774,18 @@ impl SingleControllerExecutor {
 
     /// The desired stack's configuration of another resource, to change after the stack
     /// mutations ran, as a later release would.
+    /// Adds a permission profile to the desired stack, as a stack edited between two setup runs.
+    pub fn add_permission_profile(
+        &mut self,
+        name: impl Into<String>,
+        profile: alien_core::permissions::PermissionProfile,
+    ) {
+        self.desired_stack
+            .permissions
+            .profiles
+            .insert(name.into(), profile);
+    }
+
     pub fn desired_resource_config_mut(&mut self, resource_id: &str) -> Option<&mut Resource> {
         self.desired_stack
             .resources
@@ -819,6 +836,7 @@ pub struct SingleControllerExecutorBuilder {
     initial_setup_authority: alien_core::InitialSetupAuthority,
     resource_prefix: String,
     permission_profiles: Vec<(String, alien_core::permissions::PermissionProfile)>,
+    remote_access: bool,
     delay_mode: DelayMode,
 }
 
@@ -861,6 +879,7 @@ impl SingleControllerExecutorBuilder {
             initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
             resource_prefix: "test".to_string(),
             permission_profiles: Vec::new(),
+            remote_access: false,
             delay_mode: DelayMode::default(),
         }
     }
@@ -889,6 +908,12 @@ impl SingleControllerExecutorBuilder {
     /// that branches on ownership needs the Frozen shape to be constructible too.
     pub fn resource_lifecycle(mut self, lifecycle: ResourceLifecycle) -> Self {
         self.resource_lifecycle = lifecycle;
+        self
+    }
+
+    /// Declares the resource under test with remote access, as `add_with_remote_access` does.
+    pub fn remote_access(mut self, remote_access: bool) -> Self {
+        self.remote_access = remote_access;
         self
     }
 
@@ -1348,7 +1373,7 @@ impl SingleControllerExecutorBuilder {
                     .collect(),
                 display_name: None,
                 description: None,
-                remote_access: false,
+                remote_access: self.remote_access,
                 enabled_when: None,
             },
         );
@@ -1427,6 +1452,7 @@ impl SingleControllerExecutorBuilder {
             .stack_settings(self.stack_settings.clone())
             .setup_run(self.setup_run)
             .maybe_setup_run_id(setup_run_id.clone())
+            .deployment_id(TEST_DEPLOYMENT_ID.to_string())
             .maybe_management_config(management_config.clone())
             .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
             .maybe_compute_backend(self.compute_backend.clone())

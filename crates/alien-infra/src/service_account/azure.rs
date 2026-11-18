@@ -1066,7 +1066,7 @@ impl AzureServiceAccountController {
         let mut all_custom_roles = Vec::new();
         let mut all_bindings = Vec::new();
 
-        for permission_set in &service_account.stack_permission_sets {
+        for permission_set in stack_bound_permission_sets(&service_account.stack_permission_sets) {
             let grant_plan = generator
                 .generate_grant_plan(permission_set, BindingTarget::Stack, &permission_context)
                 .context(ErrorData::InfrastructureError {
@@ -1104,6 +1104,21 @@ impl AzureServiceAccountController {
             _internal_stay_count: None,
         }
     }
+}
+
+/// The sets of a profile's `"*"` entry that Azure binds at the stack: those with an Azure stack
+/// binding. A set with only a resource binding (`sandbox/execute`) belongs to one sandbox group,
+/// which setup's Terraform grants it on, once per group in the stack, so it has no stack-wide role
+/// to create here. This is the Terraform emitter's own rule: it skips the same sets.
+fn stack_bound_permission_sets(
+    sets: &[alien_core::PermissionSet],
+) -> impl Iterator<Item = &alien_core::PermissionSet> {
+    sets.iter().filter(|set| {
+        set.platforms
+            .azure
+            .as_ref()
+            .is_some_and(|bindings| bindings.iter().any(|b| b.binding.stack.is_some()))
+    })
 }
 
 fn emit_azure_service_account_heartbeat(
@@ -1177,4 +1192,24 @@ fn emit_azure_service_account_heartbeat(
         ),
         raw: vec![],
     });
+}
+
+#[cfg(test)]
+mod stack_grant_tests {
+    use super::stack_bound_permission_sets;
+
+    /// A profile that grants `"*": ["sandbox/execute", ...]` for AWS must not make the Azure
+    /// service account ask for a stack binding the set does not have: deploy failed with
+    /// "Binding target 'stack' is not supported by platform 'azure' in permission set
+    /// 'sandbox/execute'".
+    #[test]
+    fn a_wildcard_sandbox_execute_has_no_stack_role_on_azure() {
+        let execute = alien_permissions::get_permission_set("sandbox/execute").unwrap();
+        let storage = alien_permissions::get_permission_set("storage/data-read").unwrap();
+        let sets = vec![execute.clone(), storage.clone()];
+        let kept: Vec<_> = stack_bound_permission_sets(&sets)
+            .map(|s| s.id.clone())
+            .collect();
+        assert_eq!(kept, vec![storage.id.clone()]);
+    }
 }

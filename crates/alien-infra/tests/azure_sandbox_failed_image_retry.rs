@@ -118,6 +118,8 @@ async fn a_failed_build_is_rebuilt_on_retry() {
         .controller(controller)
         .platform(Platform::Azure)
         .resource_lifecycle(ResourceLifecycle::Frozen)
+        // Images are built by the provisioning run; a setup run builds none.
+        .setup_run(false)
         .service_provider(Arc::new(provider))
         .build()
         .await
