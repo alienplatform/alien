@@ -347,17 +347,62 @@ pub(crate) fn pod_waiting_reason(pods: &[k8s_openapi::api::core::v1::Pod]) -> Op
         .find_map(|pod| {
             let waiting = pod
                 .status
-                .as_ref()?
-                .container_statuses
-                .as_deref()?
-                .iter()
-                .find_map(|status| status.state.as_ref()?.waiting.as_ref())?;
-            let reason = waiting.reason.as_deref()?;
-            Some(format!(
-                "pod {} is waiting: {reason}",
-                pod.metadata.name.as_deref().unwrap_or("?")
-            ))
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_deref())
+                .and_then(|statuses| {
+                    statuses
+                        .iter()
+                        .find_map(|status| status.state.as_ref()?.waiting.as_ref())
+                })
+                .and_then(|waiting| waiting.reason.as_deref());
+            let name = pod.metadata.name.as_deref().unwrap_or("?");
+            match waiting {
+                Some(reason) => Some(format!("pod {name} is waiting: {reason}")),
+                None => unscheduled_reason(pod).map(|why| format!("pod {name} is Pending: {why}")),
+            }
         })
+}
+
+/// Why the scheduler has not placed a pod, from its `PodScheduled` condition, such as
+/// `Unschedulable "0/10 nodes are available: Insufficient cpu"`.
+fn unscheduled_reason(pod: &k8s_openapi::api::core::v1::Pod) -> Option<String> {
+    let condition = pod
+        .status
+        .as_ref()?
+        .conditions
+        .as_deref()?
+        .iter()
+        .find(|c| c.type_ == "PodScheduled" && c.status == "False")?;
+    Some(
+        match (condition.reason.as_deref(), condition.message.as_deref()) {
+            (Some(reason), Some(message)) => format!("{reason} \"{message}\""),
+            (Some(reason), None) => reason.to_string(),
+            (None, Some(message)) => format!("\"{message}\""),
+            (None, None) => "not scheduled".to_string(),
+        },
+    )
+}
+
+/// True on the last poll of a `Stay` that allows `max_times` polls. The step then fails with
+/// the workload's own state instead of the generic polling timeout.
+pub(crate) fn last_poll(stay_count: Option<u32>, max_times: u32) -> bool {
+    stay_count.unwrap_or(0) + 1 >= max_times
+}
+
+/// The message of a rollout wait that ran out of time: the counts, and the first pod that is
+/// not ready with its reason.
+pub(crate) fn rollout_timeout_message(
+    kind: &str,
+    workload_name: &str,
+    counts: &str,
+    pod_reason: Option<&str>,
+) -> String {
+    match pod_reason {
+        Some(reason) => format!(
+            "{kind} '{workload_name}' did not finish rolling out in time: {counts}; {reason}"
+        ),
+        None => format!("{kind} '{workload_name}' did not finish rolling out in time: {counts}"),
+    }
 }
 
 /// Best effort: a failure to list pods must not hide the drift being reported.
@@ -904,6 +949,43 @@ mod tests {
         for part in ["gateway", "ProgressDeadlineExceeded", "ImagePullBackOff"] {
             assert!(message.contains(part), "{message}");
         }
+    }
+
+    #[test]
+    fn a_pod_the_scheduler_cannot_place_is_reported_with_its_condition_message() {
+        let pods: Vec<k8s_openapi::api::core::v1::Pod> =
+            serde_json::from_value(serde_json::json!([
+                {"metadata":{"name":"agent-ok"},"status":{"phase":"Running"}},
+                {"metadata":{"name":"agent-x7k2p"},"status":{"phase":"Pending","conditions":[
+                    {"type":"PodScheduled","status":"False","reason":"Unschedulable",
+                     "message":"0/10 nodes are available: Insufficient cpu"}]}}
+            ]))
+            .unwrap();
+        assert_eq!(
+            pod_waiting_reason(&pods).as_deref(),
+            Some("pod agent-x7k2p is Pending: Unschedulable \"0/10 nodes are available: Insufficient cpu\"")
+        );
+    }
+
+    #[test]
+    fn the_last_poll_is_the_one_that_would_have_timed_out() {
+        assert!(!last_poll(None, 3));
+        assert!(!last_poll(Some(1), 3));
+        assert!(last_poll(Some(2), 3));
+    }
+
+    #[test]
+    fn a_rollout_timeout_message_carries_the_counts_and_the_pod_reason() {
+        let message = rollout_timeout_message(
+            "DaemonSet",
+            "agent",
+            "desired 10, updated 6, available 6",
+            Some("pod agent-1 is Pending: Unschedulable"),
+        );
+        assert_eq!(
+            message,
+            "DaemonSet 'agent' did not finish rolling out in time: desired 10, updated 6, available 6; pod agent-1 is Pending: Unschedulable"
+        );
     }
 
     #[test]

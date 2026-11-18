@@ -20,9 +20,10 @@ use crate::kubernetes_public_endpoint::{
 };
 use crate::kubernetes_workload_heartbeat::{
     assess_rollout, deployment_has_ready_replicas, deployment_rollout_complete,
-    emit_kubernetes_workload_heartbeat, label_selector, recovery_check, stalled_rollout_message,
-    statefulset_has_ready_replicas, workload_fully_ready, workload_pod_reason, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, RolloutWait, RolloutWatch,
+    emit_kubernetes_workload_heartbeat, label_selector, last_poll, recovery_check,
+    rollout_timeout_message, stalled_rollout_message, statefulset_has_ready_replicas,
+    workload_fully_ready, workload_pod_reason, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadHeartbeatInput, RolloutWait, RolloutWatch,
     KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -898,6 +899,34 @@ impl KubernetesContainerController {
         self.workload_failure = priority_failure
             .or(restricted_hint)
             .or(self.workload_failure.take());
+
+        if last_poll(
+            self._internal_stay_count,
+            KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+        ) {
+            let selector = self.workload_labels(ctx, &config.id, self.build_labels(workload_name));
+            let pod_reason =
+                workload_pod_reason(ctx, namespace, &selector, self.workload_failure.as_deref())
+                    .await;
+            return Err(AlienError::new(ErrorData::WorkloadNotReady {
+                resource_id: config.id.clone(),
+                message: rollout_timeout_message(
+                    if self.is_stateful {
+                        "StatefulSet"
+                    } else {
+                        "Deployment"
+                    },
+                    workload_name,
+                    &format!(
+                        "desired {}, ready {}, total {}",
+                        config.replicas.unwrap_or(1),
+                        ready_replicas.unwrap_or(0),
+                        replicas.unwrap_or(0)
+                    ),
+                    pod_reason.as_deref(),
+                ),
+            }));
+        }
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -1833,6 +1862,34 @@ impl KubernetesContainerController {
         self.workload_failure = priority_failure
             .or(restricted_hint)
             .or(self.workload_failure.take());
+
+        if last_poll(
+            self._internal_stay_count,
+            KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+        ) {
+            let selector = self.workload_labels(ctx, &config.id, self.build_labels(workload_name));
+            let pod_reason =
+                workload_pod_reason(ctx, namespace, &selector, self.workload_failure.as_deref())
+                    .await;
+            return Err(AlienError::new(ErrorData::WorkloadNotReady {
+                resource_id: config.id.clone(),
+                message: rollout_timeout_message(
+                    if self.is_stateful {
+                        "StatefulSet"
+                    } else {
+                        "Deployment"
+                    },
+                    workload_name,
+                    &format!(
+                        "desired {}, ready {}, total {}",
+                        desired_replicas,
+                        ready_replicas.unwrap_or(0),
+                        replicas.unwrap_or(0)
+                    ),
+                    pod_reason.as_deref(),
+                ),
+            }));
+        }
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),

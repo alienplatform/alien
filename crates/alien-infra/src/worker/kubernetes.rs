@@ -13,10 +13,10 @@ use crate::kubernetes_public_endpoint::{
 };
 use crate::kubernetes_workload_heartbeat::{
     assess_rollout, deployment_has_ready_replicas, deployment_rollout_complete,
-    emit_kubernetes_workload_heartbeat, label_selector, recovery_check, stalled_rollout_message,
-    workload_fully_ready, workload_pod_reason, KubernetesWorkload, KubernetesWorkloadDataKind,
-    KubernetesWorkloadHeartbeatInput, RolloutWait, RolloutWatch,
-    KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+    emit_kubernetes_workload_heartbeat, label_selector, last_poll, recovery_check,
+    rollout_timeout_message, stalled_rollout_message, workload_fully_ready, workload_pod_reason,
+    KubernetesWorkload, KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, RolloutWait,
+    RolloutWatch, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -33,6 +33,21 @@ use super::kubernetes_deployment::{
     build_worker_deployment, kubernetes_namespace, recorded_architecture, worker_labels,
     WORKER_CONTAINER_NAME,
 };
+
+/// "desired 3, updated 2, available 1" for the Deployment, as the rollout timeout reports it.
+fn deployment_counts(deployment: &k8s_openapi::api::apps::v1::Deployment) -> String {
+    let desired = deployment
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.replicas)
+        .unwrap_or(1);
+    let status = deployment.status.as_ref();
+    format!(
+        "desired {desired}, updated {}, available {}",
+        status.and_then(|s| s.updated_replicas).unwrap_or(0),
+        status.and_then(|s| s.available_replicas).unwrap_or(0)
+    )
+}
 
 #[controller]
 pub struct KubernetesWorkerController {
@@ -312,11 +327,13 @@ impl KubernetesWorkerController {
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
+        let mut counts = "the Deployment does not exist yet".to_string();
         match deployment_client
             .get_deployment(namespace, deployment_name)
             .await
         {
             Ok(deployment) => {
+                counts = deployment_counts(&deployment);
                 let ready = deployment.status.as_ref().is_some_and(|status| {
                     let total = status.replicas.unwrap_or(0);
                     total > 0
@@ -365,6 +382,20 @@ impl KubernetesWorkerController {
                     resource_id: Some(config.id.clone()),
                 }));
             }
+        }
+
+        if last_poll(self._internal_stay_count, 60) {
+            let selector = worker_labels(deployment_name);
+            let pod_reason = workload_pod_reason(ctx, namespace, &selector, None).await;
+            return Err(AlienError::new(ErrorData::WorkloadNotReady {
+                resource_id: config.id.clone(),
+                message: rollout_timeout_message(
+                    "Deployment",
+                    deployment_name,
+                    &counts,
+                    pod_reason.as_deref(),
+                ),
+            }));
         }
 
         Ok(HandlerAction::Stay {
@@ -882,11 +913,13 @@ impl KubernetesWorkerController {
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
+        let mut counts = "the Deployment does not exist yet".to_string();
         match deployment_client
             .get_deployment(namespace, deployment_name)
             .await
         {
             Ok(deployment) => {
+                counts = deployment_counts(&deployment);
                 let desired = deployment
                     .spec
                     .as_ref()
@@ -927,6 +960,23 @@ impl KubernetesWorkerController {
                     resource_id: Some(config.id.clone()),
                 }));
             }
+        }
+
+        if last_poll(
+            self._internal_stay_count,
+            KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+        ) {
+            let selector = worker_labels(deployment_name);
+            let pod_reason = workload_pod_reason(ctx, namespace, &selector, None).await;
+            return Err(AlienError::new(ErrorData::WorkloadNotReady {
+                resource_id: config.id.clone(),
+                message: rollout_timeout_message(
+                    "Deployment",
+                    deployment_name,
+                    &counts,
+                    pod_reason.as_deref(),
+                ),
+            }));
         }
 
         Ok(HandlerAction::Stay {

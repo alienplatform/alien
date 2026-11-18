@@ -17,9 +17,9 @@ use crate::kubernetes_public_endpoint::{
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
-    KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+    emit_kubernetes_workload_heartbeat, label_selector, last_poll, rollout_timeout_message,
+    workload_pod_reason, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadHeartbeatInput, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -61,6 +61,22 @@ fn daemonset_rollout_complete(daemonset: &DaemonSet) -> bool {
             && status.updated_number_scheduled.unwrap_or(0) == desired
             && status.number_available.unwrap_or(0) == desired
     })
+}
+
+/// Polls (5 s apart) the create wait may take.
+const CREATE_WAIT_MAX_POLLS: u32 = 60;
+
+/// "desired 10, updated 6, available 6" for the DaemonSet, as the rollout timeout reports it.
+fn daemonset_counts(daemonset: Option<&DaemonSet>) -> String {
+    match daemonset.and_then(|d| d.status.as_ref()) {
+        Some(status) => format!(
+            "desired {}, updated {}, available {}",
+            status.desired_number_scheduled,
+            status.updated_number_scheduled.unwrap_or(0),
+            status.number_available.unwrap_or(0)
+        ),
+        None => "the DaemonSet reports no status".to_string(),
+    }
 }
 
 #[controller]
@@ -364,7 +380,8 @@ impl KubernetesDaemonController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if self.daemonset_ready(ctx).await? {
+        let live = self.read_daemonset(ctx).await?;
+        if live.as_ref().is_some_and(daemonset_is_ready) {
             return Ok(HandlerAction::Continue {
                 state: ReconcilePublicEndpoint,
                 suggested_delay: None,
@@ -375,9 +392,12 @@ impl KubernetesDaemonController {
         if self.workload_failure.is_none() {
             self.workload_failure = restricted_hint;
         }
+        if last_poll(self._internal_stay_count, CREATE_WAIT_MAX_POLLS) {
+            return Err(self.rollout_timeout(ctx, live.as_ref()).await);
+        }
 
         Ok(HandlerAction::Stay {
-            max_times: Some(60),
+            max_times: Some(CREATE_WAIT_MAX_POLLS),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -759,10 +779,14 @@ impl KubernetesDaemonController {
                 suggested_delay: None,
             });
         }
+        let live = self.read_daemonset(ctx).await?;
         let restricted_hint = self.root_image_hint(ctx).await?;
         self.record_workload_failure(ctx).await;
         if self.workload_failure.is_none() {
             self.workload_failure = restricted_hint;
+        }
+        if last_poll(self._internal_stay_count, UPDATE_WAIT_MAX_POLLS) {
+            return Err(self.rollout_timeout(ctx, live.as_ref()).await);
         }
 
         Ok(HandlerAction::Stay {
@@ -1242,12 +1266,39 @@ impl KubernetesDaemonController {
         };
     }
 
-    async fn daemonset_ready(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        Ok(self
-            .read_daemonset(ctx)
-            .await?
-            .as_ref()
-            .is_some_and(daemonset_is_ready))
+    /// The error for a DaemonSet that did not become ready in time: the counts and the first
+    /// pod that is not ready, with its reason. Retryable: a retry applies the spec again.
+    async fn rollout_timeout(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        live: Option<&DaemonSet>,
+    ) -> AlienError<ErrorData> {
+        let resource_id = ctx
+            .desired_resource_config::<Daemon>()
+            .map(|config| config.id.clone())
+            .unwrap_or_default();
+        let name = self.daemon_set_name.clone().unwrap_or_default();
+        let pod_reason = match self.namespace.as_deref() {
+            Some(namespace) => {
+                workload_pod_reason(
+                    ctx,
+                    namespace,
+                    &self.build_labels(&name),
+                    self.workload_failure.as_deref(),
+                )
+                .await
+            }
+            None => self.workload_failure.clone(),
+        };
+        AlienError::new(ErrorData::WorkloadNotReady {
+            resource_id,
+            message: rollout_timeout_message(
+                "DaemonSet",
+                &name,
+                &daemonset_counts(live),
+                pod_reason.as_deref(),
+            ),
+        })
     }
 
     /// The live DaemonSet, or `None` when it does not exist.
@@ -2778,5 +2829,71 @@ mod tests {
             .await
             .expect("recovers on the next refresh");
         assert_eq!(controller.get_status(), ResourceStatus::Running);
+    }
+
+    /// A roll that stalls (a node has no room for the new pod) ends with the counts and the
+    /// first pod that is not ready, not with the generic polling timeout.
+    #[tokio::test]
+    async fn a_daemon_update_wait_that_times_out_says_why() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes config")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual config")
+        };
+        *server_url = server.base_url();
+
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/api/v1/namespaces/test-ns/events");
+            then.status(200).json_body(
+                serde_json::json!({"apiVersion":"v1","kind":"EventList","metadata":{},"items":[]}),
+            );
+        });
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/api/v1/namespaces/test-ns/pods");
+            then.status(200).json_body(serde_json::json!({
+                "apiVersion":"v1","kind":"PodList","metadata":{},
+                "items":[{
+                    "metadata":{"name":"agent-x7k2p"},
+                    "status":{"phase":"Pending","conditions":[{
+                        "type":"PodScheduled","status":"False","reason":"Unschedulable",
+                        "message":"0/10 nodes are available: Insufficient cpu"
+                    }]}
+                }]
+            }));
+        });
+        let mut controller = manifest_test_controller();
+        let labels = controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200).json_body(serde_json::json!({
+                "apiVersion":"apps/v1", "kind":"DaemonSet",
+                "metadata":{"name":"agent", "generation":2, "labels":labels},
+                "spec":{"selector":{"matchLabels":{"app":"agent"}},"template":{"spec":{"containers":[]}}},
+                "status":{"desiredNumberScheduled":10, "numberReady":6, "updatedNumberScheduled":6,
+                    "numberAvailable":6, "observedGeneration":2}
+            }));
+        });
+        controller.state = KubernetesDaemonState::WaitingForUpdate;
+        controller._internal_stay_count = Some(UPDATE_WAIT_MAX_POLLS - 1);
+
+        let error = controller.step(&ctx).await.expect_err("times out");
+
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
+        assert!(error.retryable);
+        for part in [
+            "desired 10, updated 6, available 6",
+            "pod agent-x7k2p is Pending",
+            "0/10 nodes are available: Insufficient cpu",
+        ] {
+            assert!(error.message.contains(part), "{}", error.message);
+        }
     }
 }
