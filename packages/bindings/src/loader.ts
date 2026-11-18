@@ -303,6 +303,20 @@ export interface RawSandboxHandle {
   pause(sandboxId: string): Promise<void>
   resume(sandboxId: string): Promise<void>
   terminate(sandboxId: string): Promise<void>
+  storageStatus(sandboxId: string): Promise<RawSandboxStorageStatus | null>
+  syncStorage(sandboxId: string): Promise<RawSandboxStorageStatus>
+  readStorageFile(key: string, path: string): Promise<Buffer>
+  deleteStorage(key: string): Promise<void>
+}
+
+/** `SandboxStorageStatusJs` as napi hands it over. */
+export interface RawSandboxStorageStatus {
+  key?: string | null
+  state: string
+  lastSyncedAt?: string | null
+  head?: number | null
+  lastError?: string | null
+  grantExpiresAt?: string | null
 }
 
 /** Raw napi bindings entry point. Construction validates the environment. */

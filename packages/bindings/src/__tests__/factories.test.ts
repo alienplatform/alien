@@ -171,6 +171,13 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     pause: async () => {},
     resume: async () => {},
     terminate: async () => {},
+    storageStatus: async sandboxId =>
+      sandboxId === "plain"
+        ? null
+        : { key: "engine-42", state: "denied", head: 7, lastError: "grant expired" },
+    syncStorage: async () => ({ key: "engine-42", state: "replicating", head: 8 }),
+    readStorageFile: async (key, path) => Buffer.from(`${key}:${path}`),
+    deleteStorage: async () => {},
   }
 
   const bindings: RawBindingsHandle = {
@@ -695,15 +702,16 @@ describe("sandbox create", () => {
     expect(created.sandboxId).toBe("provider-assigned")
     // Positional, because the addon takes them positionally: a lifetime that arrives as the
     // tenant key, or not at all, is a sandbox with no deadline and no error to show for it.
-    expect(create).toHaveBeenCalledWith("mine", null, null, 600_000, null)
+    // The last is the storage key, absent here.
+    expect(create).toHaveBeenCalledWith("mine", null, null, 600_000, null, null)
 
     const resolved = await handle.getOrCreate({ sandboxId: "requested", timeoutMs: 1_000 })
     expect(resolved.sandbox.sandboxId).toBe("provider-recovered")
     expect(resolved.created).toBe(true)
-    expect(getOrCreate).toHaveBeenCalledWith("requested", null, null, 1_000, null)
+    expect(getOrCreate).toHaveBeenCalledWith("requested", null, null, 1_000, null, null)
 
     await handle.getOrCreate({ timeoutMs: 2_000 })
-    expect(getOrCreate).toHaveBeenNthCalledWith(2, null, null, null, 2_000, null)
+    expect(getOrCreate).toHaveBeenNthCalledWith(2, null, null, null, 2_000, null, null)
   })
 })
 
@@ -1496,6 +1504,28 @@ describe("sandbox streaming", () => {
     const read = await sandbox("sbx").readFile("s1", "a.txt")
 
     expect(Buffer.isBuffer(read)).toBe(true)
+  })
+})
+
+describe("sandbox persistent storage", () => {
+  it("reports status, syncs, reads a key's file and erases a key", async () => {
+    const { addon } = fakeAddon()
+    const { sandbox } = createFactories(() => addon)
+
+    expect(await sandbox("sbx").storageStatus("plain")).toBeNull()
+    expect(await sandbox("sbx").storageStatus("s1")).toEqual({
+      key: "engine-42",
+      state: "denied",
+      lastSyncedAt: null,
+      head: 7,
+      lastError: "grant expired",
+      grantExpiresAt: null,
+    })
+    expect((await sandbox("sbx").syncStorage("s1")).state).toBe("replicating")
+    expect((await sandbox("sbx").readStorageFile("engine-42", "notes.md")).toString()).toBe(
+      "engine-42:notes.md",
+    )
+    await sandbox("sbx").deleteStorage("engine-42")
   })
 })
 

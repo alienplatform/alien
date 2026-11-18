@@ -97,6 +97,14 @@ function fakeRemoteAddon() {
     pause: async () => {},
     resume: async () => {},
     terminate,
+    storageStatus: async () => null,
+    syncStorage: async () => {
+      throw new Error("unused")
+    },
+    readStorageFile: async () => {
+      throw new Error("unused")
+    },
+    deleteStorage: async () => {},
   }
   const resolveSandbox = vi.fn<(name: string) => Promise<RawSandboxHandle>>(async () => sandbox)
   const resolveAi = vi.fn<RawRemoteBindingsHandle["ai"]>(async () => ({

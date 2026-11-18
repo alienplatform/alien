@@ -781,5 +781,6 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<CommandFrame>()?;
     module.add_class::<JobResult>()?;
     module.add_class::<Preview>()?;
+    module.add_class::<sandbox::StorageStatus>()?;
     Ok(())
 }
