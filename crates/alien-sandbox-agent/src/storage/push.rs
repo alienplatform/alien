@@ -1,6 +1,7 @@
 //! The push transport: the agent writes its key's store directly with the grant the binding
-//! minted (an S3 POST policy for `<key>/`, a presigned PUT for `<key>/HEAD`, presigned GETs for
-//! the restore). The agent holds no cloud identity, and the grant reaches nothing but one key.
+//! minted (S3: a POST policy for `<key>/`, a presigned PUT for `<key>/HEAD`, presigned GETs for
+//! the restore; Azure: a SAS for the key's directory). The agent holds no cloud identity, and the
+//! grant reaches nothing but one key.
 //!
 //! Its sockets are the agent's own: commands run in the guest cgroup, whose sockets carry the
 //! guest mark and are dropped on the way to the store.
@@ -9,8 +10,8 @@ use std::sync::RwLock;
 
 use alien_error::AlienError;
 use alien_sandbox_storage::{
-    ErrorData as StorageError, ObjectStore, ObjectVersion, Precondition, PutOutcome,
-    Result as StorageResult, StorageGrant, StoredObject, HEAD_OBJECT,
+    AzureBlobStore, ErrorData as StorageError, ObjectStore, ObjectVersion, Precondition,
+    PutOutcome, Result as StorageResult, StorageGrant, StoredObject, HEAD_OBJECT,
 };
 use async_trait::async_trait;
 
@@ -26,23 +27,51 @@ fn failed(operation: &str, object: &str, reason: impl Into<String>) -> AlienErro
 pub struct GrantStore {
     grant: RwLock<StorageGrant>,
     http: reqwest::Client,
+    /// Set when the grant is an Azure SAS: every request goes through it, and a renewal swaps
+    /// its SAS.
+    azure: Option<AzureBlobStore>,
 }
 
 impl GrantStore {
-    /// A store using `grant`.
-    pub fn new(grant: StorageGrant) -> Self {
-        Self {
+    /// A store using `grant`. Refused when an Azure grant's key URL is not an HTTPS directory URL.
+    pub fn new(grant: StorageGrant) -> StorageResult<Self> {
+        let azure = match &grant {
+            StorageGrant::S3 { .. } => None,
+            StorageGrant::AzureSas { key_url, sas, .. } => {
+                Some(AzureBlobStore::new(key_url, &sas.0)?)
+            }
+        };
+        Ok(Self {
             grant: RwLock::new(grant),
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(60))
                 .build()
                 .expect("a client with rustls builds"),
-        }
+            azure,
+        })
     }
 
-    /// Replaces the grant (renewal before expiry).
-    pub fn renew(&self, grant: StorageGrant) {
-        *self.grant.write().expect("not poisoned") = grant;
+    /// Replaces the grant (renewal before expiry). A renewal must reach the same key the same
+    /// way: one for another cloud or another Azure directory is refused and the old grant kept.
+    pub fn renew(&self, grant: StorageGrant) -> StorageResult<()> {
+        let mut current = self.grant.write().expect("not poisoned");
+        match (&*current, &grant, &self.azure) {
+            (StorageGrant::S3 { .. }, StorageGrant::S3 { .. }, None) => {}
+            (
+                StorageGrant::AzureSas { key_url: held, .. },
+                StorageGrant::AzureSas { key_url, sas, .. },
+                Some(azure),
+            ) if held == key_url => azure.renew(&sas.0),
+            _ => {
+                return Err(failed(
+                    "renew",
+                    "",
+                    "the renewed grant does not reach the attached key the same way",
+                ))
+            }
+        }
+        *current = grant;
+        Ok(())
     }
 
     fn grant(&self) -> StorageGrant {
@@ -52,6 +81,7 @@ impl GrantStore {
     fn read_url(&self, object: &str) -> Option<String> {
         match self.grant() {
             StorageGrant::S3 { reads, .. } => reads.get(object).cloned(),
+            StorageGrant::AzureSas { .. } => None,
         }
     }
 }
@@ -88,6 +118,9 @@ fn form(fields: &[(&str, &str)], file: &[u8]) -> (String, Vec<u8>) {
 #[async_trait]
 impl ObjectStore for GrantStore {
     async fn get(&self, object: &str) -> StorageResult<Option<StoredObject>> {
+        if let Some(azure) = &self.azure {
+            return azure.get(object).await;
+        }
         let url = self
             .read_url(object)
             .ok_or_else(|| failed("get", object, "the grant does not cover this object"))?;
@@ -115,6 +148,9 @@ impl ObjectStore for GrantStore {
     }
 
     async fn get_range(&self, object: &str, offset: u64, len: u64) -> StorageResult<Vec<u8>> {
+        if let Some(azure) = &self.azure {
+            return azure.get_range(object, offset, len).await;
+        }
         if len == 0 {
             return Ok(Vec::new());
         }
@@ -147,9 +183,15 @@ impl ObjectStore for GrantStore {
         bytes: Vec<u8>,
         precondition: Precondition,
     ) -> StorageResult<PutOutcome> {
+        if let Some(azure) = &self.azure {
+            return azure.put_if(object, bytes, precondition).await;
+        }
         let StorageGrant::S3 {
             post, head_put_url, ..
-        } = self.grant();
+        } = self.grant()
+        else {
+            return Err(failed("put", object, "the grant is not an S3 grant"));
+        };
         let response = if object == HEAD_OBJECT {
             let request = self.http.put(head_put_url).body(bytes);
             let request = match &precondition {
@@ -205,5 +247,87 @@ impl ObjectStore for GrantStore {
 
     async fn delete(&self, object: &str) -> StorageResult<()> {
         Err(failed("delete", object, "a writer's grant cannot delete"))
+    }
+}
+
+#[cfg(test)]
+mod azure_grant_tests {
+    use super::*;
+    use alien_sandbox_storage::{S3PostPolicy, SasToken};
+    use chrono::{TimeZone, Utc};
+
+    const KEY_URL: &str = "https://acmeagents1a2b3c4d.blob.core.windows.net/keys/engine-42/";
+
+    fn azure(key_url: &str, sas: &str) -> StorageGrant {
+        StorageGrant::AzureSas {
+            key_url: key_url.to_string(),
+            sas: SasToken(sas.to_string()),
+            expires_at: Utc.with_ymd_and_hms(2026, 11, 18, 12, 0, 0).unwrap(),
+        }
+    }
+
+    /// The grant as the binding sends it on the agent channel.
+    #[test]
+    fn an_azure_grant_reads_from_the_wire() {
+        let grant: StorageGrant = serde_json::from_value(serde_json::json!({
+            "type": "azureSas",
+            "keyUrl": KEY_URL,
+            "sas": "sv=2026-10-06&sr=d&sig=secret",
+            "expiresAt": "2026-11-18T12:00:00Z",
+        }))
+        .expect("the grant reads");
+        assert_eq!(grant, azure(KEY_URL, "sv=2026-10-06&sr=d&sig=secret"));
+    }
+
+    /// The SAS is a credential: a grant printed for a log or an error shows no part of it.
+    #[test]
+    fn the_sas_is_never_printed() {
+        let printed = format!("{:?}", azure(KEY_URL, "sv=2026-10-06&sr=d&sig=secret"));
+        assert!(
+            !printed.contains("secret") && !printed.contains("sr=d"),
+            "{printed}"
+        );
+        let store = GrantStore::new(azure(KEY_URL, "sig=secret")).expect("the store builds");
+        assert!(!format!("{:?}", store.azure).contains("secret"));
+    }
+
+    /// A key URL the transport cannot address safely is refused at attach, not at the first push.
+    #[test]
+    fn an_azure_grant_must_name_an_https_directory() {
+        for key_url in [
+            "http://acme.blob.core.windows.net/keys/engine-42/",
+            "https://acme.blob.core.windows.net/keys/engine-42",
+            "https://acme.blob.core.windows.net/keys/engine-42/?sig=x",
+        ] {
+            assert!(
+                GrantStore::new(azure(key_url, "sig=x")).is_err(),
+                "{key_url}"
+            );
+        }
+    }
+
+    /// A renewal reaches the same key the same way, or it is refused and the old grant stays.
+    #[test]
+    fn a_renewal_cannot_move_the_store() {
+        let store = GrantStore::new(azure(KEY_URL, "sig=first")).expect("the store builds");
+        store
+            .renew(azure(KEY_URL, "sig=second"))
+            .expect("same directory renews");
+        assert_eq!(store.grant(), azure(KEY_URL, "sig=second"));
+
+        let other_key = "https://acmeagents1a2b3c4d.blob.core.windows.net/keys/engine-43/";
+        assert!(store.renew(azure(other_key, "sig=third")).is_err());
+        let s3 = StorageGrant::S3 {
+            post: S3PostPolicy {
+                url: "https://bucket.s3.amazonaws.com/".to_string(),
+                fields: Default::default(),
+                key_prefix: "engine-42/".to_string(),
+            },
+            head_put_url: "https://bucket.s3.amazonaws.com/engine-42/HEAD".to_string(),
+            reads: Default::default(),
+            expires_at: Utc.with_ymd_and_hms(2026, 11, 18, 12, 0, 0).unwrap(),
+        };
+        assert!(store.renew(s3).is_err());
+        assert_eq!(store.grant(), azure(KEY_URL, "sig=second"));
     }
 }

@@ -215,7 +215,9 @@ impl PersistentStorage {
                 self.config.path.clone(),
             ))
         };
-        let store = Arc::new(GrantStore::new(request.grant));
+        let store = Arc::new(
+            GrantStore::new(request.grant).map_err(|e| storage_failed("use the key's grant", e))?,
+        );
         let manifest = match &request.commit {
             Some(commit) => Some(
                 read_manifest(store.as_ref(), commit)
@@ -274,7 +276,9 @@ impl PersistentStorage {
                 reason: "persistent storage is not attached".to_string(),
             })
         })?;
-        live.store.renew(request.grant);
+        live.store
+            .renew(request.grant)
+            .map_err(|e| storage_failed("renew the key's grant", e))?;
         Ok(())
     }
 
