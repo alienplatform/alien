@@ -214,8 +214,19 @@ pub fn aws_sandbox_agent_environment(
         // is installed. The authenticated run hook installs it before user code.
         environment.insert("ALIEN_SANDBOX_EGRESS_RUN_HOOK".into(), "true".into());
     }
+    // Only when declared, so a sandbox without mounts keeps an identical environment.
+    if !sandbox.mounts.is_empty() {
+        environment.insert(
+            ENV_SANDBOX_MOUNTS.into(),
+            serde_json::to_string(&sandbox.mounts).expect("mounts serialize"),
+        );
+    }
     environment
 }
+
+/// Environment variable carrying the declared mounts (JSON) to the agent, which mounts them
+/// before the image command starts.
+pub const ENV_SANDBOX_MOUNTS: &str = "ALIEN_SANDBOX_MOUNTS";
 
 /// The name of the operator role's inline policy.
 pub const SANDBOX_EGRESS_POLICY_NAME: &str = "sandbox-egress-connector";
@@ -397,6 +408,34 @@ mod tests {
         assert!(gateway_image_serves_admin_protocol(
             "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000000"
         ));
+    }
+
+    #[test]
+    fn declared_mounts_reach_the_agent_and_only_then() {
+        let build = |mounts: Vec<crate::SandboxMount>| {
+            let mut sandbox = Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "s3://acme/agents/bundle.zip".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            sandbox.mounts = mounts;
+            let stack = Stack::new("acme".to_string()).build();
+            aws_sandbox_agent_environment(&stack, &sandbox)
+        };
+        assert!(!build(vec![]).contains_key(ENV_SANDBOX_MOUNTS));
+        let declared = build(vec![crate::SandboxMount::S3files {
+            path: "/workspace".into(),
+        }]);
+        assert_eq!(
+            declared[ENV_SANDBOX_MOUNTS],
+            r#"[{"type":"s3files","path":"/workspace"}]"#
+        );
     }
 
     use crate::{ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
