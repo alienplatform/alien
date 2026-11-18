@@ -151,3 +151,66 @@ fn gcp_queues_without_a_dead_letter_render_no_policy_or_service_agent_grant() {
     assert!(!text.contains("gcp-sa-pubsub"));
     assert!(!text.contains("roles/pubsub.subscriber"));
 }
+
+/// Two dead-lettering queues, each triggering a Live Worker, with the queues' lifecycle given.
+fn worker_stack(lifecycle: ResourceLifecycle, queues: &[&str]) -> Stack {
+    use alien_core::{Worker, WorkerCode, WorkerTrigger};
+    let mut builder = Stack::new("dead-letter".into());
+    builder = builder.add(Queue::new("tasks-failed".into()).build(), lifecycle);
+    for id in queues {
+        let mut queue = Queue::new((*id).into()).build();
+        queue.dead_letter = Some(
+            QueueDeadLetter::builder()
+                .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "tasks-failed"))
+                .build(),
+        );
+        let worker = Worker::new(format!("{id}-consumer"))
+            .code(WorkerCode::Image {
+                image: "example.com/app:1".into(),
+            })
+            .permissions("execution".into())
+            .trigger(WorkerTrigger::queue(&queue))
+            .build();
+        builder = builder
+            .add(queue, lifecycle)
+            .add(worker, ResourceLifecycle::Live);
+    }
+    builder.build()
+}
+
+#[test]
+fn gcp_frozen_queues_with_a_live_worker_get_one_project_subscriber_grant() {
+    for queues in [&["tasks"][..], &["tasks", "other"][..]] {
+        let module = render(
+            &worker_stack(ResourceLifecycle::Frozen, queues),
+            TerraformTarget::Gcp,
+            StackSettings::default(),
+        );
+        let text = normalized(&module);
+        // One project-level member for the Pub/Sub service agent, however many queues need it.
+        assert_eq!(
+            text.matches("resource \"google_project_iam_member\" \"dead_letter_push_subscriber\"")
+                .count(),
+            1,
+            "{queues:?}: {text}"
+        );
+        assert!(text.contains("roles/pubsub.subscriber"), "{text}");
+        assert_terraform_valid(&module, "GCP Frozen queues with a Live Worker trigger");
+    }
+}
+
+#[test]
+fn gcp_live_queues_and_workerless_queues_get_no_project_subscriber_grant() {
+    let live = render(
+        &worker_stack(ResourceLifecycle::Live, &["tasks"]),
+        TerraformTarget::Gcp,
+        StackSettings::default(),
+    );
+    assert!(!normalized(&live).contains("dead_letter_push_subscriber"));
+    let workerless = render(
+        &stack(true, ResourceLifecycle::Frozen),
+        TerraformTarget::Gcp,
+        StackSettings::default(),
+    );
+    assert!(!normalized(&workerless).contains("dead_letter_push_subscriber"));
+}

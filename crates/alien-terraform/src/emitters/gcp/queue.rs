@@ -109,6 +109,29 @@ impl TfEmitter for GcpQueueEmitter {
                 ],
             ));
         }
+        if alien_core::queues_needing_project_push_subscriber(ctx.stack)
+            .first()
+            .is_some_and(|first| first == queue.id())
+        {
+            // A Worker's push subscription on a setup-owned queue gets its dead-letter policy
+            // at runtime, where nothing may write subscription IAM. The Pub/Sub service agent
+            // needs `roles/pubsub.subscriber`: granted once for the project here (Google's
+            // documented grant for dead-letter subscriptions), by the first queue that needs
+            // it, so the member stays while any such queue remains and goes with the last.
+            let agent = emit_pubsub_agent(&mut fragment, "dead_letter_push");
+            fragment.resource_blocks.push(resource_block(
+                "google_project_iam_member",
+                "dead_letter_push_subscriber",
+                [
+                    attr("project", expr::raw("var.gcp_project")),
+                    attr(
+                        "role",
+                        Expression::String("roles/pubsub.subscriber".to_string()),
+                    ),
+                    attr("member", agent),
+                ],
+            ));
+        }
         emit_queue_iam(ctx, &mut fragment, label)?;
         if queue_receives_storage_notifications(ctx.stack, queue.id()) {
             emit_storage_publisher(&mut fragment, label);

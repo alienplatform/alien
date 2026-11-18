@@ -36,6 +36,8 @@ impl ResourceImporter for GcpQueueImporter {
             dead_letter_publisher: false,
             dead_letter_subscriber_pending: None,
             dead_letter_publisher_pending: None,
+            dead_letter_project_subscriber: false,
+            dead_letter_project_subscriber_pending: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

@@ -7,7 +7,9 @@ use common::create_test_context;
 
 /// The worker's subscriber grant is project scoped and unconditioned: a real project refused a
 /// subscription-name condition on getIamPolicy, and queue/provision already holds the same
-/// permissions at project scope. It carries only the two IAM permissions.
+/// permissions at project scope. It carries only the two IAM permissions. Management holds it
+/// only when the trigger queue is Live; with a Frozen queue setup grants the service agent
+/// subscriber for the project and management holds no subscription IAM write access.
 #[test]
 fn worker_dead_letter_grant_is_project_scoped_with_only_the_two_iam_permissions() {
     let generator = GcpRuntimePermissionsGenerator::new();
@@ -37,9 +39,12 @@ fn worker_dead_letter_grant_is_project_scoped_with_only_the_two_iam_permissions(
     );
 }
 
-/// The queue grant names the queue's own topic and subscription, plus the project number read.
+/// The permissions and bindings of `queue/dead-letter`: three bindings, with the project number
+/// read. For a Live queue the grant is project scoped when it reaches management (the queue may
+/// not exist at setup time); that adds nothing over `queue/provision`, which already holds the
+/// same subscription IAM permissions on such a queue.
 #[test]
-fn queue_dead_letter_grant_is_resource_scoped_and_only_reads_the_project() {
+fn queue_dead_letter_grant_lists_exactly_the_pubsub_permissions_it_needs() {
     let generator = GcpRuntimePermissionsGenerator::new();
     let set = get_permission_set("queue/dead-letter").expect("permission set exists");
     let context = create_test_context().with_resource_name("my-stack-tasks");

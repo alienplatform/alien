@@ -5682,8 +5682,22 @@ impl GcpWorkerController {
         queue_ref: &alien_core::ResourceRef,
     ) -> Result<()> {
         use crate::queue::gcp_dead_letter::{policy_key, pubsub_service_agent, set_subscriber};
+        // A setup-owned (Frozen) worker's subscription is never written at runtime.
+        if !crate::queue::may_change_queue_settings(ctx, &worker_config.id) {
+            return Ok(());
+        }
         let name = Self::push_subscription_name(ctx, worker_config, queue_ref);
         let desired = Self::desired_push_dead_letter(ctx, queue_ref)?;
+        refuse_protected_push_dead_letter(
+            crate::core::verifier::protected_statements(ctx, &worker_config.id)?.is_some(),
+            desired.is_some(),
+            &worker_config.id,
+            &queue_ref.id,
+        )?;
+        // With a Frozen queue, setup grants the Pub/Sub service agent subscriber for the
+        // project, and nothing at runtime writes the subscription's IAM policy.
+        let queue_is_setup_owned =
+            alien_core::queue_needs_project_push_subscriber(ctx.desired_stack, &queue_ref.id);
         let key = policy_key(&desired);
         let grant_to_revoke = key.is_none() && self.push_dead_letter_grants.contains(&name);
         if key.as_ref() == self.push_dead_letters.get(&name) && !grant_to_revoke {
@@ -5692,7 +5706,7 @@ impl GcpWorkerController {
         let client = ctx
             .service_provider
             .get_gcp_pubsub_client(ctx.get_gcp_config()?)?;
-        if desired.is_some() {
+        if desired.is_some() && !queue_is_setup_owned {
             if self.push_dead_letter_agent.is_none() {
                 // Recorded before any write, so a lost response is still revoked later.
                 self.push_dead_letter_agent =
@@ -6571,6 +6585,27 @@ fn grants_missing(
         }
     }
     missing
+}
+
+/// A protected install does not set a dead-letter policy on a Worker's queue push subscription:
+/// the verifier checks the queue's own subscription and topic against the signed stack, but not
+/// the Worker's push subscription (its creation is not a checked write either), so the setting
+/// would be written around it.
+fn refuse_protected_push_dead_letter(
+    protected: bool,
+    dead_letter_wanted: bool,
+    worker_id: &str,
+    queue_id: &str,
+) -> Result<()> {
+    if protected && dead_letter_wanted {
+        return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: worker_id.to_string(),
+            message: format!(
+                "Queue '{queue_id}' has a dead-letter setting and triggers this Worker. A protected install does not support that on Google Cloud yet: the verifier does not check the dead-letter policy of the Worker's push subscription. Remove the queue's deadLetter or this Worker's queue trigger, or use an install that is not protected."
+            ),
+        }));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -8517,6 +8552,8 @@ mod tests {
                             dead_letter_publisher: false,
                             dead_letter_subscriber_pending: None,
                             dead_letter_publisher_pending: None,
+                            dead_letter_project_subscriber: false,
+                            dead_letter_project_subscriber_pending: None,
                             _internal_stay_count: None,
                         },
                     )
@@ -8579,6 +8616,8 @@ mod tests {
             dead_letter_publisher: false,
             dead_letter_subscriber_pending: None,
             dead_letter_publisher_pending: None,
+            dead_letter_project_subscriber: false,
+            dead_letter_project_subscriber_pending: None,
             _internal_stay_count: None,
         };
 
@@ -8658,6 +8697,8 @@ mod tests {
             dead_letter_publisher: false,
             dead_letter_subscriber_pending: None,
             dead_letter_publisher_pending: None,
+            dead_letter_project_subscriber: false,
+            dead_letter_project_subscriber_pending: None,
             _internal_stay_count: None,
         };
 
@@ -8801,6 +8842,133 @@ mod tests {
         *executor.desired_resource_config_mut("test-queue").unwrap() =
             alien_core::Resource::new(queue);
         assert!(executor.needs_update().unwrap(), "a removed dead letter");
+    }
+
+    /// A mock Pub/Sub that records patched policies and answers no subscription IAM call at all
+    /// (a call would panic: the controller must not make one).
+    fn pubsub_without_iam(
+        patches: Arc<std::sync::Mutex<Vec<Option<alien_gcp_clients::pubsub::DeadLetterPolicy>>>>,
+    ) -> MockPlatformServiceProvider {
+        let worker = function_with_queue_trigger();
+        let function_name = format!("test-{}", worker.id);
+        let mock_cloudrun = setup_mock_client_for_creation_and_update(&function_name, false);
+        let mut mock_pubsub = MockPubSubApi::new();
+        mock_pubsub
+            .expect_create_subscription()
+            .returning(|_, _| Ok(Subscription::default()));
+        mock_pubsub.expect_patch_subscription().returning(
+            move |_, patch: alien_gcp_clients::pubsub::SubscriptionPatch, _| {
+                patches.lock().unwrap().push(patch.dead_letter_policy);
+                Ok(Subscription::default())
+            },
+        );
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_cloudrun_client()
+            .returning(move |_| Ok(mock_cloudrun.clone()));
+        let iam = create_gcp_iam_mock_for_resource_permissions();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let pubsub = Arc::new(mock_pubsub);
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+    }
+
+    fn queue_with_dead_letter() -> alien_core::Queue {
+        let mut queue = test_queue();
+        queue.dead_letter = Some(
+            alien_core::QueueDeadLetter::builder()
+                .queue(alien_core::ResourceRef::new(
+                    alien_core::Queue::RESOURCE_TYPE,
+                    "failed",
+                ))
+                .max_attempts(8)
+                .build(),
+        );
+        queue
+    }
+
+    /// With a setup-owned queue, the setup grants the Pub/Sub service agent subscriber for the
+    /// project, so the Worker sets the dead-letter policy and makes no IAM call at all (management
+    /// holds no subscription IAM write access then).
+    #[tokio::test]
+    async fn a_setup_owned_queue_gets_its_push_policy_without_any_subscription_iam_write() {
+        let patches: Arc<
+            std::sync::Mutex<Vec<Option<alien_gcp_clients::pubsub::DeadLetterPolicy>>>,
+        > = Default::default();
+        let provider = pubsub_without_iam(patches.clone());
+        let queue = queue_with_dead_letter();
+        let queue_controller = GcpQueueController {
+            state: GcpQueueState::Ready,
+            topic_name: Some("test-test-queue".to_string()),
+            subscription_name: Some("test-test-queue-sub".to_string()),
+            ..Default::default()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_with_queue_trigger())
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .with_dependency(queue, queue_controller)
+            .dependency_lifecycle("test-queue", ResourceLifecycle::Frozen)
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let patches = patches.lock().unwrap();
+        assert_eq!(patches.len(), 1);
+        assert_eq!(
+            patches[0].as_ref().and_then(|p| p.max_delivery_attempts),
+            Some(8)
+        );
+    }
+
+    /// A setup-owned Worker's subscription is never written at runtime: no policy is patched
+    /// when the Worker is Frozen and the deployment is not in its setup run.
+    #[tokio::test]
+    async fn a_setup_owned_worker_subscription_is_not_written_at_runtime() {
+        let patches: Arc<
+            std::sync::Mutex<Vec<Option<alien_gcp_clients::pubsub::DeadLetterPolicy>>>,
+        > = Default::default();
+        let provider = pubsub_without_iam(patches.clone());
+        let queue = queue_with_dead_letter();
+        let queue_controller = GcpQueueController {
+            state: GcpQueueState::Ready,
+            topic_name: Some("test-test-queue".to_string()),
+            subscription_name: Some("test-test-queue-sub".to_string()),
+            ..Default::default()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_with_queue_trigger())
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .with_dependency(queue, queue_controller)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert!(patches.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_protected_install_refuses_a_dead_letter_on_a_worker_queue_trigger() {
+        let refused = super::refuse_protected_push_dead_letter(true, true, "consumer", "tasks")
+            .expect_err("refused");
+        let text = refused.to_string();
+        assert!(text.contains("protected install"), "{text}");
+        assert!(text.contains("'tasks'"), "{text}");
+        // Not protected, or no dead-letter setting: nothing to refuse.
+        super::refuse_protected_push_dead_letter(false, true, "consumer", "tasks").unwrap();
+        super::refuse_protected_push_dead_letter(true, false, "consumer", "tasks").unwrap();
     }
 
     /// The subscriber grant reaches Google but its response is lost; the queue's dead-letter
