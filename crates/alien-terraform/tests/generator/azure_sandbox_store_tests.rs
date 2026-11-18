@@ -347,3 +347,94 @@ fn an_undeclared_encryption_key_leaves_the_store_on_microsoft_managed_keys() {
         0
     );
 }
+
+async fn internet_module(storage: Option<SandboxPersistentStorage>) -> ModuleFiles {
+    let mut sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "registry.example/agents:1".to_string(),
+            bundled_from: None,
+        })
+        .egress(SandboxEgress::Internet)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    sandbox.persistent_storage = storage;
+    let stack = Stack::new("azint".to_string())
+        .add(sandbox, ResourceLifecycle::Frozen)
+        .build();
+    let prepared =
+        super::helpers::prepare_for_target_unchecked(stack, TerraformTarget::Azure).await;
+    render(&prepared, TerraformTarget::Azure, StackSettings::default())
+}
+
+/// `(name, priority, access, protocol, destination, ports)` of every NSG rule on the declared
+/// sandbox's subnet.
+fn sandbox_nsg_rules(body: &hcl::Body) -> Vec<[String; 6]> {
+    resources(body, "azurerm_network_security_rule")
+        .filter(|block| block.labels()[1].as_str().contains("_sandbox_agents_"))
+        .map(|block| {
+            [
+                "name",
+                "priority",
+                "access",
+                "protocol",
+                "destination_address_prefix",
+                "destination_port_ranges",
+            ]
+            .map(|key| {
+                attribute(block, key)
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .collect()
+            })
+        })
+        .collect()
+}
+
+/// Under `internet` the subnet of a sandbox with persistent storage, and only it, reaches Azure
+/// Storage in its region on 443, with its own priority ahead of the Internet and catch-all
+/// denies that would cover it; the rendered module validates against the real provider.
+#[tokio::test]
+async fn an_internet_sandbox_with_storage_reaches_regional_storage_on_443_only() {
+    let module = internet_module(Some(declared())).await;
+    let rules = sandbox_nsg_rules(&body(&module));
+    let storage: Vec<_> = rules
+        .iter()
+        .filter(|rule| rule[0] == "\"storage\"")
+        .collect();
+    assert_eq!(
+        storage,
+        [&[
+            "\"storage\"".to_string(),
+            "104".to_string(),
+            "\"Allow\"".to_string(),
+            "\"Tcp\"".to_string(),
+            "\"Storage.${var.azure_location}\"".to_string(),
+            "[\"443\"]".to_string(),
+        ]]
+    );
+    let mut priorities: Vec<&String> = rules.iter().map(|rule| &rule[1]).collect();
+    priorities.sort();
+    let before = priorities.len();
+    priorities.dedup();
+    assert_eq!(
+        before,
+        priorities.len(),
+        "two rules share a priority: {rules:?}"
+    );
+    assert!(
+        rules
+            .iter()
+            .filter(|rule| rule[0] == "\"internet\"" || rule[0] == "\"other\"")
+            .all(|rule| rule[1].parse::<i64>().unwrap() > 104),
+        "{rules:?}"
+    );
+    assert_terraform_valid(&module, "azure internet sandbox with a store");
+
+    let plain = internet_module(None).await;
+    assert!(sandbox_nsg_rules(&body(&plain))
+        .iter()
+        .all(|rule| rule[0] != "\"storage\""));
+}

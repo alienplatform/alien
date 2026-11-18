@@ -59,14 +59,21 @@ pub(super) fn emit(
     }
     emit_gateway_subnet(ctx, network, fragment)?;
     let slots = subnet_slots(sandboxes.iter().map(|(id, _)| id.as_str()))?;
-    for (id, _sandbox) in sandboxes {
+    for (id, sandbox) in sandboxes {
         let name = ctx.name_for(id).ok_or_else(|| {
             AlienError::new(ErrorData::OperationNotSupported {
                 operation: "Azure sandbox network setup".to_string(),
                 reason: format!("sandbox {id} has no Terraform resource name"),
             })
         })?;
-        emit_group(ctx, network, name, slots[id.as_str()], fragment)?;
+        emit_group(
+            ctx,
+            network,
+            name,
+            slots[id.as_str()],
+            sandbox.persistent_storage.is_some(),
+            fragment,
+        )?;
     }
     Ok(())
 }
@@ -130,6 +137,7 @@ fn emit_group(
     network: &str,
     sandbox_name: &str,
     subnet_index: usize,
+    persistent_storage: bool,
     fragment: &mut TfFragment,
 ) -> Result<()> {
     let label = subnet_label(network, sandbox_name);
@@ -203,6 +211,23 @@ fn emit_group(
         ],
     ));
     nsg_rules(fragment, &label, network);
+    if persistent_storage {
+        // The agent pushes the sandbox's persistent storage straight to its store account, so
+        // this subnet alone reaches Azure Storage in the region on 443. The platform policy lets
+        // only the store's host through it, and the agent drops guest sockets' direct
+        // connections to anything but the gateway and the resolver, so commands gain nothing.
+        rule(
+            fragment,
+            &label,
+            Rule {
+                name: "storage",
+                priority: 104,
+                destination: expr::template("Storage.${var.azure_location}"),
+                allowed_ports: Some(BTreeSet::from(["443".to_string()])),
+                protocol: "Tcp",
+            },
+        );
+    }
     for (resource, field, target) in [
         (
             "azurerm_subnet_nat_gateway_association",
