@@ -70,6 +70,42 @@ impl CredentialResolver for LocalAzureTargetCredentialResolver {
     }
 }
 
+/// Azure in CI: credentials come from the environment (the workload identity),
+/// and the management identity the manager renders into an update is the one the
+/// harness rendered into setup.
+///
+/// Without it the manager has no Azure management binding, renders updates without
+/// the setup-owned `management` resource, and refuses a setup rerun as changing the
+/// setup digest. Both sides take the value from
+/// [`TestManager::build_management_config`] so they cannot drift. This makes the
+/// Azure Terraform upgrade tests exercise the setup-rerun path; it does not
+/// exercise managed-identity impersonation.
+struct AzureManagementConfigResolver {
+    inner: alien_manager::providers::environment_credentials::EnvironmentCredentialResolver,
+    management_config: ManagementConfig,
+}
+
+#[async_trait]
+impl CredentialResolver for AzureManagementConfigResolver {
+    async fn resolve(&self, deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
+        self.inner.resolve(deployment).await
+    }
+
+    async fn resolve_with_capability(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<ResolvedCredentials, AlienError> {
+        self.inner.resolve_with_capability(deployment).await
+    }
+
+    async fn resolve_management_config(
+        &self,
+        platform: Platform,
+    ) -> Result<Option<ManagementConfig>, AlienError> {
+        Ok((platform == Platform::Azure).then(|| self.management_config.clone()))
+    }
+}
+
 /// A running alien-manager instance for E2E tests.
 ///
 /// Call [`TestManager::start`] to spin one up. The manager runs in a background
@@ -247,6 +283,11 @@ impl TestManager {
         if local_azure_resolver.is_some() {
             management_config = None;
         }
+        let azure_ci_resolver = if local_azure_resolver.is_none() {
+            Self::build_azure_management_resolver(platforms, management_config.clone())
+        } else {
+            None
+        };
 
         // 6c. Build typed bindings for the TOML config from test resources.
         //     This replaces the old env var injection pattern — all binding
@@ -303,6 +344,8 @@ impl TestManager {
         //    and starts an embedded local registry when no cloud AR is configured.
         let mut builder = AlienManagerBuilder::new(manager_config).token_store(token_store.clone());
         if let Some(resolver) = local_azure_resolver {
+            builder = builder.credential_resolver(Arc::new(resolver));
+        } else if let Some(resolver) = azure_ci_resolver {
             builder = builder.credential_resolver(Arc::new(resolver));
         }
         let server = builder
@@ -488,6 +531,19 @@ impl TestManager {
             }
             _ => None,
         }
+    }
+
+    fn build_azure_management_resolver(
+        platforms: &[Platform],
+        management_config: Option<ManagementConfig>,
+    ) -> Option<AzureManagementConfigResolver> {
+        if platforms != [Platform::Azure] {
+            return None;
+        }
+        Some(AzureManagementConfigResolver {
+            inner: alien_manager::providers::environment_credentials::EnvironmentCredentialResolver::new(),
+            management_config: management_config?,
+        })
     }
 
     fn build_local_azure_target_resolver(
@@ -763,6 +819,41 @@ impl TestManager {
 #[cfg(test)]
 mod tests {
     use super::{derive_response_signing_key, TestManager};
+    use alien_core::{AzureManagementConfig, ManagementConfig, Platform};
+    use alien_manager::traits::CredentialResolver;
+
+    #[tokio::test]
+    async fn azure_ci_manager_returns_the_management_config_the_setup_renders() {
+        let config = ManagementConfig::Azure(AzureManagementConfig {
+            managing_tenant_id: "tenant".into(),
+            oidc_issuer: "https://issuer.example".into(),
+            oidc_subject: "subject".into(),
+        });
+        let resolver =
+            TestManager::build_azure_management_resolver(&[Platform::Azure], Some(config.clone()))
+                .expect("azure only, with a management config");
+        assert_eq!(
+            resolver
+                .resolve_management_config(Platform::Azure)
+                .await
+                .unwrap(),
+            Some(config.clone())
+        );
+        assert_eq!(
+            resolver
+                .resolve_management_config(Platform::Aws)
+                .await
+                .unwrap(),
+            None
+        );
+        // Other platform sets keep the default resolver.
+        assert!(TestManager::build_azure_management_resolver(
+            &[Platform::Aws, Platform::Azure],
+            Some(config)
+        )
+        .is_none());
+        assert!(TestManager::build_azure_management_resolver(&[Platform::Azure], None).is_none());
+    }
 
     #[tokio::test]
     async fn manager_serves_requests_with_embedded_registry() {

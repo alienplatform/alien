@@ -4832,6 +4832,56 @@ resource "terraform_data" "gate_keeper" {}
     }
 
     #[tokio::test]
+    async fn azure_update_with_the_managers_management_config_matches_the_setup_render() {
+        let source_stack = Stack::new("azure-digest".to_string())
+            .permission(
+                "execution",
+                PermissionProfile::new().global(["worker/execute"]),
+            )
+            .add(
+                Worker::new("alien-rs-worker".to_string())
+                    .permissions("execution".to_string())
+                    .code(WorkerCode::Image {
+                        image: "manager.example.com/alien-e2e:tag".to_string(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let stack_settings = stack_settings_for_flow(DeploymentModel::Push);
+        let render = |config: Option<ManagementConfig>| {
+            apply_render_mutations_with_management_config(
+                source_stack.clone(),
+                Platform::Azure,
+                &stack_settings,
+                config,
+            )
+        };
+
+        // What the harness renders into setup, and what the test manager now
+        // supplies when it computes an update (real tenant and OIDC values).
+        let setup = render(render_management_config(Platform::Azure, &stack_settings))
+            .await
+            .unwrap();
+        let manager_config = ManagementConfig::Azure(AzureManagementConfig {
+            managing_tenant_id: "tenant".to_string(),
+            oidc_issuer: "https://issuer.example".to_string(),
+            oidc_subject: "subject".to_string(),
+        });
+        let update = render(Some(manager_config)).await.unwrap();
+        // The old behaviour: the manager had no Azure management config.
+        let without = render(None).await.unwrap();
+
+        assert!(contains_resource_type(&update, "remote-stack-management"));
+        assert_eq!(setup.setup_update_digest(), update.setup_update_digest());
+        assert!(
+            !contains_resource_type(&without, "remote-stack-management"),
+            "without a management config the update target loses the management resource"
+        );
+        assert_ne!(setup.setup_update_digest(), without.setup_update_digest());
+    }
+
+    #[tokio::test]
     async fn gcp_management_probe_skips_direct_target_without_remote_management() {
         wait_for_gcp_management_permissions(
             &empty_test_config(),
