@@ -53,6 +53,8 @@ struct FakeApi {
     /// without a readiness probe is: the workload reports ready, and the restart count of the
     /// ready pod grows with every pod list.
     restart_blip: bool,
+    /// Crash-looping pods wait for a node instead: Pending, unschedulable (a slow autoscaler).
+    pending: bool,
     pod_lists: i64,
 }
 
@@ -109,6 +111,30 @@ impl FakeApi {
                             }],
                         },
                     }]}),
+                )
+            }
+            Method::GET if !self.crash_looping.is_empty() && path.ends_with("/pods") => {
+                let pod = if self.pending {
+                    json!({
+                        "metadata": {"name": "platform-abc"},
+                        "status": {"phase": "Pending", "conditions": [{
+                            "type": "PodScheduled", "status": "False", "reason": "Unschedulable",
+                            "message": "0/3 nodes are available: Insufficient cpu",
+                        }]},
+                    })
+                } else {
+                    json!({
+                        "metadata": {"name": "platform-abc"},
+                        "status": {"containerStatuses": [{
+                            "name": "platform", "ready": false, "image": "i", "imageID": "i",
+                            "restartCount": 5,
+                            "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+                        }]},
+                    })
+                };
+                (
+                    200,
+                    json!({"apiVersion": "v1", "kind": "PodList", "metadata": {}, "items": [pod]}),
                 )
             }
             Method::GET if path.ends_with("/pods") || path.ends_with("/events") => {
@@ -757,6 +783,9 @@ async fn step_until_settled(
     first_step: usize,
 ) -> (StackState, usize) {
     let mut step = first_step;
+    // A resource that starts in RefreshFailed has settled there only after it left it.
+    let mut left_refresh_failed =
+        state.resources["platform"].status != ResourceStatus::RefreshFailed;
     while step < first_step + 80 {
         api.lock().unwrap().step = step;
         state = executor
@@ -765,10 +794,11 @@ async fn step_until_settled(
             .expect("executor step")
             .next_state;
         step += 1;
-        if matches!(
-            state.resources["platform"].status,
-            ResourceStatus::Running | ResourceStatus::UpdateFailed
-        ) {
+        let now = state.resources["platform"].status;
+        left_refresh_failed |= now != ResourceStatus::RefreshFailed;
+        if matches!(now, ResourceStatus::Running | ResourceStatus::UpdateFailed)
+            || (now == ResourceStatus::RefreshFailed && left_refresh_failed)
+        {
             break;
         }
     }
@@ -950,60 +980,10 @@ async fn a_retry_over_a_deleted_deployment_is_not_applied_and_reports_it_again()
     );
 }
 
-/// A pod that is ready for part of each crash cycle still fails the refresh: a ready check in
-/// between does not reset the count of not-ready observations (three in ten minutes). Without
-/// the bound it would stay Running forever.
-#[tokio::test]
-async fn a_flapping_container_reaches_refresh_failed() {
-    let (url, api) = start_fake_api().await;
-    let config = deployment_config();
-    let mut statuses = BTreeMap::new();
-    let installed = stack("1");
-    let install = StackExecutor::builder(&installed, client_config(&url))
-        .deployment_config(&config)
-        .running_resource_policy(RunningResourcePolicy::All)
-        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
-        .build()
-        .expect("install executor");
-    let (mut state, first_step) = run_steps(
-        &install,
-        &api,
-        StackState::with_resource_prefix(Platform::Kubernetes, "test".to_string()),
-        0,
-        &mut statuses,
-    )
-    .await;
-
-    let path = deployment_path("platform");
-    let mut step = first_step;
-    while state.resources["platform"].status != ResourceStatus::RefreshFailed {
-        assert!(
-            step < first_step + 60,
-            "a flapping container stays Running: {:?}",
-            state.resources["platform"].status
-        );
-        {
-            // Not ready on every other step, ready in between.
-            let mut api = api.lock().unwrap();
-            api.step = step;
-            if step % 2 == 0 {
-                api.crash_looping.insert(path.clone());
-            } else {
-                api.crash_looping.remove(&path);
-            }
-        }
-        state = install.step(state).await.expect("executor step").next_state;
-        step += 1;
-    }
-    assert_eq!(
-        state.resources["platform"].error.as_ref().unwrap().code,
-        "WORKLOAD_NOT_READY"
-    );
-}
-
 /// A pod that is Ready for a moment after each restart makes the workload look ready on every
 /// poll. The rollout never completes, because the restart count of the ready pod grows: the
-/// update fails at its bound with the not-ready error instead of reporting a finished rollout.
+/// update does not report a finished rollout: after its bound it goes back to the refresh check,
+/// which does not recover it while the restart count keeps growing.
 #[tokio::test]
 async fn a_crash_looping_pod_that_is_briefly_ready_on_each_restart_never_completes_the_rollout() {
     let (url, api, state, first_step) = crash_loop_until_refresh_failed("platform").await;
@@ -1024,11 +1004,50 @@ async fn a_crash_looping_pod_that_is_briefly_ready_on_each_restart_never_complet
     let (state, steps) = step_until_settled(&update, &api, state, first_step).await;
     assert_eq!(
         state.resources["platform"].status,
-        ResourceStatus::UpdateFailed
-    );
-    assert_eq!(
-        state.resources["platform"].error.as_ref().unwrap().code,
-        "WORKLOAD_NOT_READY"
+        ResourceStatus::RefreshFailed
     );
     assert!(steps < 40, "the short bound applies: {steps} steps");
+}
+
+/// A release over a workload whose pods wait for a node (a slow autoscaler or image pull) does
+/// not become an update failure, which is never checked again: after the short bound the
+/// resource goes back to the refresh check, which recovers it once the pods run.
+#[tokio::test]
+async fn an_unchanged_release_over_pods_waiting_for_a_node_goes_back_to_the_refresh_check() {
+    let (url, api, state, first_step) = crash_loop_until_refresh_failed("platform").await;
+    api.lock().unwrap().pending = true;
+    let config = deployment_config();
+    let update = StackExecutor::builder(&stack("1"), client_config(&url))
+        .deployment_config(&config)
+        .resume_unchanged_failed_resources(true)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("update executor");
+    let (state, steps) = step_until_settled(&update, &api, state, first_step).await;
+    assert_eq!(put_calls(&api, first_step), 1);
+    assert_eq!(
+        state.resources["platform"].status,
+        ResourceStatus::RefreshFailed
+    );
+    assert!(steps < 40, "the short bound applies: {steps} steps");
+
+    // The pods get a node and run: the refresh check recovers the resource.
+    api.lock().unwrap().crash_looping.clear();
+    api.lock().unwrap().pending = false;
+    let observe = StackExecutor::builder(&stack("1"), client_config(&url))
+        .deployment_config(&config)
+        .running_resource_policy(RunningResourcePolicy::All)
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("observing executor");
+    let mut state = state;
+    let mut step = first_step + steps;
+    while state.resources["platform"].status != ResourceStatus::Running {
+        assert!(step < first_step + steps + 60, "the refresh check recovers");
+        api.lock().unwrap().step = step;
+        state = observe.step(state).await.expect("executor step").next_state;
+        step += 1;
+    }
 }
