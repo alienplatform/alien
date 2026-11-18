@@ -392,6 +392,7 @@ async fn run_step_loop_body(
                         }
                         if let Some(updated_config) = reconciled.config {
                             *config = updated_config;
+                            config.deployment_id = Some(deployment_id.to_string());
                         }
                         break;
                     }
@@ -493,6 +494,7 @@ async fn run_step_loop_body(
                             }
                             if let Some(updated_config) = reconciled.config {
                                 *config = updated_config;
+                                config.deployment_id = Some(deployment_id.to_string());
                             }
                             break;
                         }
@@ -599,6 +601,7 @@ async fn run_step_loop_body(
                     }
                     if let Some(updated_config) = reconciled.config {
                         *config = updated_config;
+                        config.deployment_id = Some(deployment_id.to_string());
                     }
                     break;
                 }

@@ -228,6 +228,36 @@ impl AzureSandboxController {
         self.create_group(ctx, config).await
     }
 
+    /// Tags the group this deployment just created (a 201 on the create-only write). Saved
+    /// state already says it is ours, so a failure here retries this step only.
+    #[handler(state = TaggingGroup, on_failure = ProvisionFailed, status = ResourceStatus::Provisioning)]
+    async fn tagging_group(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        let (group, region, resource_group) = self.identity(&config.id)?;
+        let tags: std::collections::BTreeMap<String, String> = [(
+            GROUP_OWNER_TAG.to_string(),
+            group_marker(
+                ctx.resource_prefix,
+                &config.id,
+                ctx.setup_owner_deployment_id()?,
+            ),
+        )]
+        .into();
+        let arm = ctx
+            .service_provider
+            .get_azure_sandbox_groups_client(ctx.get_azure_config()?)?;
+        arm.create_or_update_sandbox_group(&resource_group, &group, &region, tags)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to tag Azure sandbox group '{group}'"),
+                resource_id: Some(config.id.clone()),
+            })?;
+        Ok(HandlerAction::Continue {
+            state: WaitingForGroup,
+            suggested_delay: None,
+        })
+    }
+
     /// A role assignment names the group, so the group has to be finished first.
     #[handler(state = WaitingForGroup, on_failure = ProvisionFailed, status = ResourceStatus::Provisioning)]
     async fn waiting_for_group(
@@ -1455,12 +1485,19 @@ impl AzureSandboxController {
             ),
         )]
         .into();
-        // A group that was absent when read is created create-only: one made by someone else in
-        // between is refused, not taken over. A retry that found the group tagged for this
-        // deployment converges with an idempotent put.
+        // A group that was absent when read is created create-only, WITHOUT tags: the group API
+        // answers 200 for an existing group and would replace the tags of one somebody else made
+        // in between. A 201 means this deployment made it; only then is it tagged (next step).
+        // A retry that found the group tagged for this deployment converges with an idempotent
+        // put that carries the tags.
         let created = if self.group_absent {
-            arm.create_sandbox_group_if_absent(&resource_group, &group, &region, tags)
-                .await
+            arm.create_sandbox_group_if_absent(
+                &resource_group,
+                &group,
+                &region,
+                std::collections::BTreeMap::new(),
+            )
+            .await
         } else {
             arm.create_or_update_sandbox_group(&resource_group, &group, &region, tags)
                 .await
@@ -1490,6 +1527,7 @@ impl AzureSandboxController {
                 }));
             }
         }
+        let tag_next = self.group_absent;
         self.group_absent = false;
         self.capture_session_inputs(config)?;
         self.sandbox_group = Some(group.clone());
@@ -1498,7 +1536,11 @@ impl AzureSandboxController {
         self.created_group = true;
         info!(sandbox_id = %config.id, %group, "Azure sandbox group created");
         Ok(AzureSandboxHandlerAction::Continue {
-            state: AzureSandboxState::WaitingForGroup,
+            state: if tag_next {
+                AzureSandboxState::TaggingGroup
+            } else {
+                AzureSandboxState::WaitingForGroup
+            },
             suggested_delay: None,
         })
     }
@@ -3419,6 +3461,18 @@ mod direct_setup_tests {
         }
     }
 
+    /// The tag call after a 201: the owner tag names this deployment.
+    fn expect_tagging(groups: &mut MockSandboxGroupsApi) {
+        groups
+            .expect_create_or_update_sandbox_group()
+            .times(1)
+            .withf(|_, _, _, tags| {
+                tags.get(GROUP_OWNER_TAG).map(String::as_str)
+                    .is_some_and(|tag| tag.ends_with("@dep_test"))
+            })
+            .returning(|_, _, _, _| Ok(group("Succeeded")));
+    }
+
     fn not_found() -> alien_client_core::Error {
         AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {
             resource_type: "SandboxGroup".to_string(),
@@ -3602,13 +3656,14 @@ mod direct_setup_tests {
                 rg == "default-resource-group"
                     && name == "test-prefix-box-one"
                     && location == "eastus"
-                    && tags.get(GROUP_OWNER_TAG).map(String::as_str) == Some("Test_Prefix/box_one@dep_test")
+                    && tags.is_empty()
             })
             .times(1)
             .returning(move |_, _, _, _| {
                 made_by_create.store(true, Ordering::SeqCst);
                 Ok(group("Creating"))
             });
+        expect_tagging(&mut groups);
         let polls = Arc::new(AtomicU32::new(0));
         let seen = polls.clone();
         groups.expect_get_sandbox_group().returning(move |_, _| {
@@ -3663,6 +3718,7 @@ mod direct_setup_tests {
                 made_by_create.store(true, Ordering::SeqCst);
                 Ok(group("Succeeded"))
             });
+        expect_tagging(&mut groups);
         groups.expect_get_sandbox_group().returning(move |_, _| {
             if made.load(Ordering::SeqCst) {
                 Ok(group("Succeeded"))
@@ -3876,6 +3932,9 @@ mod direct_setup_tests {
         groups
             .expect_create_sandbox_group_if_absent()
             .times(1)
+            // Create-only and tagless: the write that loses the race must not replace the tags
+            // of the group the winner made.
+            .withf(|_, _, _, tags| tags.is_empty())
             .returning(|_, _, _, _| {
                 Err(AlienError::new(
                     alien_client_core::ErrorData::RemoteResourceConflict {
@@ -3993,6 +4052,7 @@ mod direct_setup_tests {
                 made_by_create.store(true, Ordering::SeqCst);
                 Ok(group("Succeeded"))
             });
+        expect_tagging(&mut groups);
         groups.expect_get_sandbox_group().returning(move |_, _| {
             if made.load(Ordering::SeqCst) {
                 Ok(group("Succeeded"))
@@ -4402,6 +4462,7 @@ mod direct_setup_tests {
                 made_by_create.store(true, Ordering::SeqCst);
                 Ok(group("Succeeded"))
             });
+        expect_tagging(&mut groups);
         groups.expect_get_sandbox_group().returning(move |_, _| {
             if made.load(Ordering::SeqCst) {
                 Ok(group("Succeeded"))

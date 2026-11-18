@@ -25,6 +25,31 @@ pub struct AzureResourceGroupController {
     pub(crate) resource_id: Option<String>,
     /// The location/region where the Resource Group was created.
     pub(crate) location: Option<String>,
+    /// The name this deployment is about to create. Saved before the write; it is what lets
+    /// teardown recognise a group made by a write whose response was lost. Never used to
+    /// delete a group that does not carry this deployment's tag.
+    #[serde(default)]
+    pub(crate) create_intent: Option<String>,
+}
+
+impl AzureResourceGroupController {
+    fn record_group(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        group_name: &str,
+        rg: &ResourceGroup,
+    ) -> Result<()> {
+        let azure_config = ctx.get_azure_config()?;
+        self.resource_group_name = Some(group_name.to_string());
+        self.location = Some(rg.location.clone());
+        self.resource_id = rg.id.clone().or_else(|| {
+            Some(azure_resource_group_resource_id(
+                &azure_config.subscription_id,
+                group_name,
+            ))
+        });
+        Ok(())
+    }
 }
 
 #[controller]
@@ -107,28 +132,90 @@ impl AzureResourceGroupController {
             }
         }
         let mut resource_group = resource_group;
+
+        if absent {
+            // The intent is saved before the write, so a crash after the group exists but
+            // before the name is saved still leaves a record that this deployment tried.
+            // The write is a separate step; its response can then be told apart.
+            self.create_intent = Some(group_name);
+            return Ok(HandlerAction::Continue {
+                state: PuttingResourceGroup,
+                suggested_delay: None,
+            });
+        }
+
         resource_group
             .tags
             .insert(RESOURCE_GROUP_OWNER_TAG.to_string(), marker);
+        let rg = client
+            .create_or_update_resource_group(&group_name, &resource_group)
+            .await
+            .map_err(|e| {
+                e.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create or update resource group '{}'.",
+                        group_name
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
 
-        let created = if absent {
-            client
-                .create_resource_group_if_absent(&group_name, &resource_group)
-                .await
-        } else {
-            client
-                .create_or_update_resource_group(&group_name, &resource_group)
-                .await
+        self.record_group(ctx, &group_name, &rg)?;
+
+        info!(group_name=%group_name, "Resource group creation initiated");
+
+        Ok(HandlerAction::Continue {
+            state: CreatingResourceGroup,
+            suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    /// The create-only write for a group that did not exist a moment ago. It carries no tags:
+    /// Azure ignores the create-only header on a resource group and would replace the tags of
+    /// a group someone else made in between. A 201 means this deployment made the group;
+    /// only then is it tagged.
+    #[handler(
+        state = PuttingResourceGroup,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn putting_resource_group(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let azure_config = ctx.get_azure_config()?;
+        let config = ctx.desired_resource_config::<AzureResourceGroup>()?;
+        let group_name = generate_azure_resource_group_name(&ctx.resource_prefix, &config.id);
+        let client = ctx
+            .service_provider
+            .get_azure_resources_client(azure_config)?;
+
+        let resource_group = ResourceGroup {
+            id: None,
+            location: azure_config
+                .region
+                .clone()
+                .unwrap_or_else(|| "East US".to_string()),
+            managed_by: None,
+            name: Some(group_name.clone()),
+            properties: None,
+            tags: HashMap::new(),
+            type_: None,
         };
-        let rg = match created {
+
+        let rg = match client
+            .create_resource_group_if_absent(&group_name, &resource_group)
+            .await
+        {
             Ok(rg) => rg,
             Err(e)
-                if absent
-                    && matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceConflict { .. })
-                    ) =>
+                if matches!(
+                    e.error,
+                    Some(CloudClientErrorData::RemoteResourceConflict { .. })
+                ) =>
             {
+                // Not ours: nothing is recorded, so destroy never touches it.
+                self.create_intent = None;
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: format!(
                         "Azure resource group '{group_name}' was created by someone else while \
@@ -140,26 +227,68 @@ impl AzureResourceGroupController {
             }
             Err(e) => {
                 return Err(e.context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to create or update resource group '{}'.",
-                        group_name
-                    ),
+                    message: format!("Failed to create resource group '{}'.", group_name),
                     resource_id: Some(config.id.clone()),
                 }));
             }
         };
 
-        self.resource_group_name = Some(group_name.clone());
-        self.location = Some(rg.location.clone());
-        self.resource_id = rg.id.clone().or_else(|| {
-            Some(azure_resource_group_resource_id(
-                &azure_config.subscription_id,
-                &group_name,
-            ))
-        });
+        // Created here: recorded and saved before the tag call (its own step), so a failure
+        // there retries as ours.
+        self.record_group(ctx, &group_name, &rg)?;
+        self.create_intent = None;
+        Ok(HandlerAction::Continue {
+            state: TaggingResourceGroup,
+            suggested_delay: None,
+        })
+    }
 
-        info!(group_name=%group_name, "Resource group creation initiated");
-
+    /// Tags the group this deployment just created (a 201 on the create-only write).
+    #[handler(
+        state = TaggingResourceGroup,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn tagging_resource_group(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let azure_config = ctx.get_azure_config()?;
+        let config = ctx.desired_resource_config::<AzureResourceGroup>()?;
+        let group_name = self.resource_group_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "the resource group name was not recorded".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+        let client = ctx
+            .service_provider
+            .get_azure_resources_client(azure_config)?;
+        let resource_group = ResourceGroup {
+            id: None,
+            location: self.location.clone().unwrap_or_default(),
+            managed_by: None,
+            name: Some(group_name.clone()),
+            properties: None,
+            tags: HashMap::from([(
+                RESOURCE_GROUP_OWNER_TAG.to_string(),
+                owner_marker(
+                    &ctx.resource_prefix,
+                    &config.id,
+                    ctx.setup_owner_deployment_id()?,
+                ),
+            )]),
+            type_: None,
+        };
+        client
+            .create_or_update_resource_group(&group_name, &resource_group)
+            .await
+            .map_err(|e| {
+                e.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to tag resource group '{}'.", group_name),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
         Ok(HandlerAction::Continue {
             state: CreatingResourceGroup,
             suggested_delay: Some(Duration::from_secs(5)),
@@ -307,20 +436,16 @@ impl AzureResourceGroupController {
         let azure_config = ctx.get_azure_config()?;
         let config = ctx.desired_resource_config::<AzureResourceGroup>()?;
 
-        // Nothing recorded: creation never ran, was refused, or succeeded with its response lost
-        // before the name was saved. Only a direct setup creates the group itself, so only there
-        // is the derived name looked up, and the group is deleted only when it carries this
-        // deployment's tag.
+        // Nothing recorded and no saved attempt: this deployment never created a group, so
+        // nothing is looked up by the derived name. With only a saved attempt (the response of
+        // the create was lost), the group is deleted only when it carries this deployment's tag.
         let name_was_recorded = self.resource_group_name.is_some();
-        let derived;
-        let group_name = match self.resource_group_name.as_ref() {
+        let group_name = match self
+            .resource_group_name
+            .as_ref()
+            .or(self.create_intent.as_ref())
+        {
             Some(name) => name,
-            None if ctx.initial_setup_authority
-                == alien_core::InitialSetupAuthority::DirectSetup =>
-            {
-                derived = generate_azure_resource_group_name(&ctx.resource_prefix, &config.id);
-                &derived
-            }
             None => {
                 return Ok(HandlerAction::Continue {
                     state: Deleted,
@@ -598,6 +723,7 @@ impl AzureResourceGroupController {
                 resource_group_name
             )),
             location: Some("East US".to_string()),
+            create_intent: None,
             _internal_stay_count: None,
         }
     }
@@ -721,8 +847,14 @@ mod tests {
         let mut api = MockResourcesApi::new();
         api.expect_get_resource_group()
             .returning(|_| Err(not_found()));
-        api.expect_create_or_update_resource_group().times(0);
+        // The create-only write carries no tags (Azure ignores the create-only header and
+        // would replace the tags of a group someone else made in between); the tag is set in
+        // a second call, only after the group was created.
         api.expect_create_resource_group_if_absent()
+            .times(1)
+            .withf(|_, body| body.tags.is_empty())
+            .returning(|_, body| Ok(body.clone()));
+        api.expect_create_or_update_resource_group()
             .times(1)
             .withf(|_, body| {
                 body.tags.get(RESOURCE_GROUP_OWNER_TAG).map(String::as_str)
@@ -731,6 +863,8 @@ mod tests {
             .returning(|_, body| Ok(body.clone()));
         let mut executor = executor(api, AzureResourceGroupController::default()).await;
         executor.step().await.expect("create starts");
+        executor.step().await.expect("group written");
+        executor.step().await.expect("group tagged");
     }
 
     /// A group somebody else creates between the read and the write is refused, not taken over.
@@ -751,11 +885,17 @@ mod tests {
                 ))
             });
         api.expect_create_or_update_resource_group().times(0);
+        // The refused deployment recorded nothing: its destroy reads and deletes nothing, so
+        // the group the other deployment made (and A's ownership of it) is never touched.
+        api.expect_delete_resource_group().times(0);
         let mut executor = executor(api, AzureResourceGroupController::default()).await;
+        executor.step().await.expect("intent saved");
         let result = executor.step().await;
         let message = format!("{:?}", result.err());
         assert!(message.contains("created by someone else"), "{message}");
         assert_ne!(executor.status(), ResourceStatus::Running);
+        executor.delete().expect("delete starts");
+        executor.step().await.expect("delete step");
     }
 
     /// Two deployments that reuse one prefix: the group the first made (tagged with its
@@ -812,23 +952,21 @@ mod tests {
         executor.step().await.expect("retry goes on");
     }
 
-    /// A refused create recorded nothing, and the group under the derived name is somebody
-    /// else's (untagged, or tagged for another deployment): destroy deletes nothing.
+    /// Nothing recorded and no saved attempt: destroy never looks the derived name up, so a
+    /// group somebody else made under it (untagged, or tagged for another deployment, or even
+    /// tagged with this deployment's own marker) is never read or deleted.
     #[tokio::test]
-    async fn delete_after_a_refused_create_deletes_nothing() {
-        for tag in [None, Some("other/default-resource-group".to_string())] {
-            let mut api = MockResourcesApi::new();
-            api.expect_get_resource_group()
-                .returning(move |_| Ok(group(tag.as_deref())));
-            api.expect_delete_resource_group().times(0);
-            let mut executor = executor(api, AzureResourceGroupController::default()).await;
-            executor.delete().expect("delete starts");
-            executor.step().await.expect("delete step");
-            executor
-                .run_until_status(ResourceStatus::Deleted)
-                .await
-                .expect("deleted");
-        }
+    async fn delete_without_a_record_never_touches_the_derived_name() {
+        let mut api = MockResourcesApi::new();
+        api.expect_get_resource_group().times(0);
+        api.expect_delete_resource_group().times(0);
+        let mut executor = executor(api, AzureResourceGroupController::default()).await;
+        executor.delete().expect("delete starts");
+        executor.step().await.expect("delete step");
+        executor
+            .run_until_status(ResourceStatus::Deleted)
+            .await
+            .expect("deleted");
     }
 
     /// The create succeeded but its response was lost before the name was saved: the group under
@@ -842,15 +980,36 @@ mod tests {
         api.expect_delete_resource_group().times(1).returning(|_| {
             Ok(alien_azure_clients::long_running_operation::OperationResult::Completed(()))
         });
-        let mut run = executor(api, AzureResourceGroupController::default()).await;
+        let attempted = || AzureResourceGroupController {
+            create_intent: Some(generate_azure_resource_group_name(
+                "test",
+                "default-resource-group",
+            )),
+            ..Default::default()
+        };
+        let mut run = executor(api, attempted()).await;
         run.delete().expect("delete starts");
         run.step().await.expect("delete step");
+
+        // Tagged for another deployment (or untagged): never deleted, a leak is accepted.
+        for tag in [
+            None,
+            Some("other/default-resource-group@dep_other".to_string()),
+        ] {
+            let mut api = MockResourcesApi::new();
+            api.expect_get_resource_group()
+                .returning(move |_| Ok(group(tag.as_deref())));
+            api.expect_delete_resource_group().times(0);
+            let mut run = executor(api, attempted()).await;
+            run.delete().expect("delete starts");
+            run.step().await.expect("delete step");
+        }
 
         let mut api = MockResourcesApi::new();
         api.expect_get_resource_group()
             .returning(|_| Err(not_found()));
         api.expect_delete_resource_group().times(0);
-        let mut run = executor(api, AzureResourceGroupController::default()).await;
+        let mut run = executor(api, attempted()).await;
         run.delete().expect("delete starts");
         run.step().await.expect("delete step");
         run.run_until_status(ResourceStatus::Deleted)
