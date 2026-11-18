@@ -658,6 +658,14 @@ fn refused_change(original: &HookRequest, changed: &HookRequest) -> Option<Strin
                 .to_string(),
         );
     }
+    if let Some(exposure) = public_exposures(changed)
+        .difference(&public_exposures(original))
+        .next()
+    {
+        return Some(format!(
+            "it made the call open a resource to the internet ({exposure}); an interceptor may not make storage or a network public"
+        ));
+    }
     if is_json(original) && !is_json(changed) {
         return Some("it changed a JSON body into one that is not JSON".to_string());
     }
@@ -827,6 +835,113 @@ fn changes_access(request: &HookRequest) -> bool {
                     .any(|w| w[0] == "serviceaccounts" && w[2] == "token")
         }
         Cloud::Azure => false,
+    }
+}
+
+/// Network ranges that mean the whole internet, in any cloud.
+const OPEN_RANGES: [&str; 5] = ["0.0.0.0/0", "::/0", "internet", "any", "*"];
+
+/// Fields that hold a source range or address prefix on Azure, which may name the internet as a
+/// tag (`Internet`, `Any`, `*`) and not only as a CIDR.
+const AZURE_SOURCE_FIELDS: [&str; 5] = [
+    "sourceaddressprefix",
+    "sourceaddressprefixes",
+    "sourceaddresses",
+    "ipaddressorrange",
+    "value",
+];
+
+/// What in `request` opens a resource to the internet, each as a short description. A call that
+/// Alien builds with one of them (a bucket made public on purpose) keeps it; the check refuses an
+/// exposure the original call did not have. It covers a storage account or container that allows
+/// public access, a storage firewall, network security group or firewall rule whose source is the
+/// internet, a security group open to `0.0.0.0/0` or `::/0`, `allUsers` and
+/// `allAuthenticatedUsers` in a Cloud Storage body, and an S3 public access block turned off.
+fn public_exposures(request: &HookRequest) -> BTreeSet<String> {
+    let body = request.body.as_deref().unwrap_or_default();
+    let query = request.url.query().unwrap_or_default();
+    let json = serde_json::from_str::<serde_json::Value>(body).ok();
+    let mut texts = vec![body.to_string(), decoded(body), decoded(query)];
+    if let Some(value) = &json {
+        json_strings(value, &mut texts);
+    }
+    let mut found = BTreeSet::new();
+    // A needle counts once per place it appears, so a second one is a new exposure.
+    for needle in ["0.0.0.0/0", "::/0", "allusers", "allauthenticatedusers"] {
+        let count = texts
+            .iter()
+            .map(|text| text.to_ascii_lowercase().matches(needle).count())
+            .max()
+            .unwrap_or(0);
+        for n in 0..count {
+            found.insert(format!("{needle} #{n}"));
+        }
+    }
+    // An S3 public access block with a protection turned off.
+    let lower = body.to_ascii_lowercase();
+    for tag in [
+        "blockpublicacls",
+        "ignorepublicacls",
+        "blockpublicpolicy",
+        "restrictpublicbuckets",
+    ] {
+        if lower.contains(&format!("<{tag}>false")) {
+            found.insert(format!("S3 {tag} turned off"));
+        }
+    }
+    if let Some(value) = &json {
+        json_exposures(value, "", &mut found);
+    }
+    found
+}
+
+fn json_exposures(value: &serde_json::Value, pointer: &str, found: &mut BTreeSet<String>) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            for (key, field) in fields {
+                let name = key.to_ascii_lowercase();
+                let at = pointer_to(pointer, key);
+                let text = field.as_str().map(|text| text.trim().to_ascii_lowercase());
+                let public = match name.as_str() {
+                    "allowblobpublicaccess" | "allowpublicaccess" => {
+                        field.as_bool() == Some(true) || text.as_deref() == Some("true")
+                    }
+                    // A container's access level: anything but none or off.
+                    "publicaccess" => text
+                        .as_deref()
+                        .is_some_and(|t| !matches!(t, "none" | "off" | "")),
+                    "publicnetworkaccess" => text.as_deref() == Some("enabled"),
+                    "defaultaction" => text.as_deref() == Some("allow"),
+                    // Cloud Storage: public access prevention turned off.
+                    "publicaccessprevention" => text.as_deref().is_some_and(|t| t != "enforced"),
+                    _ => false,
+                };
+                if public {
+                    found.insert(at.clone());
+                }
+                if AZURE_SOURCE_FIELDS.contains(&name.as_str())
+                    || name == "ipranges"
+                    || name == "sourceranges"
+                {
+                    let mut leaves = Vec::new();
+                    json_strings(field, &mut leaves);
+                    // `value` holds anything; only an open range counts there.
+                    if leaves.iter().any(|leaf| {
+                        let leaf = leaf.trim().to_ascii_lowercase();
+                        OPEN_RANGES.contains(&leaf.as_str()) || leaf.ends_with("/0")
+                    }) {
+                        found.insert(format!("{at}: an open source range"));
+                    }
+                }
+                json_exposures(field, &at, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                json_exposures(item, &format!("{pointer}/{index}"), found);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2438,6 +2553,251 @@ mod tests {
         ];
         for (what, built, change) in cases {
             assert_change_refused(what, built, change);
+        }
+    }
+
+    const AZURE_JSON: [(&str, &str, &str); 4] = [
+        (
+            "storage account",
+            "https://management.azure.com/subscriptions/s/resourceGroups/g/providers/Microsoft.Storage/storageAccounts/acct?api-version=2023-01-01",
+            r#"{"location":"eastus","properties":{"allowBlobPublicAccess":false,"networkAcls":{"defaultAction":"Deny","ipRules":[{"value":"10.0.0.0/8"}]}}}"#,
+        ),
+        (
+            "container",
+            "https://management.azure.com/subscriptions/s/resourceGroups/g/providers/Microsoft.Storage/storageAccounts/acct/blobServices/default/containers/c?api-version=2023-01-01",
+            r#"{"properties":{"publicAccess":"None"}}"#,
+        ),
+        (
+            "network security group",
+            "https://management.azure.com/subscriptions/s/resourceGroups/g/providers/Microsoft.Network/networkSecurityGroups/nsg?api-version=2023-01-01",
+            r#"{"location":"eastus","properties":{"securityRules":[{"name":"r","properties":{"access":"Allow","direction":"Inbound","sourceAddressPrefix":"10.0.0.0/16","sourceAddressPrefixes":[]}}]}}"#,
+        ),
+        (
+            "storage account with a public default",
+            "https://management.azure.com/subscriptions/s/resourceGroups/g/providers/Microsoft.Storage/storageAccounts/acct?api-version=2023-01-01",
+            r#"{"properties":{"publicNetworkAccess":"Disabled"}}"#,
+        ),
+    ];
+
+    fn azure_call(what: &str) -> Built {
+        let (_, url, body) = AZURE_JSON.iter().find(|(name, ..)| *name == what).unwrap();
+        (
+            Cloud::Azure,
+            "management",
+            Method::PUT,
+            url,
+            &[("content-type", "application/json")],
+            Some(body),
+        )
+    }
+
+    /// An interceptor never makes storage or a network public, on any cloud.
+    #[test]
+    fn a_change_that_opens_storage_or_a_network_to_the_internet_is_refused() {
+        const SECURITY_GROUP: Built = (
+            Cloud::Aws,
+            "ec2",
+            Method::POST,
+            "https://ec2.us-east-1.amazonaws.com/",
+            &[("content-type", "application/x-www-form-urlencoded")],
+            Some("Action=AuthorizeSecurityGroupIngress&GroupId=sg-1&IpPermissions.1.IpProtocol=-1&IpPermissions.1.IpRanges.1.CidrIp=10.0.0.0%2F16"),
+        );
+        const PUBLIC_ACCESS_BLOCK: Built = (
+            Cloud::Aws,
+            "s3",
+            Method::PUT,
+            "https://bucket.s3.amazonaws.com/?publicAccessBlock",
+            &[],
+            Some("<PublicAccessBlockConfiguration><BlockPublicAcls>true</BlockPublicAcls><RestrictPublicBuckets>true</RestrictPublicBuckets></PublicAccessBlockConfiguration>"),
+        );
+        const GCS_BUCKET: Built = (
+            Cloud::Gcp,
+            "storage",
+            Method::PATCH,
+            "https://storage.googleapis.com/storage/v1/b/bucket",
+            &[("content-type", "application/json")],
+            Some(r#"{"iamConfiguration":{"publicAccessPrevention":"enforced"}}"#),
+        );
+        const FIREWALL: Built = (
+            Cloud::Gcp,
+            "compute",
+            Method::POST,
+            "https://compute.googleapis.com/compute/v1/projects/p/global/firewalls",
+            &[("content-type", "application/json")],
+            Some(r#"{"name":"f","sourceRanges":["10.0.0.0/16"]}"#),
+        );
+        let cases: [(&str, Built, fn(&mut HookRequest)); 16] = [
+            (
+                "an Azure storage account allowing public blobs",
+                azure_call("storage account"),
+                |r| {
+                    r.body = Some(r.body.as_ref().unwrap().replace(
+                        r#""allowBlobPublicAccess":false"#,
+                        r#""allowBlobPublicAccess":true"#,
+                    ))
+                },
+            ),
+            (
+                "an Azure container with blob access",
+                azure_call("container"),
+                |r| r.body = Some(r#"{"properties":{"publicAccess":"Blob"}}"#.into()),
+            ),
+            (
+                "an Azure container with container access",
+                azure_call("container"),
+                |r| r.body = Some(r#"{"properties":{"publicAccess":"Container"}}"#.into()),
+            ),
+            (
+                "an Azure storage firewall that allows by default",
+                azure_call("storage account"),
+                |r| r.body = Some(r.body.as_ref().unwrap().replace(r#""Deny""#, r#""Allow""#)),
+            ),
+            (
+                "an Azure storage firewall rule for the whole internet",
+                azure_call("storage account"),
+                |r| r.body = Some(r.body.as_ref().unwrap().replace("10.0.0.0/8", "0.0.0.0/0")),
+            ),
+            (
+                "an Azure storage account with public network access",
+                azure_call("storage account with a public default"),
+                |r| r.body = Some(r#"{"properties":{"publicNetworkAccess":"Enabled"}}"#.into()),
+            ),
+            (
+                "an Azure NSG rule from *",
+                azure_call("network security group"),
+                |r| r.body = Some(r.body.as_ref().unwrap().replace("10.0.0.0/16", "*")),
+            ),
+            (
+                "an Azure NSG rule from Internet",
+                azure_call("network security group"),
+                |r| r.body = Some(r.body.as_ref().unwrap().replace("10.0.0.0/16", "Internet")),
+            ),
+            (
+                "an Azure NSG rule from Any",
+                azure_call("network security group"),
+                |r| r.body = Some(r.body.as_ref().unwrap().replace("10.0.0.0/16", "any")),
+            ),
+            (
+                "an Azure NSG rule from ::/0 in a prefix list",
+                azure_call("network security group"),
+                |r| {
+                    r.body = Some(r.body.as_ref().unwrap().replace(
+                        r#""sourceAddressPrefixes":[]"#,
+                        r#""sourceAddressPrefixes":["::/0"]"#,
+                    ))
+                },
+            ),
+            ("an AWS security group open to IPv4", SECURITY_GROUP, |r| {
+                r.body = Some(
+                    r.body
+                        .as_ref()
+                        .unwrap()
+                        .replace("10.0.0.0%2F16", "0.0.0.0%2F0"),
+                )
+            }),
+            ("an AWS security group open to IPv6", SECURITY_GROUP, |r| {
+                r.body
+                    .as_mut()
+                    .unwrap()
+                    .push_str("&IpPermissions.1.Ipv6Ranges.1.CidrIpv6=%3A%3A%2F0")
+            }),
+            (
+                "an S3 public access block turned off",
+                PUBLIC_ACCESS_BLOCK,
+                |r| {
+                    r.body = Some(
+                        r.body
+                            .as_ref()
+                            .unwrap()
+                            .replace("<BlockPublicAcls>true", "<BlockPublicAcls>false"),
+                    )
+                },
+            ),
+            (
+                "a Cloud Storage public access prevention turned off",
+                GCS_BUCKET,
+                |r| {
+                    r.body = Some(
+                        r#"{"iamConfiguration":{"publicAccessPrevention":"inherited"}}"#.into(),
+                    )
+                },
+            ),
+            ("a Cloud Storage ACL entry for allUsers", GCS_BUCKET, |r| {
+                r.body = Some(r#"{"acl":[{"entity":"allUsers","role":"READER"}]}"#.into())
+            }),
+            ("a Google firewall open to the internet", FIREWALL, |r| {
+                r.body = Some(r#"{"name":"f","sourceRanges":["10.0.0.0/16","0.0.0.0/0"]}"#.into())
+            }),
+        ];
+        for (what, built, change) in cases {
+            assert_change_refused(what, built, change);
+        }
+    }
+
+    /// Ordinary changes still go through, and a call Alien itself builds public stays so.
+    #[test]
+    fn a_change_that_does_not_open_anything_to_the_internet_is_sent() {
+        const PUBLIC_CONTAINER: Built = (
+            Cloud::Azure,
+            "management",
+            Method::PUT,
+            "https://management.azure.com/subscriptions/s/resourceGroups/g/providers/Microsoft.Storage/storageAccounts/acct/blobServices/default/containers/c?api-version=2023-01-01",
+            &[("content-type", "application/json")],
+            Some(r#"{"properties":{"publicAccess":"Blob"}}"#),
+        );
+        const EGRESS: Built = (
+            Cloud::Aws,
+            "ec2",
+            Method::POST,
+            "https://ec2.us-east-1.amazonaws.com/",
+            &[("content-type", "application/x-www-form-urlencoded")],
+            Some("Action=AuthorizeSecurityGroupEgress&GroupId=sg-1&IpPermissions.1.IpRanges.1.CidrIp=0.0.0.0%2F0"),
+        );
+        let cases: [(&str, Built, fn(&mut HookRequest)); 4] = [
+            (
+                "a tag on an Azure storage account",
+                azure_call("storage account"),
+                |r| {
+                    r.body = Some(r.body.as_ref().unwrap().replace(
+                        r#""location":"eastus""#,
+                        r#""location":"eastus","tags":{"team":"a"}"#,
+                    ))
+                },
+            ),
+            (
+                "a narrower Azure NSG source",
+                azure_call("network security group"),
+                |r| {
+                    r.body = Some(
+                        r.body
+                            .as_ref()
+                            .unwrap()
+                            .replace("10.0.0.0/16", "10.1.0.0/16"),
+                    )
+                },
+            ),
+            (
+                "an Azure container Alien made public on purpose",
+                PUBLIC_CONTAINER,
+                |r| {
+                    r.body = Some(
+                        r#"{"properties":{"publicAccess":"Blob"},"metadata":{"a":"b"}}"#.into(),
+                    )
+                },
+            ),
+            (
+                "an AWS rule Alien already opened to the internet",
+                EGRESS,
+                |r| {
+                    r.body
+                        .as_mut()
+                        .unwrap()
+                        .push_str("&IpPermissions.1.IpRanges.1.Description=x")
+                },
+            ),
+        ];
+        for (what, built, change) in cases {
+            assert_change_sent(what, built, change);
         }
     }
 
