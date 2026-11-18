@@ -33,6 +33,7 @@ mod gc;
 mod layout;
 mod manifest;
 mod pack;
+mod pull;
 mod read;
 mod store;
 
@@ -45,5 +46,6 @@ pub use layout::{
 };
 pub use manifest::{ChunkLocation, Entry, EntryKind, Manifest, MANIFEST_VERSION};
 pub use pack::{chunk_hash, PackBuilder, CHUNK_SIZE};
+pub use pull::{seed, AckOutcome, Pending, PendingObject, PullChannel, PullOutcome, Puller, Spool};
 pub use read::{read_file, read_head, read_manifest, restore, takeover, Takeover, TreeSink};
 pub use store::{create, MemoryStore, ObjectStore, Precondition, PutOutcome, StoredObject};
