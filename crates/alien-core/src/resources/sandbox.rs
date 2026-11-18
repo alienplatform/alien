@@ -677,6 +677,51 @@ pub struct SandboxPrivilegedSupervisor {
     pub command_uid: u32,
 }
 
+/// A filesystem the sandbox's agent attaches before the image command starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum SandboxMount {
+    /// An Amazon S3 Files file system. The caller names the file system, access point, region
+    /// and short-lived credentials for this mount path when it creates each sandbox.
+    #[serde(rename_all = "camelCase")]
+    S3files {
+        /// Absolute path inside the sandbox
+        path: String,
+    },
+    /// A memory-backed filesystem with a hard size cap.
+    #[serde(rename_all = "camelCase")]
+    Tmpfs {
+        /// Absolute path inside the sandbox
+        path: String,
+        /// Size cap as a quantity, for example `8Gi`
+        size: String,
+    },
+}
+
+impl SandboxMount {
+    /// The path inside the sandbox where this mount appears.
+    pub fn path(&self) -> &str {
+        match self {
+            Self::S3files { path } | Self::Tmpfs { path, .. } => path,
+        }
+    }
+
+    /// The stable type name used in messages.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::S3files { .. } => "s3files",
+            Self::Tmpfs { .. } => "tmpfs",
+        }
+    }
+}
+
+/// Paths a mount may never cover: the agent's own files and the kernel's virtual filesystems.
+const RESERVED_MOUNT_PREFIXES: &[&str] = &["/opt/alien", "/proc", "/sys", "/dev", "/run/alien"];
+
+/// Most mounts one sandbox may declare.
+pub const MAX_SANDBOX_MOUNTS: usize = 8;
+
 /// An isolated environment for running untrusted code, created at runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -736,6 +781,11 @@ pub struct Sandbox {
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_ports: Vec<u16>,
+    /// Filesystems Alien's agent attaches before the image command starts. Omitted when empty,
+    /// so a declaration without mounts serializes exactly as it did before this field existed.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mounts: Vec<SandboxMount>,
 }
 
 /// Whether the artifact being rendered restricts which network modes it accepts.
@@ -836,6 +886,7 @@ impl Sandbox {
                 }));
             }
         }
+        self.validate_mounts(platform)?;
         if self.image_user == Some(0) && platform == Platform::Local {
             return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
                 capability: "root image USER: this backend does not yet separate bounded root boot from non-root exec; use a non-root image USER".into(),
@@ -1014,6 +1065,120 @@ impl Sandbox {
         }
 
         self.validate_capabilities(&capabilities, platform)
+    }
+
+    /// Refuses mounts this backend cannot attach, and mount declarations that cannot work anywhere.
+    ///
+    /// Only AWS sandboxes can mount in v1: the agent there starts as root and keeps a privileged
+    /// helper, while a Kubernetes pod drops every capability and Azure, Google Cloud and Local run
+    /// the agent without one. Refused at plan time so the customer sees it before deploying.
+    pub fn validate_mounts(&self, platform: Platform) -> Result<()> {
+        if self.mounts.is_empty() {
+            return Ok(());
+        }
+        let invalid = |field: String, value: &str, reason: String| {
+            AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field,
+                value: value.to_string(),
+                reason,
+            })
+        };
+        if platform != Platform::Aws {
+            let kinds: Vec<&str> = self.mounts.iter().map(SandboxMount::kind).collect();
+            return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                capability: format!(
+                    "mounts ({}): sandbox mounts are available on AWS only; remove the mounts declaration for this platform",
+                    kinds.join(", ")
+                ),
+                platform: platform.to_string(),
+            }));
+        }
+        if self.mounts.len() > MAX_SANDBOX_MOUNTS {
+            return Err(invalid(
+                "mounts".into(),
+                &self.mounts.len().to_string(),
+                format!("a sandbox may declare at most {MAX_SANDBOX_MOUNTS} mounts"),
+            ));
+        }
+        let mut seen: Vec<&str> = Vec::new();
+        for (index, mount) in self.mounts.iter().enumerate() {
+            let field = format!("mounts[{index}].path");
+            let path = mount.path();
+            let well_formed = path.starts_with('/')
+                && path.len() > 1
+                && path.len() <= 255
+                && !path.ends_with('/')
+                && path
+                    .split('/')
+                    .skip(1)
+                    .all(|part| !part.is_empty() && part != "." && part != "..")
+                && path
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'/' | b'-' | b'_' | b'.'));
+            if !well_formed {
+                return Err(invalid(
+                    field,
+                    path,
+                    "must be an absolute path of letters, digits, '-', '_' and '.' without a trailing slash, '.' or '..' parts".into(),
+                ));
+            }
+            if RESERVED_MOUNT_PREFIXES
+                .iter()
+                .any(|reserved| path == *reserved || path.starts_with(&format!("{reserved}/")))
+            {
+                return Err(invalid(
+                    field,
+                    path,
+                    "overlaps a path the sandbox agent or the kernel owns".into(),
+                ));
+            }
+            if seen.contains(&path) {
+                return Err(invalid(field, path, "is declared more than once".into()));
+            }
+            seen.push(path);
+            if let SandboxMount::Tmpfs { size, .. } = mount {
+                match quantity_mib(size) {
+                    Some(mib) if mib > 0 => {}
+                    _ => {
+                        return Err(invalid(
+                            format!("mounts[{index}].size"),
+                            size,
+                            "must be a positive quantity such as 512Mi or 8Gi".into(),
+                        ))
+                    }
+                }
+            }
+        }
+        // An S3 Files mount may contain a tmpfs (a scratch directory under the workspace) but the
+        // reverse hides the file system, and one s3files mount under another is two attachments of
+        // one namespace. Order is the declaration order, so a parent must come first.
+        for (index, mount) in self.mounts.iter().enumerate() {
+            for earlier in &self.mounts[..index] {
+                let (e, m) = (earlier.path(), mount.path());
+                if e.starts_with(&format!("{m}/")) {
+                    return Err(invalid(
+                        format!("mounts[{index}].path"),
+                        m,
+                        format!("must be declared before the mount at {e} that lies inside it"),
+                    ));
+                }
+            }
+            if matches!(mount, SandboxMount::S3files { .. }) {
+                for earlier in &self.mounts[..index] {
+                    if matches!(earlier, SandboxMount::S3files { .. })
+                        && mount.path().starts_with(&format!("{}/", earlier.path()))
+                    {
+                        return Err(invalid(
+                            format!("mounts[{index}].path"),
+                            mount.path(),
+                            "an s3files mount cannot lie inside another s3files mount".into(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// What Azure creates this sandbox from: a catalog name or a registry image, told apart by
@@ -3238,6 +3403,104 @@ mod label_format_tests {
         assert!(is_valid_sandbox_expiry("1700000000000"));
         for bad in ["", "0", "-1", "1.5", "never", "+5 "] {
             assert!(!is_valid_sandbox_expiry(bad), "{bad}");
+        }
+    }
+    fn mounts_sandbox(mounts: serde_json::Value) -> Sandbox {
+        serde_json::from_value(serde_json::json!({
+            "id": "sbx",
+            "code": {"type": "image", "image": "ubuntu:24.04"},
+            "egress": "none",
+            "lifecycle": {},
+            "mounts": mounts,
+        }))
+        .expect("a mounts declaration must deserialize")
+    }
+
+    #[test]
+    fn a_declaration_without_mounts_serializes_without_the_field() {
+        let sandbox = mounts_sandbox(serde_json::json!([]));
+        let value = serde_json::to_value(&sandbox).unwrap();
+        assert!(value.get("mounts").is_none(), "{value}");
+    }
+
+    #[test]
+    fn mounts_roundtrip_and_unknown_mount_fields_are_rejected() {
+        let sandbox = mounts_sandbox(serde_json::json!([
+            {"type": "s3files", "path": "/workspace"},
+            {"type": "tmpfs", "path": "/workspace/tmp", "size": "8Gi"},
+        ]));
+        let value = serde_json::to_value(&sandbox).unwrap();
+        assert_eq!(serde_json::from_value::<Sandbox>(value).unwrap(), sandbox);
+        for bad in [
+            serde_json::json!({"type": "s3files", "path": "/w", "size": "1Gi"}),
+            serde_json::json!({"type": "nfs", "path": "/w"}),
+        ] {
+            let json = serde_json::json!({
+                "id": "sbx", "code": {"type": "image", "image": "u"}, "egress": "none",
+                "lifecycle": {}, "mounts": [bad],
+            });
+            serde_json::from_value::<Sandbox>(json).expect_err("unknown mount shape");
+        }
+    }
+
+    #[test]
+    fn aws_accepts_the_workspace_and_scratch_mounts() {
+        mounts_sandbox(serde_json::json!([
+            {"type": "s3files", "path": "/workspace"},
+            {"type": "tmpfs", "path": "/workspace/tmp", "size": "8Gi"},
+        ]))
+        .validate_for_platform(Platform::Aws)
+        .expect("AWS accepts mounts");
+    }
+
+    #[test]
+    fn other_platforms_refuse_mounts_at_plan_time() {
+        for platform in [
+            Platform::Azure,
+            Platform::Gcp,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
+            for mount in [
+                serde_json::json!({"type": "s3files", "path": "/workspace"}),
+                serde_json::json!({"type": "tmpfs", "path": "/scratch", "size": "1Gi"}),
+            ] {
+                let error = mounts_sandbox(serde_json::json!([mount]))
+                    .validate_for_platform(platform)
+                    .expect_err("mounts are AWS only");
+                assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED", "{platform}");
+                assert!(error.message.contains("mounts"), "{}", error.message);
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_mounts_are_refused() {
+        let cases = [
+            serde_json::json!([{"type": "s3files", "path": "workspace"}]),
+            serde_json::json!([{"type": "s3files", "path": "/"}]),
+            serde_json::json!([{"type": "s3files", "path": "/a/../b"}]),
+            serde_json::json!([{"type": "s3files", "path": "/workspace/"}]),
+            serde_json::json!([{"type": "s3files", "path": "/opt/alien"}]),
+            serde_json::json!([{"type": "s3files", "path": "/opt/alien/x"}]),
+            serde_json::json!([{"type": "s3files", "path": "/proc"}]),
+            serde_json::json!([{"type": "tmpfs", "path": "/t", "size": "lots"}]),
+            serde_json::json!([{"type": "tmpfs", "path": "/t", "size": "0"}]),
+            serde_json::json!([
+                {"type": "s3files", "path": "/w"}, {"type": "tmpfs", "path": "/w", "size": "1Gi"}
+            ]),
+            serde_json::json!([
+                {"type": "tmpfs", "path": "/w/tmp", "size": "1Gi"}, {"type": "s3files", "path": "/w"}
+            ]),
+            serde_json::json!([
+                {"type": "s3files", "path": "/w"}, {"type": "s3files", "path": "/w/inner"}
+            ]),
+        ];
+        for case in cases {
+            let error = mounts_sandbox(case.clone())
+                .validate_for_platform(Platform::Aws)
+                .expect_err(&format!("must refuse {case}"));
+            assert_eq!(error.code, "SANDBOX_LIMIT_INVALID", "{case}");
         }
     }
 }
