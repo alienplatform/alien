@@ -16,6 +16,7 @@ alien-sdk = { workspace = true, features = ["worker", "openapi", "local", "gcp",
 # This infrastructure test also exercises managed resource bindings that are
 # intentionally outside the app-facing `alien_sdk` namespace.
 alien-bindings = { workspace = true, features = ["local-artifact-registry"] }
+alien-azure-clients = { workspace = true }
 alien-core = { workspace = true, features = ["openapi"] }
 alien-error = { workspace = true, features = ["axum", "openapi"] }
 anyhow = { workspace = true }

@@ -231,3 +231,27 @@ pub struct SSEMessage {
     /// Event type
     pub event: Option<String>,
 }
+
+/// Request of the build negative-check endpoint
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildIdentityCheckRequest {
+    /// Full resource id of a user-assigned identity that is not the build's own
+    pub other_identity_id: String,
+}
+
+/// Result of the build negative-check endpoint
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildIdentityCheckResponse {
+    /// Name of the binding being tested
+    pub binding_name: String,
+    /// Whether Azure refused the request with 403
+    pub refused: bool,
+    /// HTTP status class Azure answered with (403 when refused, 0 when the request succeeded)
+    pub status: u16,
+    /// Error code of the refusal, empty when the request succeeded
+    pub error_code: String,
+    /// Error message of the refusal
+    pub message: String,
+}

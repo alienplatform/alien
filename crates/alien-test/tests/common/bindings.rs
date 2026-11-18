@@ -922,6 +922,73 @@ pub async fn check_build(deployment: &TestDeployment) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Azure only: the grants of the build binding must not let a job name another identity. The app
+/// tries to create a job that names the stack's other service account identity (read from stack
+/// state) and must be refused with 403. Records status codes only.
+pub async fn check_build_refuses_other_identity(deployment: &TestDeployment) -> anyhow::Result<()> {
+    use alien_core::{ServiceAccountOutputs, StackState};
+
+    let url = deployment_url(deployment)?;
+    info!("Checking that a build job cannot name another identity");
+
+    let installed = deployment
+        .manager()
+        .client()
+        .get_deployment()
+        .id(&deployment.id)
+        .send()
+        .await
+        .context("Failed to read deployment")?;
+    let state: StackState = serde_json::from_value(serde_json::to_value(
+        installed
+            .stack_state
+            .as_ref()
+            .context("Deployment has no stack state")?,
+    )?)?;
+    let other_identity_id = state
+        .resources
+        .get("test-alien-sa")
+        .and_then(|resource| resource.outputs.as_ref())
+        .and_then(|outputs| outputs.downcast_ref::<ServiceAccountOutputs>())
+        .map(|outputs| outputs.resource_id.clone())
+        .filter(|id| id.contains("/userAssignedIdentities/"))
+        .context("The stack has no other user-assigned identity (test-alien-sa) to name")?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .unwrap();
+    let resp = client
+        .post(format!(
+            "{}/build-test/test-alien-build/other-identity",
+            url
+        ))
+        .json(&serde_json::json!({ "otherIdentityId": other_identity_id }))
+        .send()
+        .await
+        .context("Other-identity request failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        bail!("Other-identity check returned {}: {}", status, body);
+    }
+    let data: serde_json::Value = resp.json().await.context("Failed to parse response")?;
+    info!(
+        refused = %data["refused"],
+        status = %data["status"],
+        error_code = %data["errorCode"],
+        "Other-identity check result"
+    );
+    if data["refused"] != true || data["status"] != 403 {
+        bail!(
+            "A job naming another identity must be refused with 403, got status {} code {}",
+            data["status"],
+            data["errorCode"]
+        );
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Artifact Registry
 // ---------------------------------------------------------------------------

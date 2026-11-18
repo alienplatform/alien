@@ -406,6 +406,10 @@ fn build_router(app_state: AppState) -> Router {
             post(handlers::build::test_build),
         )
         .route(
+            "/build-test/{binding_name}/other-identity",
+            post(handlers::build::test_build_other_identity),
+        )
+        .route(
             "/artifact-registry-test/{binding_name}",
             post(handlers::artifact_registry::test_artifact_registry),
         )

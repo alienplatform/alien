@@ -66,7 +66,12 @@ pub async fn check_all_bindings(
             Binding::Worker => bindings::check_worker(deployment).await?,
             Binding::Container => bindings::check_container(deployment).await?,
             Binding::WaitUntil => bindings::check_wait_until(deployment).await?,
-            Binding::Build => bindings::check_build(deployment).await?,
+            Binding::Build => {
+                bindings::check_build(deployment).await?;
+                if platform == Platform::Azure {
+                    bindings::check_build_refuses_other_identity(deployment).await?;
+                }
+            }
             Binding::ArtifactRegistry => bindings::check_artifact_registry(deployment).await?,
             Binding::ServiceAccount => bindings::check_service_account(deployment).await?,
             Binding::Ai => bindings::check_ai(deployment).await?,
