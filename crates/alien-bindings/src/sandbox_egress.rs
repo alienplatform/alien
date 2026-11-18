@@ -554,6 +554,9 @@ impl SandboxEgressManager {
         backoff: impl Fn(u64) -> std::time::Duration,
     ) -> Result<()> {
         let mut done: std::collections::HashSet<String> = Default::default();
+        // Replicas that answered definitely with a refusal; asking them again changes nothing.
+        let mut refused: std::collections::HashSet<String> = Default::default();
+        let mut refusal: Option<AlienError<ErrorData>> = None;
         let mut failure = unavailable("a gateway replica did not acknowledge the revocation");
         for attempt in 0..attempts {
             // A lookup that fails now may work on the next attempt (a replica is being replaced).
@@ -568,9 +571,8 @@ impl SandboxEgressManager {
                 }
             };
             let mut pending = false;
-            let mut refusal = None;
             for target in &targets {
-                if done.contains(target) {
+                if done.contains(target) || refused.contains(target) {
                     continue;
                 }
                 let authorization = issuer.mint_admin(
@@ -599,21 +601,23 @@ impl SandboxEgressManager {
                         pending = true;
                     }
                     // Any other answer (401, 400, ...) is a refusal that retrying cannot fix. The
-                    // remaining replicas still get the revocation this round; the first refusal
-                    // is returned after them.
+                    // remaining replicas still get the revocation, and a replica that has not
+                    // answered yet is still retried: the refusal decides only once every
+                    // replica has answered.
                     Ok(response) => {
                         let error = gateway_error(response).await;
+                        refused.insert(target.clone());
                         refusal.get_or_insert(error);
                     }
                     // A connection failure or timeout passes too.
                     Err(_) => pending = true,
                 }
             }
-            if let Some(error) = refusal {
-                return Err(error);
-            }
             if !pending && complete {
-                return Ok(());
+                return match refusal {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                };
             }
             if attempt + 1 < attempts {
                 tokio::time::sleep(backoff(attempt)).await;

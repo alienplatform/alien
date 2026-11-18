@@ -1004,6 +1004,99 @@ async fn a_revocation_refused_permanently_is_not_retryable() {
     }
 }
 
+/// A mixed round: one replica refuses (401) while another has not answered yet. The refusal
+/// decides only once every replica has answered, so the pending one is still retried.
+/// Order 1: the refusing replica comes first and the other returns during the retries.
+#[tokio::test]
+async fn a_refusal_waits_for_a_replica_that_returns_during_the_retries() {
+    let h = Harness::new().await;
+    let (manager, second, back) =
+        two_replicas(&h, Some(std::time::Duration::from_millis(1500))).await;
+    h.state
+        .refuse_status
+        .store(401, std::sync::atomic::Ordering::SeqCst);
+
+    let error = manager
+        .delete("box-1")
+        .await
+        .expect_err("one replica refuses");
+    assert!(!error.retryable, "{error}");
+    assert!(error.message.contains("401"), "{error}");
+    assert!(
+        !holds_grant(&second),
+        "the replica that was away got the revocation before the refusal decided"
+    );
+    back.abort();
+}
+
+/// Order 1, the other replica never comes back: the round stays retryable.
+#[tokio::test]
+async fn a_refusal_beside_a_replica_that_never_answers_is_retryable() {
+    let h = Harness::new().await;
+    let (manager, _second, away) = two_replicas(&h, None).await;
+    h.state
+        .refuse_status
+        .store(401, std::sync::atomic::Ordering::SeqCst);
+
+    let error = manager
+        .delete("box-1")
+        .await
+        .expect_err("one replica refuses, one is away");
+    assert!(error.retryable, "{error}");
+    away.abort();
+}
+
+/// Order 2: the first replica answers 503 and the second refuses. The 503 replica is retried; it
+/// recovers during the retries, then the refusal is final and not retryable.
+#[tokio::test]
+async fn a_refusal_after_a_replica_that_answers_503_waits_for_it() {
+    let h = Harness::new().await;
+    let (manager, [second, third], servers) = three_replicas(&h).await;
+    // Replica 2 refuses; replica 3 acknowledges at once.
+    second
+        .refuse_status
+        .store(401, std::sync::atomic::Ordering::SeqCst);
+    h.state.refuse.store(true, Ordering::SeqCst);
+    let state = h.state.clone();
+    let recover = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        state.refuse.store(false, Ordering::SeqCst);
+    });
+
+    let error = manager
+        .delete("box-1")
+        .await
+        .expect_err("one replica refuses");
+    assert!(!error.retryable, "{error}");
+    assert!(error.message.contains("401"), "{error}");
+    assert!(
+        !holds_grant(&h.state),
+        "the 503 replica was retried and revoked"
+    );
+    assert!(!holds_grant(&third), "the third replica holds no grant");
+    recover.abort();
+    servers.iter().for_each(|server| server.abort());
+}
+
+/// Order 2, the 503 replica never recovers: the round ends retryable, not on the refusal.
+#[tokio::test]
+async fn a_refusal_after_a_replica_that_keeps_answering_503_is_retryable() {
+    let h = Harness::new().await;
+    let (manager, [second, third], servers) = three_replicas(&h).await;
+    second
+        .refuse_status
+        .store(401, std::sync::atomic::Ordering::SeqCst);
+    h.state.refuse.store(true, Ordering::SeqCst);
+
+    let error = manager
+        .delete("box-1")
+        .await
+        .expect_err("never acknowledged");
+    assert!(error.retryable, "{error}");
+    assert!(!holds_grant(&third), "the third replica holds no grant");
+    servers.iter().for_each(|server| server.abort());
+}
+
 /// Three replicas on 127.0.0.1-3, all holding the grant for `box-1`; the first is the manager's
 /// own harness replica. Returns the manager, the other two states and their servers.
 async fn three_replicas(
