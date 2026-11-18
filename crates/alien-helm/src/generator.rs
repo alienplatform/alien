@@ -7874,7 +7874,7 @@ fn pvc_tpl() -> String {
 {{- fail (printf "runtime.data.persistence.storageClassName is %q, but this cluster has no StorageClass with that name, so the Operator's identity claim %s would stay Pending. Name a StorageClass that exists (kubectl get storageclass), or set clusterBootstrap.storageClass.default.enabled=true with that name and a provisioner so the chart creates it." $named $claimName) }}
 {{- end }}
 {{- else if and (not $hasDefault) (not $bootstrapEnabled) }}
-{{- fail (printf "The cluster has no default StorageClass, so the Operator's identity claim %s would stay Pending and the Operator would never start. Set runtime.data.persistence.storageClassName to a StorageClass of this cluster (EKS Auto Mode: create one with provisioner ebs.csi.eks.amazonaws.com), set clusterBootstrap.storageClass.default.enabled=true with a name and provisioner so the chart creates one, set runtime.data.persistence.existingClaim, or set runtime.data.persistence.storageClassCheck=false to skip this check." $claimName) }}
+{{- fail (printf "The cluster has no default StorageClass, so the Operator's identity claim %s would stay Pending and the Operator would never start. Set runtime.data.persistence.storageClassName to a StorageClass of this cluster (EKS Auto Mode: create one with provisioner ebs.csi.eks.amazonaws.com), set clusterBootstrap.storageClass.default.enabled=true with a name and provisioner so the chart creates one, set runtime.data.persistence.existingClaim, or set runtime.data.persistence.storageClassCheck=false to skip this check (needed when the claim binds to a pre-provisioned PersistentVolume that has no StorageClass)." $claimName) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -8665,6 +8665,8 @@ The install lists the cluster's StorageClasses to fail early, naming the fix, wh
 Operator's identity claim could not bind. An installer limited to the release namespace
 cannot list them, and Helm then fails with a forbidden error; add
 `--set runtime.data.persistence.storageClassCheck=false` for such an installer.
+The check also refuses a cluster with no default StorageClass when the claim is meant to bind
+to a pre-provisioned PersistentVolume that has no class; set `storageClassCheck=false` for that too.
 
 Managed packages can supply the project's resolved management endpoint as a
 chart default. The installation service supplies an override when the selected

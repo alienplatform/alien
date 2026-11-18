@@ -108,6 +108,22 @@ fn the_install_names_a_missing_default_storage_class() {
             "--wait=false",
         ]);
     };
+    // The spec.storageClassName of the one claim the release created ("" when none is set).
+    let claim_class = |kubectl: &dyn Fn(&[&str]) -> std::process::Output, namespace: &str| {
+        let output = kubectl(&[
+            "-n",
+            namespace,
+            "get",
+            "pvc",
+            "-o",
+            "jsonpath={range .items[*]}{.metadata.name}={.spec.storageClassName};{end}",
+        ]);
+        let listed = String::from_utf8_lossy(&output.stdout).to_string();
+        let entries: Vec<&str> = listed.split(';').filter(|entry| !entry.is_empty()).collect();
+        assert_eq!(entries.len(), 1, "exactly one claim rendered: {listed}");
+        assert!(entries[0].contains("-runtime-data="), "{listed}");
+        entries[0].split_once('=').expect("name=class").1.to_string()
+    };
     // The cluster has no default StorageClass.
     let _ = kubectl(&["delete", "storageclass", "--all"]);
 
@@ -116,6 +132,12 @@ fn the_install_names_a_missing_default_storage_class() {
     assert!(refused.contains("no default StorageClass"), "{refused}");
     assert!(
         refused.contains("runtime.data.persistence.storageClassName"),
+        "{refused}"
+    );
+    // The message names the way through for a claim that binds to a pre-provisioned volume.
+    assert!(
+        refused.contains("storageClassCheck=false")
+            && refused.contains("pre-provisioned PersistentVolume"),
         "{refused}"
     );
     assert!(
@@ -158,7 +180,8 @@ fn the_install_names_a_missing_default_storage_class() {
             "clusterBootstrap.storageClass.default.provisioner=kubernetes.io/no-provisioner",
         ],
     );
-    assert!(!created.contains("no default StorageClass"), "{created}");
+    assert!(created.starts_with("ok=true"), "{created}");
+    assert_eq!(claim_class(&kubectl, "scheck-b2"), "made", "{created}");
     uninstall("scheck-b2");
     let skipped = install(
         &context,
@@ -166,7 +189,8 @@ fn the_install_names_a_missing_default_storage_class() {
         "scheck-b3",
         &["--set", "runtime.data.persistence.storageClassCheck=false"],
     );
-    assert!(!skipped.contains("no default StorageClass"), "{skipped}");
+    assert!(skipped.starts_with("ok=true"), "{skipped}");
+    assert_eq!(claim_class(&kubectl, "scheck-b3"), "", "{skipped}");
     uninstall("scheck-b3");
 
     // A default StorageClass makes the plain install pass the check.
@@ -177,8 +201,23 @@ fn the_install_names_a_missing_default_storage_class() {
         .status
         .success());
     let plain = install(&context, chart, "scheck-c", &[]);
-    assert!(!plain.contains("no default StorageClass"), "{plain}");
+    assert!(plain.starts_with("ok=true"), "{plain}");
+    assert_eq!(claim_class(&kubectl, "scheck-c"), "fast", "{plain}");
     uninstall("scheck-c");
+
+    // Naming an existing class passes and the claim carries that class.
+    let named = install(
+        &context,
+        chart,
+        "scheck-d",
+        &[
+            "--set-string",
+            "runtime.data.persistence.storageClassName=fast",
+        ],
+    );
+    assert!(named.starts_with("ok=true"), "{named}");
+    assert_eq!(claim_class(&kubectl, "scheck-d"), "fast", "{named}");
+    uninstall("scheck-d");
     let _ = kubectl(&["delete", "storageclass", "fast"]);
 }
 
