@@ -440,3 +440,37 @@ async fn head_never_names_a_manifest_the_store_lacks() {
     );
     assert_eq!(store.get("HEAD").await.unwrap().unwrap(), before);
 }
+
+/// Two binding instances (workload replicas) pull the same sandbox. The one whose HEAD version
+/// is stale finds HEAD moved by its own sandbox, not by another one: it publishes on top and
+/// the agent keeps committing.
+#[tokio::test]
+async fn a_second_puller_of_the_same_sandbox_publishes_rather_than_stopping_it() {
+    let store = MemoryStore::new();
+    let mut sandbox = sandbox(&store, "sandbox-1").await;
+    let start = read_head(&store).await.unwrap().unwrap().1;
+    let mut sibling = Puller::new("sandbox-1", start, PAGE);
+
+    sandbox.commit(&sample()).await.unwrap();
+    sandbox.pull(&store).await.unwrap();
+    let edited = sample().file("late.txt", pattern(100, 3), 2);
+    sandbox.commit(&edited).await.unwrap();
+
+    let outcome = sibling
+        .pull(&sandbox.spool, &store, "engine-42")
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, PullOutcome::Published { .. }),
+        "{outcome:?}"
+    );
+    assert!(!sandbox.spool.is_superseded());
+    assert_eq!(files_at_head(&store).await, edited.files());
+
+    // The first puller is now the stale one; it catches up the same way.
+    let third = edited.clone().file("third.txt", b"3".to_vec(), 3);
+    sandbox.commit(&third).await.unwrap();
+    sandbox.pull(&store).await.unwrap();
+    assert!(!sandbox.spool.is_superseded());
+    assert_eq!(files_at_head(&store).await, third.files());
+}

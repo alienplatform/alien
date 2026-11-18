@@ -533,34 +533,63 @@ impl Puller {
             }
         }
 
-        match store
-            .put_if(
-                HEAD_OBJECT,
-                pending.head.into_bytes(),
-                Precondition::Matches(self.head_version.clone()),
-            )
-            .await?
-        {
-            PutOutcome::Written { version } => {
-                self.head_version = version;
-                channel
-                    .ack(pending.generation, AckOutcome::Published)
-                    .await?;
-                Ok(PullOutcome::Published {
-                    commit: head.commit,
-                    bytes: copied,
-                })
-            }
-            PutOutcome::Conflict => {
-                self.superseded = true;
-                channel
-                    .ack(pending.generation, AckOutcome::Superseded)
-                    .await?;
-                Err(AlienError::new(ErrorData::Superseded {
-                    key: key.to_string(),
-                }))
+        let ours = head.commit.as_ref().map(|commit| commit.seq);
+        let bytes = pending.head.into_bytes();
+        // A conflict means HEAD moved since this puller last wrote it. Another binding instance
+        // pulling the same sandbox moves it too, with this sandbox as the writer: then the newer
+        // of the two commits stays (a sandbox's commits only grow) and the sandbox carries on.
+        // Only a HEAD naming another writer supersedes this sandbox. Bounded: each retry follows
+        // a publish by this same sandbox.
+        for _ in 0..4 {
+            match store
+                .put_if(
+                    HEAD_OBJECT,
+                    bytes.clone(),
+                    Precondition::Matches(self.head_version.clone()),
+                )
+                .await?
+            {
+                PutOutcome::Written { version } => {
+                    self.head_version = version;
+                    channel
+                        .ack(pending.generation, AckOutcome::Published)
+                        .await?;
+                    return Ok(PullOutcome::Published {
+                        commit: head.commit,
+                        bytes: copied,
+                    });
+                }
+                PutOutcome::Conflict => match crate::read_head(store).await? {
+                    Some((current, version)) if current.writer == self.writer => {
+                        self.head_version = version;
+                        if current.commit.as_ref().map(|commit| commit.seq) >= ours {
+                            channel
+                                .ack(pending.generation, AckOutcome::Published)
+                                .await?;
+                            return Ok(PullOutcome::Published {
+                                commit: current.commit,
+                                bytes: copied,
+                            });
+                        }
+                    }
+                    _ => {
+                        self.superseded = true;
+                        channel
+                            .ack(pending.generation, AckOutcome::Superseded)
+                            .await?;
+                        return Err(AlienError::new(ErrorData::Superseded {
+                            key: key.to_string(),
+                        }));
+                    }
+                },
             }
         }
+        Err(AlienError::new(ErrorData::StoreFailed {
+            operation: "put".to_string(),
+            object: HEAD_OBJECT.to_string(),
+            reason: "HEAD kept moving under this sandbox's own commits; retried next pull"
+                .to_string(),
+        }))
     }
 
     async fn read_object(
