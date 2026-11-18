@@ -318,6 +318,7 @@ fn capability_names(value: alien_core::SandboxCapabilities) -> Vec<String> {
         (value.sandbox_lifetime, "sandboxLifetime"),
         (value.supervisor_pid_namespace, "supervisorPidNamespace"),
         (value.supervisor_isolation, "supervisorIsolation"),
+        (value.persistent_storage, "persistentStorage"),
     ]
     .into_iter()
     .filter(|(supported, _)| *supported)
