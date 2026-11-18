@@ -35,6 +35,11 @@ pub const ENV_ALIEN_SANDBOX_NODE_SELECTOR: &str = "ALIEN_SANDBOX_NODE_SELECTOR";
 /// Set by the Kubernetes operator on root-boot pods: the egress limit is enforced outside the pod
 /// (NetworkPolicy and the gateway), so the agent skips in-pod firewall setup. Agent-read only.
 pub const ENV_ALIEN_SANDBOX_NETWORK_ENFORCER: &str = "ALIEN_SANDBOX_NETWORK_ENFORCER";
+/// Set by the Azure binding on a sandbox whose platform policy opens a host the agent needs (a
+/// persistent storage store) that commands must not reach. `none`: the agent marks guest sockets
+/// and drops their egress before image code starts. Agent-read only; any other value refuses
+/// to start.
+pub const ENV_ALIEN_SANDBOX_GUEST_EGRESS: &str = "ALIEN_SANDBOX_GUEST_EGRESS";
 /// JSON array of tolerations for sandbox pods (`sandbox.tolerations`).
 pub const ENV_ALIEN_SANDBOX_TOLERATIONS: &str = "ALIEN_SANDBOX_TOLERATIONS";
 /// JSON object mapping workload priority levels (`critical`, `high`, `normal`, `low`) to
