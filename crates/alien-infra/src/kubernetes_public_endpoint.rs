@@ -34,9 +34,15 @@ use crate::core::{kubernetes_cleanup_resource_labels, ResourceControllerContext}
 use crate::error::{ErrorData, Result};
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
-/// How long the managed certificate may take to issue. Same bound as the public workers on the
-/// other clouds (`worker/certificate_wait.rs`: several attempts plus their retry backoff).
-const CERTIFICATE_WAIT_BOUND: Duration = Duration::from_secs(30 * 60);
+/// How long the managed certificate may take to issue before the wait ends with a retryable-by-
+/// the-deployment timeout: the wall-clock length of the former 60 polls of 10 seconds. A first
+/// install on the pull path keeps the configuration it received with its operation, so it cannot
+/// see the certificate become issued; ending the operation lets the deployment's automatic retry
+/// start with fresh configuration.
+const CERTIFICATE_WAIT_BOUND: Duration = Duration::from_secs(10 * 60);
+/// The poll limit the certificate wait had before it was bounded by time; reported in its
+/// timeout error.
+const CERTIFICATE_WAIT_POLLS: u32 = 60;
 /// Poll interval while the certificate issues; same as the public workers.
 const CERTIFICATE_WAIT: Duration = Duration::from_secs(5);
 /// Load balancer address, DNS and health check: 60 polls of `ENDPOINT_WAIT`, as before.
@@ -206,16 +212,25 @@ fn apply_wait_deadline(
                 // The deployment fails and may be retried with this same state: the retry
                 // gets fresh windows instead of failing at once on the old start.
                 state.clear_waits();
+                if kind == EndpointWait::Certificate {
+                    if certificate_failed {
+                        tracing::warn!(
+                            %resource_id,
+                            "Certificate wait timed out; the issuer last reported the certificate as failed"
+                        );
+                    }
+                    // Same error as the controllers' poll limit gave: not retryable by the
+                    // controller, the deployment retries automatically afterwards.
+                    return Err(AlienError::new(ErrorData::PollingTimeout {
+                        state: "ReconcilePublicEndpoint".to_string(),
+                        max_times: CERTIFICATE_WAIT_POLLS,
+                    }));
+                }
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: format!(
-                        "Timed out after {} seconds waiting for {}{}",
+                        "Timed out after {} seconds waiting for {}",
                         elapsed,
-                        kind.description(),
-                        if certificate_failed {
-                            " (last status: failed)"
-                        } else {
-                            ""
-                        }
+                        kind.description()
                     ),
                     resource_id: Some(resource_id.to_string()),
                 }));
@@ -5074,26 +5089,27 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_certificate_that_never_issues_fails_after_its_bound_naming_the_wait() {
+        async fn a_certificate_that_never_issues_ends_with_the_polling_timeout_after_ten_minutes() {
             let harness = harness(CertificateStatus::Pending, false);
             let now = chrono::Utc::now().timestamp();
             let mut state = KubernetesPublicEndpointState::default();
             state
                 .wait_started_unix
-                .insert(EndpointWait::Certificate, now - 29 * 60);
+                .insert(EndpointWait::Certificate, now - 9 * 60);
             reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
                 .await
                 .expect("inside the bound");
             state
                 .wait_started_unix
-                .insert(EndpointWait::Certificate, now - 31 * 60);
+                .insert(EndpointWait::Certificate, now - 11 * 60);
             let error =
                 reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
                     .await
                     .expect_err("past the bound");
-            let message = error.to_string();
-            assert!(message.contains("managed certificate"), "{message}");
-            assert!(message.contains("after 1860 seconds"), "{message}");
+            // The error the controllers' 60-poll limit gave: the deployment then retries on its own.
+            assert_eq!(error.code, "RESOURCE_POLLING_TIMEOUT");
+            assert!(!error.retryable, "{error}");
+            assert!(error.to_string().contains("60 attempts"), "{error}");
         }
 
         /// A certificate the issuer reports as failed is retried by the issuer: it waits like
@@ -5110,16 +5126,12 @@ mod tests {
             let now = chrono::Utc::now().timestamp();
             state
                 .wait_started_unix
-                .insert(EndpointWait::Certificate, now - 31 * 60);
+                .insert(EndpointWait::Certificate, now - 11 * 60);
             let error =
                 reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
                     .await
                     .expect_err("past the bound");
-            assert!(error.to_string().contains("managed certificate"), "{error}");
-            assert!(
-                error.to_string().ends_with("(last status: failed)"),
-                "{error}"
-            );
+            assert_eq!(error.code, "RESOURCE_POLLING_TIMEOUT");
         }
 
         /// A renewal does not take the published certificate away, and the Service and route are
@@ -5221,14 +5233,14 @@ mod tests {
             let mut state = KubernetesPublicEndpointState::default();
             apply_wait_deadline("api", &mut state, certificate_wait(), 1_000).expect("starts");
             // Issued: the endpoint waits for its load balancer instead.
-            poll_every_minute(&mut state, endpoint_wait, 1_060, 1_600);
+            poll_every_minute(&mut state, endpoint_wait, 1_060, 1_300);
             // The status falls back: the certificate wait did not restart.
-            poll_every_minute(&mut state, certificate_wait, 1_600, 2_000);
+            poll_every_minute(&mut state, certificate_wait, 1_300, 1_500);
             assert_eq!(state.wait_started_unix[&EndpointWait::Certificate], 1_000);
-            poll_every_minute(&mut state, certificate_wait, 2_000, 1_000 + 1_800);
-            let error = apply_wait_deadline("api", &mut state, certificate_wait(), 1_000 + 1_800)
+            poll_every_minute(&mut state, certificate_wait, 1_500, 1_000 + 600);
+            let error = apply_wait_deadline("api", &mut state, certificate_wait(), 1_000 + 600)
                 .expect_err("the original start counts");
-            assert!(error.to_string().contains("managed certificate"), "{error}");
+            assert_eq!(error.code, "RESOURCE_POLLING_TIMEOUT", "{error}");
             // The timeout ended every wait: nothing is left for a retry to trip over.
             assert!(state.wait_started_unix.is_empty());
         }
@@ -5239,8 +5251,8 @@ mod tests {
         fn a_retry_after_a_timeout_gets_a_fresh_window() {
             let mut state = KubernetesPublicEndpointState::default();
             apply_wait_deadline("api", &mut state, certificate_wait(), 1_000).expect("starts");
-            poll_every_minute(&mut state, certificate_wait, 1_060, 1_000 + 1_800);
-            apply_wait_deadline("api", &mut state, certificate_wait(), 1_000 + 1_800)
+            poll_every_minute(&mut state, certificate_wait, 1_060, 1_000 + 600);
+            apply_wait_deadline("api", &mut state, certificate_wait(), 1_000 + 600)
                 .expect_err("timed out");
             let retry = apply_wait_deadline("api", &mut state, certificate_wait(), 3_000)
                 .expect("a fresh window, not an error");
