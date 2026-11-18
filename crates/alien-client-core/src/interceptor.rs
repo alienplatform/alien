@@ -658,6 +658,12 @@ fn refused_change(original: &HookRequest, changed: &HookRequest) -> Option<Strin
                 .to_string(),
         );
     }
+    let (before, after) = (exposure_settings(original), exposure_settings(changed));
+    if let Some((place, _)) = before.symmetric_difference(&after).next() {
+        return Some(format!(
+            "it added, removed or changed a setting that decides who can reach a resource ({place}); an interceptor may not touch network, firewall, access or public-exposure settings"
+        ));
+    }
     if let Some(exposure) = public_exposures(changed)
         .difference(&public_exposures(original))
         .next()
@@ -843,13 +849,106 @@ const OPEN_RANGES: [&str; 5] = ["0.0.0.0/0", "::/0", "internet", "any", "*"];
 
 /// Fields that hold a source range or address prefix on Azure, which may name the internet as a
 /// tag (`Internet`, `Any`, `*`) and not only as a CIDR.
-const AZURE_SOURCE_FIELDS: [&str; 5] = [
+const AZURE_SOURCE_FIELDS: [&str; 4] = [
     "sourceaddressprefix",
     "sourceaddressprefixes",
     "sourceaddresses",
     "ipaddressorrange",
-    "value",
 ];
+
+/// Whether a field by this name sets who can reach a resource: a public-access, network, firewall,
+/// source-range, ingress, ACL or access-policy setting, on any cloud.
+fn exposure_field(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.starts_with("publicaccess")
+        || name.starts_with("sourceaddressprefix")
+        || name.contains("ingress")
+        || matches!(
+            name.as_str(),
+            "allowblobpublicaccess"
+                | "allowpublicaccess"
+                | "publicnetworkaccess"
+                | "networkacls"
+                | "defaultaction"
+                | "iprules"
+                | "ipranges"
+                | "ipaddressorrange"
+                | "sourceaddresses"
+                | "sourceranges"
+                | "invokeriamdisabled"
+                | "publiclyaccessible"
+                | "ipconfiguration"
+                | "ipv4enabled"
+                | "authorizednetworks"
+                | "cidrip"
+                | "cidripv6"
+                | "acl"
+                | "defaultobjectacl"
+                | "iamconfiguration"
+                | "accesspolicies"
+                | "enablerbacauthorization"
+        )
+}
+
+/// Every exposure or access setting a call carries, with where it sits and its whole value
+/// (every leaf of a nested setting). The set must be equal before and after an interceptor: a
+/// setting added, removed or changed in any way counts, so a range split in two, a firewall
+/// field flipped, or a protection element dropped is caught without judging its value.
+fn exposure_settings(request: &HookRequest) -> BTreeSet<(String, String)> {
+    let body = request.body.as_deref().unwrap_or_default();
+    let mut found = BTreeSet::new();
+    let json = serde_json::from_str::<serde_json::Value>(body).ok();
+    let mut pairs = |location: &str, text: &str| {
+        for (key, value) in form_urlencoded::parse(text.as_bytes()) {
+            if key.rsplit('.').next().is_some_and(exposure_field) {
+                found.insert((format!("{location}{key}"), value.into_owned()));
+            }
+        }
+    };
+    pairs("?", request.url.query().unwrap_or_default());
+    if json.is_none() {
+        pairs("&", body);
+    }
+    if let Some(value) = &json {
+        json_settings(value, "", &mut found);
+    }
+    // The S3 public access block is XML: each element is a setting, counted by position.
+    let lower = body.to_ascii_lowercase();
+    for tag in [
+        "blockpublicacls",
+        "ignorepublicacls",
+        "blockpublicpolicy",
+        "restrictpublicbuckets",
+    ] {
+        let open = format!("<{tag}>");
+        for (n, (at, _)) in lower.match_indices(&open).enumerate() {
+            let rest = &lower[at + open.len()..];
+            let value = rest.split('<').next().unwrap_or_default().trim();
+            found.insert((format!("S3 {tag} #{n}"), value.to_string()));
+        }
+    }
+    found
+}
+
+fn json_settings(value: &serde_json::Value, pointer: &str, found: &mut BTreeSet<(String, String)>) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            for (key, field) in fields {
+                let at = pointer_to(pointer, key);
+                if exposure_field(key) {
+                    every_leaf(field, &at, found);
+                }
+                json_settings(field, &at, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                json_settings(item, &format!("{pointer}/{index}"), found);
+            }
+        }
+        _ => {}
+    }
+}
 
 /// What in `request` opens a resource to the internet, each as a short description. A call that
 /// Alien builds with one of them (a bucket made public on purpose) keeps it; the check refuses an
@@ -925,7 +1024,6 @@ fn json_exposures(value: &serde_json::Value, pointer: &str, found: &mut BTreeSet
                 {
                     let mut leaves = Vec::new();
                     json_strings(field, &mut leaves);
-                    // `value` holds anything; only an open range counts there.
                     if leaves.iter().any(|leaf| {
                         let leaf = leaf.trim().to_ascii_lowercase();
                         OPEN_RANGES.contains(&leaf.as_str()) || leaf.ends_with("/0")
@@ -1661,6 +1759,16 @@ mod tests {
 
     /// Runs `change` on `built` and expects the chain to refuse it before anything is sent.
     fn assert_change_refused(what: &str, built: Built, change: fn(&mut HookRequest)) {
+        assert_change_refused_because(what, built, "", change)
+    }
+
+    /// Like `assert_change_refused`, and the refusal's reason must contain `reason`.
+    fn assert_change_refused_because(
+        what: &str,
+        built: Built,
+        reason: &str,
+        change: fn(&mut HookRequest),
+    ) {
         let (cloud, service) = (built.0, built.1);
         let interceptors = chain(vec![TestInterceptor::new("acme", cloud, service)
             .on_request(move |r| {
@@ -1672,7 +1780,11 @@ mod tests {
         let error = interceptors
             .intercept(cloud, service, &mut request)
             .expect_err(what);
-        assert_fails_naming(error, "acme");
+        assert_fails_naming(error.clone(), "acme");
+        assert!(
+            matches!(&error.error, Some(ErrorData::InterceptorFailed { message, .. }) if message.contains(reason)),
+            "{what}: the reason should contain {reason:?}: {error}"
+        );
         assert_eq!(format!("{request:?}"), before, "{what}");
     }
 
@@ -2734,6 +2846,158 @@ mod tests {
         }
     }
 
+    /// Any change to an exposure or access setting is refused, whatever its value: the check
+    /// does not judge a value, so a split range or a flipped flag cannot slip past it.
+    #[test]
+    fn any_change_to_an_exposure_or_access_setting_is_refused_with_its_reason() {
+        const REASON: &str = "a setting that decides who can reach a resource";
+        const SECURITY_GROUP: Built = (
+            Cloud::Aws,
+            "ec2",
+            Method::POST,
+            "https://ec2.us-east-1.amazonaws.com/",
+            &[("content-type", "application/x-www-form-urlencoded")],
+            Some("Action=AuthorizeSecurityGroupIngress&GroupId=sg-1&IpPermissions.1.IpRanges.1.CidrIp=10.0.0.0%2F16"),
+        );
+        const RDS: Built = (
+            Cloud::Aws,
+            "rds",
+            Method::POST,
+            "https://rds.us-east-1.amazonaws.com/?Action=ModifyDBInstance&DBInstanceIdentifier=db&PubliclyAccessible=false",
+            &[],
+            None,
+        );
+        const SQL: Built = (
+            Cloud::Gcp,
+            "sqladmin",
+            Method::PATCH,
+            "https://sqladmin.googleapis.com/v1/projects/p/instances/i",
+            &[("content-type", "application/json")],
+            Some(
+                r#"{"settings":{"ipConfiguration":{"ipv4Enabled":false,"authorizedNetworks":[]}}}"#,
+            ),
+        );
+        const RUN: Built = (
+            Cloud::Gcp,
+            "run",
+            Method::PATCH,
+            "https://run.googleapis.com/v2/projects/p/locations/l/services/web",
+            &[("content-type", "application/json")],
+            Some(r#"{"ingress":"INGRESS_TRAFFIC_INTERNAL_ONLY","invokerIamDisabled":false}"#),
+        );
+        const APP: Built = (
+            Cloud::Azure,
+            "management",
+            Method::PUT,
+            "https://management.azure.com/subscriptions/s/resourceGroups/g/providers/Microsoft.App/containerApps/web?api-version=2024-03-01",
+            &[("content-type", "application/json")],
+            Some(r#"{"properties":{"configuration":{"ingress":{"external":false,"targetPort":80}}}}"#),
+        );
+        const BLOCK: Built = (
+            Cloud::Aws,
+            "s3",
+            Method::PUT,
+            "https://bucket.s3.amazonaws.com/?publicAccessBlock",
+            &[],
+            Some("<PublicAccessBlockConfiguration><BlockPublicAcls>true</BlockPublicAcls><RestrictPublicBuckets>true</RestrictPublicBuckets></PublicAccessBlockConfiguration>"),
+        );
+        const VAULT: Built = (
+            Cloud::Azure,
+            "management",
+            Method::PUT,
+            "https://management.azure.com/subscriptions/s/resourceGroups/g/providers/Microsoft.KeyVault/vaults/v?api-version=2023-07-01",
+            &[("content-type", "application/json")],
+            Some(r#"{"properties":{"enableRbacAuthorization":true,"accessPolicies":[]}}"#),
+        );
+        const GCS: Built = (
+            Cloud::Gcp,
+            "storage",
+            Method::PATCH,
+            "https://storage.googleapis.com/storage/v1/b/bucket",
+            &[("content-type", "application/json")],
+            Some(r#"{"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":true}},"acl":[]}"#),
+        );
+        const FIREWALL: Built = (
+            Cloud::Gcp,
+            "compute",
+            Method::POST,
+            "https://compute.googleapis.com/compute/v1/projects/p/global/firewalls",
+            &[("content-type", "application/json")],
+            Some(r#"{"name":"f","sourceRanges":["10.0.0.0/16"]}"#),
+        );
+        let cases: [(&str, Built, fn(&mut HookRequest)); 10] = [
+            (
+                "a range split in two halves of the internet",
+                FIREWALL,
+                |r| {
+                    r.body =
+                        Some(r#"{"name":"f","sourceRanges":["0.0.0.0/1","128.0.0.0/1"]}"#.into())
+                },
+            ),
+            ("an RDS instance made publicly accessible", RDS, |r| {
+                r.url = "https://rds.us-east-1.amazonaws.com/?Action=ModifyDBInstance&DBInstanceIdentifier=db&PubliclyAccessible=true"
+                    .parse()
+                    .unwrap()
+            }),
+            ("a Cloud SQL authorized network added", SQL, |r| {
+                r.body = Some(
+                    r#"{"settings":{"ipConfiguration":{"ipv4Enabled":false,"authorizedNetworks":[{"value":"203.0.113.0/24"}]}}}"#.into(),
+                )
+            }),
+            (
+                "a Cloud Run ingress opened and IAM invoker check off",
+                RUN,
+                |r| {
+                    r.body = Some(
+                        r#"{"ingress":"INGRESS_TRAFFIC_ALL","invokerIamDisabled":true}"#.into(),
+                    )
+                },
+            ),
+            ("a Container App with external ingress", APP, |r| {
+                r.body = Some(
+                    r.body
+                        .as_ref()
+                        .unwrap()
+                        .replace(r#""external":false"#, r#""external":true"#),
+                )
+            }),
+            ("an S3 public access block element removed", BLOCK, |r| {
+                r.body = Some(
+                    r.body
+                        .as_ref()
+                        .unwrap()
+                        .replace("<RestrictPublicBuckets>true</RestrictPublicBuckets>", ""),
+                )
+            }),
+            ("a Key Vault moved to access policies", VAULT, |r| {
+                r.body = Some(
+                    r#"{"properties":{"enableRbacAuthorization":false,"accessPolicies":[{"objectId":"o"}]}}"#.into(),
+                )
+            }),
+            ("a bucket with uniform access off and an ACL", GCS, |r| {
+                r.body = Some(
+                    r#"{"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":false}},"acl":[{"entity":"project-owners-1","role":"OWNER"}]}"#.into(),
+                )
+            }),
+            (
+                "a security group range added next to the original",
+                SECURITY_GROUP,
+                |r| {
+                    r.body
+                        .as_mut()
+                        .unwrap()
+                        .push_str("&IpPermissions.1.IpRanges.2.CidrIp=203.0.113.0%2F24")
+                },
+            ),
+            ("a setting removed", FIREWALL, |r| {
+                r.body = Some(r#"{"name":"f"}"#.into())
+            }),
+        ];
+        for (what, built, change) in cases {
+            assert_change_refused_because(what, built, REASON, change);
+        }
+    }
+
     /// Ordinary changes still go through, and a call Alien itself builds public stays so.
     #[test]
     fn a_change_that_does_not_open_anything_to_the_internet_is_sent() {
@@ -2753,7 +3017,25 @@ mod tests {
             &[("content-type", "application/x-www-form-urlencoded")],
             Some("Action=AuthorizeSecurityGroupEgress&GroupId=sg-1&IpPermissions.1.IpRanges.1.CidrIp=0.0.0.0%2F0"),
         );
+        const CONTAINER_APP: Built = (
+            Cloud::Azure,
+            "management",
+            Method::PUT,
+            "https://management.azure.com/subscriptions/s/resourceGroups/g/providers/Microsoft.App/containerApps/web?api-version=2024-03-01",
+            &[("content-type", "application/json")],
+            Some(r#"{"properties":{"template":{"containers":[{"name":"web","env":[{"name":"MODE","value":"a"}]}]}}}"#),
+        );
         let cases: [(&str, Built, fn(&mut HookRequest)); 4] = [
+            (
+                "an environment variable that ends in /0 (a Redis URL)",
+                CONTAINER_APP,
+                |r| {
+                    r.body = Some(r.body.as_ref().unwrap().replace(
+                        r#"{"name":"MODE","value":"a"}"#,
+                        r#"{"name":"MODE","value":"a"},{"name":"REDIS_URL","value":"redis://cache:6379/0"}"#,
+                    ))
+                },
+            ),
             (
                 "a tag on an Azure storage account",
                 azure_call("storage account"),
@@ -2762,18 +3044,6 @@ mod tests {
                         r#""location":"eastus""#,
                         r#""location":"eastus","tags":{"team":"a"}"#,
                     ))
-                },
-            ),
-            (
-                "a narrower Azure NSG source",
-                azure_call("network security group"),
-                |r| {
-                    r.body = Some(
-                        r.body
-                            .as_ref()
-                            .unwrap()
-                            .replace("10.0.0.0/16", "10.1.0.0/16"),
-                    )
                 },
             ),
             (
