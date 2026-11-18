@@ -596,6 +596,8 @@ impl Sandbox for AzureSandbox {
         .into_iter()
         .flatten()
         .min();
+        // A persistent storage grant lives no longer than the sandbox can.
+        let storage_deadline = deadline.and_then(chrono::DateTime::from_timestamp_millis);
         if let Some(expires) = deadline {
             labels.insert(SANDBOX_EXPIRY_LABEL.to_string(), expires.to_string());
         }
@@ -698,7 +700,8 @@ impl Sandbox for AzureSandbox {
                 self.wait_for_agent(&sandbox.id).await?;
             }
             if let Some(key) = &storage_key {
-                self.attach_storage(&sandbox.id, key).await?;
+                self.attach_storage(&sandbox.id, key, storage_deadline)
+                    .await?;
             }
             Ok(instance)
         }

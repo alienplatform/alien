@@ -38,8 +38,14 @@ impl AzureSandbox {
 
     /// Claims `key` for the new sandbox, then hands its agent the claimed commit and a SAS for the
     /// key's directory. The claim comes first, so a sandbox still running for the key can no
-    /// longer publish over the tree this one restores.
-    pub(super) async fn attach_storage(&self, sandbox_id: &str, key: &str) -> Result<()> {
+    /// longer publish over the tree this one restores. The grant ends no later than `deadline`,
+    /// the end of the sandbox's own life.
+    pub(super) async fn attach_storage(
+        &self,
+        sandbox_id: &str,
+        key: &str,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
         let unreachable = |reason: String| {
             AlienError::new(ErrorData::SandboxUnreachable {
                 operation: "sandbox.create".to_string(),
@@ -63,7 +69,7 @@ impl AzureSandbox {
             None => None,
         };
         let grant = grants
-            .grant(key)
+            .grant(key, deadline)
             .await
             .map_err(|e| unreachable(format!("could not sign the storage grant: {e}")))?;
         let body = serde_json::json!({

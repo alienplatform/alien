@@ -15,9 +15,9 @@ use chrono::{DateTime, Duration, Utc};
 
 use crate::error::{ErrorData, Result};
 
-/// How long a grant lives: as long as a user delegation key may (seven days from now, less a
-/// margin). Nothing renews it yet, as on AWS, so a sandbox that runs longer than this stops
-/// committing (its state turns `behind`) and says so.
+/// The longest a grant lives: as long as a user delegation key may (seven days from now, less a
+/// margin). A grant also ends with the sandbox it is for, whichever comes first; the SAS is signed
+/// with a delegation key that expires at the same moment, so it cannot outlive it.
 pub(crate) const GRANT_LIFETIME: Duration = Duration::minutes(7 * 24 * 60 - 10);
 
 /// Back-dating of the start, so a grant is valid on a store whose clock runs a little behind.
@@ -94,20 +94,27 @@ impl AzureGrants {
         super::persistent_store::KeyStore::new(self.store.clone(), "", key)
     }
 
-    /// A grant to read and write `key`, for [`GRANT_LIFETIME`] from now.
-    pub(crate) async fn grant(&self, key: &str) -> Result<StorageGrant> {
+    /// A grant to read and write `key`, until `deadline` or for [`GRANT_LIFETIME`] from now,
+    /// whichever is earlier.
+    pub(crate) async fn grant(
+        &self,
+        key: &str,
+        deadline: Option<DateTime<Utc>>,
+    ) -> Result<StorageGrant> {
         mint_key_grant(
             self.delegation.as_ref(),
             &self.account,
             &self.container,
             key,
             Utc::now(),
+            deadline,
         )
         .await
     }
 }
 
-/// A grant to `key` in `container` of `account`, valid from `now` for [`GRANT_LIFETIME`].
+/// A grant to `key` in `container` of `account`, valid from `now` until `deadline` or for
+/// [`GRANT_LIFETIME`], whichever is earlier.
 ///
 /// The account and container come from setup; they are checked anyway, because they are put
 /// into the URL the agent sends its SAS to.
@@ -117,6 +124,7 @@ pub(crate) async fn mint_key_grant(
     container: &str,
     key: &str,
     now: DateTime<Utc>,
+    deadline: Option<DateTime<Utc>>,
 ) -> Result<StorageGrant> {
     let invalid = |field: &str, details: String| {
         AlienError::new(ErrorData::InvalidInput {
@@ -152,7 +160,15 @@ pub(crate) async fn mint_key_grant(
         .map_err(|error| invalid("storageKey", error.message))?;
 
     let start = now - CLOCK_SKEW;
-    let expires_at = now + GRANT_LIFETIME;
+    let expires_at = deadline.map_or(now + GRANT_LIFETIME, |deadline| {
+        deadline.min(now + GRANT_LIFETIME)
+    });
+    if expires_at <= now {
+        return Err(invalid(
+            "deadline",
+            format!("the sandbox's life ended at {expires_at}"),
+        ));
+    }
     let delegation_key = delegation
         .get_user_delegation_key(account, start, expires_at)
         .await
@@ -220,6 +236,7 @@ mod tests {
             "keys",
             "engine-42",
             now(),
+            None,
         )
         .await
         .expect("the grant mints");
@@ -247,6 +264,79 @@ mod tests {
         assert_eq!(query["se"], "2026-11-25T11:50:00Z");
     }
 
+    /// A sandbox that ends in two hours gets a grant, and a delegation key, that end with it: the
+    /// SAS can never outlive the sandbox or the key that signed it.
+    #[tokio::test]
+    async fn a_grant_ends_with_the_sandbox() {
+        let deadline = now() + Duration::hours(2);
+        let mut api = MockBlobDelegationApi::new();
+        api.expect_get_user_delegation_key()
+            .times(1)
+            .returning(move |_, start, expiry| {
+                assert_eq!(start, now() - CLOCK_SKEW);
+                assert_eq!(expiry, deadline, "the delegation key ends with the sandbox");
+                Ok(UserDelegationKey {
+                    signed_oid: "00000000-0000-0000-0000-000000000001".to_string(),
+                    signed_tid: "00000000-0000-0000-0000-000000000002".to_string(),
+                    signed_start: "2026-11-18T11:55:00Z".to_string(),
+                    signed_expiry: "2026-11-18T14:00:00Z".to_string(),
+                    signed_service: "b".to_string(),
+                    signed_version: "2026-10-06".to_string(),
+                    value: "c2VjcmV0LWtleS1ieXRlcy0zMi1sb25nLi4uLi4uLi4=".to_string(),
+                })
+            });
+        let grant = mint_key_grant(
+            &api,
+            "acmeagents1a2b3c4d",
+            "keys",
+            "engine-42",
+            now(),
+            Some(deadline),
+        )
+        .await
+        .expect("the grant mints");
+        let StorageGrant::AzureSas {
+            sas, expires_at, ..
+        } = grant
+        else {
+            panic!("an Azure grant")
+        };
+        assert_eq!(expires_at, deadline);
+        let query: std::collections::BTreeMap<String, String> =
+            url::form_urlencoded::parse(sas.0.as_bytes())
+                .into_owned()
+                .collect();
+        assert_eq!(query["se"], "2026-11-18T14:00:00Z");
+
+        // A sandbox that may live longer than a delegation key gets the longest grant there is.
+        let far = now() + Duration::days(30);
+        let error = mint_key_grant(
+            &MockBlobDelegationApi::new(),
+            "acmeagents1a2b3c4d",
+            "keys",
+            "engine-42",
+            now(),
+            Some(now() - Duration::seconds(1)),
+        )
+        .await
+        .expect_err("a sandbox already past its life gets no grant");
+        assert_eq!(error.code, "INVALID_INPUT", "{error}");
+        let grant = mint_key_grant(
+            &delegation(),
+            "acmeagents1a2b3c4d",
+            "keys",
+            "engine-42",
+            now(),
+            Some(far),
+        )
+        .await
+        .expect("the grant mints");
+        let StorageGrant::AzureSas { expires_at, .. } = grant else {
+            panic!("an Azure grant")
+        };
+        assert_eq!(expires_at, now() + GRANT_LIFETIME);
+    }
+
     /// Account, container and key go into the URL the agent sends its SAS to, so anything that
     /// could redirect it or widen the directory is refused before a delegation key is asked for.
     #[tokio::test]
@@ -266,6 +356,7 @@ mod tests {
                 container,
                 key,
                 now(),
+                None,
             )
             .await
             .expect_err("refused");
@@ -354,6 +445,82 @@ mod live {
         std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set"))
     }
 
+    fn grants() -> AzureGrants {
+        let config = alien_core::AzureClientConfig {
+            subscription_id: env("AZURE_TARGET_SUBSCRIPTION_ID"),
+            tenant_id: env("AZURE_TARGET_TENANT_ID"),
+            region: Some("eastus".to_string()),
+            credentials: alien_core::AzureCredentials::ServicePrincipal {
+                client_id: env("AZURE_TARGET_CLIENT_ID"),
+                client_secret: env("AZURE_TARGET_CLIENT_SECRET"),
+            },
+            service_overrides: None,
+        };
+        AzureGrants::new(
+            env("AZURE_PERSISTENT_STORAGE_ACCOUNT"),
+            "store".to_string(),
+            config,
+        )
+        .expect("the store builds")
+    }
+
+    /// A grant for a sandbox that ends in 60 s writes until then and is refused after: the
+    /// effective expiry is the sandbox's deadline, measured against Azure, not a later one.
+    #[tokio::test]
+    #[ignore = "needs a live Azure hierarchical-namespace account"]
+    async fn a_grant_stops_working_when_its_sandbox_ends() {
+        let grants = grants();
+        let key = format!("expiry-{}", Utc::now().timestamp_millis());
+        let deadline = Utc::now() + Duration::seconds(60);
+        let StorageGrant::AzureSas {
+            key_url,
+            sas,
+            expires_at,
+        } = grants
+            .grant(&key, Some(deadline))
+            .await
+            .expect("the grant mints")
+        else {
+            panic!("an Azure grant")
+        };
+        assert_eq!(expires_at, deadline);
+        let agent = AzureBlobStore::new(&key_url, &sas.0).expect("the agent's store");
+        let mut last_ok = None;
+        let mut first_refused = None;
+        for attempt in 0..60 {
+            let object = format!("packs/{attempt}");
+            match agent
+                .put_if(&object, b"pack".to_vec(), Precondition::Absent)
+                .await
+            {
+                Ok(PutOutcome::Written { .. }) => last_ok = Some(Utc::now()),
+                Ok(other) => panic!("unexpected outcome {other:?}"),
+                Err(error) => {
+                    let text = error.to_string();
+                    assert!(text.contains("403"), "refused for expiry: {text}");
+                    assert!(!text.contains("sig="), "the SAS is never printed: {text}");
+                    first_refused = Some(Utc::now());
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+        let last_ok = last_ok.expect("the grant wrote before its deadline");
+        let first_refused = first_refused.expect("the grant was refused after its deadline");
+        eprintln!(
+            "deadline {deadline}, last write {last_ok}, first refusal {first_refused}, \
+             refused {}s after the deadline",
+            (first_refused - deadline).num_seconds()
+        );
+        assert!(last_ok <= deadline + Duration::seconds(1));
+        assert!(first_refused >= deadline - Duration::seconds(1));
+        assert!(first_refused <= deadline + Duration::seconds(10));
+        let store = grants.key_store(&key).expect("a key store");
+        for object in store.list("").await.expect("the binding lists the key") {
+            store.delete(&object).await.expect("the binding erases");
+        }
+    }
+
     /// The binding claims a key through `object_store` with its own identity (conditional puts
     /// on an HNS account), mints the agent's grant, and the grant writes and reads inside the
     /// key; the binding then reads what the grant wrote, lists the key and erases it.
@@ -389,7 +556,7 @@ mod live {
         assert_ne!(claim.head_version, second.head_version);
 
         let StorageGrant::AzureSas { key_url, sas, .. } =
-            grants.grant(&key).await.expect("the grant mints")
+            grants.grant(&key, None).await.expect("the grant mints")
         else {
             panic!("an Azure grant")
         };
