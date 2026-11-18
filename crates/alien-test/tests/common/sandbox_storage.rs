@@ -284,7 +284,18 @@ pub async fn check_persistent_storage(
             _ => unreachable!("an Azure config"),
         }),
     );
-    let abrupt = Abrupt { plane, group };
+    let store_host = format!(
+        "{}.blob.core.windows.net",
+        binding
+            .pointer("/persistentStorage/store/account")
+            .and_then(|v| v.as_str())
+            .context("the binding's store account")?
+    );
+    let abrupt = Abrupt {
+        plane,
+        group,
+        store_host,
+    };
 
     let token = alien_azure_clients::AzureTokenCache::new(match &client_config {
         alien_core::ClientConfig::Azure(config) => (**config).clone(),
@@ -411,7 +422,7 @@ async fn all_checks(sandbox: &Arc<dyn Sandbox>, abrupt: &Abrupt) -> anyhow::Resu
     ] {
         let mut live: Vec<String> = Vec::new();
         let outcome = match check {
-            Check::Main => run_checks(sandbox, &key, &mut live).await,
+            Check::Main => run_checks(sandbox, &abrupt.store_host, &key, &mut live).await,
             Check::MaxSize => max_size(sandbox, &key, &mut live).await,
             Check::Kills => kills(sandbox, abrupt, &key, *KILLS, &mut live).await,
         };
@@ -452,6 +463,8 @@ static KILLS: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
 struct Abrupt {
     plane: alien_azure_clients::azure::sandbox_data_plane::AzureSandboxDataPlaneClient,
     group: String,
+    /// The store account's blob host, which the platform opens for the agent only.
+    store_host: String,
 }
 
 impl Abrupt {
@@ -599,6 +612,7 @@ PY");
 
 async fn run_checks(
     sandbox: &Arc<dyn Sandbox>,
+    store_host: &str,
     key: &str,
     live: &mut Vec<String>,
 ) -> anyhow::Result<()> {
@@ -619,19 +633,36 @@ async fn run_checks(
     );
     eprintln!("synced head {:?}", synced.head);
 
-    // 2. The command's uid sees no rights and reaches nothing outside.
+    // 2. The command's uid sees no rights and reaches nothing outside, the store included: by
+    //    name, and by the address the test host resolves it to (no DNS needed in the guest).
+    let store_ip = tokio::net::lookup_host((store_host, 443))
+        .await
+        .context("resolve the store host")?
+        .find(|a| a.is_ipv4())
+        .context("the store host has no IPv4 address")?
+        .ip();
+    let store_probe = format!(
+        "curl -sS -m 8 -o /dev/null https://{store_host}/ && echo REACHED_STORE || echo store-refused; \
+curl -sS -m 8 -o /dev/null --resolve {store_host}:443:{store_ip} https://{store_host}/ && echo REACHED_STORE || echo store-ip-refused; "
+    );
     let probe = sh(
         sandbox,
         &first,
-        r#"id -u; env | grep -c 'sig=' || true; cat /proc/1/environ >/dev/null 2>&1 && echo READ_PID1_ENV || echo pid1-env-denied; echo begin-grep;
+        &(store_probe + r#"id -u; env | grep -c 'sig=' || true; cat /proc/1/environ >/dev/null 2>&1 && echo READ_PID1_ENV || echo pid1-env-denied; echo begin-grep;
 grep -rls 'sig=' /proc/[0-9]*/environ /proc/[0-9]*/cmdline /tmp /workspace /opt/alien 2>/dev/null | head -5; echo end-grep;
 curl -sS -m 8 -o /dev/null https://management.azure.com/ && echo REACHED_OUT || echo outbound-refused;
-curl -sS -m 8 -o /dev/null https://www.microsoft.com/ && echo REACHED_OUT || echo outbound-refused"#,
+curl -sS -m 8 -o /dev/null https://www.microsoft.com/ && echo REACHED_OUT || echo outbound-refused"#),
     )
     .await?;
     eprintln!("command-uid probe:\n{}{}", probe.stdout, probe.stderr);
     ensure!(
-        probe.stdout.lines().next() != Some("0"),
+        !probe.stdout.contains("REACHED_STORE")
+            && probe.stdout.contains("store-refused")
+            && probe.stdout.contains("store-ip-refused"),
+        "a command reached the store account"
+    );
+    ensure!(
+        probe.stdout.lines().nth(2) != Some("0"),
         "commands run as root"
     );
     ensure!(
