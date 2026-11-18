@@ -134,24 +134,40 @@ impl EnvironmentCredentialResolver {
         deployment: &DeploymentRecord,
         env: HashMap<String, String>,
     ) -> Result<RemoteStorageCredentialSource, AlienError> {
-        let outputs = deployment
+        // First-class Remote Bindings resource, then the access identity that
+        // imports from before it became its own resource kept inside the
+        // Remote Stack Management outputs (same lookup as the impersonation
+        // resolver).
+        let resources = deployment
             .stack_state
             .as_ref()
-            .and_then(|state| {
-                state.resources.values().find(|resource| {
+            .map(|state| &state.resources);
+        let first_class = resources
+            .and_then(|resources| {
+                resources.values().find(|resource| {
                     resource.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref()
                 })
             })
             .and_then(|state| state.outputs.as_ref())
-            .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteBindingsOutputs>())
-            .ok_or_else(|| {
-                AlienError::new(GenericError {
-                    message: format!(
-                        "Remote Bindings identity state is required for deployment {}; rerun setup",
-                        deployment.id
-                    ),
+            .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteBindingsOutputs>());
+        let legacy = resources
+            .and_then(|resources| {
+                resources.values().find(|resource| {
+                    resource.resource_type
+                        == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
                 })
-            })?;
+            })
+            .and_then(|state| state.outputs.as_ref())
+            .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteStackManagementOutputs>())
+            .and_then(|outputs| outputs.legacy_remote_bindings_access.as_ref());
+        let outputs = first_class.or(legacy).ok_or_else(|| {
+            AlienError::new(GenericError {
+                message: format!(
+                    "Remote Bindings identity state is required for deployment {}; rerun setup",
+                    deployment.id
+                ),
+            })
+        })?;
         let base = ClientConfig::from_env(deployment.platform, &env)
             .await
             .map_err(|error| error.into_generic())?;
@@ -411,20 +427,98 @@ pub(super) mod tests {
             &config.azure_config().unwrap().credentials,
             AzureCredentials::WorkloadIdentity { client_id, .. } if client_id == "access-uami-client"
         ));
+    }
 
-        // Without the Remote Bindings identity there is no fallback to the
-        // management identity.
+    fn set_management_legacy_access(deployment: &mut DeploymentRecord, client: &str) {
+        let state = deployment
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut("management")
+            .unwrap();
+        state.outputs = Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+            management_resource_id: "target-uami-resource-id".to_string(),
+            access_configuration: serde_json::json!({
+                "uamiClientId": "target-uami-client",
+                "tenantId": "target-tenant"
+            })
+            .to_string(),
+            legacy_remote_bindings_access: Some(alien_core::RemoteBindingsOutputs {
+                resource_id: "legacy-access-resource-id".to_string(),
+                access_configuration: serde_json::json!({
+                    "uamiClientId": client,
+                    "tenantId": "target-tenant"
+                })
+                .to_string(),
+            }),
+        }));
+    }
+
+    #[tokio::test]
+    async fn azure_remote_bindings_fall_back_to_the_legacy_access_identity() {
+        let mut deployment = azure_deployment("running");
+        set_management_legacy_access(&mut deployment, "legacy-access-client");
+        let RemoteStorageCredentialSource::Direct(config) = EnvironmentCredentialResolver::new()
+            .azure_remote_bindings_source(&deployment, azure_env())
+            .await
+            .expect("legacy remote bindings credentials should resolve");
+        assert!(matches!(
+            &config.azure_config().unwrap().credentials,
+            AzureCredentials::WorkloadIdentity { client_id, .. } if client_id == "legacy-access-client"
+        ));
+    }
+
+    #[tokio::test]
+    async fn azure_remote_bindings_prefer_the_first_class_resource_over_legacy() {
+        let mut deployment = azure_deployment("running");
+        set_management_legacy_access(&mut deployment, "legacy-access-client");
+        let bindings = alien_core::RemoteBindings::new("remote-bindings".to_string()).build();
+        let state = StackResourceState::new_pending(
+            alien_core::RemoteBindings::RESOURCE_TYPE.to_string(),
+            Resource::new(bindings),
+            None,
+            Vec::new(),
+        )
+        .with_updates(|state| {
+            state.status = ResourceStatus::Running;
+            state.outputs = Some(ResourceOutputs::new(alien_core::RemoteBindingsOutputs {
+                resource_id: "access-uami-resource-id".to_string(),
+                access_configuration: serde_json::json!({
+                    "uamiClientId": "access-uami-client",
+                    "tenantId": "target-tenant"
+                })
+                .to_string(),
+            }));
+        });
         deployment
             .stack_state
             .as_mut()
             .unwrap()
             .resources
-            .remove("remote-bindings");
-        assert!(EnvironmentCredentialResolver::new()
+            .insert("remote-bindings".to_string(), state);
+        let RemoteStorageCredentialSource::Direct(config) = EnvironmentCredentialResolver::new()
             .azure_remote_bindings_source(&deployment, azure_env())
             .await
-            .is_err());
+            .unwrap();
+        assert!(matches!(
+            &config.azure_config().unwrap().credentials,
+            AzureCredentials::WorkloadIdentity { client_id, .. } if client_id == "access-uami-client"
+        ));
     }
+
+    #[tokio::test]
+    async fn azure_remote_bindings_without_either_identity_are_rejected() {
+        // The management identity alone must never be used.
+        let deployment = azure_deployment("running");
+        let error = EnvironmentCredentialResolver::new()
+            .azure_remote_bindings_source(&deployment, azure_env())
+            .await
+            .err()
+            .expect("no Remote Bindings identity");
+        assert!(error.to_string().contains("rerun setup"));
+    }
+
     /// A resolver that only implements `resolve` must not serve Azure remote
     /// Storage with the management identity.
     #[tokio::test]
