@@ -261,6 +261,11 @@ impl StackResourceStateExt for StackResourceState {
                         "Resuming refresh-failed resource from its current controller state"
                     );
                     controller.reset_stay_count();
+                    // A workload that failed its readiness check gives the same answer until
+                    // its pods are applied again, so the retry applies the current spec.
+                    if controller.reapplies_after_failed_refresh() {
+                        controller.transition_to_update()?;
+                    }
                     self.status = controller.get_status();
                     self.outputs = controller.get_outputs();
                     self.set_internal_controller(Some(controller))?;

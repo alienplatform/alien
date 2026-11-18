@@ -1138,7 +1138,7 @@ impl KubernetesContainerController {
                 )
                 .await;
                 if healthy || ready_replicas.unwrap_or(0) > 0 {
-                    return Err(AlienError::new(ErrorData::ResourceDrift {
+                    return Err(AlienError::new(ErrorData::WorkloadNotReady {
                         resource_id: config.id.clone(),
                         message: stalled_rollout_message(
                             workload_kind,
@@ -1184,7 +1184,7 @@ impl KubernetesContainerController {
                 )
                 .await;
                 let cause = assessment.stall.clone().unwrap_or_default();
-                return Err(AlienError::new(ErrorData::ResourceDrift {
+                return Err(AlienError::new(ErrorData::WorkloadNotReady {
                     resource_id: config.id.clone(),
                     message: format!(
                         "{workload_kind} '{workload_name}' has {} ready replicas out of {} observed{}{}",
@@ -2419,6 +2419,10 @@ impl KubernetesContainerController {
         } else {
             None
         }
+    }
+
+    fn reapplies_after_failed_refresh(&self) -> bool {
+        true
     }
 
     /// Secret-typed env vars never enter the resource config on Kubernetes
@@ -3788,13 +3792,13 @@ mod tests {
             let error = controller
                 .ready(&ctx)
                 .await
-                .expect_err("persistent zero is drift");
-            assert_eq!(error.code, "RESOURCE_DRIFT");
+                .expect_err("persistent zero is not ready");
+            assert_eq!(error.code, "WORKLOAD_NOT_READY");
         }
     }
 
     #[tokio::test]
-    async fn partly_ready_workload_retries_while_rolling_out_and_drifts_once_settled() {
+    async fn partly_ready_workload_retries_while_rolling_out_and_reports_not_ready_once_settled() {
         // (stateful, status, retried while rolling out)
         let deployment_status = |reason: &str, condition: &str| {
             serde_json::json!({
@@ -3884,14 +3888,15 @@ mod tests {
                 assert!(controller.rollout_watch.is_some());
             } else {
                 let error = result.expect_err("one of two replicas is not ready");
-                assert_eq!(error.code, "RESOURCE_DRIFT", "{status}");
+                assert_eq!(error.code, "WORKLOAD_NOT_READY", "{status}");
                 assert!(!error.retryable);
             }
         }
     }
 
     #[tokio::test]
-    async fn a_rollout_that_outlasts_its_time_bound_is_drift_with_a_clear_message() {
+    async fn a_rollout_that_outlasts_its_time_bound_is_a_retryable_not_ready_with_a_clear_message()
+    {
         let now = chrono::Utc::now().timestamp();
         // (stateful, status, bound in the workload spec, key the watch is kept under, seconds seen)
         let deployment_status = serde_json::json!({"replicas":2,"updatedReplicas":2,"readyReplicas":1,
@@ -3954,7 +3959,7 @@ mod tests {
             let result = controller.ready(&ctx).await;
             if expect_drift {
                 let error = result.expect_err("the rollout outlasted its bound");
-                assert_eq!(error.code, "RESOURCE_DRIFT");
+                assert_eq!(error.code, "WORKLOAD_NOT_READY");
                 assert!(
                     error.message.contains("rollout has not finished"),
                     "{}",
@@ -3970,7 +3975,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_rollout_past_its_bound_is_drift_even_while_the_previous_version_serves() {
+    async fn a_rollout_past_its_bound_is_not_ready_even_while_the_previous_version_serves() {
         let now = chrono::Utc::now().timestamp();
         // (stateful, status, seconds the rollout has been seen, expect drift)
         let stuck_deployment = serde_json::json!({"replicas":3,"updatedReplicas":1,"readyReplicas":2,
@@ -4025,7 +4030,7 @@ mod tests {
                     .ready(&ctx)
                     .await
                     .expect_err("the new version never rolled out");
-                assert_eq!(error.code, "RESOURCE_DRIFT");
+                assert_eq!(error.code, "WORKLOAD_NOT_READY");
                 assert!(
                     error.message.contains("'web' rollout is stalled")
                         && (error.message.contains("ProgressDeadlineExceeded")
@@ -4154,7 +4159,7 @@ mod tests {
             .step(&ctx)
             .await
             .expect_err("real drift keeps the failure");
-        assert_eq!(error.code, "RESOURCE_DRIFT");
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
         assert_eq!(controller.recovery_checks, 0);
         assert_eq!(controller.get_status(), ResourceStatus::RefreshFailed);
     }
@@ -6156,6 +6161,35 @@ mod tests {
             })
             .await;
         }
+    }
+
+    /// A refresh-failed container is retried by applying its current spec again: running the failed
+    /// readiness check again reads the same pods and fails the same way.
+    #[test]
+    fn a_retry_of_a_refresh_failed_container_applies_the_spec_again() {
+        use crate::core::state_utils::StackResourceStateExt;
+        let mut record = alien_core::StackResourceState::new_pending(
+            Container::RESOURCE_TYPE.to_string(),
+            alien_core::Resource::new(manifest_test_container(&[], false)),
+            Some(alien_core::ResourceLifecycle::Live),
+            vec![],
+        );
+        let mut controller = manifest_test_controller();
+        controller.state = KubernetesContainerState::RefreshFailed;
+        record.status = ResourceStatus::RefreshFailed;
+        record
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+
+        assert!(record.retry_failed().unwrap());
+
+        assert_eq!(record.status, ResourceStatus::Updating);
+        let resumed = record.get_internal_controller().unwrap().unwrap();
+        let resumed = resumed
+            .as_any()
+            .downcast_ref::<KubernetesContainerController>()
+            .unwrap();
+        assert_eq!(resumed.state, KubernetesContainerState::UpdateStart);
     }
 }
 

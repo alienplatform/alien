@@ -641,14 +641,17 @@ impl ResourceControllerContext<'_> {
     /// The deployment id a direct setup writes into ownership markers. The runner sets it on
     /// every step; without it nothing can be marked or recognised as owned, so this fails.
     pub fn setup_owner_deployment_id(&self) -> crate::error::Result<&str> {
-        self.deployment_config.deployment_id.as_deref().ok_or_else(|| {
-            alien_error::AlienError::new(crate::error::ErrorData::CloudPlatformError {
-                message: "the deployment id is not available, so ownership of what setup \
+        self.deployment_config
+            .deployment_id
+            .as_deref()
+            .ok_or_else(|| {
+                alien_error::AlienError::new(crate::error::ErrorData::CloudPlatformError {
+                    message: "the deployment id is not available, so ownership of what setup \
                           creates cannot be recorded"
-                    .to_string(),
-                resource_id: Some(self.desired_config.id().to_string()),
+                        .to_string(),
+                    resource_id: Some(self.desired_config.id().to_string()),
+                })
             })
-        })
     }
 
     pub fn emit_heartbeat(&self, heartbeat: ResourceHeartbeat) {
@@ -832,6 +835,14 @@ pub trait ResourceController: Send + Sync + Debug {
     /// during convergence phases. Most Ready resources are periodic health
     /// checks and should only run in the dedicated Running pass.
     fn requires_convergence_reconciliation(&self) -> bool {
+        false
+    }
+
+    /// Whether a retry of a refresh failure applies the current configuration again (the
+    /// update flow) instead of running the failed health check again. A workload that failed
+    /// its readiness check returns the same result until its pods are re-applied. Off by
+    /// default: other resources recover by observation alone.
+    fn reapplies_after_failed_refresh(&self) -> bool {
         false
     }
 

@@ -268,6 +268,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut get_binding_params_method = None;
     let mut needs_update_method = None;
     let mut requires_convergence_reconciliation_method = None;
+    let mut reapplies_after_failed_refresh_method = None;
     let mut nothing_deleted_yet_method = None;
     let mut has_runtime_setup_inputs_method = None;
     let mut get_progress_method = None;
@@ -290,6 +291,11 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
 
                 if method.sig.ident == "requires_convergence_reconciliation" {
                     requires_convergence_reconciliation_method = Some(method.clone());
+                    continue;
+                }
+
+                if method.sig.ident == "reapplies_after_failed_refresh" {
+                    reapplies_after_failed_refresh_method = Some(method.clone());
                     continue;
                 }
 
@@ -393,6 +399,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
         get_binding_params_method.as_ref(),
         needs_update_method.as_ref(),
         requires_convergence_reconciliation_method.as_ref(),
+        reapplies_after_failed_refresh_method.as_ref(),
         nothing_deleted_yet_method.as_ref(),
         has_runtime_setup_inputs_method.as_ref(),
         get_progress_method.as_ref(),
@@ -563,6 +570,7 @@ fn generate_controller_impl(
     get_binding_params_method: Option<&ImplItemFn>,
     needs_update_method: Option<&ImplItemFn>,
     requires_convergence_reconciliation_method: Option<&ImplItemFn>,
+    reapplies_after_failed_refresh_method: Option<&ImplItemFn>,
     nothing_deleted_yet_method: Option<&ImplItemFn>,
     has_runtime_setup_inputs_method: Option<&ImplItemFn>,
     get_progress_method: Option<&ImplItemFn>,
@@ -668,6 +676,18 @@ fn generate_controller_impl(
             quote! {}
         };
 
+    let reapplies_after_failed_refresh_impl =
+        if let Some(method) = reapplies_after_failed_refresh_method {
+            let method_block = &method.block;
+            quote! {
+                fn reapplies_after_failed_refresh(&self) -> bool {
+                    #method_block
+                }
+            }
+        } else {
+            quote! {}
+        };
+
     quote! {
         #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
         #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
@@ -749,6 +769,8 @@ fn generate_controller_impl(
             #needs_update_impl
 
             #requires_convergence_reconciliation_impl
+
+            #reapplies_after_failed_refresh_impl
 
             #nothing_deleted_yet_impl
 

@@ -686,6 +686,22 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// A workload is not ready yet (pods still rolling out, or none running). This is a health
+    /// observation, not a difference from the configuration: it is retried and recovers on its
+    /// own when the workload becomes ready.
+    #[error(
+        code = "WORKLOAD_NOT_READY",
+        message = "Resource '{resource_id}' is not ready: {message}",
+        retryable = "true",
+        internal = "false"
+    )]
+    WorkloadNotReady {
+        /// ID of the resource whose workload is not ready
+        resource_id: String,
+        /// Human-readable description of what is not ready
+        message: String,
+    },
+
     /// A cloud object with the name a resource uses already exists and this deployment did not create it.
     #[error(
         code = "EXISTING_CLOUD_RESOURCE_NOT_OWNED",

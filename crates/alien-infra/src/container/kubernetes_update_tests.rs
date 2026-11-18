@@ -87,6 +87,18 @@ impl FakeApi {
     fn answer(&mut self, method: &Method, path: &str, body: &str) -> (u16, Value) {
         let name = path.rsplit('/').next().unwrap_or_default().to_string();
         match *method {
+            // The health check lists pods and events: the fake cluster has none.
+            Method::GET if path.ends_with("/pods") || path.ends_with("/events") => {
+                let kind = if path.ends_with("/pods") {
+                    "PodList"
+                } else {
+                    "EventList"
+                };
+                (
+                    200,
+                    json!({"apiVersion": "v1", "kind": kind, "metadata": {}, "items": []}),
+                )
+            }
             Method::GET => match self.objects.get(path) {
                 Some(object) => (200, object.clone()),
                 None => (404, status(404, "NotFound", &name)),
@@ -521,4 +533,121 @@ async fn an_update_of_a_workload_changed_since_it_was_read_is_retried_by_the_exe
     );
     // One step more than a release without the conflict.
     assert_eq!(release.steps, 3 * CHAIN.len() + 1);
+}
+
+/// Installs release 1, marks `failed` as a Container whose readiness check failed (its refresh
+/// failed), then steps `release_to_apply` the way a deployment update does. Returns the
+/// requests sent after the failure and the final state.
+async fn release_over_a_refresh_failed_container(
+    failed: &str,
+    release_to_apply: &str,
+) -> (Vec<Call>, StackState, BTreeMap<String, Value>) {
+    use crate::container::kubernetes::{KubernetesContainerController, KubernetesContainerState};
+    use crate::core::state_utils::StackResourceStateExt;
+    use crate::core::ResourceController;
+
+    let (url, api) = start_fake_api().await;
+    let config = deployment_config();
+    let mut statuses = BTreeMap::new();
+    let installed = stack("1");
+    let install = StackExecutor::builder(&installed, client_config(&url))
+        .deployment_config(&config)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("install executor");
+    let (mut state, first_step) = run_steps(
+        &install,
+        &api,
+        StackState::with_resource_prefix(Platform::Kubernetes, "test".to_string()),
+        0,
+        &mut statuses,
+    )
+    .await;
+
+    // The Ready step failed: the controller sits in RefreshFailed, as a saved state has it.
+    let record = state.resources.get_mut(failed).unwrap();
+    let mut controller = record
+        .get_internal_controller()
+        .unwrap()
+        .unwrap()
+        .as_any()
+        .downcast_ref::<KubernetesContainerController>()
+        .unwrap()
+        .clone();
+    controller.state = KubernetesContainerState::RefreshFailed;
+    record.status = ResourceStatus::RefreshFailed;
+    record
+        .set_internal_controller(Some(Box::new(controller)))
+        .unwrap();
+    assert_eq!(controller_status(record), ResourceStatus::RefreshFailed);
+
+    let release = stack(release_to_apply);
+    let update = StackExecutor::builder(&release, client_config(&url))
+        .deployment_config(&config)
+        .resume_unchanged_failed_resources(true)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("update executor");
+    // A refresh-failed Container is not Running until its update completes, so the stepping
+    // here does not treat that status as a failure.
+    let mut state = state;
+    for step in first_step..first_step + 60 {
+        api.lock().unwrap().step = step;
+        state = update.step(state).await.expect("executor step").next_state;
+        if state
+            .resources
+            .values()
+            .all(|resource| resource.status == ResourceStatus::Running)
+        {
+            break;
+        }
+    }
+    let api = api.lock().unwrap();
+    let calls = api
+        .calls
+        .iter()
+        .filter(|call| call.step >= first_step)
+        .cloned()
+        .collect();
+    (calls, state, api.objects.clone())
+}
+
+fn controller_status(record: &alien_core::StackResourceState) -> ResourceStatus {
+    use crate::core::state_utils::StackResourceStateExt;
+    record
+        .get_internal_controller()
+        .unwrap()
+        .unwrap()
+        .get_status()
+}
+
+/// A release with an unchanged config over a Container that failed its readiness check applies
+/// the pod spec again, instead of re-running the check that read the same pods.
+#[tokio::test]
+async fn an_unchanged_release_applies_the_spec_of_a_container_that_failed_readiness() {
+    let (calls, state, _) = release_over_a_refresh_failed_container("platform", "1").await;
+    assert_eq!(state.resources["platform"].status, ResourceStatus::Running);
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.method == Method::PUT && call.path == deployment_path("platform")),
+        "the workload is updated: {calls:#?}"
+    );
+}
+
+/// A changed config is still planned as an update of the failed Container.
+#[tokio::test]
+async fn a_changed_release_updates_a_container_that_failed_readiness() {
+    let (calls, state, objects) = release_over_a_refresh_failed_container("platform", "2").await;
+    assert_eq!(state.resources["platform"].status, ResourceStatus::Running);
+    assert!(calls
+        .iter()
+        .any(|call| call.method == Method::PUT && call.path == deployment_path("platform")));
+    assert_eq!(
+        objects[&deployment_path("platform")]["spec"]["template"]["spec"]["containers"][0]["image"],
+        "registry.example.com/platform:2"
+    );
 }

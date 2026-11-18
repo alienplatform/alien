@@ -470,7 +470,9 @@ impl KubernetesDaemonController {
         }
         if !live.as_ref().is_some_and(daemonset_is_ready) {
             let config = ctx.desired_resource_config::<Daemon>()?;
-            return Err(AlienError::new(ErrorData::ResourceDrift {
+            // Not ready (or still rolling) is a health observation, not drift: it is retried, and
+            // the refresh that follows a failure re-checks and recovers on its own.
+            return Err(AlienError::new(ErrorData::WorkloadNotReady {
                 resource_id: config.id.clone(),
                 message: "Daemon daemonset is not fully ready".to_string(),
             }));
@@ -1072,10 +1074,19 @@ impl KubernetesDaemonController {
     );
     terminal_state!(state = UpdateFailed, status = ResourceStatus::UpdateFailed);
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
-    terminal_state!(
+    // A failed health check is checked again: the resource returns to Running when every node
+    // runs a ready pod, and keeps reporting its error while it does not.
+    #[handler(
         state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ready(ctx).await
+    }
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     /// Secret-typed env vars never enter the resource config on Kubernetes
@@ -1083,6 +1094,10 @@ impl KubernetesDaemonController {
     /// see secret rotations. Schedule an update when the snapshot-derived
     /// env-secret checksum drifts from the one applied last; the update
     /// re-reconciles the Secret and rolls pods via the checksum annotation.
+    fn reapplies_after_failed_refresh(&self) -> bool {
+        true
+    }
+
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let Some(daemon_set_name) = self.daemon_set_name.as_ref() else {
             return Ok(false);
@@ -2662,5 +2677,35 @@ mod tests {
             })
             .await;
         }
+    }
+
+    /// A refresh-failed daemon is retried by applying its current spec again, so a retry does
+    /// not run the same failed readiness check.
+    #[test]
+    fn a_retry_of_a_refresh_failed_daemon_applies_the_spec_again() {
+        use crate::core::state_utils::StackResourceStateExt;
+        let config = manifest_test_daemon(&[]);
+        let mut record = alien_core::StackResourceState::new_pending(
+            Daemon::RESOURCE_TYPE.to_string(),
+            Resource::new(config),
+            Some(alien_core::ResourceLifecycle::Live),
+            vec![],
+        );
+        let mut controller = manifest_test_controller();
+        controller.state = KubernetesDaemonState::RefreshFailed;
+        record.status = ResourceStatus::RefreshFailed;
+        record
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+
+        assert!(record.retry_failed().unwrap());
+
+        assert_eq!(record.status, ResourceStatus::Updating);
+        let resumed = record.get_internal_controller().unwrap().unwrap();
+        let resumed = resumed
+            .as_any()
+            .downcast_ref::<KubernetesDaemonController>()
+            .unwrap();
+        assert_eq!(resumed.state, KubernetesDaemonState::UpdateStart);
     }
 }

@@ -520,7 +520,7 @@ impl KubernetesWorkerController {
                 // The new version is not rolling out, even if old pods still serve.
                 if healthy || ready_replicas > 0 {
                     let pod_reason = workload_pod_reason(ctx, &namespace, &selector, None).await;
-                    return Err(AlienError::new(ErrorData::ResourceDrift {
+                    return Err(AlienError::new(ErrorData::WorkloadNotReady {
                         resource_id: config.id.clone(),
                         message: stalled_rollout_message(
                             "Deployment",
@@ -553,7 +553,7 @@ impl KubernetesWorkerController {
             }
             if !healthy {
                 let pod_reason = workload_pod_reason(ctx, &namespace, &selector, None).await;
-                return Err(AlienError::new(ErrorData::ResourceDrift {
+                return Err(AlienError::new(ErrorData::WorkloadNotReady {
                     resource_id: config.id.clone(),
                     message: format!(
                         "Deployment '{deployment_name}' does not have the requested ready replicas ({ready_replicas} ready){}{}",
@@ -1349,6 +1349,10 @@ impl KubernetesWorkerController {
         Ok(recorded_architecture(ctx, &config.id) != self.applied_architecture)
     }
 
+    fn reapplies_after_failed_refresh(&self) -> bool {
+        true
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let Some(deployment_name) = &self.deployment_name {
             Some(ResourceOutputs::new(WorkerOutputs {
@@ -1710,8 +1714,8 @@ mod tests {
         let error = controller
             .ready(&ctx)
             .await
-            .expect_err("persistent zero is drift");
-        assert_eq!(error.code, "RESOURCE_DRIFT");
+            .expect_err("persistent zero is not ready");
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
     }
 
     #[tokio::test]
@@ -1843,7 +1847,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn worker_rollout_is_waited_for_inside_its_bound_and_drifts_after_it() {
+    async fn worker_rollout_is_waited_for_inside_its_bound_and_reports_not_ready_after_it() {
         let now = chrono::Utc::now().timestamp();
         let rolling = serde_json::json!({"replicas":2,"updatedReplicas":2,"readyReplicas":1,
             "observedGeneration":3,
@@ -1910,8 +1914,8 @@ mod tests {
             let result = controller.refresh_failed(&ctx).await;
             assert_eq!(controller.recovery_checks, 0, "{status}");
             if drift {
-                let error = result.expect_err("drift");
-                assert_eq!(error.code, "RESOURCE_DRIFT", "{status}");
+                let error = result.expect_err("not ready");
+                assert_eq!(error.code, "WORKLOAD_NOT_READY", "{status}");
                 assert!(!error.retryable);
             } else {
                 assert!(
@@ -1981,7 +1985,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn worker_rollout_past_the_progress_deadline_is_drift_while_old_pods_serve() {
+    async fn worker_rollout_past_the_progress_deadline_is_not_ready_while_old_pods_serve() {
         let server = httpmock::MockServer::start_async().await;
         crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
         server.mock(|when, then| {
@@ -2021,7 +2025,7 @@ mod tests {
             .refresh_failed(&ctx)
             .await
             .expect_err("the new version never rolled out");
-        assert_eq!(error.code, "RESOURCE_DRIFT");
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
         assert!(
             error.message.contains("'worker' rollout is stalled")
                 && error.message.contains("ProgressDeadlineExceeded"),
@@ -2237,6 +2241,42 @@ mod tests {
             })
             .await;
         }
+    }
+
+    /// A refresh-failed worker is retried by applying its current spec again: running the failed
+    /// readiness check again reads the same pods and fails the same way.
+    #[test]
+    fn a_retry_of_a_refresh_failed_worker_applies_the_spec_again() {
+        use crate::core::state_utils::StackResourceStateExt;
+        let mut record = alien_core::StackResourceState::new_pending(
+            Worker::RESOURCE_TYPE.to_string(),
+            alien_core::Resource::new(
+                Worker::new("worker".into())
+                    .code(WorkerCode::Image {
+                        image: "example.test/worker:1".into(),
+                    })
+                    .permissions("default".into())
+                    .build(),
+            ),
+            Some(alien_core::ResourceLifecycle::Live),
+            vec![],
+        );
+        let mut controller = KubernetesWorkerController::default();
+        controller.state = KubernetesWorkerState::RefreshFailed;
+        record.status = ResourceStatus::RefreshFailed;
+        record
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+
+        assert!(record.retry_failed().unwrap());
+
+        assert_eq!(record.status, ResourceStatus::Updating);
+        let resumed = record.get_internal_controller().unwrap().unwrap();
+        let resumed = resumed
+            .as_any()
+            .downcast_ref::<KubernetesWorkerController>()
+            .unwrap();
+        assert_eq!(resumed.state, KubernetesWorkerState::UpdateStart);
     }
 }
 

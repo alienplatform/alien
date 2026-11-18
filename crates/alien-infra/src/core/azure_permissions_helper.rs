@@ -2395,11 +2395,14 @@ mod tests {
             .expect_create_or_update_role_assignment_by_id()
             .times(1)
             .returning(|_, _| {
-                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
-                    resource_type: "role assignment".to_string(),
-                    resource_name: "assignment-123".to_string(),
-                    message: "the value cannot be updated while the policy is locked".to_string(),
-                }))
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "role assignment".to_string(),
+                        resource_name: "assignment-123".to_string(),
+                        message: "the value cannot be updated while the policy is locked"
+                            .to_string(),
+                    },
+                ))
             });
         authorization.expect_get_role_assignment_by_id().times(0);
         authorization.expect_delete_role_assignment_by_id().times(0);
@@ -2424,11 +2427,15 @@ mod tests {
             .expect_create_or_update_role_assignment_by_id()
             .times(1)
             .returning(|_, _| {
-                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
-                    resource_type: "role assignment".to_string(),
-                    resource_name: "assignment-123".to_string(),
-                    message: "RoleAssignmentUpdateNotPermitted: scope are not allowed to be updated.".to_string(),
-                }))
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "role assignment".to_string(),
+                        resource_name: "assignment-123".to_string(),
+                        message:
+                            "RoleAssignmentUpdateNotPermitted: scope are not allowed to be updated."
+                                .to_string(),
+                    },
+                ))
             });
         authorization
             .expect_get_role_assignment_by_id()
