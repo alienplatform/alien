@@ -72,6 +72,16 @@ pub enum ErrorData {
     )]
     SandboxEgressInvalid { reason: String },
 
+    /// A create request's mounts do not match the declaration.
+    #[error(
+        code = "SANDBOX_MOUNTS_INVALID",
+        message = "Invalid sandbox mounts: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxMountsInvalid { reason: String },
+
     /// The SDK clock is too far ahead of the gateway clock.
     #[error(
         code = "SANDBOX_EGRESS_VERSION_IN_FUTURE",

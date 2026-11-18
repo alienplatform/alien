@@ -713,6 +713,7 @@ impl Sandbox for KubernetesSandbox {
 
     /// Claims a warm pod through the broker.
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        super::mounts::refuse_unsupported(&request, "sandbox.create")?;
         self.create_resolved(request)
             .await
             .map(|resolved| resolved.sandbox)
@@ -736,6 +737,7 @@ impl Sandbox for KubernetesSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        super::mounts::refuse_unsupported(&request, "sandbox.getOrCreate")?;
         self.validate_egress(request.egress.as_ref())?;
         // `timeout_ms` applies when this call creates the session. A session that already exists
         // keeps the deadline it was created with.

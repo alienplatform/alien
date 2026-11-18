@@ -444,6 +444,7 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn create(&self, mut request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        super::mounts::refuse_unsupported(&request, "sandbox.create")?;
         let policy = self.requested_policy(request.egress.as_ref())?;
         checked_sandbox_env(CREATE, &request.env)?;
         if self.agent
@@ -631,6 +632,7 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        super::mounts::refuse_unsupported(&request, "sandbox.getOrCreate")?;
         if let Some(policy) = request.egress.as_ref() {
             self.requested_policy(Some(policy))?;
         }

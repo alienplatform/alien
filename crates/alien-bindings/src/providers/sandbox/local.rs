@@ -323,6 +323,7 @@ impl Sandbox for LocalSandbox {
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        super::mounts::refuse_unsupported(&request, "sandbox.create")?;
         super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         refuse_create_time_lifetime(&request)?;
         let sandbox_id = request
@@ -356,6 +357,7 @@ impl Sandbox for LocalSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        super::mounts::refuse_unsupported(&request, "sandbox.getOrCreate")?;
         super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         // Refused on the reconnect path too: an existing sandbox honors a lifetime no more than a
         // fresh one would.
