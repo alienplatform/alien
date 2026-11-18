@@ -30,6 +30,8 @@ pub struct GrantStore {
     /// Set when the grant is an Azure SAS: every request goes through it, and a renewal swaps
     /// its SAS.
     azure: Option<AzureBlobStore>,
+    /// Set when the store refused the grant (403) and cleared by a renewal.
+    denied: std::sync::atomic::AtomicBool,
 }
 
 impl GrantStore {
@@ -48,7 +50,22 @@ impl GrantStore {
                 .build()
                 .expect("a client with rustls builds"),
             azure,
+            denied: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// Whether the grant is expired or the store refused it: nothing more can be written until
+    /// the binding renews it.
+    pub fn denied(&self) -> bool {
+        self.denied.load(std::sync::atomic::Ordering::SeqCst)
+            || self.azure.as_ref().is_some_and(AzureBlobStore::denied)
+            || self.grant().expires_at() <= chrono::Utc::now()
+    }
+
+    fn observe(&self, status: reqwest::StatusCode) {
+        if status == reqwest::StatusCode::FORBIDDEN {
+            self.denied.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     /// Replaces the grant (renewal before expiry). A renewal must reach the same key the same
@@ -71,6 +88,7 @@ impl GrantStore {
             }
         }
         *current = grant;
+        self.denied.store(false, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -183,12 +201,18 @@ impl ObjectStore for GrantStore {
         bytes: Vec<u8>,
         precondition: Precondition,
     ) -> StorageResult<PutOutcome> {
+        let grant = self.grant();
+        if grant.expires_at() <= chrono::Utc::now() {
+            // Sent anyway it would fail with 403 later and cost an upload; say why now.
+            self.denied.store(true, std::sync::atomic::Ordering::SeqCst);
+            return Err(failed("put", object, "the storage grant expired"));
+        }
         if let Some(azure) = &self.azure {
             return azure.put_if(object, bytes, precondition).await;
         }
         let StorageGrant::S3 {
             post, head_put_url, ..
-        } = self.grant()
+        } = grant
         else {
             return Err(failed("put", object, "the grant is not an S3 grant"));
         };
@@ -220,6 +244,7 @@ impl ObjectStore for GrantStore {
                 .await
         }
         .map_err(|e| failed("put", object, e.to_string()))?;
+        self.observe(response.status());
         match response.status() {
             reqwest::StatusCode::PRECONDITION_FAILED | reqwest::StatusCode::CONFLICT => {
                 Ok(PutOutcome::Conflict)

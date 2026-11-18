@@ -214,7 +214,27 @@ pub fn aws_sandbox_agent_environment(
         // is installed. The authenticated run hook installs it before user code.
         environment.insert("ALIEN_SANDBOX_EGRESS_RUN_HOOK".into(), "true".into());
     }
+    if let Some(variable) = persistent_storage_environment(sandbox) {
+        environment.insert(ENV_PERSISTENT_STORAGE.into(), variable);
+    }
     environment
+}
+
+/// The agent variable that declares persistent storage and holds the image command until the
+/// key is restored. Absent unless declared, so other sandboxes' images are unchanged.
+pub const ENV_PERSISTENT_STORAGE: &str = "ALIEN_SANDBOX_PERSISTENT_STORAGE";
+
+/// `{ path, exclude, maxSizeBytes }` for the agent, when the sandbox declares persistent storage.
+pub fn persistent_storage_environment(sandbox: &Sandbox) -> Option<String> {
+    let storage = sandbox.persistent_storage.as_ref()?;
+    let mut value = serde_json::json!({ "path": storage.path });
+    if !storage.exclude.is_empty() {
+        value["exclude"] = serde_json::json!(storage.exclude);
+    }
+    if let Some(bytes) = storage.max_size_bytes().and_then(|b| u64::try_from(b).ok()) {
+        value["maxSizeBytes"] = serde_json::json!(bytes);
+    }
+    Some(value.to_string())
 }
 
 /// The name of the operator role's inline policy.

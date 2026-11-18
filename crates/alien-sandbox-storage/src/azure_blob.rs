@@ -28,6 +28,8 @@ pub struct AzureBlobStore {
     /// `https://<account>.blob.core.windows.net/<container>/<key root>/`, ending in `/`.
     key_url: String,
     sas: RwLock<String>,
+    /// Set when Azure refused the SAS (403) and cleared by a renewal.
+    denied: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for AzureBlobStore {
@@ -67,12 +69,20 @@ impl AzureBlobStore {
             client,
             key_url: key_url.to_string(),
             sas: RwLock::new(sas.trim_start_matches('?').to_string()),
+            denied: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
     /// Replaces the SAS with a renewed one. Requests already sent keep the old one.
     pub fn renew(&self, sas: &str) {
         *self.sas.write().expect("not poisoned") = sas.trim_start_matches('?').to_string();
+        self.denied
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether Azure refused the SAS since it was last renewed.
+    pub fn denied(&self) -> bool {
+        self.denied.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn url(&self, object: &str) -> Result<String> {
@@ -95,6 +105,12 @@ impl AzureBlobStore {
             .await
             // The URL carries the SAS, so it never goes into an error.
             .map_err(|e| failed(operation, object, &e.without_url().to_string()))
+            .inspect(|response| {
+                if response.status() == StatusCode::FORBIDDEN {
+                    self.denied
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            })
     }
 }
 

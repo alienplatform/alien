@@ -101,6 +101,8 @@ pub enum ReplicationState {
     Behind,
     /// Another sandbox claimed the key; nothing more is committed.
     Stopped,
+    /// The grant expired or the store refused it; commits resume once the binding renews it.
+    Denied,
 }
 
 /// The status a caller sees.
@@ -117,8 +119,12 @@ pub struct StorageStatus {
     pub restored_from: Option<ObjectName>,
     /// The commit HEAD names now.
     pub head: Option<u64>,
-    /// Why the state is `behind` or `stopped`.
+    /// Why the state is `behind`, `denied` or `stopped`.
     pub last_error: Option<String>,
+    /// When the grant the agent holds expires; the binding renews it past half its life.
+    pub grant_expires_at: Option<DateTime<Utc>>,
+    /// When the agent received that grant: with `grant_expires_at`, its life.
+    pub grant_issued_at: Option<DateTime<Utc>>,
 }
 
 struct Live {
@@ -164,6 +170,8 @@ impl PersistentStorage {
                 restored_from: None,
                 head: None,
                 last_error: None,
+                grant_expires_at: None,
+                grant_issued_at: None,
             }),
         }
     }
@@ -215,6 +223,7 @@ impl PersistentStorage {
                 self.config.path.clone(),
             ))
         };
+        let grant_expires_at = request.grant.expires_at();
         let store = Arc::new(
             GrantStore::new(request.grant).map_err(|e| storage_failed("use the key's grant", e))?,
         );
@@ -261,6 +270,8 @@ impl PersistentStorage {
             s.restored_from = request.commit;
             s.head = head;
             s.last_synced_at = Some(Utc::now());
+            s.grant_expires_at = Some(grant_expires_at);
+            s.grant_issued_at = Some(Utc::now());
         });
         image.restored()?;
         let this = Arc::clone(self);
@@ -276,9 +287,17 @@ impl PersistentStorage {
                 reason: "persistent storage is not attached".to_string(),
             })
         })?;
+        let expires_at = request.grant.expires_at();
         live.store
             .renew(request.grant)
             .map_err(|e| storage_failed("renew the key's grant", e))?;
+        self.update(|s| {
+            s.grant_expires_at = Some(expires_at);
+            s.grant_issued_at = Some(Utc::now());
+            if s.state == ReplicationState::Denied {
+                s.state = ReplicationState::Behind;
+            }
+        });
         Ok(())
     }
 
@@ -319,10 +338,13 @@ impl PersistentStorage {
             }
             Err(error) => {
                 let stopped = live.replicator.is_superseded();
+                let denied = live.store.denied();
                 let message = error.to_string();
                 let status = self.update(|s| {
                     s.state = if stopped {
                         ReplicationState::Stopped
+                    } else if denied {
+                        ReplicationState::Denied
                     } else {
                         ReplicationState::Behind
                     };
