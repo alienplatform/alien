@@ -605,6 +605,10 @@ async fn sync_with_manager(
         }
     }
 
+    if let Err(e) = repair_frozen_cluster_namespace(state).await {
+        warn!(error = %e, "Could not check the recorded cluster namespace; will retry on the next sync");
+    }
+
     let durable_target = match durable_target {
         Some(mut target) => {
             // The newest signed config, which may be newer than the one the
@@ -1348,6 +1352,94 @@ fn operation_command_address_capability(
     }
 }
 
+/// The namespace a Kubernetes install that was registered before setup recorded
+/// its namespace holds in its frozen cluster.
+const MANAGER_DEFAULT_CLUSTER_NAMESPACE: &str = "default";
+
+/// Repairs the frozen `kubernetes` cluster of an install that was registered
+/// with the manager's default namespace while this Operator runs in its Helm
+/// release namespace. Such a baseline can never pass an update ("Frozen
+/// resource 'kubernetes' was modified"), and the Operator never takes resource
+/// state from its manager once initialized, so the repair is local; the
+/// Operator's state report carries it to the manager.
+async fn repair_frozen_cluster_namespace(state: &OperatorState) -> crate::error::Result<()> {
+    let Some(own_namespace) = state
+        .config
+        .stack_settings
+        .as_ref()
+        .and_then(|settings| settings.kubernetes.as_ref())
+        .and_then(|kubernetes| kubernetes.cluster.as_ref())
+        .and_then(|cluster| cluster.namespace.as_deref())
+        .filter(|namespace| !namespace.is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(mut local_state) = state.db.get_deployment_state().await? else {
+        return Ok(());
+    };
+    if let Some(old) = repaired_cluster_namespace(&mut local_state, own_namespace) {
+        state.db.set_deployment_state(&local_state).await?;
+        info!(
+            old_namespace = %old,
+            new_namespace = %own_namespace,
+            "Recorded the cluster in the namespace this Operator runs in; setup registered it before the namespace was known"
+        );
+    }
+    Ok(())
+}
+
+/// Sets the frozen cluster's namespace to `own_namespace` in the stack state and
+/// the prepared stack, and returns the namespace it replaced. Changes nothing
+/// unless all hold: the platform is Kubernetes; the recorded namespace is the
+/// manager's default and differs from `own_namespace`; and no Live resource was
+/// ever created, so nothing can live in the recorded namespace. A cluster
+/// recorded in another namespace, or an install that already ran, keeps the
+/// Frozen refusal.
+fn repaired_cluster_namespace(
+    local_state: &mut alien_core::DeploymentState,
+    own_namespace: &str,
+) -> Option<String> {
+    use alien_core::{KubernetesCluster, ResourceLifecycle, ResourceStatus};
+
+    if local_state.platform != Platform::Kubernetes
+        || own_namespace == MANAGER_DEFAULT_CLUSTER_NAMESPACE
+    {
+        return None;
+    }
+    let stack_state = local_state.stack_state.as_mut()?;
+    let ran_live = stack_state.resources.values().any(|resource| {
+        resource.lifecycle.unwrap_or(ResourceLifecycle::Live) == ResourceLifecycle::Live
+            && resource.status != ResourceStatus::Pending
+    });
+    if ran_live {
+        return None;
+    }
+    let mut replaced = None;
+    for resource in stack_state.resources.values_mut() {
+        if let Some(cluster) = resource.config.downcast_mut::<KubernetesCluster>() {
+            if cluster.namespace == MANAGER_DEFAULT_CLUSTER_NAMESPACE {
+                cluster.namespace = own_namespace.to_string();
+                replaced = Some(MANAGER_DEFAULT_CLUSTER_NAMESPACE.to_string());
+            }
+        }
+    }
+    if let Some(prepared) = local_state
+        .runtime_metadata
+        .as_mut()
+        .and_then(|metadata| metadata.prepared_stack.as_mut())
+    {
+        for entry in prepared.resources.values_mut() {
+            if let Some(cluster) = entry.config.downcast_mut::<KubernetesCluster>() {
+                if cluster.namespace == MANAGER_DEFAULT_CLUSTER_NAMESPACE {
+                    cluster.namespace = own_namespace.to_string();
+                    replaced = Some(MANAGER_DEFAULT_CLUSTER_NAMESPACE.to_string());
+                }
+            }
+        }
+    }
+    replaced
+}
+
 fn is_uninitialized_deployment_state(state: &alien_core::DeploymentState) -> bool {
     state.status == alien_core::DeploymentStatus::Pending
         && state.current_release.is_none()
@@ -1536,6 +1628,293 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 
 #[cfg(test)]
 mod tests {
+
+    // --- recorded cluster namespace repair ---
+
+    fn cluster_in(namespace: &str) -> alien_core::KubernetesCluster {
+        alien_core::KubernetesCluster::new("kubernetes".to_string())
+            .provider(alien_core::KubernetesClusterProvider::Gke)
+            .ownership(alien_core::KubernetesClusterOwnership::Existing)
+            .namespace(namespace.to_string())
+            .heartbeat_mode(alien_core::KubernetesHeartbeatMode::KubernetesApi)
+            .build()
+    }
+
+    fn cluster_namespaces(state: &DeploymentState) -> (String, String) {
+        let in_state = state.stack_state.as_ref().unwrap().resources["kubernetes"]
+            .config
+            .downcast_ref::<alien_core::KubernetesCluster>()
+            .unwrap()
+            .namespace
+            .clone();
+        let in_baseline = state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .as_ref()
+            .unwrap()
+            .resources["kubernetes"]
+            .config
+            .downcast_ref::<alien_core::KubernetesCluster>()
+            .unwrap()
+            .namespace
+            .clone();
+        (in_state, in_baseline)
+    }
+
+    /// An install as an old registration recorded it: the frozen cluster in
+    /// `namespace`, and no Live resource ever created.
+    fn imported_state(namespace: &str) -> DeploymentState {
+        let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
+        stack_state.resources.insert(
+            "kubernetes".to_string(),
+            alien_core::StackResourceState {
+                status: alien_core::ResourceStatus::Running,
+                ..alien_core::StackResourceState::new_pending(
+                    "kubernetes-cluster".to_string(),
+                    alien_core::Resource::new(cluster_in(namespace)),
+                    Some(alien_core::ResourceLifecycle::Frozen),
+                    vec![],
+                )
+            },
+        );
+        let prepared = Stack::new("imported".to_string())
+            .add(cluster_in(namespace), alien_core::ResourceLifecycle::Frozen)
+            .build();
+        DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Pending,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                prepared_stack: Some(prepared),
+                ..Default::default()
+            }),
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn with_live_resource(state: &mut DeploymentState, status: alien_core::ResourceStatus) {
+        let stack_state = state.stack_state.as_mut().unwrap();
+        let mut worker = alien_core::StackResourceState::new_pending(
+            "worker".to_string(),
+            alien_core::Resource::new(
+                alien_core::Worker::new("api".to_string())
+                    .code(alien_core::WorkerCode::Image {
+                        image: "img".to_string(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+            ),
+            Some(alien_core::ResourceLifecycle::Live),
+            vec![],
+        );
+        worker.status = status;
+        stack_state.resources.insert("api".to_string(), worker);
+    }
+
+    #[test]
+    fn a_cluster_recorded_before_the_namespace_was_known_takes_the_operators_namespace() {
+        let mut state = imported_state("default");
+        assert_eq!(
+            super::repaired_cluster_namespace(&mut state, "product").as_deref(),
+            Some("default")
+        );
+        assert_eq!(
+            cluster_namespaces(&state),
+            ("product".to_string(), "product".to_string())
+        );
+        // A second report changes nothing.
+        assert_eq!(
+            super::repaired_cluster_namespace(&mut state, "product"),
+            None
+        );
+    }
+
+    /// The Operator's update is checked against the recorded baseline: refused
+    /// while it holds the cluster in `default`, accepted after the repair, and a
+    /// genuine change to the cluster is still refused.
+    #[tokio::test]
+    async fn the_update_passes_the_compatibility_check_after_the_repair() {
+        let target = || {
+            Stack::new("imported".to_string())
+                .permission(
+                    "execution",
+                    alien_core::PermissionProfile::new().global(["worker/execute"]),
+                )
+                .add(
+                    alien_core::Worker::new("api".to_string())
+                        .code(alien_core::WorkerCode::Image {
+                            image: "img".to_string(),
+                        })
+                        .permissions("execution".to_string())
+                        .build(),
+                    alien_core::ResourceLifecycle::Live,
+                )
+                .build()
+        };
+        let config = |namespace: &str, cluster_name: Option<&str>| {
+            alien_core::DeploymentConfig::builder()
+                .stack_settings(alien_core::StackSettings {
+                    kubernetes: Some(alien_core::KubernetesSettings {
+                        cluster: Some(alien_core::KubernetesClusterSettings {
+                            ownership: alien_core::KubernetesClusterOwnership::Existing,
+                            namespace: Some(namespace.to_string()),
+                            cloud: cluster_name.map(|name| alien_core::KubernetesCloudReference {
+                                cluster_name: Some(name.to_string()),
+                                ..Default::default()
+                            }),
+                        }),
+                        exposure: None,
+                    }),
+                    ..Default::default()
+                })
+                .base_platform(Platform::Gcp)
+                .external_bindings(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .build()
+        };
+        let check = |state: &DeploymentState, config: alien_core::DeploymentConfig| {
+            let prepared = state
+                .runtime_metadata
+                .as_ref()
+                .unwrap()
+                .prepared_stack
+                .clone();
+            let stack_state = state.stack_state.clone().unwrap();
+            async move {
+                alien_preflights::runner::PreflightRunner::new()
+                    .run_deployment_time_preflights(
+                        target(),
+                        &stack_state,
+                        &config,
+                        &alien_core::ClientConfig::Test,
+                        prepared.as_ref(),
+                        None,
+                        None,
+                    )
+                    .await
+            }
+        };
+
+        // The baseline an old registration prepared: the cluster in `default`.
+        let (baseline, _, _) = alien_preflights::runner::PreflightRunner::new()
+            .run_deployment_time_preflights(
+                target(),
+                &alien_core::StackState::new(Platform::Kubernetes),
+                &config("default", None),
+                &alien_core::ClientConfig::Test,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("the baseline prepares");
+        let mut state = imported_state("default");
+        let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
+        for (id, entry) in &baseline.resources {
+            let mut resource = alien_core::StackResourceState::new_pending(
+                entry.config.resource_type().to_string(),
+                entry.config.clone(),
+                Some(entry.lifecycle),
+                entry.dependencies.clone(),
+            );
+            if entry.lifecycle == alien_core::ResourceLifecycle::Frozen {
+                resource.status = alien_core::ResourceStatus::Running;
+                // A controller state: not adopted from an external binding.
+                resource.internal_state = Some(serde_json::json!({}));
+            }
+            stack_state.resources.insert(id.clone(), resource);
+        }
+        state.stack_state = Some(stack_state);
+        state.runtime_metadata.as_mut().unwrap().prepared_stack = Some(baseline);
+        let refused = check(&state, config("product", None))
+            .await
+            .expect_err("the baseline holds the cluster in default");
+        assert!(format!("{refused:?}").contains("'kubernetes' was modified"));
+
+        assert!(super::repaired_cluster_namespace(&mut state, "product").is_some());
+        check(&state, config("product", None))
+            .await
+            .expect("the repaired baseline passes");
+
+        let refused = check(&state, config("product", Some("another-cluster")))
+            .await
+            .expect_err("a changed cluster still needs setup");
+        assert!(format!("{refused:?}").contains("'kubernetes' was modified"));
+    }
+
+    #[test]
+    fn a_pending_live_resource_does_not_block_the_repair() {
+        let mut state = imported_state("default");
+        with_live_resource(&mut state, alien_core::ResourceStatus::Pending);
+        assert!(super::repaired_cluster_namespace(&mut state, "product").is_some());
+    }
+
+    #[test]
+    fn the_cluster_namespace_is_left_alone_when_the_repair_does_not_apply() {
+        // The namespaces already match: a Helm install, or a repaired one.
+        let mut state = imported_state("product");
+        assert_eq!(
+            super::repaired_cluster_namespace(&mut state, "product"),
+            None
+        );
+
+        // The Operator itself runs in the default namespace.
+        let mut state = imported_state("default");
+        assert_eq!(
+            super::repaired_cluster_namespace(&mut state, "default"),
+            None
+        );
+
+        // A cluster recorded in another namespace is a real move: setup decides.
+        let mut state = imported_state("analytics");
+        assert_eq!(
+            super::repaired_cluster_namespace(&mut state, "product"),
+            None
+        );
+        assert_eq!(
+            cluster_namespaces(&state),
+            ("analytics".to_string(), "analytics".to_string())
+        );
+
+        // An install that already ran Live resources may have workloads in the
+        // recorded namespace.
+        for status in [
+            alien_core::ResourceStatus::Running,
+            alien_core::ResourceStatus::Provisioning,
+            alien_core::ResourceStatus::ProvisionFailed,
+        ] {
+            let mut state = imported_state("default");
+            with_live_resource(&mut state, status);
+            assert_eq!(
+                super::repaired_cluster_namespace(&mut state, "product"),
+                None
+            );
+            assert_eq!(
+                cluster_namespaces(&state),
+                ("default".to_string(), "default".to_string())
+            );
+        }
+
+        // Not Kubernetes.
+        let mut state = imported_state("default");
+        state.platform = Platform::Aws;
+        assert_eq!(
+            super::repaired_cluster_namespace(&mut state, "product"),
+            None
+        );
+    }
     /// Turning on protected mode removes the dynamic containers the install ran
     /// before; unprotected installs and installs that never allowed them keep
     /// today's behavior.

@@ -104,5 +104,6 @@ fs2 = "0.4"
 tokio = { workspace = true, features = ["test-util"] }
 alien-bindings = { workspace = true }
 alien-infra = { workspace = true, features = ["test-utils"] }
+alien-preflights = { workspace = true }
 tempfile = { workspace = true }
 temp-env = { workspace = true }
