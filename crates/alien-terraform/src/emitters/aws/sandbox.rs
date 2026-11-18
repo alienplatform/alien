@@ -521,6 +521,17 @@ impl TfEmitter for AwsSandboxEmitter {
             ));
         }
 
+        if !sandbox.mounts.is_empty() {
+            fields.push((
+                "mounts",
+                hcl::to_expression(&sandbox.mounts)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing the sandbox mounts".into(),
+                    })?,
+            ));
+        }
+
         Ok(Some(expr::object(fields)))
     }
 }
@@ -1262,6 +1273,7 @@ mod tests {
             idle_pause_seconds: Some(600),
             max_lifetime_seconds: Some(1800),
             allow_egress: true,
+            mounts: Vec::new(),
         })
         .expect("the binding type serializes");
 

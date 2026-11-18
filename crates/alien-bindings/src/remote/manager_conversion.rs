@@ -426,6 +426,7 @@ impl ResolvedRemoteBinding {
                         execution_role_arn: None,
                         egress_connector_arns: Vec::new(),
                         preview_ports,
+                        mounts: Vec::new(),
                         idle_pause_seconds: binding
                             .idle_pause_seconds
                             .map(|seconds| {

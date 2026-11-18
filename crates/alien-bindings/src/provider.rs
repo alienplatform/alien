@@ -2369,6 +2369,7 @@ impl BindingsProviderApi for BindingsProvider {
                     aws_binding.idle_pause_seconds,
                     aws_binding.max_lifetime_seconds,
                 )
+                .with_mounts(aws_binding.mounts.clone())
                 .with_egress(
                     aws_binding
                         .egress

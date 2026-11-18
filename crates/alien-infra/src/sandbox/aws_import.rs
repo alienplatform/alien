@@ -47,6 +47,7 @@ impl ResourceImporter for AwsSandboxImporter {
             egress_connector_arns: data.egress_connector_arns,
             allow_egress: data.allow_egress,
             preview_ports: data.preview_ports,
+            mounts: sandbox.mounts.clone(),
             idle_pause_seconds: sandbox.lifecycle.idle_pause_seconds,
             max_lifetime_seconds: sandbox.lifecycle.max_lifetime_seconds,
             ..Default::default()
@@ -233,6 +234,7 @@ impl ResourceImporter for AwsSandboxImporter {
             egress_connector_arns: imported_controller.egress_connector_arns,
             allow_egress: imported_controller.allow_egress,
             preview_ports: imported_controller.preview_ports,
+            mounts: imported_controller.mounts,
             region: imported_controller
                 .region
                 .or(existing_controller.region.clone()),

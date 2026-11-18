@@ -206,6 +206,9 @@ pub struct AwsSandboxController {
     /// Ports a preview token may be minted for; the mint is bounded by this list alone.
     #[serde(default)]
     pub(crate) preview_ports: Vec<u16>,
+    /// Mounts the agent attaches before the image command starts, from the declaration.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) mounts: Vec<alien_core::SandboxMount>,
     /// Idle-suspend seconds for the binding, captured from the declaration.
     #[serde(default)]
     pub(crate) idle_pause_seconds: Option<u32>,
@@ -288,6 +291,7 @@ impl AwsSandboxController {
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
         self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
         self.preview_ports = config.preview_ports.clone();
+        self.mounts = config.mounts.clone();
 
         // The vendor's base image travels inside the bundle's Dockerfile, already resolved to
         // a registry the build role can reach; the only image this call names is AWS's managed
@@ -671,6 +675,7 @@ impl AwsSandboxController {
         // Preview tokens follow the current release, including old Ready checkpoints whose
         // update already completed without refreshing their authorization list.
         self.preview_ports = config.preview_ports.clone();
+        self.mounts = config.mounts.clone();
 
         let declared = super::egress::is_declared(ctx);
         if matches!(config.egress, alien_core::SandboxEgress::Internet) {
@@ -816,6 +821,7 @@ impl AwsSandboxController {
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
         self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
         self.preview_ports = config.preview_ports.clone();
+        self.mounts = config.mounts.clone();
 
         // Ownership decides before the bundle is even read. A template's Frozen image belongs to
         // the setup stack, which owns its bundle too and hands none over — so there is nothing
@@ -1305,6 +1311,7 @@ impl AwsSandboxController {
                 .map(|arn| BindingValue::value(arn.clone()))
                 .collect(),
             preview_ports: self.preview_ports.clone(),
+            mounts: self.mounts.clone(),
             idle_pause_seconds: self.idle_pause_seconds,
             max_lifetime_seconds: self.max_lifetime_seconds,
             allow_egress: self.allow_egress,

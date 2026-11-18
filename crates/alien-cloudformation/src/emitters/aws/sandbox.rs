@@ -367,6 +367,8 @@ impl CfEmitter for AwsSandboxEmitter {
             ));
         }
 
+        fields.extend(mounts_field(sandbox)?);
+
         Ok(Some(CfExpression::object(fields)))
     }
 }
@@ -645,6 +647,21 @@ fn build_role_trust_policy() -> CfExpression {
 /// Carried into both the import data and the binding because minting is where ingress is granted:
 /// `CreateMicrovmAuthToken` will scope a token to any port it is asked for, so the declared list
 /// has to reach the code that mints or the declaration bounds nothing.
+/// The declared mounts, for the binding the workload reads. Absent when none are declared, so a
+/// stack without mounts renders exactly as it did before mounts existed.
+fn mounts_field(sandbox: &Sandbox) -> Result<Option<(String, CfExpression)>> {
+    if sandbox.mounts.is_empty() {
+        return Ok(None);
+    }
+    let value = serde_json::to_value(&sandbox.mounts)
+        .and_then(serde_json::from_value::<CfExpression>)
+        .into_alien_error()
+        .context(ErrorData::GenericError {
+            message: "serializing the sandbox mounts".to_string(),
+        })?;
+    Ok(Some(("mounts".to_string(), value)))
+}
+
 fn preview_ports(sandbox: &Sandbox) -> CfExpression {
     CfExpression::list(
         sandbox
@@ -1174,6 +1191,7 @@ mod tests {
             idle_pause_seconds: Some(600),
             max_lifetime_seconds: Some(1800),
             allow_egress: true,
+            mounts: Vec::new(),
         })
         .expect("the binding type serializes");
 

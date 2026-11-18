@@ -223,6 +223,10 @@ pub struct AwsSandboxBinding {
     /// indistinguishable from `allow`. Absent means `deny`, which is the answer that fails closed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_egress: bool,
+    /// Filesystems the agent attaches before the image command starts. Absent when the
+    /// declaration has none, so a binding without mounts is unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mounts: Vec<crate::SandboxMount>,
 }
 
 /// Azure sandbox binding configuration.
@@ -408,6 +412,7 @@ impl SandboxBinding {
             idle_pause_seconds: None,
             max_lifetime_seconds: None,
             allow_egress: false,
+            mounts: Vec::new(),
         })
     }
 

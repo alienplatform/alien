@@ -101,6 +101,8 @@ pub struct AwsSandbox {
     /// Wall-clock ceiling on a sandbox, where the declaration asked for one. Lambda terminates
     /// the MicroVM when it elapses.
     max_lifetime_seconds: Option<u32>,
+    /// Mounts the declaration asks the agent to attach before the image command starts.
+    mounts: Vec<alien_core::SandboxMount>,
     agent: reqwest::Client,
 }
 
@@ -118,6 +120,71 @@ impl AwsSandbox {
     ) -> Self {
         self.egress_manager = Some(manager);
         self
+    }
+
+    /// Supplies the declared mounts carried by the resolved binding.
+    pub fn with_mounts(mut self, mounts: Vec<alien_core::SandboxMount>) -> Self {
+        self.mounts = mounts;
+        self
+    }
+
+    /// Hands the mount sources to the agent, which attaches them before the image command starts.
+    /// The credentials travel only in this request body over the agent's authenticated channel.
+    async fn deliver_mounts(
+        &self,
+        sandbox_id: &str,
+        mounts: &std::collections::BTreeMap<String, crate::traits::SandboxMountSource>,
+    ) -> Result<()> {
+        let body = serde_json::json!({ "mounts": mounts });
+        self.put_agent("sandbox.mounts", sandbox_id, "/v1/mounts", &body)
+            .await
+    }
+
+    /// A PUT the agent answers once the sandbox's endpoint is up; throttles and restore failures
+    /// repeat within the readiness deadline. Errors never carry the request body or URL.
+    async fn put_agent(
+        &self,
+        operation: &str,
+        sandbox_id: &str,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<()> {
+        let deadline = std::time::Instant::now() + SANDBOX_READY_TIMEOUT;
+        let mut delay = SANDBOX_READY_POLL;
+        let mut last_seen = "the endpoint gave no answer".to_string();
+        loop {
+            let ready = self
+                .owned_microvm(operation, sandbox_id)
+                .await?
+                .is_some_and(|vm| vm.endpoint.is_some());
+            if ready {
+                let request = self
+                    .authorized_request(sandbox_id, reqwest::Method::PUT, path)
+                    .await?
+                    .json(body)
+                    .timeout(SANDBOX_READY_TIMEOUT);
+                match request.send().await {
+                    Ok(response) if response.status().is_success() => return Ok(()),
+                    Ok(response) => {
+                        let status = response.status();
+                        last_seen = format!("HTTP {status}");
+                        if !matches!(status.as_u16(), 429 | 502 | 503) {
+                            return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                                operation: operation.to_string(),
+                                reason: format!("the agent refused the request: {last_seen}"),
+                            }));
+                        }
+                    }
+                    Err(_) => last_seen = "the connection failed".to_string(),
+                }
+            }
+            if !endpoint_backoff(&mut delay, deadline, false).await {
+                return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: operation.to_string(),
+                    reason: format!("not delivered within the readiness deadline: {last_seen}"),
+                }));
+            }
+        }
     }
 
     pub fn with_default_policy(mut self, policy: Option<alien_core::EgressPolicy>) -> Self {
@@ -356,6 +423,7 @@ impl AwsSandbox {
             preview_ports,
             idle_pause_seconds,
             max_lifetime_seconds,
+            mounts: Vec::new(),
             agent: reqwest::Client::new(),
         }
     }
@@ -816,6 +884,7 @@ impl Sandbox for AwsSandbox {
         self.validate_egress(request.egress.as_ref())?;
         let _ = request.sandbox_id;
         refuse_unsupported_create_fields(&request, "sandbox.create")?;
+        super::mounts::validate_sources(&self.mounts, &request.mounts)?;
         let max_lifetime_seconds = self.lifetime_seconds(request.timeout_ms, "sandbox.create")?;
         // AWS has an eight-hour hard lifetime ceiling, including when no smaller limit is set.
         let expires_at = crate::sandbox_egress::now_unix()?.saturating_add(i64::from(
@@ -860,6 +929,10 @@ impl Sandbox for AwsSandbox {
         // fails a fraction of the time. Local, Azure and Kubernetes all return a sandbox that can
         // already serve, so this is what makes AWS mean the same thing.
         let ready = async {
+            // Before the image command can start: the agent attaches these first.
+            if !request.mounts.is_empty() {
+                self.deliver_mounts(&microvm_id, &request.mounts).await?;
+            }
             if let Some(manager) = &self.egress_manager {
                 let policy = request
                     .egress
@@ -917,6 +990,49 @@ impl Sandbox for AwsSandbox {
         Ok(self.instance(microvm_id, Some("RUNNING".to_string())))
     }
 
+    async fn update_mount_credentials(
+        &self,
+        sandbox_id: &str,
+        path: &str,
+        credentials: crate::traits::SandboxMountCredentials,
+    ) -> Result<()> {
+        if !self
+            .mounts
+            .iter()
+            .any(|mount| matches!(mount, alien_core::SandboxMount::S3files { path: p } if p == path))
+        {
+            return Err(AlienError::new(ErrorData::SandboxMountsInvalid {
+                reason: format!("'{path}' is not a declared s3files mount"),
+            }));
+        }
+        super::mounts::validate_credentials(path, &credentials)?;
+        let sandbox = self
+            .fetch(sandbox_id, "sandbox.updateMountCredentials")
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.updateMountCredentials".into(),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
+                    ),
+                })
+            })?;
+        if sandbox.state != SandboxState::Running {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "sandboxNotRunning".to_string(),
+                reason: format!("sandbox '{sandbox_id}' is not running; renew after it resumes"),
+            }));
+        }
+        let body = serde_json::json!({ "path": path, "credentials": credentials });
+        self.put_agent(
+            "sandbox.updateMountCredentials",
+            sandbox_id,
+            "/v1/mounts/credentials",
+            &body,
+        )
+        .await
+    }
+
     async fn update_egress(
         &self,
         sandbox_id: &str,
@@ -965,6 +1081,7 @@ impl Sandbox for AwsSandbox {
         // Refused on the reconnect path too: an existing sandbox honors these fields no more
         // than a fresh one would.
         refuse_unsupported_create_fields(&request, "sandbox.getOrCreate")?;
+        super::mounts::validate_sources(&self.mounts, &request.mounts)?;
         if let Some(id) = request.sandbox_id.as_deref() {
             // A MicroVM that is terminating or terminated never serves again, so the id is
             // answered with a fresh sandbox, as on GCP and Azure. It can also end between the read
@@ -2078,6 +2195,43 @@ mod tests {
             .await
             .expect_err("a tenant key must be refused");
         assert_eq!(error.code, "OPERATION_NOT_SUPPORTED");
+    }
+
+    #[tokio::test]
+    async fn mounts_are_checked_against_the_declaration_before_anything_starts() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_run_microvm().never();
+        let sandbox = sandbox(client).with_mounts(vec![alien_core::SandboxMount::S3files {
+            path: "/workspace".to_string(),
+        }]);
+
+        // A declared s3files mount without a source.
+        let error = sandbox
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect_err("a declared mount needs its source");
+        assert_eq!(error.code, "SANDBOX_MOUNTS_INVALID");
+        let error = sandbox
+            .get_or_create(CreateSandboxRequest::default())
+            .await
+            .expect_err("getOrCreate refuses it too");
+        assert_eq!(error.code, "SANDBOX_MOUNTS_INVALID");
+
+        // Renewal of a path the declaration does not name.
+        let error = sandbox
+            .update_mount_credentials(
+                "sbx",
+                "/other",
+                crate::traits::SandboxMountCredentials {
+                    access_key_id: "a".into(),
+                    secret_access_key: "b".into(),
+                    session_token: "c".into(),
+                    expiration: "2099-01-01T00:00:00Z".into(),
+                },
+            )
+            .await
+            .expect_err("only a declared s3files path renews");
+        assert_eq!(error.code, "SANDBOX_MOUNTS_INVALID");
     }
 
     /// IAM cannot draw this line: the stack binding scopes the token mint to

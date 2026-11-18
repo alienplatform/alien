@@ -161,6 +161,13 @@ pub fn remote_binding_undeliverable_reason(entry: &ResourceEntry) -> Option<&'st
         );
     }
 
+    if !sandbox.mounts.is_empty() {
+        return Some(
+            "a remotely published sandbox must declare no mounts; mounts need the file system \
+             credentials a caller inside the deployment supplies at create",
+        );
+    }
+
     None
 }
 
