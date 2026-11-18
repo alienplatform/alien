@@ -13,7 +13,6 @@ use alien_core::{ComputeCluster, ResourceStatus};
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
 use std::time::Duration;
-use tracing::warn;
 
 /// How long one membership tick may run. The tick keeps the lease while it runs, and a retry or
 /// a delete is refused while the lease is held, so a stuck cloud call must not hold it for long.
@@ -76,7 +75,7 @@ async fn run_membership_tick_within(
     transport: &dyn DeploymentLoopTransport,
     sync: impl std::future::Future<Output = Result<()>>,
 ) -> Result<()> {
-    let result = match tokio::time::timeout(
+    match tokio::time::timeout(
         limit,
         runner::run_with_lease_renewal(deployment_id, transport, sync),
     )
@@ -89,11 +88,7 @@ async fn run_membership_tick_within(
                 limit.as_secs()
             ),
         })),
-    };
-    if let Err(error) = &result {
-        warn!(%deployment_id, %error, "Could not update the machines the deployment's cluster admits; keeping the list as it is");
     }
-    result
 }
 
 /// Asks every resource that keeps a list of admitted machines to refresh it.

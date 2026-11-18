@@ -1146,11 +1146,11 @@ async fn heartbeat_acquires_a_failed_update_only_when_it_asks_for_running_too() 
     }
 }
 
-/// A retry that is waiting when the heartbeat acquires the failed update is handed to the
-/// normal step (the record carries it), and handing the acquisition back unused restores it,
-/// so a membership tick can never consume a retry.
+/// The heartbeat takes a failed update only for the machine-list refresh. A deployment with a
+/// retry waiting is left alone (the heartbeat never runs a step of the retry), the retry stays
+/// requested, and the work loop's own failed-update acquisition still takes it.
 #[tokio::test]
-async fn heartbeat_acquisition_of_a_failed_update_never_loses_a_retry_request() {
+async fn heartbeat_never_acquires_a_failed_update_with_a_retry_waiting() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db.clone());
     let group_id = create_test_group(&store).await;
@@ -1164,7 +1164,7 @@ async fn heartbeat_acquisition_of_a_failed_update_never_loses_a_retry_request() 
         )
         .await
         .unwrap();
-    let filter = DeploymentFilter {
+    let heartbeat_filter = DeploymentFilter {
         statuses: Some(vec![
             "running".to_string(),
             "refresh-failed".to_string(),
@@ -1175,27 +1175,67 @@ async fn heartbeat_acquisition_of_a_failed_update_never_loses_a_retry_request() 
     };
 
     let acquired = store
-        .acquire(&test_subject(), "health-session", &filter, 1)
+        .acquire(&test_subject(), "health-session", &heartbeat_filter, 1)
         .await
         .unwrap();
-    assert_eq!(acquired.len(), 1);
     assert!(
-        acquired[0].deployment.retry_requested,
-        "the record carries the retry so the normal step consumes it"
+        acquired.is_empty(),
+        "the heartbeat must not take a waiting retry"
     );
-    store
-        .release_unused_acquisition(&test_subject(), &acquired[0], "health-session")
-        .await
-        .unwrap();
-
     let fetched = store
         .get_deployment(&test_subject(), &dep.id)
         .await
         .unwrap()
         .unwrap();
     assert!(fetched.retry_requested);
-    assert_eq!(fetched.status, "update-failed");
     assert!(fetched.locked_by.is_none());
+
+    // The same request without a retry waiting is a membership claim.
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET retry_requested = 0 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+    let acquired = store
+        .acquire(&test_subject(), "health-session", &heartbeat_filter, 1)
+        .await
+        .unwrap();
+    assert_eq!(acquired.len(), 1);
+    assert!(!acquired[0].deployment.retry_requested);
+    store
+        .release(&test_subject(), &dep.id, "health-session", None)
+        .await
+        .unwrap();
+
+    // The work loop's own acquisition (no Running) still takes a retry.
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET retry_requested = 1 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+    let work = store
+        .acquire(
+            &test_subject(),
+            "work-session",
+            &DeploymentFilter {
+                statuses: Some(vec!["update-failed".to_string()]),
+                deployment_ids: Some(vec![dep.id.clone()]),
+                ..Default::default()
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    assert_eq!(work.len(), 1);
+    assert!(work[0].deployment.retry_requested);
 }
 
 #[tokio::test]

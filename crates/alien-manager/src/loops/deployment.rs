@@ -236,6 +236,9 @@ pub struct DeploymentLoop {
     /// Acquisition backoff shared by deployment and heartbeat ticks. The retry
     /// deadline itself comes from persisted retry state, never from this cache.
     deferred: Mutex<HashMap<String, DeferredDeployment>>,
+    /// Deployments whose last machine-list refresh failed, so a failure that repeats every
+    /// minute is logged once and its recovery once.
+    membership_failing: Mutex<std::collections::HashSet<String>>,
     /// Holds the values of deployments whose config carries `valueSlots`.
     values: Option<Arc<crate::values::ValueStore>>,
     /// Where the commands key of command receivers built before capability
@@ -337,6 +340,7 @@ impl DeploymentLoop {
             local_bindings_cache: Mutex::new(HashMap::new()),
             settled_stack_cache: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
+            membership_failing: Mutex::new(std::collections::HashSet::new()),
             values: None,
             commands_keys: None,
             release_channels: None,
@@ -768,6 +772,35 @@ impl DeploymentLoop {
             ProcessOptions::heartbeat_tick(),
         )
         .await;
+    }
+
+    /// Reports a failed machine-list refresh once per streak (the next attempt is a minute
+    /// away, and repeating the same line would bury everything else), and its recovery.
+    fn note_membership_result<T, E: std::fmt::Display>(
+        &self,
+        deployment_id: &str,
+        result: &Result<T, E>,
+    ) {
+        let mut failing = self
+            .membership_failing
+            .lock()
+            .expect("membership_failing poisoned");
+        match result {
+            Err(error) => {
+                if failing.insert(deployment_id.to_string()) {
+                    error!(
+                        %deployment_id,
+                        %error,
+                        "Could not update the machines the deployment's cluster admits; keeping the list as it is (further failures are not logged until it recovers)"
+                    );
+                }
+            }
+            Ok(_) => {
+                if failing.remove(deployment_id) {
+                    info!(%deployment_id, "Updating the machines the deployment's cluster admits works again");
+                }
+            }
+        }
     }
 
     /// Process a single deployment: step until stable, reconcile, release.
@@ -1449,9 +1482,11 @@ impl DeploymentLoop {
                 service_provider.clone(),
             )
             .await;
+            self.note_membership_result(&deployment_id, &tick);
             if state.status == DeploymentStatus::UpdateFailed {
-                // Nothing is checkpointed, not even a cleared credential-retry window.
-                return tick.map(|()| None).map_err(|e| e.into_generic());
+                // Nothing is checkpointed, not even a cleared credential-retry window. A
+                // failed refresh was reported above and changes nothing, so it is no error here.
+                return Ok(None);
             }
         }
 
