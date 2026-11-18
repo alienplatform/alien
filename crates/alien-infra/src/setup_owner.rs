@@ -46,10 +46,7 @@ mod tests {
         // The older prefix/id marker, and a marker that merely contains ours.
         assert!(!description_names_owner("Alien setup owner: p/box.", &ours));
         let longer = description_marker(&owner_value("p", "box", "dep_10"));
-        assert!(!description_names_owner(
-            &longer,
-            &owner_value("p", "box", "dep_1")
-        ));
+        assert!(!description_names_owner(&longer, &owner_value("p", "box", "dep_1")));
         assert!(!description_names_owner("handmade", &ours));
     }
 }

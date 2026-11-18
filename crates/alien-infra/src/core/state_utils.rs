@@ -1184,4 +1184,32 @@ mod tests {
         assert_eq!(resource_state.status, ResourceStatus::RefreshFailed);
         assert!(resource_state.internal_state.is_none());
     }
+
+    /// A stack state saved by the release before this change, holding workloads that failed a
+    /// readiness check, loads and heals: a retry applies the current spec again.
+    #[test]
+    fn a_saved_state_with_failed_workloads_loads_and_heals_on_retry() {
+        let mut state: StackState =
+            serde_json::from_str(include_str!("fixtures/saved_failed_workloads.json"))
+                .expect("the saved state loads");
+        assert_eq!(
+            state.resources["refresh-failed"].status,
+            ResourceStatus::RefreshFailed
+        );
+        assert_eq!(
+            state.resources["daemon-refresh-failed"].status,
+            ResourceStatus::RefreshFailed
+        );
+        assert_eq!(
+            state.resources["update-failed"].status,
+            ResourceStatus::UpdateFailed
+        );
+
+        for (id, record) in &mut state.resources {
+            assert!(record.retry_failed().unwrap(), "'{id}' is retried");
+            assert_eq!(record.status, ResourceStatus::Updating, "'{id}'");
+            assert!(record.error.is_none(), "'{id}'");
+        }
+    }
 }
+

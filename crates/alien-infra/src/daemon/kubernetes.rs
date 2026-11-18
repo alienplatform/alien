@@ -2708,4 +2708,67 @@ mod tests {
             .unwrap();
         assert_eq!(resumed.state, KubernetesDaemonState::UpdateStart);
     }
+
+    fn daemonset_status_body(labels: &std::collections::BTreeMap<String, String>, ready: i32) -> serde_json::Value {
+        serde_json::json!({
+            "apiVersion":"apps/v1", "kind":"DaemonSet",
+            "metadata":{"name":"agent", "generation":2, "labels":labels},
+            "spec":{"selector":{"matchLabels":{"app":"agent"}},"template":{"spec":{"containers":[]}}},
+            "status":{"desiredNumberScheduled":10, "numberReady":ready, "observedGeneration":2}
+        })
+    }
+
+    /// A healthy DaemonSet observed in the middle of a roll is not drift: the check fails with
+    /// a retryable not-ready error, and the refresh that follows recovers once every node runs
+    /// a ready pod.
+    #[tokio::test]
+    async fn a_daemonset_observed_mid_roll_recovers_when_it_is_fully_ready() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes config")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual config")
+        };
+        *server_url = server.base_url();
+
+        for (path, kind) in [("pods", "PodList"), ("events", "EventList")] {
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path(format!("/api/v1/namespaces/test-ns/{path}"));
+                then.status(200).json_body(
+                    serde_json::json!({"apiVersion":"v1","kind":kind,"metadata":{},"items":[]}),
+                );
+            });
+        }
+        let mut controller = manifest_test_controller();
+        let labels = controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+        controller.state = KubernetesDaemonState::Ready;
+        let mut rolling = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200).json_body(daemonset_status_body(&labels, 6));
+        });
+        let error = controller.step(&ctx).await.expect_err("mid-roll");
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
+        assert!(error.retryable);
+
+        // The refresh failed (the retry budget of the Ready check ran out).
+        controller.state = KubernetesDaemonState::RefreshFailed;
+        let error = controller.step(&ctx).await.expect_err("still rolling");
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
+        assert_eq!(controller.get_status(), ResourceStatus::RefreshFailed);
+
+        rolling.delete();
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200).json_body(daemonset_status_body(&labels, 10));
+        });
+        controller.step(&ctx).await.expect("recovers on the next refresh");
+        assert_eq!(controller.get_status(), ResourceStatus::Running);
+    }
 }

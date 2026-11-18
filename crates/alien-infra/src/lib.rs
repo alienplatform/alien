@@ -1,6 +1,6 @@
 mod core;
-mod registry_digest;
 mod setup_owner;
+mod registry_digest;
 pub use core::*;
 
 mod error;

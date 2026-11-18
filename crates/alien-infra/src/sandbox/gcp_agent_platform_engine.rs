@@ -646,14 +646,8 @@ mod tests {
         let mut m = MockAgentPlatformApi::new();
         m.expect_list_engines().returning(|| {
             Ok(vec![
-                listed(
-                    "eng-1",
-                    Some("Alien setup owner: test/orders-engine@dep_test."),
-                ),
-                listed(
-                    "eng-42",
-                    Some("Alien setup owner: test/orders-engine@dep_test."),
-                ),
+                listed("eng-1", Some("Alien setup owner: test/orders-engine@dep_test.")),
+                listed("eng-42", Some("Alien setup owner: test/orders-engine@dep_test.")),
             ])
         });
         m.expect_delete_engine()
