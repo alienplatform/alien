@@ -1317,6 +1317,8 @@ pub enum SandboxStorageState {
     Behind,
     /// Another sandbox claimed the key; this one commits nothing more.
     Stopped,
+    /// The sandbox's grant expired or was refused; commits resume once it is renewed.
+    Denied,
 }
 
 /// `sandbox.persistentStorage`: the key a sandbox holds and how far its writes are durable.
@@ -1335,9 +1337,12 @@ pub struct SandboxStorageStatus {
     /// Sequence number of the commit HEAD names now.
     #[serde(default)]
     pub head: Option<u64>,
-    /// Why the state is `behind` or `stopped`.
+    /// Why the state is `behind`, `denied` or `stopped`.
     #[serde(default)]
     pub last_error: Option<String>,
+    /// When the sandbox's grant expires; bindings renew it past half its life.
+    #[serde(default)]
+    pub grant_expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// A live sandbox.

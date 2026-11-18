@@ -278,8 +278,8 @@ mod fake_s3 {
             return StatusCode::BAD_REQUEST.into_response();
         };
         let key = String::from_utf8_lossy(key).to_string();
-        // The fake's policy is the allowed prefix itself.
-        if !key.starts_with(std::str::from_utf8(policy).unwrap()) {
+        // The fake's policy is the allowed prefix itself; "expired" stands for a lapsed grant.
+        if policy == b"expired" || !key.starts_with(std::str::from_utf8(policy).unwrap()) {
             return StatusCode::FORBIDDEN.into_response();
         }
         let version = bucket.next();
@@ -571,4 +571,115 @@ async fn attach_restores_then_sync_publishes() {
             .unwrap(),
         b"after restore"
     );
+}
+
+/// What setup writes into the image is exactly what the agent reads, and a sandbox without
+/// persistent storage gets no variable at all.
+#[test]
+fn the_setup_variable_parses_as_the_agents_config() {
+    use alien_core::sandbox_egress::persistent_storage_environment;
+    let mut sandbox = alien_core::Sandbox::new("agent".to_string())
+        .code(alien_core::SandboxCode::Image {
+            image: "example".to_string(),
+            bundled_from: None,
+        })
+        .limits(alien_core::SandboxLimits {
+            cpu: "1".to_string(),
+            memory: "2Gi".to_string(),
+            disk: "10Gi".to_string(),
+            max_processes: None,
+        })
+        .egress(alien_core::SandboxEgress::None)
+        .lifecycle(alien_core::SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .preview_ports(vec![])
+        .build();
+    assert_eq!(persistent_storage_environment(&sandbox), None);
+    sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+        path: "/workspace".to_string(),
+        exclude: vec!["tmp/".to_string()],
+        max_size: Some("8Gi".to_string()),
+        encryption_key: None,
+    });
+    let variable = persistent_storage_environment(&sandbox).expect("declared");
+    let config: super::attach::StorageConfig = serde_json::from_str(&variable).expect("parses");
+    assert_eq!(config.path, "/workspace");
+    assert_eq!(config.exclude, vec!["tmp/".to_string()]);
+    assert_eq!(config.max_size_bytes, Some(8 << 30));
+}
+
+/// An expired grant is reported as `denied`, not as a silent stall, and a renewal resumes.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_expired_grant_reports_denied_until_renewed() {
+    use super::attach::{AttachRequest, PersistentStorage, ReplicationState, StorageConfig};
+    let (url, bucket) = fake_s3::serve().await;
+    let binding = KeyView(std::sync::Arc::clone(&bucket), "engine-42".to_string());
+    let claim = takeover(&binding, "sandbox-1").await.expect("claim");
+    let sandbox = tempfile::tempdir().expect("tempdir");
+    let workspace = sandbox.path().join("workspace");
+    let storage = std::sync::Arc::new(PersistentStorage::with_staging(
+        StorageConfig {
+            path: workspace.display().to_string(),
+            exclude: vec![],
+            max_size_bytes: None,
+        },
+        sandbox.path().join("staging"),
+    ));
+    let mut expired = s3_grant(&url, "engine-42", &[]);
+    let alien_sandbox_storage::StorageGrant::S3 { post, .. } = &mut expired;
+    post.fields
+        .insert("policy".to_string(), "expired".to_string());
+    let image = crate::image_command::ImageProcess::default().awaiting_restore();
+    // SAFETY: plain getters.
+    let me = unsafe {
+        crate::exec::ExecIdentity {
+            uid: libc::getuid(),
+            gid: libc::getgid(),
+        }
+    };
+    let request: AttachRequest = serde_json::from_value(serde_json::json!({
+        "key": "engine-42",
+        "writer": "sandbox-1",
+        "headVersion": claim.head_version,
+        "grant": expired,
+    }))
+    .expect("parses");
+    storage.attach(request, &image, me).await.expect("attach");
+    write(&workspace, "notes.md", b"x");
+    storage
+        .sync()
+        .await
+        .expect_err("the store refuses the grant");
+    assert_eq!(storage.status().state, ReplicationState::Denied);
+
+    storage
+        .renew(
+            serde_json::from_value(
+                serde_json::json!({ "grant": s3_grant(&url, "engine-42", &[]) }),
+            )
+            .unwrap(),
+        )
+        .await
+        .expect("renew");
+    let synced = storage.sync().await.expect("renewed grant works");
+    assert_eq!(synced.state, ReplicationState::Replicating);
+}
+
+/// A grant past its expiry is refused before anything is sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_expired_grant_sends_nothing() {
+    use alien_sandbox_storage::{ObjectStore, Precondition};
+    let (url, bucket) = fake_s3::serve().await;
+    let mut grant = s3_grant(&url, "engine-42", &[]);
+    let alien_sandbox_storage::StorageGrant::S3 { expires_at, .. } = &mut grant;
+    *expires_at = chrono::Utc::now() - chrono::Duration::seconds(1);
+    let store = GrantStore::new(grant);
+    store
+        .put_if("packs/1-x", b"x".to_vec(), Precondition::Absent)
+        .await
+        .expect_err("expired");
+    assert!(store.denied());
+    assert!(bucket.objects.lock().unwrap().is_empty());
 }

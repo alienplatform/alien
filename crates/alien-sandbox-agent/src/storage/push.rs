@@ -26,6 +26,8 @@ fn failed(operation: &str, object: &str, reason: impl Into<String>) -> AlienErro
 pub struct GrantStore {
     grant: RwLock<StorageGrant>,
     http: reqwest::Client,
+    /// Set when the store refused the grant (403) and cleared by a renewal.
+    denied: std::sync::atomic::AtomicBool,
 }
 
 impl GrantStore {
@@ -37,12 +39,28 @@ impl GrantStore {
                 .timeout(std::time::Duration::from_secs(60))
                 .build()
                 .expect("a client with rustls builds"),
+            denied: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Whether the grant is expired or the store refused it: nothing more can be written until
+    /// the binding renews it.
+    pub fn denied(&self) -> bool {
+        self.denied.load(std::sync::atomic::Ordering::SeqCst)
+            || self.grant().expires_at() <= chrono::Utc::now()
+    }
+
+    fn observe(&self, status: reqwest::StatusCode) {
+        if status == reqwest::StatusCode::FORBIDDEN {
+            self.denied.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
     /// Replaces the grant (renewal before expiry).
     pub fn renew(&self, grant: StorageGrant) {
         *self.grant.write().expect("not poisoned") = grant;
+        self.denied
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn grant(&self) -> StorageGrant {
@@ -147,9 +165,15 @@ impl ObjectStore for GrantStore {
         bytes: Vec<u8>,
         precondition: Precondition,
     ) -> StorageResult<PutOutcome> {
+        let grant = self.grant();
+        if grant.expires_at() <= chrono::Utc::now() {
+            // Sent anyway it would fail with 403 later and cost an upload; say why now.
+            self.denied.store(true, std::sync::atomic::Ordering::SeqCst);
+            return Err(failed("put", object, "the storage grant expired"));
+        }
         let StorageGrant::S3 {
             post, head_put_url, ..
-        } = self.grant();
+        } = grant;
         let response = if object == HEAD_OBJECT {
             let request = self.http.put(head_put_url).body(bytes);
             let request = match &precondition {
@@ -178,6 +202,7 @@ impl ObjectStore for GrantStore {
                 .await
         }
         .map_err(|e| failed("put", object, e.to_string()))?;
+        self.observe(response.status());
         match response.status() {
             reqwest::StatusCode::PRECONDITION_FAILED | reqwest::StatusCode::CONFLICT => {
                 Ok(PutOutcome::Conflict)
