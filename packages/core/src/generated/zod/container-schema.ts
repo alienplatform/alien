@@ -4,7 +4,6 @@
 */
 
 import * as z from "zod";
-import { ArchitectureSchema } from "./architecture-schema.js";
 import { ContainerAutoscalingSchema } from "./container-autoscaling-schema.js";
 import { ContainerCodeSchema } from "./container-code-schema.js";
 import { ContainerEgressSchema } from "./container-egress-schema.js";
@@ -27,9 +26,6 @@ import { WorkloadPrioritySchema } from "./workload-priority-schema.js";
 export const ContainerSchema = z.object({
     get "autoscaling"(){
                 return z.union([ContainerAutoscalingSchema, z.null()]).optional()
-              },
-get "builtArchitectures"(){
-                return z.array(ArchitectureSchema.describe("CPU architecture.")).describe("Set by `alien build` for a Kubernetes stack: the CPU architectures of the\nimage built for this workload (more than one means a multi-architecture\nimage). Pods of a single-architecture image are placed on matching nodes.\nAbsent means the build did not record it (an older release), so no\narchitecture is selected. Build output replaces any value written in the\nstack definition.").optional()
               },
 "cluster": z.string().describe("ComputeCluster resource ID that this container runs on.\nIf None, will be auto-assigned by ComputeClusterMutation at deployment time.").nullish(),
 get "code"(){

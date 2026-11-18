@@ -83,12 +83,6 @@ pub(crate) const RESOURCE_CHOICES: Feature = feature(
     Action::Strip,
     "the choice is resolved at setup into the deployment's settings; the fixed sizes stay in the stack",
 );
-pub(crate) const BUILT_ARCHITECTURES: Feature = feature(
-    "built image architectures",
-    NEXT_RELEASE,
-    Action::Strip,
-    "an older Operator places Pods without an architecture selector, as it did before the build recorded one",
-);
 pub(crate) const REPLICATION_REGIONS_INPUT: Feature = feature(
     "registry replication inputs",
     NEXT_RELEASE,
@@ -199,7 +193,6 @@ pub(crate) const CUSTOM_BASE_DOMAIN: Feature = feature(
 pub(crate) const FEATURES: &[&Feature] = &[
     &COMMANDS_CAPABILITY_FILE,
     &RUNTIME_IDENTITY_EXCHANGE,
-    &BUILT_ARCHITECTURES,
     &RESOURCE_CHOICES,
     &REPLICATION_REGIONS_INPUT,
     &AI_MODELS,
@@ -313,13 +306,6 @@ pub(crate) fn apply(
             if !operator.reads(&RESOURCE_CHOICES) && !signed {
                 container.resource_choices = None;
             }
-            if !operator.reads(&BUILT_ARCHITECTURES) && !container.built_architectures.is_empty() {
-                if signed {
-                    refuse(&BUILT_ARCHITECTURES);
-                } else {
-                    container.built_architectures.clear();
-                }
-            }
             if container.priority.is_some() {
                 refuse(&PRIORITY);
             }
@@ -334,13 +320,6 @@ pub(crate) fn apply(
                 refuse(&WRITABLE_PATHS);
             }
         } else if let Some(daemon) = config.downcast_mut::<Daemon>() {
-            if !operator.reads(&BUILT_ARCHITECTURES) && !daemon.built_architectures.is_empty() {
-                if signed {
-                    refuse(&BUILT_ARCHITECTURES);
-                } else {
-                    daemon.built_architectures.clear();
-                }
-            }
             if !operator.reads(&COMMANDS_CAPABILITY_FILE) && daemon.commands_capability_file {
                 if signed {
                     refuse(&COMMANDS_CAPABILITY_FILE);
@@ -355,13 +334,6 @@ pub(crate) fn apply(
                 refuse(&DAEMON_SECURITY);
             }
         } else if let Some(worker) = config.downcast_mut::<Worker>() {
-            if !operator.reads(&BUILT_ARCHITECTURES) && !worker.built_architectures.is_empty() {
-                if signed {
-                    refuse(&BUILT_ARCHITECTURES);
-                } else {
-                    worker.built_architectures.clear();
-                }
-            }
             if !operator.reads(&RUNTIME_IDENTITY_EXCHANGE) && worker.runtime_identity_exchange {
                 if signed {
                     refuse(&RUNTIME_IDENTITY_EXCHANGE);
@@ -647,46 +619,25 @@ mod tests {
         }
     }
 
-    fn built_stack() -> Stack {
-        let mut c = container();
-        c.built_architectures = vec![alien_core::instance_catalog::Architecture::X86_64];
-        let mut d = daemon(None);
-        d.built_architectures = vec![alien_core::instance_catalog::Architecture::X86_64];
-        stack_with(c, d)
-    }
-
+    /// The record of built architectures lives on the stack, which older Operators
+    /// read without refusing unknown fields, so no release is stripped or refused for it.
     #[test]
-    fn an_older_operator_is_pulled_a_stack_without_built_architectures() {
-        let mut stack = built_stack();
-        assert!(serde_json::to_string(&stack)
-            .unwrap()
-            .contains("builtArchitectures"));
-        let operator = OperatorVersion::from_report(Some("3.3.64"));
-        assert!(apply(&mut stack, None, &operator, false).is_empty());
-        assert!(!serde_json::to_string(&stack)
-            .unwrap()
-            .contains("builtArchitectures"));
-    }
-
-    #[test]
-    fn an_operator_that_reads_built_architectures_keeps_them() {
-        let mut stack = built_stack();
-        let before = serde_json::to_string(&stack).unwrap();
-        assert!(apply(&mut stack, None, &OperatorVersion::Current, false).is_empty());
-        assert_eq!(serde_json::to_string(&stack).unwrap(), before);
-    }
-
-    #[test]
-    fn a_signed_release_with_built_architectures_is_refused_for_an_older_operator() {
-        let mut stack = built_stack();
-        let before = serde_json::to_string(&stack).unwrap();
-        let operator = OperatorVersion::from_report(Some("3.3.64"));
-        let refused = apply(&mut stack, None, &operator, true);
-        assert_eq!(
-            refused.iter().map(|f| f.name).collect::<Vec<_>>(),
-            ["built image architectures"]
+    fn built_architectures_reach_every_operator_unchanged() {
+        let mut stack = stack_with(container(), daemon(None));
+        stack.built_architectures.insert(
+            "c".to_string(),
+            vec![alien_core::instance_catalog::Architecture::X86_64],
         );
-        assert_eq!(serde_json::to_string(&stack).unwrap(), before);
+        let before = serde_json::to_string(&stack).unwrap();
+        assert!(before.contains("builtArchitectures"));
+        for version in [None, Some("3.3.31"), Some("3.3.64")] {
+            for signed in [false, true] {
+                let mut stack = stack.clone();
+                let operator = OperatorVersion::from_report(version);
+                assert!(apply(&mut stack, None, &operator, signed).is_empty());
+                assert_eq!(serde_json::to_string(&stack).unwrap(), before);
+            }
+        }
     }
 
     fn choices_stack() -> Stack {

@@ -886,13 +886,6 @@
           ],
           "description": "Build from source: { toolchain = \"rust\", binary-name = \"<binary>\", src = \".\" }."
         },
-        "built-architectures": {
-          "description": "Set by `alien build` for a Kubernetes stack: the CPU architectures of the\nimage built for this workload (more than one means a multi-architecture\nimage). Pods of a single-architecture image are placed on matching nodes.\nAbsent means the build did not record it (an older release), so no\narchitecture is selected. Build output replaces any value written in the\nstack definition.",
-          "items": {
-            "$ref": "#/definitions/Architecture"
-          },
-          "type": "array"
-        },
         "command": {
           "description": "Command to override image default",
           "items": {
@@ -1504,13 +1497,6 @@
             }
           ],
           "description": "Build from source: { toolchain = \"rust\", binary-name = \"<binary>\", src = \".\" }."
-        },
-        "built-architectures": {
-          "description": "Set by `alien build` for a Kubernetes stack: the CPU architectures of the\nimage built for this workload (more than one means a multi-architecture\nimage). Pods of a single-architecture image are placed on matching nodes.\nAbsent means the build did not record it (an older release), so no\narchitecture is selected. Build output replaces any value written in the\nstack definition.",
-          "items": {
-            "$ref": "#/definitions/Architecture"
-          },
-          "type": "array"
         },
         "command": {
           "description": "Command to override the image default.",
@@ -3450,13 +3436,6 @@
             }
           ],
           "description": "Build from source: { toolchain = \"rust\", binary-name = \"<binary>\", src = \".\" }."
-        },
-        "built-architectures": {
-          "description": "Set by `alien build` for a Kubernetes stack: the CPU architectures of the\nimage built for this workload (more than one means a multi-architecture\nimage). Pods of a single-architecture image are placed on matching nodes.\nAbsent means the build did not record it (an older release), so no\narchitecture is selected. Build output replaces any value written in the\nstack definition.",
-          "items": {
-            "$ref": "#/definitions/Architecture"
-          },
-          "type": "array"
         },
         "commands-enabled": {
           "default": false,

@@ -134,9 +134,34 @@ pub struct Stack {
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operations: Option<crate::OperationsConfig>,
+    /// Set by `alien build` for a Kubernetes stack: the CPU architectures of the image
+    /// built for each Container, Daemon and Worker, by resource id (more than one means a
+    /// multi-architecture image). Pods of a single-architecture image are placed on
+    /// matching nodes. A resource with no entry was not recorded (a prebuilt image or an
+    /// older release), so no architecture is selected. Build output replaces any value
+    /// written in the stack definition.
+    ///
+    /// Kept on the stack, not on the resources: older managers and Operators read every
+    /// resource strictly and refuse a field they do not know, but ignore an unknown
+    /// stack-level field.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub built_architectures: BTreeMap<String, Vec<crate::instance_catalog::Architecture>>,
 }
 
 impl Stack {
+    /// The architectures `alien build` recorded for a workload's image. Empty when none
+    /// were recorded.
+    pub fn built_architectures_of(
+        &self,
+        resource_id: &str,
+    ) -> &[crate::instance_catalog::Architecture] {
+        self.built_architectures
+            .get(resource_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
     /// The ids of the stack's own vaults: those the application reads and writes, not the
     /// reserved ones the framework keeps its secrets in.
     pub fn application_vault_ids(&self) -> Vec<String> {

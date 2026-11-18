@@ -104,7 +104,7 @@ pub fn kubernetes_compute_architecture(stack: &Stack) -> Result<Option<Architect
 
 /// Match Pod placement to the architecture of the workload's image.
 /// The pool's profile wins; otherwise a single built architecture recorded by
-/// `alien build` for this workload selects nodes; several built architectures
+/// `alien build` for this workload (`Stack::built_architectures_of`) selects nodes; several built architectures
 /// (a multi-architecture image) or none leave the Pod unconstrained, as releases
 /// built before the build recorded it were.
 /// This does not associate Workers with a compute pool or reserve node capacity.
@@ -483,6 +483,15 @@ mod tests {
         assert!(kubernetes_dynamic_pool(&stack).unwrap().is_none());
     }
 
+    fn recorded(mut stack: Stack, architectures: &[Architecture]) -> Stack {
+        if !architectures.is_empty() {
+            stack
+                .built_architectures
+                .insert("web".to_string(), architectures.to_vec());
+        }
+        stack
+    }
+
     fn empty_stack() -> Stack {
         Stack::new("test".to_string()).build()
     }
@@ -493,20 +502,24 @@ mod tests {
 
     #[test]
     fn a_single_built_architecture_selects_matching_nodes() {
+        let stack = recorded(empty_stack(), &[Architecture::X86_64]);
         let selector =
-            kubernetes_compute_node_selector(&empty_stack(), None, &[Architecture::X86_64])
+            kubernetes_compute_node_selector(&stack, None, stack.built_architectures_of("web"))
                 .unwrap();
         assert_eq!(arch_label(selector).as_deref(), Some("amd64"));
+        let stack = recorded(empty_stack(), &[Architecture::Arm64]);
         let selector =
-            kubernetes_compute_node_selector(&empty_stack(), None, &[Architecture::Arm64]).unwrap();
+            kubernetes_compute_node_selector(&stack, None, stack.built_architectures_of("web"))
+                .unwrap();
         assert_eq!(arch_label(selector).as_deref(), Some("arm64"));
     }
 
     #[test]
     fn a_multi_architecture_build_or_an_older_release_adds_no_constraint() {
-        let both = [Architecture::X86_64, Architecture::Arm64];
+        let both = recorded(empty_stack(), &[Architecture::X86_64, Architecture::Arm64]);
         assert_eq!(
-            kubernetes_compute_node_selector(&empty_stack(), None, &both).unwrap(),
+            kubernetes_compute_node_selector(&both, None, both.built_architectures_of("web"))
+                .unwrap(),
             None
         );
         // A release built before the build recorded architectures.
@@ -514,14 +527,22 @@ mod tests {
             kubernetes_compute_node_selector(&empty_stack(), None, &[]).unwrap(),
             None
         );
+        // Another workload's record says nothing about this one.
+        let other = recorded(empty_stack(), &[Architecture::Arm64]);
+        assert_eq!(
+            kubernetes_compute_node_selector(&other, None, other.built_architectures_of("worker"))
+                .unwrap(),
+            None
+        );
     }
 
     #[test]
     fn a_pool_profile_still_wins_over_the_built_architecture() {
-        let stack = stack(cluster());
+        let stack = recorded(stack(cluster()), &[Architecture::Arm64]);
         let pool = kubernetes_dynamic_pool(&stack).unwrap();
         let selector =
-            kubernetes_compute_node_selector(&stack, pool, &[Architecture::Arm64]).unwrap();
+            kubernetes_compute_node_selector(&stack, pool, stack.built_architectures_of("web"))
+                .unwrap();
         assert_eq!(arch_label(selector).as_deref(), Some("amd64"));
     }
 }

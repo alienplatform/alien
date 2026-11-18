@@ -1286,7 +1286,7 @@ impl KubernetesDaemonController {
         let node_selector = alien_core::kubernetes_compute_node_selector(
             ctx.desired_stack,
             pool,
-            &config.built_architectures,
+            ctx.desired_stack.built_architectures_of(&config.id),
         )
         .map_err(|message| {
             AlienError::new(ErrorData::ResourceControllerConfigError {

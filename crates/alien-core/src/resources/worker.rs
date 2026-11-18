@@ -302,16 +302,6 @@ pub struct Worker {
     #[builder(default)]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub runtime_identity_exchange: bool,
-
-    /// Set by `alien build` for a Kubernetes stack: the CPU architectures of the
-    /// image built for this workload (more than one means a multi-architecture
-    /// image). Pods of a single-architecture image are placed on matching nodes.
-    /// Absent means the build did not record it (an older release), so no
-    /// architecture is selected. Build output replaces any value written in the
-    /// stack definition.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub built_architectures: Vec<crate::instance_catalog::Architecture>,
 }
 
 impl Worker {

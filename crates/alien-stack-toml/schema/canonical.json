@@ -899,12 +899,6 @@
             }
           ]
         },
-        "builtArchitectures": {
-          "items": {
-            "$ref": "#/components/schemas/Architecture"
-          },
-          "type": "array"
-        },
         "cluster": {
           "type": [
             "string",
@@ -1325,12 +1319,6 @@
     "Daemon": {
       "additionalProperties": false,
       "properties": {
-        "builtArchitectures": {
-          "items": {
-            "$ref": "#/components/schemas/Architecture"
-          },
-          "type": "array"
-        },
         "cluster": {
           "type": [
             "string",
@@ -3022,12 +3010,6 @@
     "Worker": {
       "additionalProperties": false,
       "properties": {
-        "builtArchitectures": {
-          "items": {
-            "$ref": "#/components/schemas/Architecture"
-          },
-          "type": "array"
-        },
         "code": {
           "$ref": "#/components/schemas/WorkerCode"
         },

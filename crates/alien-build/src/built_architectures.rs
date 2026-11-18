@@ -32,9 +32,7 @@ pub(crate) fn architectures_of_targets(targets: &[BinaryTarget]) -> Vec<Architec
 
 /// Forget any recorded architectures: only a build may say what it built.
 pub(crate) fn clear(stack: &mut Stack) {
-    for (_, entry) in stack.resources_mut() {
-        set_on(&mut entry.config, Vec::new());
-    }
+    stack.built_architectures.clear();
 }
 
 /// The Containers, Daemons and Workers built from source: only their images are known
@@ -67,34 +65,21 @@ pub(crate) fn stamp(stack: &mut Stack, resource_ids: &[String], architectures: &
 
 /// What one resource of a built stack records. Empty for other resources.
 pub(crate) fn recorded(stack: &Stack, resource_id: &str) -> Vec<Architecture> {
-    let Some((_, entry)) = stack.resources().find(|(id, _)| *id == resource_id) else {
-        return Vec::new();
-    };
-    if let Some(container) = entry.config.downcast_ref::<Container>() {
-        container.built_architectures.clone()
-    } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
-        daemon.built_architectures.clone()
-    } else if let Some(worker) = entry.config.downcast_ref::<Worker>() {
-        worker.built_architectures.clone()
-    } else {
-        Vec::new()
-    }
+    stack
+        .built_architectures
+        .get(resource_id)
+        .cloned()
+        .unwrap_or_default()
 }
 
-/// Replace what one resource records. No-op for other resources.
+/// Replace what one resource records. Nothing is recorded for an empty list.
 pub(crate) fn set(stack: &mut Stack, resource_id: &str, architectures: Vec<Architecture>) {
-    if let Some((_, entry)) = stack.resources_mut().find(|(id, _)| *id == resource_id) {
-        set_on(&mut entry.config, architectures);
-    }
-}
-
-fn set_on(config: &mut alien_core::Resource, architectures: Vec<Architecture>) {
-    if let Some(container) = config.downcast_mut::<Container>() {
-        container.built_architectures = architectures;
-    } else if let Some(daemon) = config.downcast_mut::<Daemon>() {
-        daemon.built_architectures = architectures;
-    } else if let Some(worker) = config.downcast_mut::<Worker>() {
-        worker.built_architectures = architectures;
+    if architectures.is_empty() {
+        stack.built_architectures.remove(resource_id);
+    } else {
+        stack
+            .built_architectures
+            .insert(resource_id.to_string(), architectures);
     }
 }
 
@@ -151,6 +136,29 @@ mod tests {
         assert!(built_from_source(&stack()).is_empty());
     }
 
+    fn three_workloads() -> Stack {
+        use alien_core::{DaemonCode, WorkerCode};
+        let daemon = Daemon::new("agent".to_string())
+            .code(DaemonCode::Image {
+                image: "example.test/agent:1".to_string(),
+            })
+            .build();
+        let worker = Worker::new("fn".to_string())
+            .code(WorkerCode::Image {
+                image: "example.test/fn:1".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let container = match stack().resources().next().unwrap().1.config.clone() {
+            config => config.downcast_ref::<Container>().unwrap().clone(),
+        };
+        Stack::new("test".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .add(daemon, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
+            .build()
+    }
+
     #[test]
     fn the_field_is_absent_from_json_until_recorded() {
         let mut stack = stack();
@@ -159,8 +167,62 @@ mod tests {
         stamp(&mut stack, &["api".to_string()], &[Architecture::X86_64]);
         let after = serde_json::to_string(&stack).unwrap();
         assert!(
-            after.contains("\"builtArchitectures\":[\"x86_64\"]"),
+            after.contains("\"builtArchitectures\":{\"api\":[\"x86_64\"]}"),
             "{after}"
         );
+    }
+
+    /// Older managers and Operators read each Container, Daemon and Worker strictly and
+    /// refuse a field they do not know, so the record must stay out of the resources.
+    #[test]
+    fn the_record_is_never_inside_a_resource() {
+        let mut stack = three_workloads();
+        let ids: Vec<String> = stack.resources().map(|(id, _)| id.clone()).collect();
+        stamp(&mut stack, &ids, &[Architecture::X86_64, Architecture::Arm64]);
+        let json = serde_json::to_value(&stack).unwrap();
+        for (id, entry) in json["resources"].as_object().unwrap() {
+            assert!(
+                entry["config"].get("builtArchitectures").is_none(),
+                "{id} carries the field inside its resource: {entry}"
+            );
+        }
+        assert_eq!(
+            json["builtArchitectures"],
+            serde_json::json!({
+                "agent": ["x86_64", "arm64"],
+                "api": ["x86_64", "arm64"],
+                "fn": ["x86_64", "arm64"],
+            })
+        );
+        if let Ok(path) = std::env::var("WRITE_BUILT_ARCHITECTURES_FIXTURE") {
+            std::fs::write(path, serde_json::to_string_pretty(&json).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_stack_written_before_the_record_existed_reads_as_not_recorded() {
+        let json = serde_json::to_value(three_workloads()).unwrap();
+        assert!(json.get("builtArchitectures").is_none());
+        let stack: Stack = serde_json::from_value(json).unwrap();
+        assert!(stack.built_architectures.is_empty());
+        assert!(recorded(&stack, "api").is_empty());
+    }
+
+    /// A reader of the older shape (it knows no `builtArchitectures`) parses a new stack.
+    #[test]
+    fn a_reader_that_does_not_know_the_record_still_reads_the_stack() {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        #[allow(dead_code)]
+        struct OlderStack {
+            id: String,
+            resources: serde_json::Map<String, serde_json::Value>,
+        }
+        let mut stack = three_workloads();
+        let ids: Vec<String> = stack.resources().map(|(id, _)| id.clone()).collect();
+        stamp(&mut stack, &ids, &[Architecture::X86_64]);
+        let json = serde_json::to_string(&stack).unwrap();
+        let older: OlderStack = serde_json::from_str(&json).unwrap();
+        assert_eq!(older.resources.len(), 3);
     }
 }

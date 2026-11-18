@@ -4,7 +4,6 @@
 */
 
 import * as z from "zod";
-import { ArchitectureSchema } from "./architecture-schema.js";
 import { ContainerSecuritySchema } from "./container-security-schema.js";
 import { ReadinessProbeSchema } from "./readiness-probe-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
@@ -16,10 +15,7 @@ import { WorkerTriggerSchema } from "./worker-trigger-schema.js";
  * @description Represents a serverless worker that executes code in response to triggers or direct invocations.\nWorkers are the primary compute resource in serverless applications, designed to be stateless and ephemeral.
  */
 export const WorkerSchema = z.object({
-    get "builtArchitectures"(){
-                return z.array(ArchitectureSchema.describe("CPU architecture.")).describe("Set by `alien build` for a Kubernetes stack: the CPU architectures of the\nimage built for this workload (more than one means a multi-architecture\nimage). Pods of a single-architecture image are placed on matching nodes.\nAbsent means the build did not record it (an older release), so no\narchitecture is selected. Build output replaces any value written in the\nstack definition.").optional()
-              },
-get "code"(){
+    get "code"(){
                 return WorkerCodeSchema.describe("Specifies the source of the worker's executable code.\nThis can be a pre-built container image or source code that the system will build.")
               },
 "commandsEnabled": z.optional(z.boolean().default(false).describe("Whether the worker can receive remote commands via the Commands protocol.\nWhen enabled, the platform pushes commands into the Worker runtime,\nwhich executes registered handlers.")),
