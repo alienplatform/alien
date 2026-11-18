@@ -32,6 +32,8 @@ const LABEL_SESSION: &str = "dev.alien.sandbox.session";
 /// Label carrying the `uid:gid` every command in the session runs as. Set by the manager when it
 /// creates the container and fixed from then on: nothing inside the container can change it.
 const LABEL_EXEC_USER: &str = "dev.alien.sandbox.exec-user";
+/// The storage key a session holds, when its sandbox declares persistent storage.
+const LABEL_STORAGE_KEY: &str = "dev.alien.sandbox.storage-key";
 /// Prefix of the environment names the manager sets in a session. A session's own environment
 /// may not use it, so code in the session never reads a value the declaration chose.
 const RESERVED_ENV_PREFIX: &str = "ALIEN_SANDBOX_";
@@ -71,6 +73,10 @@ pub struct SandboxSessionConfig {
     pub preview_ports: Vec<u16>,
     /// Environment placed in the session
     pub env: HashMap<String, String>,
+    /// Directory in the session that holds a key's persistent storage, when declared. A
+    /// session created with a storage key gets `<state>/sandbox-storage/<sandbox>/<key>` mounted
+    /// there.
+    pub persistent_storage: Option<String>,
 }
 
 /// A session the manager is tracking.
@@ -83,6 +89,8 @@ pub struct SandboxSessionHandle {
     /// Whether the container is running. One that stopped does not start again: there is no
     /// restart policy, and a session killed from the host stays stopped.
     pub running: bool,
+    /// The persistent storage key the session holds.
+    pub storage_key: Option<String>,
 }
 
 /// One frame of a running command's output.
@@ -144,7 +152,67 @@ impl LocalSandboxManager {
         session_id: &str,
         config: &SandboxSessionConfig,
     ) -> Result<SandboxSessionHandle> {
+        self.create_session_with_storage(sandbox, session_id, config, None)
+            .await
+    }
+
+    /// Where a sandbox's persistent storage keys live on the host.
+    pub fn storage_dir(&self, sandbox: &str) -> PathBuf {
+        self.state_dir.join("sandbox-storage").join(sandbox)
+    }
+
+    /// Like [`Self::create_session`], with the key whose persistent storage the session holds.
+    /// The key's host directory is mounted at the declared path. One running session holds a
+    /// key at a time: a bind mount is live, so a second one would be a second writer.
+    pub async fn create_session_with_storage(
+        &self,
+        sandbox: &str,
+        session_id: &str,
+        config: &SandboxSessionConfig,
+        storage_key: Option<&str>,
+    ) -> Result<SandboxSessionHandle> {
         let name = Self::container_name(sandbox, session_id);
+        let refuse = |operation: String| {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: session_id.to_string(),
+                operation,
+            })
+        };
+        let storage_bind = match (&config.persistent_storage, storage_key) {
+            (None, None) => None,
+            (None, Some(_)) => {
+                return Err(refuse(
+                    "storageKey given, but the sandbox declares no persistent storage".to_string(),
+                ))
+            }
+            (Some(_), None) => {
+                return Err(refuse(
+                    "the sandbox declares persistent storage, so storageKey is required"
+                        .to_string(),
+                ))
+            }
+            (Some(path), Some(key)) => {
+                alien_sandbox_storage::validate_key(key)
+                    .map_err(|error| refuse(format!("storageKey: {error}")))?;
+                if let Some(holder) = self
+                    .storage_holder(sandbox, key)
+                    .await?
+                    .filter(|holder| holder != session_id)
+                {
+                    return Err(refuse(format!(
+                        "storage key '{key}' is held by running session '{holder}'; terminate it first"
+                    )));
+                }
+                let host = self.storage_dir(sandbox).join(key);
+                std::fs::create_dir_all(&host).into_alien_error().context(
+                    ErrorData::SandboxSessionFailed {
+                        session_id: session_id.to_string(),
+                        operation: format!("create the storage directory {}", host.display()),
+                    },
+                )?;
+                Some((format!("{}:{path}:rw", host.display()), key.to_string()))
+            }
+        };
 
         if let Some(reserved) = config
             .env
@@ -172,7 +240,20 @@ impl LocalSandboxManager {
         }
 
         self.ensure_image(&config.image).await?;
-        let image = crate::sandbox_identity::inspect(&self.docker, &config.image, sandbox).await?;
+        let mut image =
+            crate::sandbox_identity::inspect(&self.docker, &config.image, sandbox).await?;
+        // A key's host directory must be writable by the session's user. A root manager gives
+        // it to the image's user; an unprivileged one cannot, so the session runs as the host
+        // user instead (never root), as Local containers with shared bind mounts do.
+        #[cfg(target_os = "linux")]
+        if storage_bind.is_some() {
+            // SAFETY: side-effect-free process identity queries.
+            let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+            if uid != 0 && gid != 0 {
+                image.identity.uid = uid;
+                image.identity.gid = gid;
+            }
+        }
 
         let network_mode = match config.egress {
             // "none" gives no interface at all, which is a stronger and simpler guarantee than
@@ -196,7 +277,7 @@ impl LocalSandboxManager {
             format!("ALIEN_SANDBOX_ROOT={SESSION_ROOT}"),
         ]);
 
-        let labels = HashMap::from([
+        let mut labels = HashMap::from([
             (LABEL_SANDBOX.to_string(), sandbox.to_string()),
             (LABEL_SESSION.to_string(), session_id.to_string()),
             (
@@ -204,6 +285,16 @@ impl LocalSandboxManager {
                 format!("{}:{}", image.identity.uid, image.identity.gid),
             ),
         ]);
+        if let Some((_, key)) = &storage_bind {
+            labels.insert(LABEL_STORAGE_KEY.to_string(), key.clone());
+            // The directory belongs to the session's user, as the cloud restore writes it.
+            let host = self.storage_dir(sandbox).join(key);
+            if let Err(error) =
+                std::os::unix::fs::chown(&host, Some(image.identity.uid), Some(image.identity.gid))
+            {
+                tracing::debug!(%error, "storage directory left with the host user's owner");
+            }
+        }
 
         // Bound to 127.0.0.1, never 0.0.0.0: a preview is for the developer's own machine, and
         // publishing on all interfaces would expose untrusted code to the local network.
@@ -238,6 +329,7 @@ impl LocalSandboxManager {
             // manager exists.
             extra_hosts: None,
             readonly_rootfs: Some(true),
+            binds: storage_bind.as_ref().map(|(bind, _)| vec![bind.clone()]),
             tmpfs: Some(HashMap::from([(
                 SESSION_ROOT.to_string(),
                 format!(
@@ -319,6 +411,7 @@ impl LocalSandboxManager {
             session_id: session_id.to_string(),
             container_id: created.id,
             running: true,
+            storage_key: storage_bind.map(|(_, key)| key),
         })
     }
 
@@ -790,14 +883,46 @@ impl LocalSandboxManager {
             .into_iter()
             .filter_map(|container| {
                 let session_id = container.labels.as_ref()?.get(LABEL_SESSION)?.clone();
+                let storage_key = container
+                    .labels
+                    .as_ref()
+                    .and_then(|labels| labels.get(LABEL_STORAGE_KEY).cloned());
                 Some(SandboxSessionHandle {
                     session_id,
+                    storage_key,
                     container_id: container.id?,
                     running: container.state
                         == Some(bollard::models::ContainerSummaryStateEnum::RUNNING),
                 })
             })
             .collect())
+    }
+
+    /// The running session holding `key`, if any.
+    pub async fn storage_holder(&self, sandbox: &str, key: &str) -> Result<Option<String>> {
+        let filters = HashMap::from([(
+            "label".to_string(),
+            vec![
+                format!("{LABEL_SANDBOX}={sandbox}"),
+                format!("{LABEL_STORAGE_KEY}={key}"),
+            ],
+        )]);
+        let containers = self
+            .docker
+            .list_containers(Some(ListContainersOptions {
+                all: false,
+                filters: Some(filters),
+                ..Default::default()
+            }))
+            .await
+            .into_alien_error()
+            .context(ErrorData::SandboxSessionFailed {
+                session_id: sandbox.to_string(),
+                operation: "find the session holding a storage key".to_string(),
+            })?;
+        Ok(containers
+            .into_iter()
+            .find_map(|container| container.labels?.get(LABEL_SESSION).cloned()))
     }
 
     /// Removes a session and its private network. Idempotent: an absent session is success.
@@ -1052,6 +1177,7 @@ mod tests {
                         egress: SandboxEgressMode::Deny,
                         preview_ports: Vec::new(),
                         env: HashMap::from([(name.to_string(), "0".to_string())]),
+                        persistent_storage: None,
                     },
                 )
                 .await
