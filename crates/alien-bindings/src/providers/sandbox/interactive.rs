@@ -494,7 +494,6 @@ mod tests {
             jobs: Default::default(),
             interactive: Default::default(),
             agent_binary: std::path::PathBuf::from("/bin/false"),
-            storage_spool: Default::default(),
             #[cfg(target_os = "linux")]
             storage: None,
         });

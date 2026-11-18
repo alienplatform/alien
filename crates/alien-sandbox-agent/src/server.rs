@@ -103,9 +103,6 @@ pub struct AgentState {
     pub preview: crate::preview_capability::PreviewAuthority,
     /// The agent's own executable, which the validate hook runs as the exec identity
     pub agent_binary: PathBuf,
-    /// Where persistent storage commits wait for the binding to pull them; set once the key's
-    /// tree is restored, and only on a platform whose binding pulls.
-    pub storage_spool: std::sync::OnceLock<Arc<alien_sandbox_storage::Spool>>,
     /// Persistent storage, when the sandbox declares it.
     #[cfg(target_os = "linux")]
     pub storage: Option<Arc<crate::storage::attach::PersistentStorage>>,
@@ -1118,6 +1115,24 @@ async fn agent_platform(
         )
         .await?
         .into_response()),
+        // The attach request refuses unknown fields, so it travels under `attach`.
+        "storageAttach" => {
+            let envelope: StorageAttachEnvelope = reparse(&body)?;
+            Ok(storage_attach(
+                State(state),
+                ConnectInfo(peer),
+                headers,
+                Json(envelope.attach),
+            )
+            .await?
+            .into_response())
+        }
+        "storageStatus" => Ok(storage_status(State(state), ConnectInfo(peer), headers)
+            .await?
+            .into_response()),
+        "storageSync" => Ok(storage_sync(State(state), ConnectInfo(peer), headers)
+            .await?
+            .into_response()),
         "health" => Ok(health(State(state), Query(HealthQuery { version: None }))
             .await?
             .into_response()),
@@ -1132,13 +1147,45 @@ async fn agent_platform(
 /// binding asks for no more, and the agent caps a larger ask so a reply stays bounded.
 pub const STORAGE_PAGE_BYTES: u64 = 900_000;
 
-/// The spool, or a refusal for a sandbox whose storage the binding does not pull.
+/// `storageAttach` over the envelope: the attach request as `PUT /v1/storage` takes it.
+#[derive(Debug, Deserialize)]
+struct StorageAttachEnvelope {
+    attach: serde_json::Value,
+}
+
+/// The spool a seed writes to, created on first use; only a sandbox that declares persistent
+/// storage has one.
+#[cfg(target_os = "linux")]
+async fn seed_spool(
+    state: &AgentState,
+) -> std::result::Result<Arc<alien_sandbox_storage::Spool>, ApiError> {
+    Ok(declared_storage(state)?.spool().await?)
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn seed_spool(
+    _: &AgentState,
+) -> std::result::Result<Arc<alien_sandbox_storage::Spool>, ApiError> {
+    Err(no_storage_spool())
+}
+
+/// The spool the binding drains, or a refusal for a sandbox whose storage it does not pull.
+#[cfg(target_os = "linux")]
 fn spool(state: &AgentState) -> std::result::Result<Arc<alien_sandbox_storage::Spool>, ApiError> {
-    state.storage_spool.get().cloned().ok_or_else(|| {
-        ApiError::from(AlienError::new(ErrorData::RequestInvalid {
-            reason: "this sandbox has no persistent storage pulled by its binding".to_string(),
-        }))
-    })
+    declared_storage(state)?
+        .existing_spool()
+        .ok_or_else(no_storage_spool)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn spool(_: &AgentState) -> std::result::Result<Arc<alien_sandbox_storage::Spool>, ApiError> {
+    Err(no_storage_spool())
+}
+
+fn no_storage_spool() -> ApiError {
+    ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+        reason: "this sandbox has no persistent storage pulled by its binding".to_string(),
+    }))
 }
 
 fn storage_failed(
@@ -1207,7 +1254,7 @@ async fn storage_pending(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> std::result::Result<Json<StoragePendingResponse>, ApiError> {
-    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
     let spool = spool(&state)?;
     Ok(Json(StoragePendingResponse {
         pending: spool.pending(),
@@ -1220,7 +1267,7 @@ async fn storage_read(
     headers: HeaderMap,
     Json(body): Json<StorageReadBody>,
 ) -> std::result::Result<Json<StorageReadResponse>, ApiError> {
-    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
     let spool = spool(&state)?;
     let length = body.length.min(STORAGE_PAGE_BYTES);
     let bytes = tokio::task::spawn_blocking(move || spool.read(&body.object, body.offset, length))
@@ -1243,7 +1290,7 @@ async fn storage_ack(
     headers: HeaderMap,
     Json(body): Json<StorageAckBody>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
     spool(&state)?
         .ack(body.generation, body.outcome)
         .map_err(|e| storage_failed("storage ack", e))?;
@@ -1256,8 +1303,8 @@ async fn storage_seed(
     headers: HeaderMap,
     Json(body): Json<StorageSeedBody>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
-    let spool = spool(&state)?;
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    let spool = seed_spool(&state).await?;
     let bytes = BASE64.decode(&body.contents_base64).map_err(|error| {
         AlienError::new(ErrorData::RequestInvalid {
             reason: format!("contents are not valid base64: {error}"),

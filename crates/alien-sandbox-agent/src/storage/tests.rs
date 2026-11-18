@@ -572,3 +572,131 @@ async fn attach_restores_then_sync_publishes() {
         b"after restore"
     );
 }
+
+/// Without a grant the binding pulls: the agent restores what the binding seeded into its spool,
+/// commits into the spool, and the binding's puller publishes those commits; a second sandbox
+/// restores them the same way, and the first, superseded, stops.
+#[tokio::test(flavor = "multi_thread")]
+async fn attach_without_a_grant_restores_from_and_commits_to_the_spool() {
+    use super::attach::{AttachRequest, PersistentStorage, ReplicationState, StorageConfig};
+    use alien_sandbox_storage::{read_file, read_head, seed, PullOutcome, Puller};
+
+    let store = MemoryStore::new();
+    // SAFETY: plain getters.
+    let me = unsafe {
+        crate::exec::ExecIdentity {
+            uid: libc::getuid(),
+            gid: libc::getgid(),
+        }
+    };
+    let sandbox = |dir: &Path| {
+        std::sync::Arc::new(PersistentStorage::with_staging(
+            StorageConfig {
+                path: dir.join("workspace").display().to_string(),
+                exclude: vec![],
+                max_size_bytes: None,
+            },
+            dir.join("staging"),
+        ))
+    };
+    let attach = |writer: &str, head_version, commit| -> AttachRequest {
+        serde_json::from_value(serde_json::json!({
+            "key": "engine-42",
+            "writer": writer,
+            "headVersion": head_version,
+            "commit": commit,
+        }))
+        .expect("an attach without a grant parses")
+    };
+
+    // The first sandbox: an empty key, so nothing is seeded.
+    let first_dir = tempfile::tempdir().expect("tempdir");
+    let first = sandbox(first_dir.path());
+    let claim = takeover(&store, "sandbox-1").await.expect("claim");
+    let image = crate::image_command::ImageProcess::default().awaiting_restore();
+    first
+        .attach(
+            attach("sandbox-1", claim.head_version.clone(), None),
+            &image,
+            me,
+        )
+        .await
+        .expect("attach");
+    assert!(!image.restore_pending().unwrap());
+    let workspace = first_dir.path().join("workspace");
+    write(&workspace, "repo/README", b"hello");
+    let synced = first.sync().await.expect("sync");
+    assert_eq!(synced.head, Some(1));
+    assert_eq!(
+        read_head(&store).await.unwrap().unwrap().0.commit,
+        None,
+        "a commit stays in the spool until the binding pulls it"
+    );
+    let spool = first.existing_spool().expect("the attach made a spool");
+    let mut puller = Puller::new("sandbox-1", claim.head_version, 900_000);
+    let outcome = puller
+        .pull(spool.as_ref(), &store, "engine-42")
+        .await
+        .expect("pull");
+    assert!(
+        matches!(outcome, PullOutcome::Published { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        read_file(&store, "engine-42", "repo/README").await.unwrap(),
+        b"hello"
+    );
+
+    // The second sandbox claims the key; the binding seeds its spool, then attaches.
+    let second_dir = tempfile::tempdir().expect("tempdir");
+    let second = sandbox(second_dir.path());
+    let claim = takeover(&store, "sandbox-2").await.expect("claim");
+    let commit = read_head(&store)
+        .await
+        .unwrap()
+        .unwrap()
+        .0
+        .commit
+        .expect("a commit");
+    let second_spool = second.spool().await.expect("spool");
+    seed(second_spool.as_ref(), &store, &commit, 900_000)
+        .await
+        .expect("seed");
+    let image = crate::image_command::ImageProcess::default().awaiting_restore();
+    let status = second
+        .attach(
+            attach("sandbox-2", claim.head_version.clone(), Some(commit)),
+            &image,
+            me,
+        )
+        .await
+        .expect("attach");
+    assert_eq!(status.state, ReplicationState::Replicating);
+    assert_eq!(
+        std::fs::read(second_dir.path().join("workspace/repo/README")).unwrap(),
+        b"hello"
+    );
+    let renew: super::attach::RenewRequest = serde_json::from_value(serde_json::json!({
+        "grant": s3_grant("http://unused", "engine-42", &[]),
+    }))
+    .unwrap();
+    second
+        .renew(renew)
+        .await
+        .expect_err("a pulled key holds no grant to renew");
+
+    // The first sandbox writes on; its puller finds the key taken and its replication stops.
+    write(&workspace, "repo/late", b"late");
+    first.sync().await.expect("committed to the spool");
+    puller
+        .pull(spool.as_ref(), &store, "engine-42")
+        .await
+        .expect_err("superseded at HEAD");
+    write(&workspace, "repo/later", b"later");
+    first
+        .sync()
+        .await
+        .expect_err("the spool refuses a superseded writer");
+    assert_eq!(first.status().state, ReplicationState::Stopped);
+    assert!(read_file(&store, "engine-42", "repo/late").await.is_err());
+}

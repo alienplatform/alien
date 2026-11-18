@@ -62,12 +62,42 @@ impl Agent {
     }
 
     async fn start_with_authorization(authorization: Option<AgentAuthorization>) -> Self {
+        Self::start_with(authorization, false).await
+    }
+
+    /// An agent whose sandbox declares persistent storage at `<root>/workspace`, waiting for the
+    /// binding to attach it.
+    #[cfg(target_os = "linux")]
+    async fn start_with_storage() -> Self {
+        Self::start_with(None, true).await
+    }
+
+    async fn start_with(authorization: Option<AgentAuthorization>, with_storage: bool) -> Self {
         let dir = TempDir::new().expect("temp dir");
         let root = dir.path().canonicalize().expect("canonical root");
         let keys = KeyPair::from_seed(Seed::new([3u8; 32]));
+        #[cfg(target_os = "linux")]
+        let storage = with_storage.then(|| {
+            std::fs::create_dir_all(root.join("workspace")).expect("workspace");
+            Arc::new(
+                alien_sandbox_agent::storage::attach::PersistentStorage::with_staging(
+                    alien_sandbox_agent::storage::attach::StorageConfig {
+                        path: root.join("workspace").display().to_string(),
+                        exclude: vec![],
+                        max_size_bytes: None,
+                    },
+                    dir.path().join("staging"),
+                ),
+            )
+        });
+        let image_process = if with_storage {
+            alien_sandbox_agent::image_command::ImageProcess::default().awaiting_restore()
+        } else {
+            alien_sandbox_agent::image_command::ImageProcess::not_configured()
+        };
 
         let state = Arc::new(AgentState {
-            image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
+            image_process,
             #[cfg(target_os = "linux")]
             gateway_egress: None,
             session_root: root.clone(),
@@ -84,9 +114,8 @@ impl Agent {
             interactive: Default::default(),
             preview: Default::default(),
             agent_binary: agent_binary(),
-            storage_spool: Default::default(),
             #[cfg(target_os = "linux")]
-            storage: None,
+            storage,
         });
 
         let served = Arc::clone(&state);
@@ -474,7 +503,6 @@ async fn transport_authorization_needs_no_capability() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
-        storage_spool: Default::default(),
         #[cfg(target_os = "linux")]
         storage: None,
     });
@@ -527,7 +555,6 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
-        storage_spool: Default::default(),
         #[cfg(target_os = "linux")]
         storage: None,
     });
@@ -626,7 +653,6 @@ async fn the_validate_hook_passes_and_leaves_the_session_root_empty() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
-        storage_spool: Default::default(),
         #[cfg(target_os = "linux")]
         storage: None,
     })
@@ -659,7 +685,6 @@ async fn the_validate_hook_refuses_a_caller_running_as_the_exec_identity() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
-        storage_spool: Default::default(),
         #[cfg(target_os = "linux")]
         storage: None,
     }))
@@ -712,7 +737,6 @@ async fn the_validate_hook_refuses_a_caller_without_a_capability() {
         // A check that ran would answer 500 on this, so a 401 is the refusal and not a failed check.
         preview: Default::default(),
         agent_binary: root.join("no-such-agent"),
-        storage_spool: Default::default(),
         #[cfg(target_os = "linux")]
         storage: None,
     }))
@@ -762,7 +786,6 @@ async fn the_validate_hook_names_the_file_check_when_the_session_root_is_not_wri
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
-        storage_spool: Default::default(),
         #[cfg(target_os = "linux")]
         storage: None,
     })
@@ -807,7 +830,6 @@ async fn the_validate_hook_names_the_identity_check_when_the_probe_cannot_run_as
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
-        storage_spool: Default::default(),
         #[cfg(target_os = "linux")]
         storage: None,
     }))
@@ -1055,7 +1077,6 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
-        storage_spool: Default::default(),
         #[cfg(target_os = "linux")]
         storage: None,
     });
@@ -1313,7 +1334,6 @@ async fn root_image_cannot_call_control_routes() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
-        storage_spool: Default::default(),
         #[cfg(target_os = "linux")]
         storage: None,
     });
@@ -2036,7 +2056,6 @@ async fn transport_agent_listening_on(own_ports: &[u16]) -> (String, TempDir) {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
-        storage_spool: Default::default(),
         #[cfg(target_os = "linux")]
         storage: None,
     });
@@ -2557,7 +2576,6 @@ async fn native_file_agent() -> (String, String, TempDir) {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
-        storage_spool: Default::default(),
         #[cfg(target_os = "linux")]
         storage: None,
     });
@@ -3038,22 +3056,24 @@ impl alien_sandbox_storage::PullChannel for EnvelopeChannel<'_> {
 struct OneFile(Vec<u8>);
 
 impl alien_sandbox_storage::FileSource for OneFile {
-    fn open(&mut self, _: &str) -> alien_sandbox_storage::Result<Box<dyn std::io::Read + Send + '_>> {
+    fn open(
+        &mut self,
+        _: &str,
+    ) -> alien_sandbox_storage::Result<Box<dyn std::io::Read + Send + '_>> {
         Ok(Box::new(&self.0[..]))
     }
 }
 
-/// A commit the agent spooled reaches the store through the envelope ops and restores into a new
-/// sandbox's spool the same way: the wire contract the GCP binding drives over `:execute`.
-#[tokio::test]
+/// The wire contract the GCP binding drives over `:execute`: attach without a grant, a commit
+/// the agent spools reaches the store through the envelope's pull ops, and a new sandbox is
+/// seeded through the envelope before its attach opens the image gate, then restores.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
 async fn storage_pulls_and_seeds_through_the_envelope() {
-    use alien_sandbox_storage::{
-        read_head, restore, seed, takeover, Committer, MemoryStore, PullOutcome, Puller, Spool,
-        TreeEntry, TreeEntryKind,
-    };
+    use alien_sandbox_storage::{read_head, seed, takeover, MemoryStore, PullOutcome, Puller};
 
     let store = MemoryStore::new();
-    let agent = Agent::start().await;
+    let agent = Agent::start_with_storage().await;
     let channel = EnvelopeChannel {
         agent: &agent,
         client: reqwest::Client::new(),
@@ -3064,34 +3084,32 @@ async fn storage_pulls_and_seeds_through_the_envelope() {
         .unwrap_err();
     assert!(
         refused.to_string().contains("400"),
-        "no spool, no storage ops: {refused}"
+        "nothing to pull before the attach: {refused}"
     );
 
     let start = takeover(&store, "sandbox-1").await.unwrap();
-    let spool = Arc::new(Spool::new(agent.root.join("spool"), start.head_version.clone()).unwrap());
-    agent.state.storage_spool.set(Arc::clone(&spool)).unwrap();
+    let status = channel
+        .call(json!({"v": 1, "op": "storageAttach", "attach": {
+            "key": "k", "writer": "sandbox-1", "headVersion": start.head_version}}))
+        .await
+        .expect("attach without a grant");
+    assert_eq!(status["state"], "replicating");
 
     // Larger than one page, so reads are paged by the agent's cap.
     let content: Vec<u8> = (0..2_500_000u32).map(|i| (i % 251) as u8).collect();
-    let mut committer = Committer::new("sandbox-1", start.head_version.clone(), None, None);
-    let walk = vec![TreeEntry {
-        path: "data.bin".to_string(),
-        kind: TreeEntryKind::File {
-            size: content.len() as u64,
-            change_token: 1,
-        },
-        mode: 0o644,
-        uid: 1000,
-        gid: 1000,
-        mtime_ns: 1,
-    }];
-    committer
-        .commit(spool.as_ref(), "k", walk, &mut OneFile(content.clone()))
+    std::fs::write(agent.root.join("workspace/data.bin"), &content).unwrap();
+    let synced = channel
+        .call(json!({"v": 1, "op": "storageSync"}))
         .await
-        .unwrap();
+        .expect("sync");
+    // The replicator's own tick may commit first; either way the write is committed.
+    assert!(synced["head"].as_u64() >= Some(1), "{synced}");
 
     // The binding asks for more than the cap; the agent answers at most the cap per read.
-    let pending = spool.pending().unwrap();
+    let pending = alien_sandbox_storage::PullChannel::pending(&channel)
+        .await
+        .unwrap()
+        .expect("the commit is pending");
     let pack = pending
         .objects
         .iter()
@@ -3108,69 +3126,32 @@ async fn storage_pulls_and_seeds_through_the_envelope() {
         matches!(outcome, PullOutcome::Published { .. }),
         "{outcome:?}"
     );
-    assert_eq!(spool.pending(), None);
+    assert!(alien_sandbox_storage::PullChannel::pending(&channel)
+        .await
+        .unwrap()
+        .is_none());
 
-    // A new sandbox's spool, seeded through the same envelope.
-    let second = Agent::start().await;
+    // A new sandbox: seeded while its image still waits for the restore, then attached.
+    let second = Agent::start_with_storage().await;
     let channel = EnvelopeChannel {
         agent: &second,
         client: reqwest::Client::new(),
     };
     let next = takeover(&store, "sandbox-2").await.unwrap();
-    let spool = Arc::new(Spool::new(second.root.join("spool"), next.head_version).unwrap());
-    second.state.storage_spool.set(Arc::clone(&spool)).unwrap();
     let (head, _) = read_head(&store).await.unwrap().unwrap();
-    let manifest = seed(&channel, &store, head.commit.as_ref().unwrap(), 900_000)
+    let commit = head.commit.expect("a commit");
+    seed(&channel, &store, &commit, 900_000)
         .await
-        .unwrap();
-
-    struct Collect(Vec<u8>);
-    impl alien_sandbox_storage::TreeSink for Collect {
-        fn dir(&mut self, _: &alien_sandbox_storage::Entry) -> alien_sandbox_storage::Result<()> {
-            Ok(())
-        }
-        fn begin_file(
-            &mut self,
-            _: &alien_sandbox_storage::Entry,
-        ) -> alien_sandbox_storage::Result<()> {
-            Ok(())
-        }
-        fn append(&mut self, bytes: &[u8]) -> alien_sandbox_storage::Result<()> {
-            self.0.extend_from_slice(bytes);
-            Ok(())
-        }
-        fn end_file(
-            &mut self,
-            _: &alien_sandbox_storage::Entry,
-        ) -> alien_sandbox_storage::Result<()> {
-            Ok(())
-        }
-        fn symlink(
-            &mut self,
-            _: &alien_sandbox_storage::Entry,
-            _: &str,
-        ) -> alien_sandbox_storage::Result<()> {
-            Ok(())
-        }
-        fn hard_link(
-            &mut self,
-            _: &alien_sandbox_storage::Entry,
-            _: &str,
-        ) -> alien_sandbox_storage::Result<()> {
-            Ok(())
-        }
-        fn finish(
-            &mut self,
-            _: &[&alien_sandbox_storage::Entry],
-        ) -> alien_sandbox_storage::Result<()> {
-            Ok(())
-        }
-    }
-    let mut restored = Collect(Vec::new());
-    restore(spool.as_ref(), &manifest, &mut restored)
+        .expect("seeding needs no restored tree");
+    let status = channel
+        .call(json!({"v": 1, "op": "storageAttach", "attach": {
+            "key": "k", "writer": "sandbox-2", "headVersion": next.head_version,
+            "commit": commit}}))
         .await
-        .unwrap();
-    assert!(restored.0 == content, "the restored file matches");
+        .expect("attach");
+    assert_eq!(status["restoredFrom"], json!(commit));
+    let restored = std::fs::read(second.root.join("workspace/data.bin")).unwrap();
+    assert!(restored == content, "the restored file matches");
 }
 
 #[tokio::test]
@@ -3212,7 +3193,6 @@ async fn nothing_runs_before_persistent_storage_is_restored() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
-        storage_spool: Default::default(),
         storage: Some(Arc::new(
             alien_sandbox_agent::storage::attach::PersistentStorage::new(config),
         )),
@@ -3281,7 +3261,6 @@ async fn storage_routes_answer_not_found_without_the_declaration() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
-        storage_spool: Default::default(),
         storage: None,
     }))
     .await;

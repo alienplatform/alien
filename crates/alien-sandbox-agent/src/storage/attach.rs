@@ -1,6 +1,10 @@
 //! Persistent storage as the agent serves it: configured at boot, attached once by the binding
 //! (claim already written, grant minted), then replicated until the sandbox ends or another
 //! sandbox claims the key.
+//!
+//! Where the sandbox cannot reach object storage (GCP Agent Platform), the binding attaches
+//! without a grant: the agent restores from and commits into its [`Spool`], which the binding
+//! seeded beforehand and drains afterwards over the agent's inbound channel.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -8,7 +12,7 @@ use std::time::Duration;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_sandbox_storage::{
     read_manifest, restore, CommitOutcome, Committer, ErrorData as StorageError, ObjectName,
-    ObjectVersion, StorageGrant,
+    ObjectStore, ObjectVersion, Spool, StorageGrant,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -72,13 +76,15 @@ pub struct AttachRequest {
     pub key: String,
     /// This sandbox's writer id, as written into HEAD by the claim.
     pub writer: String,
-    /// HEAD's version after the claim.
+    /// HEAD's version after the claim. Unused without a grant: the binding's puller holds it.
     pub head_version: ObjectVersion,
     /// The commit HEAD named at the claim, restored before the image starts.
     #[serde(default)]
     pub commit: Option<ObjectName>,
-    /// Rights to the key.
-    pub grant: StorageGrant,
+    /// Rights to the key. Without one the binding pulls: the restore reads what it seeded into
+    /// the spool and commits go to the spool.
+    #[serde(default)]
+    pub grant: Option<StorageGrant>,
 }
 
 /// A renewed grant.
@@ -121,15 +127,34 @@ pub struct StorageStatus {
     pub last_error: Option<String>,
 }
 
+/// Where commits go.
+enum Store {
+    /// The key itself, through a grant.
+    Grant(Arc<GrantStore>),
+    /// The spool the binding pulls from.
+    Spool(Arc<Spool>),
+}
+
+impl Store {
+    fn object_store(&self) -> &dyn ObjectStore {
+        match self {
+            Self::Grant(store) => store.as_ref(),
+            Self::Spool(spool) => spool.as_ref(),
+        }
+    }
+}
+
 struct Live {
     replicator: Replicator,
-    store: Arc<GrantStore>,
+    store: Store,
 }
 
 /// The agent's persistent storage.
 pub struct PersistentStorage {
     config: StorageConfig,
     staging: std::path::PathBuf,
+    spool_dir: std::path::PathBuf,
+    spool: tokio::sync::OnceCell<Arc<Spool>>,
     live: tokio::sync::Mutex<Option<Live>>,
     status: Mutex<StorageStatus>,
 }
@@ -151,11 +176,16 @@ impl PersistentStorage {
         Self::with_staging(config, STAGING_DIR.into())
     }
 
-    /// Configured, staging commits in `staging` (agent-only; tests use a temporary one).
+    /// Configured, staging commits in `staging` and spooling them for a pulling binding in
+    /// `<staging>.spool` (both agent-only; tests use a temporary one).
     pub fn with_staging(config: StorageConfig, staging: std::path::PathBuf) -> Self {
+        let mut spool_dir = staging.clone().into_os_string();
+        spool_dir.push(".spool");
         Self {
             config,
             staging,
+            spool_dir: spool_dir.into(),
+            spool: tokio::sync::OnceCell::new(),
             live: tokio::sync::Mutex::new(None),
             status: Mutex::new(StorageStatus {
                 key: None,
@@ -166,6 +196,23 @@ impl PersistentStorage {
                 last_error: None,
             }),
         }
+    }
+
+    /// The spool a pulling binding seeds and drains, created on first use.
+    pub async fn spool(&self) -> Result<Arc<Spool>> {
+        self.spool
+            .get_or_try_init(|| async {
+                Spool::new(&self.spool_dir, ObjectVersion::etag("spool-0"))
+                    .map(Arc::new)
+                    .map_err(|e| storage_failed("create the storage spool", e))
+            })
+            .await
+            .cloned()
+    }
+
+    /// The spool, if the binding has used one.
+    pub fn existing_spool(&self) -> Option<Arc<Spool>> {
+        self.spool.get().cloned()
     }
 
     /// The current status.
@@ -215,10 +262,20 @@ impl PersistentStorage {
                 self.config.path.clone(),
             ))
         };
-        let store = Arc::new(GrantStore::new(request.grant));
+        let (store, head_version) = match request.grant {
+            Some(grant) => (
+                Store::Grant(Arc::new(GrantStore::new(grant))),
+                request.head_version,
+            ),
+            None => {
+                let spool = self.spool().await?;
+                let version = spool.head_version();
+                (Store::Spool(spool), version)
+            }
+        };
         let manifest = match &request.commit {
             Some(commit) => Some(
-                read_manifest(store.as_ref(), commit)
+                read_manifest(store.object_store(), commit)
                     .await
                     .map_err(|e| storage_failed("read the key's manifest", e))?,
             ),
@@ -233,9 +290,16 @@ impl PersistentStorage {
         if let Some(manifest) = &manifest {
             // SAFETY: geteuid has no preconditions.
             let root = unsafe { libc::geteuid() } == 0;
-            restore(store.as_ref(), manifest, &mut DirSink::new(open()?, root))
-                .await
-                .map_err(|e| storage_failed("restore the key's tree", e))?;
+            restore(
+                store.object_store(),
+                manifest,
+                &mut DirSink::new(open()?, root),
+            )
+            .await
+            .map_err(|e| storage_failed("restore the key's tree", e))?;
+        }
+        if let Store::Spool(spool) = &store {
+            spool.clear_seeded();
         }
         let head = manifest.as_ref().map(|m| m.seq);
         let replicator = Replicator::new(
@@ -246,7 +310,7 @@ impl PersistentStorage {
             Freezer::guest(),
             Committer::new(
                 request.writer,
-                request.head_version,
+                head_version,
                 manifest,
                 self.config.max_size_bytes,
             ),
@@ -274,8 +338,15 @@ impl PersistentStorage {
                 reason: "persistent storage is not attached".to_string(),
             })
         })?;
-        live.store.renew(request.grant);
-        Ok(())
+        match &live.store {
+            Store::Grant(store) => {
+                store.renew(request.grant);
+                Ok(())
+            }
+            Store::Spool(_) => Err(AlienError::new(ErrorData::RequestInvalid {
+                reason: "this key is pulled by the binding and holds no grant".to_string(),
+            })),
+        }
     }
 
     /// Commits everything written so far and returns once it is durable (or why it is not).
@@ -300,7 +371,7 @@ impl PersistentStorage {
         {
             return Ok(self.status());
         }
-        match live.replicator.commit(live.store.as_ref()).await {
+        match live.replicator.commit(live.store.object_store()).await {
             Ok(outcome) => {
                 let head = live.replicator.head().map(|m| m.seq);
                 Ok(self.update(|s| {

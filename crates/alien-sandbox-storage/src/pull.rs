@@ -158,6 +158,12 @@ impl Spool {
         self.state.lock().expect("not poisoned")
     }
 
+    /// HEAD's version as a committer writing here must name it next. A spool's versions are its
+    /// own; the binding's [`Puller`] holds the store's.
+    pub fn head_version(&self) -> ObjectVersion {
+        self.state().head_version.clone()
+    }
+
     /// Whether the binding reported that another sandbox owns the key.
     pub fn is_superseded(&self) -> bool {
         self.state().superseded
