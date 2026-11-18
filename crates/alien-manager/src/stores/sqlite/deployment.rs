@@ -404,7 +404,7 @@ impl SqliteDeploymentStore {
                             && statuses.iter().any(|status| status == Self::RUNNING_STATUS))
                 })
                 .collect();
-            let membership_only = Self::membership_only_request(statuses);
+            let membership_only = Self::membership_only_request(statuses, mode);
             let requested_failed: Vec<&str> = statuses
                 .iter()
                 .map(String::as_str)
@@ -451,8 +451,11 @@ impl SqliteDeploymentStore {
 
     /// The heartbeat shape: a failed update requested together with Running. It matches only a
     /// failed update with no retry waiting.
-    fn membership_only_request(statuses: &[String]) -> bool {
-        statuses.iter().any(|status| status == UPDATE_FAILED_STATUS)
+    /// Only an acquire with no mode asks for it: a setup run or teardown asks for the same
+    /// statuses and must keep its own rules.
+    fn membership_only_request(statuses: &[String], mode: Option<DeploymentAcquireMode>) -> bool {
+        mode.is_none()
+            && statuses.iter().any(|status| status == UPDATE_FAILED_STATUS)
             && statuses.iter().any(|status| status == Self::RUNNING_STATUS)
     }
 
@@ -460,6 +463,7 @@ impl SqliteDeploymentStore {
         status: &str,
         failed_claimable: bool,
         statuses: Option<&Vec<String>>,
+        mode: Option<DeploymentAcquireMode>,
     ) -> bool {
         let failed_is_retryable = Self::FAILED_STATUSES.contains(&status) && failed_claimable;
 
@@ -467,7 +471,7 @@ impl SqliteDeploymentStore {
             return Self::WORK_STATUSES.contains(&status) || failed_is_retryable;
         };
 
-        if status == UPDATE_FAILED_STATUS && Self::membership_only_request(statuses) {
+        if status == UPDATE_FAILED_STATUS && Self::membership_only_request(statuses, mode) {
             return !failed_claimable;
         }
 
@@ -1960,6 +1964,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                     &status,
                     failed_claimable,
                     explicit_status_filter,
+                    filter.acquire_mode,
                 ) {
                     DeploymentAcquireUnavailableReason::StatusMismatch
                 } else if filter.excluded_deployment_ids.contains(&deployment_id)

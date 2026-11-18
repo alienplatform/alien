@@ -1211,6 +1211,29 @@ async fn heartbeat_never_acquires_a_failed_update_with_a_retry_waiting() {
         .await
         .unwrap();
 
+    // A setup run or teardown asking for the same statuses never gets a membership claim.
+    for mode in [
+        DeploymentAcquireMode::SetupRun,
+        DeploymentAcquireMode::SetupTeardown,
+        DeploymentAcquireMode::Runtime,
+    ] {
+        let acquired = store
+            .acquire_with_reasons(
+                &test_subject(),
+                "other-session",
+                &DeploymentFilter {
+                    statuses: Some(vec!["running".to_string(), "update-failed".to_string()]),
+                    deployment_ids: Some(vec![dep.id.clone()]),
+                    acquire_mode: Some(mode),
+                    ..Default::default()
+                },
+                1,
+            )
+            .await
+            .unwrap();
+        assert!(acquired.deployments.is_empty(), "{mode:?}");
+    }
+
     // The work loop's own acquisition (no Running) still takes a retry.
     db.conn()
         .lock()
