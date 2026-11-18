@@ -27,10 +27,7 @@ pub mod persistent_store;
 
 #[cfg(feature = "azure")]
 pub mod azure;
-// Called by the create path's attach once the shared binding attach (claim, then grant) lands;
-// until then only its tests use it.
 #[cfg(feature = "azure")]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod azure_storage;
 
 #[cfg(feature = "gcp")]

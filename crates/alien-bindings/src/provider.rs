@@ -2247,7 +2247,33 @@ impl BindingsProviderApi for BindingsProvider {
                 .with_agent(azure_binding.agent)
                 .with_preview_ports(azure_binding.preview_ports.clone())
                 .with_max_lifetime(azure_binding.max_lifetime_seconds)
-                .with_persistent_storage(azure_binding.persistent_storage.clone(), binding_name)?;
+                .with_persistent_storage(azure_binding.persistent_storage.clone(), binding_name)?
+                .with_persistent_grants(
+                    match azure_binding
+                        .persistent_storage
+                        .as_ref()
+                        .map(|storage| &storage.store)
+                    {
+                        Some(alien_core::bindings::PersistentStoreLocator::Azure {
+                            account,
+                            container,
+                            ..
+                        }) => Some(Arc::new(
+                            crate::providers::sandbox::azure_storage::AzureGrants::new(
+                                account
+                                    .clone()
+                                    .into_value(binding_name, "persistentStorage.store.account")
+                                    .map_err(|_| invalid("persistentStorage.store.account"))?,
+                                container
+                                    .clone()
+                                    .into_value(binding_name, "persistentStorage.store.container")
+                                    .map_err(|_| invalid("persistentStorage.store.container"))?,
+                                (*azure_config).clone(),
+                            )?,
+                        )),
+                        _ => None,
+                    },
+                );
                 if let Some(route) = &self.sandbox_create_route {
                     sandbox = sandbox.with_create_route(route.clone());
                 }

@@ -15,9 +15,10 @@ use chrono::{DateTime, Duration, Utc};
 
 use crate::error::{ErrorData, Result};
 
-/// How long a grant lives. The binding renews well before; a sandbox that outlives its renewals
-/// stops committing within this long.
-pub(crate) const GRANT_LIFETIME: Duration = Duration::hours(1);
+/// How long a grant lives: as long as a user delegation key may (seven days from now, less a
+/// margin). Nothing renews it yet, as on AWS, so a sandbox that runs longer than this stops
+/// committing (its state turns `behind`) and says so.
+pub(crate) const GRANT_LIFETIME: Duration = Duration::minutes(7 * 24 * 60 - 10);
 
 /// Back-dating of the start, so a grant is valid on a store whose clock runs a little behind.
 const CLOCK_SKEW: Duration = Duration::minutes(5);
@@ -29,6 +30,82 @@ const KEY_RIGHTS: DirectorySasPermissions = DirectorySasPermissions {
     create: true,
     write: true,
 };
+
+/// The store of one Azure sandbox's persistent storage, as the binding reaches it: its own Entra
+/// identity for claims, reads and erasure (Blob Data Contributor on the container), and user
+/// delegation keys (Blob Delegator on the account) for the agent's grants.
+pub(crate) struct AzureGrants {
+    account: String,
+    container: String,
+    store: std::sync::Arc<dyn object_store::ObjectStore>,
+    delegation: std::sync::Arc<dyn BlobDelegationApi>,
+}
+
+impl std::fmt::Debug for AzureGrants {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureGrants")
+            .field("account", &self.account)
+            .field("container", &self.container)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AzureGrants {
+    /// The store in `container` of `account`, reached with `config`'s identity.
+    pub(crate) fn new(
+        account: String,
+        container: String,
+        config: alien_core::AzureClientConfig,
+    ) -> Result<Self> {
+        let store = object_store::azure::MicrosoftAzureBuilder::new()
+            .with_account(&account)
+            .with_container_name(&container)
+            .with_credentials(std::sync::Arc::new(
+                crate::providers::storage::credential_bridge::AzureCredentialBridge::new(
+                    config.clone(),
+                ),
+            ))
+            .build()
+            .map_err(|error| {
+                AlienError::new(ErrorData::BindingSetupFailed {
+                    binding_type: "Azure sandbox".to_string(),
+                    reason: format!(
+                        "cannot build the persistent store client for '{account}': {error}"
+                    ),
+                })
+            })?;
+        let delegation = alien_azure_clients::azure::blob_sas::AzureBlobDelegationClient::new(
+            reqwest::Client::new(),
+            alien_azure_clients::AzureTokenCache::new(config),
+        );
+        Ok(Self {
+            account,
+            container,
+            store: std::sync::Arc::new(store),
+            delegation: std::sync::Arc::new(delegation),
+        })
+    }
+
+    /// One key with the binding's full rights.
+    pub(crate) fn key_store(
+        &self,
+        key: &str,
+    ) -> alien_sandbox_storage::Result<super::persistent_store::KeyStore> {
+        super::persistent_store::KeyStore::new(self.store.clone(), "", key)
+    }
+
+    /// A grant to read and write `key`, for [`GRANT_LIFETIME`] from now.
+    pub(crate) async fn grant(&self, key: &str) -> Result<StorageGrant> {
+        mint_key_grant(
+            self.delegation.as_ref(),
+            &self.account,
+            &self.container,
+            key,
+            Utc::now(),
+        )
+        .await
+    }
+}
 
 /// A grant to `key` in `container` of `account`, valid from `now` for [`GRANT_LIFETIME`].
 ///
@@ -124,7 +201,7 @@ mod tests {
                     signed_oid: "00000000-0000-0000-0000-000000000001".to_string(),
                     signed_tid: "00000000-0000-0000-0000-000000000002".to_string(),
                     signed_start: "2026-11-18T11:55:00Z".to_string(),
-                    signed_expiry: "2026-11-18T13:00:00Z".to_string(),
+                    signed_expiry: "2026-11-25T11:50:00Z".to_string(),
                     signed_service: "b".to_string(),
                     signed_version: "2026-10-06".to_string(),
                     value: "c2VjcmV0LWtleS1ieXRlcy0zMi1sb25nLi4uLi4uLi4=".to_string(),
@@ -167,7 +244,7 @@ mod tests {
         assert_eq!(query["sdd"], "1", "the depth of `engine-42` alone");
         assert_eq!(query["sp"], "racw");
         assert_eq!(query["spr"], "https");
-        assert_eq!(query["se"], "2026-11-18T13:00:00Z");
+        assert_eq!(query["se"], "2026-11-25T11:50:00Z");
     }
 
     /// Account, container and key go into the URL the agent sends its SAS to, so anything that

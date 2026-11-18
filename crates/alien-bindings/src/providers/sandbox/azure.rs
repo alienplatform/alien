@@ -8,6 +8,8 @@ mod gateway;
 
 #[path = "azure_agent.rs"]
 mod agent;
+#[path = "azure_persistent.rs"]
+mod persistent;
 
 use std::collections::BTreeMap;
 
@@ -19,6 +21,7 @@ use crate::providers::sandbox::{checked_env_name, guard_for, Bounded, TimeoutRep
 use crate::traits::{
     Binding, CommandOutput, CreateSandboxRequest, InteractiveCommand, JobPoll, JobStart,
     PreviewCapability, ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
+    SandboxStorageStatus,
 };
 use alien_azure_clients::azure::sandbox_data_plane::{
     egress_policy, CreateSandbox, EgressPolicy, SandboxDataPlaneApi, ALLOW, DENY, FULL_INSPECTION,
@@ -80,6 +83,8 @@ pub struct AzureSandbox {
     /// The store's account, resolved from `persistent_storage`: the one host a declared
     /// sandbox's policy opens for the agent.
     store_account: Option<String>,
+    /// Claims keys and mints the agent's grants in the declaration's own store.
+    persistent_grants: Option<std::sync::Arc<super::azure_storage::AzureGrants>>,
 }
 
 /// Creates a sandbox for a caller whose own identity may not: the request carries only the
@@ -125,6 +130,7 @@ impl AzureSandbox {
             create_route: None,
             persistent_storage: None,
             store_account: None,
+            persistent_grants: None,
         }
     }
 
@@ -503,10 +509,19 @@ impl Sandbox for AzureSandbox {
             request.storage_key.as_deref(),
             "sandbox.create",
         )?;
-        if storage_key.is_some() {
+        if storage_key.is_some() && (self.persistent_grants.is_none() || !self.agent) {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: "sandbox.create".to_string(),
-                reason: "this binding cannot attach persistent storage to an Azure sandbox yet"
+                reason: "the binding names no persistent store, or the image runs without the \
+                         Alien agent, so this sandbox cannot attach persistent storage"
+                    .to_string(),
+            }));
+        }
+        if storage_key.is_some() && self.create_route.is_some() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.create".to_string(),
+                reason: "persistent storage is not attached to sandboxes created through the \
+                         install's verifier yet"
                     .to_string(),
             }));
         }
@@ -679,6 +694,9 @@ impl Sandbox for AzureSandbox {
                     .await
                     .map_err(|error| Self::failed(CREATE, error))?;
                 self.wait_for_agent(&sandbox.id).await?;
+            }
+            if let Some(key) = &storage_key {
+                self.attach_storage(&sandbox.id, key).await?;
             }
             Ok(instance)
         }
@@ -1157,8 +1175,55 @@ impl Sandbox for AzureSandbox {
         manager.update(gateway::identity(&sandbox)?, &policy).await
     }
 
+    async fn storage_status(&self, sandbox_id: &str) -> Result<Option<SandboxStorageStatus>> {
+        if self.persistent_storage.is_none() {
+            return Ok(None);
+        }
+        Self::checked_sandbox_id("sandbox.persistentStorage", sandbox_id)?;
+        self.agent_storage(
+            sandbox_id,
+            reqwest::Method::GET,
+            "/v1/storage",
+            "sandbox.persistentStorage",
+        )
+        .await
+        .map(Some)
+    }
+
+    async fn sync_storage(&self, sandbox_id: &str) -> Result<SandboxStorageStatus> {
+        if self.persistent_storage.is_none() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.sync".to_string(),
+                reason: "this sandbox declares no persistent storage".to_string(),
+            }));
+        }
+        Self::checked_sandbox_id("sandbox.sync", sandbox_id)?;
+        self.agent_storage(
+            sandbox_id,
+            reqwest::Method::POST,
+            "/v1/storage/sync",
+            "sandbox.sync",
+        )
+        .await
+    }
+
+    async fn read_storage_file(&self, key: &str, path: &str) -> Result<Vec<u8>> {
+        self.read_key_file(key, path).await
+    }
+
+    async fn delete_storage(&self, key: &str) -> Result<()> {
+        self.erase_key(key).await
+    }
+
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.terminate", sandbox_id)?;
+        // Persistent storage: commit what was written before the sandbox goes. Best effort: a
+        // sandbox that is already gone or unreachable still terminates.
+        if self.persistent_storage.is_some() {
+            if let Err(error) = self.sync_storage(sandbox_id).await {
+                warn!(sandbox = sandbox_id, %error, "could not sync persistent storage before terminating");
+            }
+        }
         // Continue deletion even when revocation fails, then report that failure.
         let revocation = self.revoke_identity(sandbox_id).await;
         self.accept_delete(sandbox_id).await?;
