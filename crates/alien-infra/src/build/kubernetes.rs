@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::core::{
     kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, EnvironmentVariableBuilder,
@@ -37,6 +37,11 @@ pub struct KubernetesBuildController {
     pub(crate) namespace: Option<String>,
     /// The image digest of the built image (from job output)
     pub(crate) image_digest: Option<String>,
+    /// True from the moment `create_start` records its namespace and Job name, before the create
+    /// call, until that call has succeeded. A create that stops in between must not publish an
+    /// identifier for a Job that may not exist.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) create_unfinished: bool,
 }
 
 #[controller]
@@ -70,6 +75,11 @@ impl KubernetesBuildController {
             .build_job(config, &job_name, &namespace, &service_account_name, ctx)
             .await?;
 
+        // Record what the create call may write before making it: a create that fails with an
+        // ambiguous error (a timeout) can still have made the Job, and delete must find it.
+        self.namespace = Some(namespace.clone());
+        self.job_name = Some(job_name.clone());
+        self.create_unfinished = true;
         let _created_job = job_client.create_job(&namespace, &job).await.context(
             ErrorData::CloudPlatformError {
                 message: format!("Failed to create build job '{}'.", job_name),
@@ -77,8 +87,7 @@ impl KubernetesBuildController {
             },
         )?;
 
-        self.job_name = Some(job_name.clone());
-        self.namespace = Some(namespace.clone());
+        self.create_unfinished = false;
 
         info!(job_name=%job_name, namespace=%namespace, "Build Job creation initiated");
 
@@ -561,6 +570,24 @@ impl KubernetesBuildController {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Build>()?;
 
+        // Nothing recorded: this controller made no Job (a create refused before the call), or an
+        // earlier create failed part-way and its record was dropped (a restart of the create from
+        // a fresh state) or never kept (an older controller), so a Job may remain. Do not look
+        // for it: say what could remain and finish.
+        if self.namespace.is_none() && self.job_name.is_none() {
+            let name =
+                kubernetes_resource_name(&ctx.resource_prefix, &format!("build-{}", config.id));
+            warn!(
+                resource_id=%config.id,
+                job_name=%name,
+                namespace=?self.get_kubernetes_namespace(ctx).ok(),
+                "No Job is recorded, so nothing was deleted; an earlier create that failed part-way may have left the Job"
+            );
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
         let namespace = self.namespace.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: config.id.clone(),
@@ -725,6 +752,9 @@ impl KubernetesBuildController {
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
+        if self.create_unfinished {
+            return None;
+        }
         if let Some(job_name) = &self.job_name {
             Some(ResourceOutputs::new(BuildOutputs {
                 identifier: format!("job/{}", job_name),
@@ -750,6 +780,7 @@ impl KubernetesBuildController {
             job_name: Some(job_name.to_string()),
             namespace: Some(namespace.to_string()),
             image_digest: Some("sha256:mock".to_string()),
+            create_unfinished: false,
             _internal_stay_count: None,
         }
     }
@@ -999,6 +1030,208 @@ fn emit_kubernetes_build_heartbeat(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type Jobs = std::sync::Arc<
+        std::sync::Mutex<std::collections::BTreeMap<String, k8s_openapi::api::batch::v1::Job>>,
+    >;
+
+    /// A cluster that keeps the Job it was asked for; with `create_ok` the create call answers
+    /// success, otherwise it answers an error (a timeout after the API server accepted it).
+    fn job_cluster(
+        create_ok: bool,
+    ) -> (
+        Jobs,
+        crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness,
+    ) {
+        use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+        use alien_k8s_clients::jobs::{JobApi, MockJobApi};
+        use std::sync::Arc;
+
+        let jobs: Jobs = Arc::default();
+        let mut client = MockJobApi::new();
+        let created = jobs.clone();
+        client.expect_create_job().returning(move |_, job| {
+            let name = job.metadata.name.clone().unwrap_or_default();
+            let mut jobs = created.lock().unwrap();
+            if jobs.contains_key(&name) {
+                // The retry meets the Job the timed-out first call made.
+                return Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "Job".to_string(),
+                        resource_name: name,
+                        message: "already exists".to_string(),
+                    },
+                ));
+            }
+            jobs.insert(name, job.clone());
+            if create_ok {
+                return Ok(job.clone());
+            }
+            Err(AlienError::new(CloudClientErrorData::GenericError {
+                message: "request timed out".to_string(),
+            }))
+        });
+        let read = jobs.clone();
+        client.expect_get_job().returning(move |_, name| {
+            read.lock().unwrap().get(name).cloned().ok_or_else(|| {
+                AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "Job".to_string(),
+                    resource_name: name.to_string(),
+                })
+            })
+        });
+        let removed = jobs.clone();
+        client.expect_delete_job().returning(move |_, name| {
+            removed.lock().unwrap().remove(name);
+            Ok(())
+        });
+        let client: Arc<dyn JobApi> = Arc::new(client);
+        let mut provider = crate::core::MockPlatformServiceProvider::new();
+        provider
+            .expect_get_kubernetes_job_client()
+            .returning(move |_| Ok(client.clone()));
+        let config = alien_core::Build::new("build".to_string())
+            .permissions("default-profile".to_string())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![])
+            .with_service_provider(Arc::new(provider));
+        (jobs, harness)
+    }
+
+    fn build_deleted(action: &KubernetesBuildHandlerAction) -> bool {
+        matches!(
+            action,
+            KubernetesBuildHandlerAction::Continue {
+                state: KubernetesBuildState::Deleted,
+                ..
+            }
+        )
+    }
+
+    /// A create call that times out after the Job was made leaves the Job. The state saved after
+    /// the failed step names it, so delete removes it.
+    #[tokio::test]
+    async fn a_build_whose_create_call_failed_after_the_job_was_made_is_deleted_with_it() {
+        let (jobs, harness) = job_cluster(false);
+        let ctx = harness.ctx();
+        let mut controller = KubernetesBuildController::default();
+        controller.create_start(&ctx).await.expect_err("timed out");
+        assert_eq!(jobs.lock().unwrap().len(), 1);
+        assert!(controller.namespace.is_some() && controller.job_name.is_some());
+        controller.delete_start(&ctx).await.expect("delete");
+        assert!(jobs.lock().unwrap().is_empty());
+    }
+
+    /// The retry after that timeout is answered 409 by our own Job: the record stays, and delete
+    /// removes the Job.
+    #[tokio::test]
+    async fn a_retry_answered_409_by_our_own_job_keeps_the_record_and_delete_removes_it() {
+        let (jobs, harness) = job_cluster(false);
+        let ctx = harness.ctx();
+        let mut controller = KubernetesBuildController::default();
+        controller.create_start(&ctx).await.expect_err("timed out");
+        controller
+            .create_start(&ctx)
+            .await
+            .expect_err("409 from our own Job");
+        assert!(controller.namespace.is_some() && controller.job_name.is_some());
+        controller.delete_start(&ctx).await.expect("delete");
+        assert!(jobs.lock().unwrap().is_empty());
+    }
+
+    /// (Guard; passes the same on the code before this change.) A Build created normally has a
+    /// recorded Job, publishes its identifier, and is deleted with the Job.
+    #[tokio::test]
+    async fn a_build_created_normally_is_deleted_with_its_job() {
+        let (jobs, harness) = job_cluster(true);
+        let ctx = harness.ctx();
+        let mut controller = KubernetesBuildController::default();
+        controller.create_start(&ctx).await.expect("create");
+        assert_eq!(jobs.lock().unwrap().len(), 1);
+        let outputs = controller.build_outputs().expect("outputs after a create");
+        assert_eq!(
+            outputs
+                .downcast_ref::<BuildOutputs>()
+                .expect("build outputs")
+                .identifier,
+            "job/build-build"
+        );
+        controller.delete_start(&ctx).await.expect("delete");
+        assert!(jobs.lock().unwrap().is_empty());
+    }
+
+    /// A create that did not succeed publishes no identifier, as before the create recorded its
+    /// name early.
+    #[tokio::test]
+    async fn a_failed_create_publishes_no_outputs() {
+        let (_jobs, harness) = job_cluster(false);
+        let ctx = harness.ctx();
+        let mut controller = KubernetesBuildController::default();
+        controller.create_start(&ctx).await.expect_err("timed out");
+        assert!(
+            controller.job_name.is_some(),
+            "the name is recorded for delete"
+        );
+        assert!(controller.build_outputs().is_none());
+    }
+
+    /// After a failed create, a retry that succeeds publishes the identifier.
+    #[tokio::test]
+    async fn a_successful_retry_after_a_failed_create_publishes_outputs() {
+        let (jobs, harness) = job_cluster(false);
+        let ctx = harness.ctx();
+        let mut controller = KubernetesBuildController::default();
+        controller.create_start(&ctx).await.expect_err("timed out");
+        assert!(controller.build_outputs().is_none());
+        jobs.lock().unwrap().clear();
+        let (_jobs, harness) = job_cluster(true);
+        controller
+            .create_start(&harness.ctx())
+            .await
+            .expect("the retry succeeds");
+        assert!(controller.build_outputs().is_some());
+    }
+
+    /// The flag is left out of saved state when false, and state saved without it loads.
+    #[test]
+    fn the_unfinished_flag_is_omitted_when_false_and_absent_state_loads() {
+        let mut controller = KubernetesBuildController {
+            job_name: Some("build-build".to_string()),
+            namespace: Some("apps".to_string()),
+            ..Default::default()
+        };
+        let state = serde_json::to_value(&controller).unwrap();
+        assert!(state.get("createUnfinished").is_none(), "{state}");
+        let loaded: KubernetesBuildController = serde_json::from_value(state).unwrap();
+        assert!(!loaded.create_unfinished);
+        controller.create_unfinished = true;
+        let state = serde_json::to_value(&controller).unwrap();
+        assert_eq!(
+            state.get("createUnfinished"),
+            Some(&serde_json::json!(true))
+        );
+    }
+
+    /// Nothing recorded means this controller made no Job: the delete completes, twice over,
+    /// without one call to the cluster (a provider with no client expectations panics on any).
+    #[tokio::test]
+    async fn a_delete_with_nothing_recorded_completes_without_a_cluster_call() {
+        use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+        let config = alien_core::Build::new("build".to_string())
+            .permissions("default-profile".to_string())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![])
+            .with_service_provider(std::sync::Arc::new(
+                crate::core::MockPlatformServiceProvider::new(),
+            ));
+        let ctx = harness.ctx();
+        let mut controller = KubernetesBuildController::default();
+        for _ in 0..2 {
+            let action = controller.delete_start(&ctx).await.expect("completes");
+            assert!(build_deleted(&action), "{action:?}");
+            assert!(controller.namespace.is_none() && controller.job_name.is_none());
+        }
+    }
 
     #[test]
     fn test_kubernetes_build_name() {

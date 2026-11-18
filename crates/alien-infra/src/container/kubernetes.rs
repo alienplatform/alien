@@ -2,7 +2,7 @@ use super::kubernetes_network::{cluster_dns_config, GatewayDns};
 use crate::kubernetes_runtime_credentials::delete_environment_secret;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
@@ -1860,12 +1860,15 @@ impl KubernetesContainerController {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Container>()?;
 
-        let namespace = self.namespace.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: config.id.clone(),
-                message: "Namespace not set in state".to_string(),
-            })
-        })?;
+        // The controller records the namespace before it writes, so a state without one is one
+        // whose create was refused first. Nothing is recorded to delete; do not look for more.
+        let Some(namespace) = self.namespace.as_ref() else {
+            warn!(resource_id=%config.id, "No namespace is recorded, so nothing was deleted; an earlier create that failed part-way may have left objects");
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        };
 
         info!(namespace=%namespace, "Initiating Kubernetes Container deletion");
 
@@ -4653,6 +4656,32 @@ mod tests {
         assert_eq!(controller.recovery_checks, 0);
         assert_eq!(controller.last_recovery_check_unix, None);
         assert!(!controller.zero_ready_observed);
+    }
+
+    /// A container refused before its controller recorded a namespace has nothing recorded: deleting
+    /// it has nothing to delete and completes instead of failing the whole delete.
+    #[tokio::test]
+    async fn a_container_that_never_got_as_far_as_a_namespace_deletes_cleanly() {
+        let config = manifest_test_container(&[], false);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let ctx = harness.ctx();
+        let mut controller = KubernetesContainerController::default();
+        assert!(controller.namespace.is_none() && controller.workload_name.is_none());
+
+        let action = controller
+            .delete_start(&ctx)
+            .await
+            .expect("nothing is recorded, so there is nothing to fail on");
+        assert!(
+            matches!(
+                action,
+                KubernetesContainerHandlerAction::Continue {
+                    state: KubernetesContainerState::Deleted,
+                    ..
+                }
+            ),
+            "{action:?}"
+        );
     }
 
     fn manifest_test_controller() -> KubernetesContainerController {
