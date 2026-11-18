@@ -666,15 +666,6 @@ impl AzureKeyController {
             &permission_context,
         )
         .await?;
-        ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
-            ctx,
-            &key.id,
-            &key_resource_id,
-            scope,
-            "Key",
-            "key",
-        )
-        .await?;
         let authorization = ctx
             .service_provider
             .get_azure_authorization_client(ctx.get_azure_config()?)?;
@@ -701,6 +692,17 @@ impl AzureKeyController {
                 }
             }
         }
+        // Dropped assignments go first: ids are numbered by position, so a grant moving onto a
+        // dropped one's id would otherwise meet an equal assignment under another id.
+        ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
+            ctx,
+            &key.id,
+            &key_resource_id,
+            scope,
+            "Key",
+            "key",
+        )
+        .await?;
         self.role_assignment_ids = planned;
         self.access_revision = Some(desired_revision(ctx, &key.id)?);
         Ok(())

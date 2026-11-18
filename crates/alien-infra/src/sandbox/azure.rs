@@ -1291,11 +1291,10 @@ impl AzureSandboxController {
                 &permission_context,
             )
             .await?;
-        crate::core::ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
-            ctx, &config.id, &group, scope, "Sandbox", "sandbox",
-        )
-        .await?;
-        // A profile that lost its sandbox verbs loses the assignments they gave.
+        // A profile that lost its sandbox verbs loses the assignments they gave. They go before
+        // the new ones are written: assignment ids are numbered by position, so a grant that
+        // moves up onto a dropped one's id is equal to an assignment that still exists under
+        // another id, which Azure refuses and the writer reads as "already there".
         let authorization = ctx
             .service_provider
             .get_azure_authorization_client(ctx.get_azure_config()?)?;
@@ -1324,6 +1323,10 @@ impl AzureSandboxController {
                 }
             }
         }
+        crate::core::ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
+            ctx, &config.id, &group, scope, "Sandbox", "sandbox",
+        )
+        .await?;
         self.group_assignment_ids = planned;
         self.reconciled_grants = Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(
             ctx,
@@ -3548,6 +3551,35 @@ mod direct_setup_tests {
         with_profile: bool,
         management_images: bool,
     ) -> SingleControllerExecutor {
+        let sets: &[&str] = if with_profile {
+            &["sandbox/execute"]
+        } else {
+            &[]
+        };
+        executor_with_profile_sets(
+            controller,
+            groups,
+            setup_run,
+            egress,
+            authorization,
+            sets,
+            management_images,
+        )
+        .await
+    }
+
+    /// The same, with the sandbox grants the `runtime` profile holds given by name (none means
+    /// the profile and its identity are absent).
+    async fn executor_with_profile_sets(
+        controller: AzureSandboxController,
+        groups: MockSandboxGroupsApi,
+        setup_run: bool,
+        egress: SandboxEgress,
+        authorization: MockAuthorizationApi,
+        profile_sets: &[&str],
+        management_images: bool,
+    ) -> SingleControllerExecutor {
+        let with_profile = !profile_sets.is_empty();
         let authorization: Arc<dyn alien_azure_clients::authorization::AuthorizationApi> =
             Arc::new(authorization);
         let groups: Arc<dyn alien_azure_clients::sandbox_groups::SandboxGroupsApi> =
@@ -3600,7 +3632,8 @@ mod direct_setup_tests {
             )
             .permission_profile(
                 "runtime",
-                alien_core::permissions::PermissionProfile::new().resource("box_one", ["sandbox/execute"]),
+                alien_core::permissions::PermissionProfile::new()
+                    .resource("box_one", profile_sets.iter().copied().collect::<Vec<_>>()),
             );
         }
         if management_images {
@@ -4160,6 +4193,207 @@ mod direct_setup_tests {
         )
         .await;
         assert!(!runtime.needs_update().unwrap());
+    }
+
+    /// An authorization fake that behaves as Azure does for the case that matters here: a write
+    /// of an assignment equal to one that exists under another id is refused with "already
+    /// exists" naming the existing one, a write onto an existing id replaces its role, a read
+    /// returns what was written, and a delete removes it.
+    type AzureAssignments =
+        Arc<std::sync::Mutex<std::collections::BTreeMap<String, (String, String, Option<String>)>>>;
+
+    fn azure_like_authorization(store: AzureAssignments) -> MockAuthorizationApi {
+        use alien_azure_clients::models::authorization_role_assignments::{
+            RoleAssignment, RoleAssignmentProperties,
+        };
+        use alien_azure_clients::models::authorization_role_definitions::RoleDefinition;
+        let mut authorization = MockAuthorizationApi::new();
+        let reads = store.clone();
+        authorization
+            .expect_get_role_assignment_by_id()
+            .returning(move |id| match reads.lock().unwrap().get(&id) {
+                Some((principal, role, description)) => Ok(RoleAssignment {
+                    id: Some(id),
+                    name: None,
+                    type_: None,
+                    properties: Some(RoleAssignmentProperties {
+                        principal_id: principal.clone(),
+                        role_definition_id: role.clone(),
+                        scope: None,
+                        principal_type: Default::default(),
+                        condition: None,
+                        condition_version: None,
+                        delegated_managed_identity_resource_id: None,
+                        description: description.clone(),
+                        created_by: None,
+                        created_on: None,
+                        updated_by: None,
+                        updated_on: None,
+                    }),
+                }),
+                None => Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "RoleAssignment".to_string(),
+                        resource_name: id,
+                    },
+                )),
+            });
+        authorization
+            .expect_get_role_definition()
+            .returning(|_, id| {
+                Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "RoleDefinition".to_string(),
+                        resource_name: id,
+                    },
+                ))
+            });
+        authorization
+            .expect_create_or_update_role_definition()
+            .returning(|_, _, definition: &RoleDefinition| Ok(definition.clone()));
+        let writes = store.clone();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .returning(move |id, assignment: &RoleAssignment| {
+                let properties = assignment.properties.as_ref().expect("properties");
+                let wanted = (
+                    properties.principal_id.clone(),
+                    properties.role_definition_id.clone(),
+                );
+                let mut store = writes.lock().unwrap();
+                if let Some((other, _)) = store
+                    .iter()
+                    .find(|(other, (p, r, _))| **other != id && (p.clone(), r.clone()) == wanted)
+                {
+                    return Err(AlienError::new(
+                        alien_client_core::ErrorData::RemoteResourceConflict {
+                            resource_type: "role assignment".to_string(),
+                            resource_name: id.clone(),
+                            message: format!(
+                                "The role assignment already exists. The ID of the existing role assignment is {}.",
+                                other.rsplit('/').next().unwrap_or(other).replace('-', "")
+                            ),
+                        },
+                    ));
+                }
+                store.insert(
+                    id,
+                    (wanted.0, wanted.1, properties.description.clone()),
+                );
+                Ok(assignment.clone())
+            });
+        authorization
+            .expect_delete_role_assignment_by_id()
+            .returning(move |id| {
+                store.lock().unwrap().remove(&id);
+                Ok(None)
+            });
+        authorization
+    }
+
+    fn ready_group_controller() -> AzureSandboxController {
+        AzureSandboxController {
+            state: AzureSandboxState::Ready,
+            sandbox_group: Some("g".to_string()),
+            region: Some("eastus".to_string()),
+            resource_group: Some("default-resource-group".to_string()),
+            created_group: true,
+            reconciled_grants: None,
+            group_assignment_ids: Vec::new(),
+            group_create_intent: true,
+            group_absent: false,
+            ..Default::default()
+        }
+    }
+
+    /// Runs one setup run of the sandbox with the `runtime` profile holding `sets`, against
+    /// `store`, and returns the controller as it ends.
+    async fn setup_run_with_grants(
+        controller: AzureSandboxController,
+        store: &AzureAssignments,
+        sets: &[&str],
+    ) -> AzureSandboxController {
+        let mut groups = MockSandboxGroupsApi::new();
+        groups
+            .expect_get_sandbox_group()
+            .returning(|_, _| Ok(group("Succeeded")));
+        let mut executor = executor_with_profile_sets(
+            controller,
+            groups,
+            true,
+            SandboxEgress::None,
+            azure_like_authorization(store.clone()),
+            sets,
+            false,
+        )
+        .await;
+        executor
+            .update(sandbox(SandboxEgress::None))
+            .expect("update is accepted");
+        drive(&mut executor).await;
+        assert_eq!(
+            executor.status(),
+            ResourceStatus::Running,
+            "the rerun settles"
+        );
+        executor
+            .internal_state::<AzureSandboxController>()
+            .unwrap()
+            .clone()
+    }
+
+    fn held_roles(store: &AzureAssignments) -> Vec<String> {
+        let mut roles: Vec<String> = store
+            .lock()
+            .unwrap()
+            .values()
+            .map(|(_, role, _)| role.clone())
+            .collect();
+        roles.sort();
+        roles
+    }
+
+    /// Assignment ids are numbered by position, and written one at a time. A setup rerun that
+    /// changes a profile's grants must end holding exactly what a fresh install of the new
+    /// grants holds, whichever grant was dropped or moved: `[a,b,c]` to `[b,c]` moves `b` onto
+    /// `a`'s id while `b` still exists under its own, and Azure refuses that write as "already
+    /// exists". Every case compares the end state of the rerun with a fresh install.
+    #[tokio::test]
+    async fn a_setup_rerun_ends_holding_exactly_the_grants_a_fresh_install_holds() {
+        const E: &str = "sandbox/execute";
+        const I: &str = "sandbox/images";
+        const H: &str = "sandbox/heartbeat";
+        const M: &str = "sandbox/management";
+        let cases: [(&[&str], &[&str]); 5] = [
+            (&[E, I, H], &[I, H]),
+            (&[E, I, H], &[E, H]),
+            (&[E, I, H], &[E, I]),
+            (&[E, I], &[I, E]),
+            (&[E, I], &[I, M]),
+        ];
+        for (before, after) in cases {
+            let store = AzureAssignments::default();
+            let installed = setup_run_with_grants(ready_group_controller(), &store, before).await;
+            let at_install = held_roles(&store);
+            assert!(
+                at_install.len() >= before.len(),
+                "{before:?} places its grants: {at_install:?}"
+            );
+            setup_run_with_grants(installed, &store, after).await;
+            let fresh = AzureAssignments::default();
+            setup_run_with_grants(ready_group_controller(), &fresh, after).await;
+            assert_eq!(
+                held_roles(&store),
+                held_roles(&fresh),
+                "{before:?} -> {after:?}: the rerun holds what a fresh install of the new grants holds"
+            );
+            let ids = store.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+            assert_eq!(
+                ids.len(),
+                held_roles(&fresh).len(),
+                "no duplicate assignment is left behind: {ids:?}"
+            );
+        }
     }
 
     /// An internet-egress group connects to subnets only the package creates, so a direct setup
