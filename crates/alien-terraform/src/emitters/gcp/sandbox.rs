@@ -5,15 +5,16 @@
 //! the single internet-access switch cannot express a hostname list.
 
 use crate::{
-    block::{attr, resource_block},
+    block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::{
         agent_platform_engine::ENGINE_RESOURCE,
         helpers::{
             binding_label_for_role, downcast, emit_custom_roles_for_bindings, permission_context,
-            required_label, role_expression_for_binding, service_account_id_template,
-            service_account_member_for_label,
+            required_label, resource_prefix_template, role_expression_for_binding,
+            service_account_id_template, service_account_member_for_label,
         },
+        storage::emit_storage_key_access,
     },
     expr,
 };
@@ -146,6 +147,7 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
         emit_remote_access(ctx, &mut fragment)?;
         emit_template_management(ctx, &mut fragment)?;
         emit_preview_signer(ctx, &mut fragment)?;
+        emit_persistent_storage(ctx, &mut fragment)?;
         Ok(fragment)
     }
 
@@ -166,6 +168,12 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
                 )),
             ));
         }
+        if has_storage_bucket(ctx, sandbox) {
+            fields.push((
+                "persistentStorageBucket",
+                storage_bucket_name(required_label(ctx)?),
+            ));
+        }
         Ok(expr::object(fields))
     }
 
@@ -182,6 +190,9 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
                     preview_label(label)
                 )),
             ));
+        }
+        if let Some(storage) = persistent_storage_binding(ctx, sandbox, label) {
+            fields.push(("persistentStorage", storage));
         }
         fields.push((
             "service",
@@ -439,6 +450,155 @@ fn emit_preview_signer(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Resu
     Ok(())
 }
 
+fn storage_label(label: &str) -> String {
+    format!("{label}_storage")
+}
+
+fn storage_bucket_name(label: &str) -> Expression {
+    expr::template(format!(
+        "${{google_storage_bucket.{}.name}}",
+        storage_label(label)
+    ))
+}
+
+/// Whether setup creates the persistent storage bucket: only where the sandbox declares
+/// persistent storage and setup owns it, so any other sandbox adds nothing to an existing plan.
+fn has_storage_bucket(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> bool {
+    sandbox.persistent_storage.is_some() && ctx.resource.lifecycle == ResourceLifecycle::Frozen
+}
+
+/// The binding's `persistentStorage`: the declaration with the bucket setup created.
+fn persistent_storage_binding(
+    ctx: &EmitContext<'_>,
+    sandbox: &Sandbox,
+    label: &str,
+) -> Option<Expression> {
+    let declared = sandbox.persistent_storage.as_ref()?;
+    if !has_storage_bucket(ctx, sandbox) {
+        return None;
+    }
+    let mut fields = vec![
+        ("path", Expression::String(declared.path.clone())),
+        (
+            "store",
+            expr::object([
+                ("type", Expression::String("gcp".to_string())),
+                ("bucket", storage_bucket_name(label)),
+            ]),
+        ),
+    ];
+    if !declared.exclude.is_empty() {
+        fields.push((
+            "exclude",
+            Expression::Array(
+                declared
+                    .exclude
+                    .iter()
+                    .cloned()
+                    .map(Expression::String)
+                    .collect(),
+            ),
+        ));
+    }
+    if let Some(bytes) = declared
+        .max_size_bytes()
+        .and_then(|bytes| i64::try_from(bytes).ok())
+    {
+        fields.push(("maxSizeBytes", Expression::Number(hcl::Number::from(bytes))));
+    }
+    Some(expr::object(fields))
+}
+
+/// The store persistent storage replicates to: a private bucket of its own (never a declared
+/// Storage, whose public-read and lifecycle rules must not apply), kept under the deployment's
+/// data policy, and object access for the workloads that drive this sandbox. The binding in such
+/// a workload pulls each sandbox's commits through `:execute` and writes them here, so the
+/// owners are the identities that hold `sandbox/execute`; the sandbox itself holds no
+/// credential for the bucket.
+fn emit_persistent_storage(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
+    let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
+    if !has_storage_bucket(ctx, sandbox) {
+        return Ok(());
+    }
+    let label = required_label(ctx)?;
+    let bucket_label = storage_label(label);
+    let key_label = sandbox
+        .persistent_storage
+        .as_ref()
+        .and_then(|storage| storage.encryption_key.as_ref())
+        .map(|key| {
+            ctx.name_for(&key.id).ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!(
+                        "Sandbox '{}' persistent storage key '{}' has no Terraform resource",
+                        ctx.resource_id, key.id
+                    ),
+                })
+            })
+        })
+        .transpose()?;
+    let mut body = vec![
+        attr(
+            "name",
+            resource_prefix_template(&format!("{}-storage", ctx.resource_id)),
+        ),
+        attr("project", expr::raw("var.gcp_project")),
+        attr("location", expr::raw("upper(var.gcp_region)")),
+        attr("storage_class", Expression::String("STANDARD".to_string())),
+        attr("uniform_bucket_level_access", Expression::Bool(true)),
+        attr("force_destroy", Expression::Bool(false)),
+        attr(
+            "public_access_prevention",
+            Expression::String("enforced".to_string()),
+        ),
+    ];
+    if let Some(key_label) = key_label {
+        emit_storage_key_access(fragment, &bucket_label, key_label);
+        body.push(nested(block(
+            "encryption",
+            [attr(
+                "default_kms_key_name",
+                expr::traversal(["google_kms_crypto_key", key_label, "id"]),
+            )],
+        )));
+        body.push(attr(
+            "depends_on",
+            Expression::Array(vec![expr::traversal([
+                "google_kms_crypto_key_iam_member",
+                &format!("{bucket_label}_storage_encryption"),
+            ])]),
+        ));
+    }
+    fragment
+        .resource_blocks
+        .push(resource_block("google_storage_bucket", &bucket_label, body));
+    for owner in execute_owner_labels(ctx) {
+        fragment.resource_blocks.push(resource_block(
+            "google_storage_bucket_iam_member",
+            &format!("{bucket_label}_{owner}"),
+            [
+                attr(
+                    "bucket",
+                    expr::traversal(["google_storage_bucket", bucket_label.as_str(), "name"]),
+                ),
+                attr(
+                    "role",
+                    Expression::String("roles/storage.objectUser".to_string()),
+                ),
+                attr("member", service_account_member_for_label(&owner)),
+            ],
+        ));
+    }
+    // The bucket holds the keys' data; the storage service's key grant must outlive an uninstall
+    // that keeps it, or the retained objects cannot be read. Object access stays managed so an
+    // uninstall revokes it.
+    fragment.retain_resources(|kind, name| kind == "google_storage_bucket" && name == bucket_label);
+    let key_grant = format!("{bucket_label}_storage_encryption");
+    fragment
+        .retain_state(|kind, name| kind == "google_kms_crypto_key_iam_member" && name == key_grant);
+    Ok(())
+}
+
 /// Terraform labels of the workload identities whose profile grants `sandbox/execute` on this
 /// sandbox, by name or through the wildcard.
 fn execute_owner_labels(ctx: &EmitContext<'_>) -> Vec<String> {
@@ -576,6 +736,154 @@ mod tests {
         fn attribute(block: &hcl::structure::Block, key: &str) -> String {
             attribute_opt(block, key)
                 .unwrap_or_else(|| panic!("the block carries no '{key}': {block:?}"))
+        }
+
+        /// Persistent storage on GCP: setup creates a private bucket of its own and gives object
+        /// access to the workloads that drive the sandbox, and the bucket reaches the controller
+        /// (import data) and the binding. A sandbox without it, or one setup does not own, adds
+        /// nothing.
+        #[test]
+        fn declared_persistent_storage_gets_a_private_bucket_its_workloads_can_use() {
+            let render = |declared: bool, lifecycle: ResourceLifecycle| {
+                let mut sandbox = Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu".to_string(),
+                        bundled_from: None,
+                    })
+                    .egress(SandboxEgress::None)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build();
+                if declared {
+                    sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+                        path: "/workspace".to_string(),
+                        exclude: vec!["tmp/".to_string()],
+                        max_size: Some("8Gi".to_string()),
+                        encryption_key: None,
+                    });
+                }
+                let stack = Stack::new("acme".to_string())
+                    .add(
+                        GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+                        lifecycle,
+                    )
+                    .add(sandbox, lifecycle)
+                    .permission(
+                        "worker",
+                        alien_core::permissions::PermissionProfile::new()
+                            .resource("agents", ["sandbox/execute"]),
+                    )
+                    .permission(
+                        "reader",
+                        alien_core::permissions::PermissionProfile::new()
+                            .resource("agents", ["sandbox/heartbeat"]),
+                    )
+                    .build();
+                let mut names = names();
+                names.insert("worker-sa".to_string(), "worker_sa".to_string());
+                names.insert("reader-sa".to_string(), "reader_sa".to_string());
+                let resource = stack.resources.get("agents").expect("sandbox");
+                let settings = StackSettings::default();
+                let ctx = EmitContext {
+                    stack: &stack,
+                    resource,
+                    resource_id: "agents",
+                    platform: alien_core::Platform::Gcp,
+                    targets_kubernetes: false,
+                    stack_settings: &settings,
+                    names: &names,
+                    pins: &alien_core::SetupPins::default(),
+                };
+                let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
+                let binding = GcpAgentPlatformSandboxEmitter
+                    .emit_binding_ref(&ctx)
+                    .expect("renders")
+                    .expect("binding");
+                let import_ref = GcpAgentPlatformSandboxEmitter
+                    .emit_import_ref(&ctx)
+                    .expect("renders");
+                (fragment, binding, import_ref)
+            };
+            let storage_blocks = |fragment: &TfFragment| -> Vec<hcl::structure::Block> {
+                fragment
+                    .resource_blocks
+                    .iter()
+                    .filter(|b| {
+                        b.labels
+                            .first()
+                            .is_some_and(|l| l.as_str().starts_with("google_storage_bucket"))
+                    })
+                    .cloned()
+                    .collect()
+            };
+
+            let (fragment, binding, import_ref) = render(true, ResourceLifecycle::Frozen);
+            let blocks = storage_blocks(&fragment);
+            let bucket = blocks
+                .iter()
+                .find(|b| b.labels[0].as_str() == "google_storage_bucket")
+                .expect("a bucket");
+            assert_eq!(bucket.labels[1].as_str(), "agents_storage");
+            assert_eq!(
+                attribute(bucket, "public_access_prevention"),
+                "\"enforced\""
+            );
+            assert_eq!(attribute(bucket, "uniform_bucket_level_access"), "true");
+            assert_eq!(attribute(bucket, "force_destroy"), "false");
+            assert_eq!(
+                attribute(bucket, "name"),
+                "\"${local.resource_prefix}-agents-storage\""
+            );
+            // Object access for the workload that drives the sandbox, and for no other profile.
+            let members: Vec<_> = blocks
+                .iter()
+                .filter(|b| b.labels[0].as_str() == "google_storage_bucket_iam_member")
+                .collect();
+            assert_eq!(members.len(), 1, "{blocks:?}");
+            assert_eq!(
+                attribute(members[0], "role"),
+                "\"roles/storage.objectUser\""
+            );
+            assert_eq!(
+                attribute(members[0], "member"),
+                "\"serviceAccount:${google_service_account.worker_sa.email}\""
+            );
+            assert_eq!(
+                attribute(members[0], "bucket"),
+                "google_storage_bucket.agents_storage.name"
+            );
+            assert!(object_keys(&import_ref).contains("persistentStorageBucket"));
+            let Expression::Object(binding) = binding else {
+                panic!("binding is an object")
+            };
+            let storage = binding
+                .iter()
+                .find(|(key, _)| {
+                    matches!(key, hcl::expr::ObjectKey::Identifier(id) if id.as_str() == "persistentStorage")
+                })
+                .map(|(_, value)| value.to_string())
+                .expect("the binding carries persistentStorage");
+            for part in [
+                "/workspace",
+                "\"gcp\"",
+                "${google_storage_bucket.agents_storage.name}",
+                "tmp/",
+                "8589934592",
+            ] {
+                assert!(storage.contains(part), "{part} in {storage}");
+            }
+
+            for (declared, lifecycle) in [
+                (false, ResourceLifecycle::Frozen),
+                (true, ResourceLifecycle::Live),
+            ] {
+                let (fragment, binding, import_ref) = render(declared, lifecycle);
+                assert!(storage_blocks(&fragment).is_empty(), "{fragment:?}");
+                assert!(!object_keys(&binding).contains("persistentStorage"));
+                assert!(!object_keys(&import_ref).contains("persistentStorageBucket"));
+            }
         }
 
         /// The grant names the engine by reading the created block's server-assigned `name` — a
