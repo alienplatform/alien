@@ -48,6 +48,16 @@ pub struct PermissionContext {
     pub subscription_id: Option<String>,
     pub resource_group: Option<String>,
     pub storage_account_name: Option<String>,
+    /// Resource ids of the identities the Builds' jobs run as (`${buildIdentityId}`). A grant
+    /// that names it is bound once per identity; with none (no Build in the stack) it binds nowhere.
+    pub build_identity_ids: Vec<String>,
+    /// Resource id of the Container Apps environment a Build's jobs join (`${buildEnvironmentId}`).
+    pub build_environment_id: Option<String>,
+    /// Resource group scope (`/subscriptions/<id>/resourceGroups/<name>`) of that environment.
+    /// A custom role can be assignable only at a resource group, subscription or management
+    /// group, so the role behind the join grant is assignable here while the assignment itself
+    /// stays on the environment.
+    pub build_environment_group_id: Option<String>,
 
     // GCP cross-project management variables
     pub managing_project_id: Option<String>,
@@ -97,6 +107,9 @@ impl PermissionContext {
             subscription_id: None,
             resource_group: None,
             storage_account_name: None,
+            build_identity_ids: Vec::new(),
+            build_environment_id: None,
+            build_environment_group_id: None,
             managing_project_id: None,
             managing_subscription_id: None,
             managing_resource_group: None,
@@ -194,6 +207,32 @@ impl PermissionContext {
     /// Builder pattern for Azure storage account name
     pub fn with_storage_account_name(mut self, storage_account_name: impl Into<String>) -> Self {
         self.storage_account_name = Some(storage_account_name.into());
+        self
+    }
+
+    /// Builder pattern for the identity a Build's jobs run as
+    pub fn with_build_identity_id(mut self, id: impl Into<String>) -> Self {
+        let id = id.into();
+        if !self.build_identity_ids.contains(&id) {
+            self.build_identity_ids.push(id);
+        }
+        self
+    }
+
+    /// Builder pattern for the environment a Build's jobs join
+    pub fn with_build_environment_id(mut self, id: impl Into<String>) -> Self {
+        let id = id.into();
+        if let Some(group) = resource_group_scope_of(&id) {
+            self.build_environment_group_id = Some(group);
+        }
+        self.build_environment_id = Some(id);
+        self
+    }
+
+    /// Builder pattern for the resource group scope of the environment a Build's jobs join,
+    /// for an environment whose id is not yet known as a literal (Terraform references).
+    pub fn with_build_environment_group_id(mut self, id: impl Into<String>) -> Self {
+        self.build_environment_group_id = Some(id.into());
         self
     }
 
@@ -322,6 +361,8 @@ impl PermissionContext {
             "subscriptionId" => self.subscription_id.as_deref(),
             "resourceGroup" => self.resource_group.as_deref(),
             "storageAccountName" => self.storage_account_name.as_deref(),
+            "buildIdentityId" => self.build_identity_ids.first().map(String::as_str),
+            "buildEnvironmentId" => self.build_environment_id.as_deref(),
             "stackPrefix" => self.stack_prefix.as_deref(),
             "stackName" => self.stack_name.as_deref(),
             "deploymentName" => self.deployment_name.as_deref(),
@@ -365,5 +406,23 @@ impl std::fmt::Display for BindingTarget {
             BindingTarget::Stack => write!(f, "stack"),
             BindingTarget::Resource => write!(f, "resource"),
         }
+    }
+}
+
+/// The `/subscriptions/<id>/resourceGroups/<name>` prefix of an Azure resource id, when it has one.
+pub fn resource_group_scope_of(resource_id: &str) -> Option<String> {
+    let segments: Vec<&str> = resource_id.split('/').collect();
+    match segments.as_slice() {
+        ["", subscriptions, subscription, resource_groups, group, ..]
+            if subscriptions.eq_ignore_ascii_case("subscriptions")
+                && resource_groups.eq_ignore_ascii_case("resourceGroups")
+                && !subscription.is_empty()
+                && !group.is_empty() =>
+        {
+            Some(format!(
+                "/subscriptions/{subscription}/resourceGroups/{group}"
+            ))
+        }
+        _ => None,
     }
 }

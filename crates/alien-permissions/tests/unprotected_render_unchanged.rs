@@ -40,18 +40,26 @@ fn without_signing_settings_guard(set: &PermissionSet) -> PermissionSet {
     set
 }
 
+/// The Build identity and environment the Azure build grants name, so that `build/execute`
+/// renders real grants here instead of an error that pins nothing.
+fn with_build(context: PermissionContext) -> PermissionContext {
+    context
+        .with_build_identity_id("/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-observability-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/my-stack-build-sa")
+        .with_build_environment_id("/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-observability-prod/providers/Microsoft.App/managedEnvironments/my-stack-env")
+}
+
 fn contexts() -> Vec<(&'static str, PermissionContext)> {
     vec![
-        ("plain", create_test_context()),
+        ("plain", with_build(create_test_context())),
         (
             "aws-boundary",
-            create_test_context().with_aws_permissions_boundary_arn(
+            with_build(create_test_context()).with_aws_permissions_boundary_arn(
                 "arn:aws:iam::123456789012:policy/my-stack-boundary",
             ),
         ),
         (
             "gcp-managing",
-            create_test_context().with_managing_project_id("vendor-project"),
+            with_build(create_test_context()).with_managing_project_id("vendor-project"),
         ),
     ]
 }

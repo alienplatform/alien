@@ -7,6 +7,7 @@ use alien_core::{bindings::BuildBinding, BuildConfig, BuildExecution, BuildStatu
 use alien_error::Context;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use alien_azure_clients::{
     container_apps::{AzureContainerAppsClient, ContainerAppsApi},
@@ -14,18 +15,23 @@ use alien_azure_clients::{
     models::jobs::{
         Container as JobContainer, ContainerResources as JobContainerResources,
         EnvironmentVar as JobEnvironmentVar, Job, JobConfiguration,
-        JobConfigurationManualTriggerConfig, JobConfigurationTriggerType, JobProperties,
-        JobTemplate, ManagedServiceIdentity, ManagedServiceIdentityType, Parallelism,
-        ReplicaCompletionCount, UserAssignedIdentities, UserAssignedIdentity,
+        JobConfigurationManualTriggerConfig, JobConfigurationTriggerType,
+        JobExecutionPropertiesStatus, JobProperties, JobTemplate, ManagedServiceIdentity,
+        ManagedServiceIdentityType, Parallelism, ReplicaCompletionCount, UserAssignedIdentities,
+        UserAssignedIdentity,
     },
     AzureClientConfig, AzureTokenCache,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 
+/// How often, and how many times, to read a job whose create is still running.
+const PROVISION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+const PROVISION_POLL_LIMIT: u32 = 90;
+
 /// Azure implementation of the `Build` trait using Container Apps Jobs.
 #[derive(Debug)]
 pub struct AcaBuild {
-    client: AzureContainerAppsClient,
+    client: Arc<dyn ContainerAppsApi>,
     binding_name: String,
     resource_prefix: String,
     #[allow(dead_code)]
@@ -45,10 +51,10 @@ impl AcaBuild {
         binding: BuildBinding,
         azure_config: &AzureClientConfig,
     ) -> Result<Self, Error> {
-        let client = AzureContainerAppsClient::new(
+        let client: Arc<dyn ContainerAppsApi> = Arc::new(AzureContainerAppsClient::new(
             crate::http_client::create_http_client(),
             AzureTokenCache::new(azure_config.clone()),
-        );
+        ));
 
         // Extract values from binding
         let config = match binding {
@@ -167,16 +173,100 @@ impl AcaBuild {
         }
     }
 
-    /// Convert Azure Container Apps Job status to alien BuildStatus
-    fn map_build_status(status: Option<&str>) -> BuildStatus {
+    /// Convert the status of a Container Apps job execution to alien BuildStatus.
+    fn map_execution_status(status: Option<&JobExecutionPropertiesStatus>) -> BuildStatus {
         match status {
-            Some("Succeeded") => BuildStatus::Succeeded,
-            Some("Failed") => BuildStatus::Failed,
-            Some("Cancelled") => BuildStatus::Cancelled,
-            Some("Running") => BuildStatus::Running,
-            Some("Pending") => BuildStatus::Queued,
-            _ => BuildStatus::Queued,
+            Some(JobExecutionPropertiesStatus::Succeeded) => BuildStatus::Succeeded,
+            Some(JobExecutionPropertiesStatus::Failed | JobExecutionPropertiesStatus::Degraded) => {
+                BuildStatus::Failed
+            }
+            Some(JobExecutionPropertiesStatus::Stopped) => BuildStatus::Cancelled,
+            Some(
+                JobExecutionPropertiesStatus::Running | JobExecutionPropertiesStatus::Processing,
+            ) => BuildStatus::Running,
+            Some(JobExecutionPropertiesStatus::Unknown) | None => BuildStatus::Queued,
         }
+    }
+
+    /// A build id is the execution id `.../jobs/<job>/executions/<execution>` (or the tail
+    /// `<job>/executions/<execution>`). A bare job name, from an older build, has no execution.
+    fn split_build_id(build_id: &str) -> (&str, Option<&str>) {
+        let parts: Vec<&str> = build_id.split('/').collect();
+        match parts.iter().rposition(|p| *p == "executions") {
+            Some(i) if i >= 1 && i + 1 < parts.len() => (parts[i - 1], Some(parts[i + 1])),
+            _ => (parts.last().copied().unwrap_or(build_id), None),
+        }
+    }
+
+    /// The execution of a job that was just started: the job is new, so it has exactly one.
+    async fn find_started_execution(&self, job_name: &str) -> Result<String, Error> {
+        let executions = self
+            .client
+            .list_job_executions(&self.resource_group_name, job_name)
+            .await
+            .map_err(|e| {
+                map_cloud_client_error(
+                    e,
+                    format!("Failed to list executions of Azure Container Apps job '{job_name}'"),
+                    None,
+                )
+            })?;
+        executions
+            .into_iter()
+            .find_map(|execution| execution.name)
+            .ok_or_else(|| {
+                Error::new(ErrorData::BuildOperationFailed {
+                    binding_name: self.binding_name.clone(),
+                    operation: format!(
+                        "start Azure Container Apps job '{job_name}': no execution was created"
+                    ),
+                })
+            })
+    }
+
+    /// Polls the job's provisioning state until the create has finished. A create that ends in
+    /// Failed or Canceled is an error; one still running after the limit is too.
+    async fn wait_until_provisioned(&self, job_name: &str) -> Result<(), Error> {
+        for _ in 0..PROVISION_POLL_LIMIT {
+            let job = self
+                .client
+                .get_job(&self.resource_group_name, job_name)
+                .await
+                .map_err(|e| {
+                    map_cloud_client_error(
+                        e,
+                        format!(
+                            "Failed to read Azure Container Apps job '{}' while it is created",
+                            job_name
+                        ),
+                        None,
+                    )
+                })?;
+            let state = job
+                .properties
+                .as_ref()
+                .and_then(|props| props.provisioning_state.as_ref())
+                .map(|state| format!("{state:?}"));
+            match state.as_deref() {
+                Some("Succeeded") => return Ok(()),
+                Some(state @ ("Failed" | "Canceled" | "Cancelled")) => {
+                    return Err(Error::new(ErrorData::BuildOperationFailed {
+                        binding_name: self.binding_name.clone(),
+                        operation: format!(
+                            "create Azure Container Apps job '{job_name}': provisioning {state}"
+                        ),
+                    }));
+                }
+                _ => tokio::time::sleep(PROVISION_POLL_INTERVAL).await,
+            }
+        }
+        Err(Error::new(ErrorData::BuildOperationFailed {
+            binding_name: self.binding_name.clone(),
+            operation: format!(
+                "create Azure Container Apps job '{job_name}': still provisioning after {} seconds",
+                PROVISION_POLL_LIMIT as u64 * PROVISION_POLL_INTERVAL.as_secs()
+            ),
+        }))
     }
 
     /// Generate a unique job name for the build
@@ -324,18 +414,55 @@ impl Build for AcaBuild {
                 )
             })?;
 
-        let build_id = match operation_result {
-            OperationResult::Completed(created_job) => {
-                created_job.id.unwrap_or_else(|| job_name.clone())
+        // From here the job exists but has not run. If it cannot be provisioned or started it
+        // would stay behind, unstarted and unnamed by any build id, so delete it before failing.
+        let started_execution: Result<String, Error> = async {
+            // A long-running create has not finished when it returns: starting the job before it has
+            // provisioned is refused. Wait for the job to be provisioned, then start it.
+            if let OperationResult::LongRunning(_) = operation_result {
+                self.wait_until_provisioned(&job_name).await?;
             }
-            OperationResult::LongRunning(_) => {
-                // For long-running operations, we'll use the job name as ID
-                job_name.clone()
+
+            // The job has a Manual trigger: creating it runs nothing. Start one execution now. Its id
+            // is the build id, and its status is what get_build_status reports.
+            let started = self
+                .client
+                .start_job(&self.resource_group_name, &job_name)
+                .await
+                .map_err(|e| {
+                    map_cloud_client_error(
+                        e,
+                        format!("Failed to start Azure Container Apps job '{}'", job_name),
+                        None,
+                    )
+                })?;
+            let execution_name = match started {
+                OperationResult::Completed(execution) => execution.name,
+                OperationResult::LongRunning(_) => None,
+            };
+            let execution_name = match execution_name {
+                Some(name) => name,
+                None => self.find_started_execution(&job_name).await?,
+            };
+            Ok(execution_name)
+        }
+        .await;
+        let execution_name = match started_execution {
+            Ok(name) => name,
+            Err(error) => {
+                if let Err(cleanup) = self
+                    .client
+                    .delete_job(&self.resource_group_name, &job_name)
+                    .await
+                {
+                    tracing::warn!(job = %job_name, error = %cleanup, "Failed to delete the job of a build that did not start");
+                }
+                return Err(error);
             }
         };
 
         Ok(BuildExecution {
-            id: build_id,
+            id: format!("{job_name}/executions/{execution_name}"),
             status: BuildStatus::Queued,
             start_time: Some(chrono::Utc::now().to_rfc3339()),
             end_time: None,
@@ -343,40 +470,53 @@ impl Build for AcaBuild {
     }
 
     async fn get_build_status(&self, build_id: &str) -> Result<BuildExecution, Error> {
-        // Extract job name from build ID (could be a full resource ID or just the name)
-        let job_name = if build_id.contains("/") {
-            build_id.split('/').last().unwrap_or(build_id)
-        } else {
-            build_id
-        };
+        let (job_name, execution_name) = Self::split_build_id(build_id);
 
-        let job_result = self
-            .client
-            .get_job(&self.resource_group_name, job_name)
-            .await;
+        let result = async {
+            let execution_name = match execution_name {
+                Some(name) => name.to_string(),
+                None => self
+                    .client
+                    .list_job_executions(&self.resource_group_name, job_name)
+                    .await?
+                    .into_iter()
+                    .find_map(|execution| execution.name)
+                    .unwrap_or_default(),
+            };
+            if execution_name.is_empty() {
+                return Ok(None);
+            }
+            self.client
+                .get_job_execution(&self.resource_group_name, job_name, &execution_name)
+                .await
+                .map(Some)
+        }
+        .await;
 
-        match job_result {
-            Ok(job) => {
-                let status = job
-                    .properties
-                    .as_ref()
-                    .and_then(|props| props.provisioning_state.as_ref())
-                    .map(|ps| Self::map_build_status(Some(&format!("{:?}", ps))))
-                    .unwrap_or(BuildStatus::Queued);
-
+        match result {
+            Ok(execution) => {
+                let properties = execution.and_then(|e| e.properties);
+                let status =
+                    Self::map_execution_status(properties.as_ref().and_then(|p| p.status.as_ref()));
                 let end_time = if matches!(
                     status,
                     BuildStatus::Succeeded | BuildStatus::Failed | BuildStatus::Cancelled
                 ) {
-                    Some(chrono::Utc::now().to_rfc3339())
+                    Some(
+                        properties
+                            .as_ref()
+                            .and_then(|p| p.end_time.clone())
+                            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+                    )
                 } else {
                     None
                 };
-
                 Ok(BuildExecution {
                     id: build_id.to_string(),
                     status,
-                    start_time: Some(chrono::Utc::now().to_rfc3339()),
+                    start_time: properties
+                        .and_then(|p| p.start_time)
+                        .or_else(|| Some(chrono::Utc::now().to_rfc3339())),
                     end_time,
                 })
             }
@@ -391,12 +531,11 @@ impl Build for AcaBuild {
                         end_time: Some(chrono::Utc::now().to_rfc3339()),
                     })
                 } else {
-                    // For other errors, propagate them
                     Err(map_cloud_client_error(
                         err,
                         format!(
-                            "Failed to get Azure Container Apps job status for '{}'",
-                            job_name
+                            "Failed to get Azure Container Apps job execution status for '{}'",
+                            build_id
                         ),
                         Some(build_id.to_string()),
                     ))
@@ -406,12 +545,7 @@ impl Build for AcaBuild {
     }
 
     async fn stop_build(&self, build_id: &str) -> Result<(), Error> {
-        // Extract job name from build ID
-        let job_name = if build_id.contains("/") {
-            build_id.split('/').last().unwrap_or(build_id)
-        } else {
-            build_id
-        };
+        let (job_name, _) = Self::split_build_id(build_id);
 
         // For Azure Container Apps Jobs, stopping means deleting the job
         self.client
@@ -430,3 +564,260 @@ impl Build for AcaBuild {
 }
 
 impl Binding for AcaBuild {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_azure_clients::container_apps::MockContainerAppsApi;
+    use std::sync::Mutex;
+
+    fn build(client: MockContainerAppsApi) -> AcaBuild {
+        AcaBuild {
+            client: Arc::new(client),
+            binding_name: "b".to_string(),
+            resource_prefix: "p".to_string(),
+            subscription_id: "sub".to_string(),
+            resource_group_name: "rg".to_string(),
+            managed_environment_id: "env".to_string(),
+            managed_identity_id: None,
+            build_env_vars: HashMap::new(),
+            region: "eastus".to_string(),
+            monitoring: None,
+        }
+    }
+
+    fn config() -> BuildConfig {
+        BuildConfig {
+            image: "ubuntu:22.04".to_string(),
+            script: "true".to_string(),
+            environment: HashMap::new(),
+            timeout_seconds: 30,
+            compute_type: ComputeType::Small,
+            monitoring: None,
+        }
+    }
+
+    /// A Manual-trigger job runs nothing until it is started: `start_build` must create the job
+    /// and then start it, in that order, on the job it created.
+    #[tokio::test]
+    async fn start_build_creates_the_job_and_then_starts_it() {
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut client = MockContainerAppsApi::new();
+        let log = calls.clone();
+        client
+            .expect_create_or_update_job()
+            .times(1)
+            .returning(move |_, name, _| {
+                log.lock().unwrap().push(format!("create {name}"));
+                let job = serde_json::from_str(r#"{"location":"eastus"}"#).unwrap();
+                Ok(OperationResult::Completed(job))
+            });
+        let log = calls.clone();
+        client
+            .expect_start_job()
+            .times(1)
+            .returning(move |rg, name| {
+                log.lock().unwrap().push(format!("start {rg} {name}"));
+                let execution = serde_json::from_str(r#"{"name":"j-abc"}"#).unwrap();
+                Ok(OperationResult::Completed(execution))
+            });
+
+        let execution = build(client).start_build(config()).await.unwrap();
+        assert_eq!(execution.status, BuildStatus::Queued);
+
+        let calls = calls.lock().unwrap();
+        assert!(
+            execution.id.ends_with("/executions/j-abc"),
+            "the build id names the started execution: {}",
+            execution.id
+        );
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        let job = calls[0].strip_prefix("create ").expect("create first");
+        assert!(job.starts_with("build-"), "{job}");
+        assert_eq!(calls[1], format!("start rg {job}"));
+    }
+
+    /// A long-running create must finish before the job is started: the job is read until it is
+    /// provisioned, and only then started.
+    #[tokio::test(start_paused = true)]
+    async fn start_build_waits_for_a_long_running_create_before_starting() {
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut client = MockContainerAppsApi::new();
+        let log = calls.clone();
+        client
+            .expect_create_or_update_job()
+            .times(1)
+            .returning(move |_, _, _| {
+                log.lock().unwrap().push("create".to_string());
+                Ok(OperationResult::LongRunning(
+                    alien_azure_clients::long_running_operation::LongRunningOperation {
+                        url: "https://management.azure.com/op".to_string(),
+                        retry_after: None,
+                        location_url: None,
+                    },
+                ))
+            });
+        let log = calls.clone();
+        let reads = Arc::new(Mutex::new(0));
+        client.expect_get_job().returning(move |_, _| {
+            let mut reads = reads.lock().unwrap();
+            *reads += 1;
+            let state = if *reads < 3 {
+                "InProgress"
+            } else {
+                "Succeeded"
+            };
+            log.lock().unwrap().push(format!("get {state}"));
+            Ok(serde_json::from_str(&format!(
+                r#"{{"location":"eastus","properties":{{"provisioningState":"{state}"}}}}"#
+            ))
+            .unwrap())
+        });
+        let log = calls.clone();
+        client.expect_start_job().times(1).returning(move |_, _| {
+            log.lock().unwrap().push("start".to_string());
+            Ok(OperationResult::Completed(
+                serde_json::from_str(r#"{"name":"j-abc"}"#).unwrap(),
+            ))
+        });
+
+        build(client).start_build(config()).await.unwrap();
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                "create",
+                "get InProgress",
+                "get InProgress",
+                "get Succeeded",
+                "start"
+            ]
+        );
+    }
+
+    /// A create that ends Failed is an error and the job is never started.
+    #[tokio::test(start_paused = true)]
+    async fn start_build_does_not_start_a_job_whose_create_failed() {
+        let mut client = MockContainerAppsApi::new();
+        client.expect_create_or_update_job().returning(|_, _, _| {
+            Ok(OperationResult::LongRunning(
+                alien_azure_clients::long_running_operation::LongRunningOperation {
+                    url: "https://management.azure.com/op".to_string(),
+                    retry_after: None,
+                    location_url: None,
+                },
+            ))
+        });
+        client.expect_get_job().returning(|_, _| {
+            Ok(serde_json::from_str(
+                r#"{"location":"eastus","properties":{"provisioningState":"Failed"}}"#,
+            )
+            .unwrap())
+        });
+        client.expect_start_job().times(0);
+        // The unstarted job is deleted, not left behind.
+        client
+            .expect_delete_job()
+            .times(1)
+            .returning(|_, _| Ok(OperationResult::Completed(())));
+
+        assert!(build(client).start_build(config()).await.is_err());
+    }
+
+    /// A start that is refused deletes the job it created.
+    #[tokio::test]
+    async fn start_build_deletes_the_job_when_the_start_fails() {
+        let mut client = MockContainerAppsApi::new();
+        client.expect_create_or_update_job().returning(|_, _, _| {
+            Ok(OperationResult::Completed(
+                serde_json::from_str(r#"{"location":"eastus"}"#).unwrap(),
+            ))
+        });
+        client.expect_start_job().returning(|_, _| {
+            Err(alien_client_core::Error::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "job".to_string(),
+                    resource_name: "j".to_string(),
+                },
+            ))
+        });
+        client
+            .expect_delete_job()
+            .times(1)
+            .returning(|_, _| Ok(OperationResult::Completed(())));
+
+        assert!(build(client).start_build(config()).await.is_err());
+    }
+
+    /// A start that returns no execution (a long-running start) is resolved by listing the new
+    /// job's executions.
+    #[tokio::test]
+    async fn start_build_finds_the_execution_when_start_returns_none() {
+        let mut client = MockContainerAppsApi::new();
+        client.expect_create_or_update_job().returning(|_, _, _| {
+            Ok(OperationResult::Completed(
+                serde_json::from_str(r#"{"location":"eastus"}"#).unwrap(),
+            ))
+        });
+        client.expect_start_job().returning(|_, _| {
+            Ok(OperationResult::Completed(
+                serde_json::from_str("{}").unwrap(),
+            ))
+        });
+        client
+            .expect_list_job_executions()
+            .returning(|_, _| Ok(vec![serde_json::from_str(r#"{"name":"j-xyz"}"#).unwrap()]));
+        let started = build(client).start_build(config()).await.unwrap();
+        assert!(started.id.ends_with("/executions/j-xyz"), "{}", started.id);
+    }
+
+    fn status_of_execution(status: &'static str) -> MockContainerAppsApi {
+        let mut client = MockContainerAppsApi::new();
+        client
+            .expect_get_job_execution()
+            .withf(|rg, job, exec| rg == "rg" && job == "build-p-1" && exec == "e1")
+            .returning(move |_, _, _| {
+                Ok(serde_json::from_str(&format!(
+                    r#"{{"name":"e1","properties":{{"status":"{status}"}}}}"#
+                ))
+                .unwrap())
+            });
+        // The job's own provisioning state is Succeeded the whole time: it must not be read.
+        client.expect_get_job().times(0);
+        client
+    }
+
+    /// The status is the execution's, not the job's: a job that is provisioned while its
+    /// execution still runs reports Running, and a Failed execution reports Failed.
+    #[tokio::test]
+    async fn get_build_status_reads_the_execution_status() {
+        for (azure, want) in [
+            ("Running", BuildStatus::Running),
+            ("Processing", BuildStatus::Running),
+            ("Succeeded", BuildStatus::Succeeded),
+            ("Failed", BuildStatus::Failed),
+            ("Stopped", BuildStatus::Cancelled),
+        ] {
+            let got = build(status_of_execution(azure))
+                .get_build_status("build-p-1/executions/e1")
+                .await
+                .unwrap();
+            assert_eq!(got.status, want, "{azure}");
+            assert_eq!(
+                got.end_time.is_some(),
+                want != BuildStatus::Running,
+                "{azure}"
+            );
+        }
+    }
+
+    /// A full execution resource id works as a build id.
+    #[tokio::test]
+    async fn get_build_status_accepts_a_full_execution_resource_id() {
+        let id = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.App/jobs/build-p-1/executions/e1";
+        let got = build(status_of_execution("Running"))
+            .get_build_status(id)
+            .await
+            .unwrap();
+        assert_eq!(got.status, BuildStatus::Running);
+    }
+}
