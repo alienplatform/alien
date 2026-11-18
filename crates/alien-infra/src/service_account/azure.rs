@@ -424,6 +424,17 @@ impl AzureServiceAccountController {
                     )
                     .await
                     .map_err(|error| {
+                        if let Some(CloudClientErrorData::RemoteResourceConflict { .. }) =
+                            error.error
+                        {
+                            return crate::core::AzurePermissionsHelper::role_name_conflict(
+                                error,
+                                &role_name,
+                                &role_definition_id,
+                                &role_def.assignable_scopes.join(", "),
+                                &config_id,
+                            );
+                        }
                         role_write_denied(
                             error,
                             &config_id,

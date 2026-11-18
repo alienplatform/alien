@@ -765,18 +765,13 @@ impl AzurePermissionsHelper {
             .await
             .map_err(|error| {
                 if let Some(CloudClientErrorData::RemoteResourceConflict { .. }) = error.error {
-                    // A write under the role's own id adopts our role; a conflict is another
-                    // definition holding the name under a different id. Retrying cannot fix it.
-                    return error.context(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "Azure custom role '{role_name}' cannot be written under id \
-                             '{role_definition_id}': another role definition in this directory \
-                             already has that name with a different id (for example one left by \
-                             an earlier install or run). Delete that role definition, or use a \
-                             different resource prefix."
-                        ),
-                        resource_id: Some(permission_set_id.to_string()),
-                    });
+                    return Self::role_name_conflict(
+                        error,
+                        &role_name,
+                        role_definition_id,
+                        &assignable_scopes_text,
+                        permission_set_id,
+                    );
                 }
                 role_write_error(
                     error,
@@ -803,6 +798,28 @@ impl AzurePermissionsHelper {
         );
 
         Ok(())
+    }
+
+    /// A write under the role's own id adopts our role; a conflict is another definition holding
+    /// the name under a different id. Retrying cannot fix it, so it is not retryable, and it names
+    /// the role, its id and the scopes it was to be assignable at.
+    pub(crate) fn role_name_conflict(
+        error: AlienError<CloudClientErrorData>,
+        role_name: &str,
+        role_definition_id: &str,
+        assignable_scopes: &str,
+        resource_id: &str,
+    ) -> AlienError<ErrorData> {
+        error.context(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "Azure custom role '{role_name}' (assignable at {assignable_scopes}) cannot be \
+                 written under id '{role_definition_id}': another role definition in this \
+                 directory already has that name with a different id (for example one left by \
+                 an earlier install or run). Delete that role definition, or use a different \
+                 resource prefix."
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })
     }
 
     fn resource_custom_role_definition_uuid(
@@ -1999,6 +2016,34 @@ mod tests {
         let text = format!("{error:?}");
         assert!(text.contains("p-Identity x [execution]"), "{text}");
         assert!(text.contains("11111111-1111-1111-1111-111111111111"), "{text}");
+        assert!(text.contains("resourceGroups/rg-123"), "names the scope: {text}");
+    }
+
+    /// The stack-wide path (service account controller) uses the same conflict error: not
+    /// retryable, and it names the role, its id and the scopes.
+    #[test]
+    fn the_shared_conflict_error_names_the_role_id_and_scopes_and_is_not_retryable() {
+        let error = AzurePermissionsHelper::role_name_conflict(
+            AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+                resource_type: "Resource".to_string(),
+                resource_name: "id".to_string(),
+                message: "same name".to_string(),
+            }),
+            "p-Identity x [execution]",
+            "22222222-2222-2222-2222-222222222222",
+            "/subscriptions/s/resourceGroups/a, /subscriptions/s/resourceGroups/b",
+            "execution-sa",
+        );
+        assert!(!error.retryable, "{error:?}");
+        let text = format!("{error:?}");
+        for part in [
+            "p-Identity x [execution]",
+            "22222222-2222-2222-2222-222222222222",
+            "resourceGroups/a",
+            "resourceGroups/b",
+        ] {
+            assert!(text.contains(part), "{part}: {text}");
+        }
     }
 
     /// A build's role is written in the stack's group and, for the join grant on an environment
