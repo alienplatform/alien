@@ -3121,6 +3121,18 @@ fn push_cache_key(kind: &str, path: &str, platform: Platform) -> Option<String> 
     Some(format!("{kind}:{name}"))
 }
 
+/// [`push_cache_key`] of `sandbox`'s artifact at `path`. It also covers what the declaration
+/// adds to the image (GCP's persistent storage), so declaring or changing it pushes again; a
+/// sandbox that adds nothing keeps the plain key.
+fn sandbox_push_cache_key(sandbox: &Sandbox, path: &str, platform: Platform) -> Option<String> {
+    let name = PathBuf::from(path).file_name()?.to_str()?.to_string();
+    Some(format!(
+        "{}:{}",
+        Sandbox::RESOURCE_TYPE.as_ref(),
+        alien_build::sandbox_push_hash(name, platform, sandbox)
+    ))
+}
+
 /// Apply cached push URIs to a stack, replacing local image paths with
 /// previously-pushed remote URIs where the content hash matches.
 /// Returns the number of cache hits.
@@ -3212,7 +3224,7 @@ fn apply_push_cache_with_destinations(
             }
         } else if let Some(sandbox) = resource_entry.config.downcast_mut::<Sandbox>() {
             if let SandboxCode::Image { ref image, .. } = sandbox.code {
-                if let Some(key) = push_cache_key(&cache_kind, image, platform) {
+                if let Some(key) = sandbox_push_cache_key(sandbox, image, platform) {
                     if let Some(cached_uri) = cache
                         .get(&key)
                         .filter(|uri| image_uri_belongs_to_repository(uri, repository))
@@ -3315,11 +3327,15 @@ fn collect_push_cache_entries(
 
             // Find the original local path for this resource to use as cache key
             if let Some(original_path) = pre_push_images.get(resource_id) {
-                if let Some(key) = push_cache_key(
-                    resource_entry.config.resource_type().as_ref(),
-                    original_path,
-                    platform,
-                ) {
+                let key = match resource_entry.config.downcast_ref::<Sandbox>() {
+                    Some(sandbox) => sandbox_push_cache_key(sandbox, original_path, platform),
+                    None => push_cache_key(
+                        resource_entry.config.resource_type().as_ref(),
+                        original_path,
+                        platform,
+                    ),
+                };
+                if let Some(key) = key {
                     cache.insert(key, uri);
                 }
             }
@@ -4834,6 +4850,63 @@ mod tests {
             existing.message.contains("Failed to load configuration"),
             "an existing channel passes the check and the flow reaches the stack: {}",
             existing.message
+        );
+    }
+
+    /// A GCP sandbox's image carries its persistent storage declaration, so a cached push of
+    /// the same artifact made before it declared one is not reused, and the push that follows
+    /// is cached under the declaration. A sandbox without one keeps the key it always had.
+    #[test]
+    fn a_gcp_sandbox_with_persistent_storage_does_not_reuse_a_push_without_it() {
+        let local = "/tmp/build/gcp/sandbox-synthetic";
+        let repository = "registry.example/acme-prj_a";
+        let plain = sandbox_with_image(local);
+        assert_eq!(
+            sandbox_push_cache_key(&plain, local, Platform::Gcp),
+            push_cache_key("sandbox", local, Platform::Gcp)
+        );
+        let mut stored = plain.clone();
+        stored.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+            path: "/workspace".to_string(),
+            exclude: vec![],
+            max_size: None,
+            encryption_key: None,
+        });
+        let old_key = push_cache_key("sandbox", local, Platform::Gcp).unwrap();
+        let cache = HashMap::from([(old_key, format!("{repository}:old"))]);
+        let before = Stack::new("test".to_string())
+            .add(stored.clone(), ResourceLifecycle::Live)
+            .build();
+        let mut candidate = before.clone();
+        assert_eq!(
+            apply_push_cache(&mut candidate, &cache, repository, Platform::Gcp),
+            0,
+            "a push without the declaration is not reused"
+        );
+
+        let mut pushed = before.clone();
+        for (_, entry) in pushed.resources_mut() {
+            if let Some(sandbox) = entry.config.downcast_mut::<Sandbox>() {
+                sandbox.code = SandboxCode::Image {
+                    image: format!("{repository}:new"),
+                    bundled_from: None,
+                };
+            }
+        }
+        let mut cache = HashMap::new();
+        collect_push_cache_entries(&pushed, &before, &mut cache, Platform::Gcp);
+        let mut again = before.clone();
+        assert_eq!(
+            apply_push_cache(&mut again, &cache, repository, Platform::Gcp),
+            1
+        );
+        let mut unstored = Stack::new("test".to_string())
+            .add(plain, ResourceLifecycle::Live)
+            .build();
+        assert_eq!(
+            apply_push_cache(&mut unstored, &cache, repository, Platform::Gcp),
+            0,
+            "the push with the declaration is not reused without it"
         );
     }
 

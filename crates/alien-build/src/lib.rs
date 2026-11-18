@@ -1453,7 +1453,7 @@ fn strip_local_daemon_only_compute_clusters(stack: &mut Stack, platform: Platfor
 /// Check local AWS Worker images before a release cache can replace their paths.
 /// Remote image references supplied explicitly by the stack are left unchanged.
 pub fn validate_aws_worker_artifacts(stack: &Stack) -> Result<()> {
-    for target in collect_push_targets(stack)? {
+    for target in collect_push_targets(stack, &Platform::Aws)? {
         if target.resource_type == "worker" {
             lambda_image::validate(
                 &target.local_image_dir.join(format!(
@@ -1478,6 +1478,9 @@ struct ResourcePushTarget {
     resource_type: &'static str,
     /// Local directory containing OCI tarballs produced by `alien build`
     local_image_dir: PathBuf,
+    /// Agent variables a sandbox's image carries for its declaration (see
+    /// [`sandbox_image_environment`]). Sandboxes share a push only when these match too.
+    image_environment: std::collections::BTreeMap<String, String>,
 }
 
 impl ResourcePushTarget {
@@ -1507,9 +1510,12 @@ fn push_target_for_local_image<'a>(
     targets: &'a mut Vec<ResourcePushTarget>,
     resource_type: &'static str,
     local_image_dir: &Path,
+    image_environment: &std::collections::BTreeMap<String, String>,
 ) -> Option<&'a mut ResourcePushTarget> {
     targets.iter_mut().find(|target| {
-        target.resource_type == resource_type && target.local_image_dir == local_image_dir
+        target.resource_type == resource_type
+            && target.local_image_dir == local_image_dir
+            && &target.image_environment == image_environment
     })
 }
 
@@ -1520,7 +1526,27 @@ fn add_push_target_resource(
     resource_type: &'static str,
     local_image_dir: PathBuf,
 ) {
-    if let Some(target) = push_target_for_local_image(targets, resource_type, &local_image_dir) {
+    add_push_target_with_environment(
+        targets,
+        resource_id,
+        resource_name,
+        resource_type,
+        local_image_dir,
+        Default::default(),
+    )
+}
+
+fn add_push_target_with_environment(
+    targets: &mut Vec<ResourcePushTarget>,
+    resource_id: String,
+    resource_name: String,
+    resource_type: &'static str,
+    local_image_dir: PathBuf,
+    image_environment: std::collections::BTreeMap<String, String>,
+) {
+    if let Some(target) =
+        push_target_for_local_image(targets, resource_type, &local_image_dir, &image_environment)
+    {
         target.resource_ids.push(resource_id);
         target.resource_names.push(resource_name);
         return;
@@ -1531,6 +1557,7 @@ fn add_push_target_resource(
         resource_names: vec![resource_name],
         resource_type,
         local_image_dir,
+        image_environment,
     });
 }
 
@@ -1543,7 +1570,7 @@ fn add_push_target_resource(
 /// To add a compute resource type, branch here, in [`apply_pushed_images`], and in the CLI
 /// `release` push-cache sites: prebuilt rebase, cache apply, cache collect. One missing from
 /// those three still pushes, but re-pushes on every release.
-fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
+fn collect_push_targets(stack: &Stack, platform: &Platform) -> Result<Vec<ResourcePushTarget>> {
     let mut targets = Vec::new();
 
     for (resource_id, resource_entry) in stack.resources() {
@@ -1640,12 +1667,13 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
                             "Sandbox '{}' has local image directory, queuing for push",
                             sandbox.id
                         );
-                        add_push_target_resource(
+                        add_push_target_with_environment(
                             &mut targets,
                             resource_id.clone(),
                             sandbox.id.clone(),
                             "sandbox",
                             path,
+                            sandbox_image_environment(sandbox, platform),
                         );
                     } else {
                         // A bundle URI and an Azure catalog name reach this branch too: neither
@@ -1750,7 +1778,7 @@ pub async fn push_stack_to_destinations(
     if platform == Platform::Aws {
         validate_aws_worker_artifacts(&stack)?;
     }
-    let to_push = collect_push_targets(&stack)?;
+    let to_push = collect_push_targets(&stack, &platform)?;
 
     let resource_count = to_push
         .iter()
@@ -2226,6 +2254,7 @@ async fn push_target(
         agent_image,
         push_options,
         layered,
+        target.image_environment.clone(),
     )
     .await?;
     if *platform == Platform::Aws {
@@ -2253,12 +2282,16 @@ struct SandboxAgentLayering {
 }
 
 impl SandboxAgentLayering {
-    fn for_build(self) -> gcp_sandbox_image::AgentLayering {
+    fn for_build(
+        self,
+        environment: std::collections::BTreeMap<String, String>,
+    ) -> gcp_sandbox_image::AgentLayering {
         gcp_sandbox_image::AgentLayering {
             arch: self.target.to_dockdash_arch(),
             contract: self.contract,
             image_command_env: self.image_command_env,
             caller_authorization_header: self.caller_authorization_header,
+            environment,
         }
     }
 
@@ -2342,6 +2375,7 @@ async fn push_sandbox_agent_image(
     agent_image: &str,
     push_options: &dockdash::PushOptions,
     layering: SandboxAgentLayering,
+    environment: std::collections::BTreeMap<String, String>,
 ) -> Result<String> {
     let tarball = images_dir.join(format!("{}.oci.tar", layering.target.runtime_platform_id()));
     if !tarball.is_file() {
@@ -2376,7 +2410,7 @@ async fn push_sandbox_agent_image(
         push_options.auth.clone(),
         // The default cache, which every other dockdash build here uses by not naming one.
         dockdash::BlobCache::new().map_dockdash_err()?,
-        layering.for_build(),
+        layering.for_build(environment),
     )
     .await?
     .image;
@@ -2827,6 +2861,44 @@ fn sandbox_agent_layered_on(platform: Platform) -> Option<String> {
         Platform::Gcp | Platform::Azure | Platform::Aws | Platform::Kubernetes
     )
     .then(|| format!("{platform}:{}", gcp_sandbox_image::sandbox_agent_image()))
+}
+
+/// Agent variables `sandbox`'s own image carries on `platform`, beyond the backend's contract.
+///
+/// Only GCP has any: its template has no environment, so the persistent storage declaration
+/// that makes the agent hold the image command until the key is restored travels in the image.
+/// Every other backend sets it at create time. Empty for a sandbox without persistent storage,
+/// whose image and push cache key stay what they were.
+pub fn sandbox_image_environment(
+    sandbox: &Sandbox,
+    platform: &Platform,
+) -> std::collections::BTreeMap<String, String> {
+    let mut environment = std::collections::BTreeMap::new();
+    if *platform == Platform::Gcp {
+        if let Some(value) = alien_core::sandbox_egress::persistent_storage_environment(sandbox) {
+            environment.insert(
+                alien_core::sandbox_egress::ENV_PERSISTENT_STORAGE.to_string(),
+                value,
+            );
+        }
+    }
+    environment
+}
+
+/// The push cache key of `sandbox`'s artifact named `content_hash` on `platform`: the
+/// [`sandbox_image_hash`], and the image's own environment when it has one, so a sandbox whose
+/// declaration changes what its image carries pushes again.
+pub fn sandbox_push_hash(content_hash: String, platform: Platform, sandbox: &Sandbox) -> String {
+    let environment = sandbox_image_environment(sandbox, &platform);
+    let hash = sandbox_image_hash(content_hash, platform);
+    if environment.is_empty() {
+        return hash;
+    }
+    let environment = serde_json::to_string(&environment).expect("a string map serializes");
+    format!(
+        "{:x}",
+        Sha256::digest(format!("{hash}\0env\0{environment}"))
+    )
 }
 
 /// The hash of a sandbox image built for `platform` from inputs that hash to `content_hash`. On
@@ -5555,7 +5627,7 @@ mod tests {
             .add(remote, alien_core::ResourceLifecycle::Frozen)
             .build();
 
-        let targets = collect_push_targets(&stack).unwrap();
+        let targets = collect_push_targets(&stack, &Platform::Gcp).unwrap();
 
         assert_eq!(targets.len(), 2);
         assert_eq!(
@@ -5635,7 +5707,7 @@ mod tests {
             .add(remote_daemon, alien_core::ResourceLifecycle::Live)
             .build();
 
-        let targets = collect_push_targets(&stack).unwrap();
+        let targets = collect_push_targets(&stack, &Platform::Gcp).unwrap();
         assert_eq!(
             targets.len(),
             1,
@@ -5672,7 +5744,7 @@ mod tests {
         let source_stack = Stack::new("daemon-source".to_string())
             .add(source_daemon, alien_core::ResourceLifecycle::Live)
             .build();
-        let error = match collect_push_targets(&source_stack) {
+        let error = match collect_push_targets(&source_stack, &Platform::Gcp) {
             Err(error) => error,
             Ok(_) => panic!("source daemon must be rejected"),
         };
@@ -8050,6 +8122,76 @@ mod sandbox_push_tests {
         }
     }
 
+    /// On GCP the template has no environment, so a sandbox that declares persistent storage
+    /// carries the agent's variable in its own image: it gets a push of its own even when it
+    /// shares the artifact with a sandbox that declares none, which keeps the plain image and
+    /// push key. Other clouds set the variable at create time and share the push as before.
+    #[test]
+    fn a_gcp_sandbox_with_persistent_storage_gets_its_own_image_environment() {
+        let local = tempfile::tempdir().expect("temp dir");
+        let local_image = local.path().to_string_lossy().to_string();
+        let mut stored = sandbox("stored", &local_image);
+        stored.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+            path: "/workspace".to_string(),
+            exclude: vec!["tmp/".to_string()],
+            max_size: Some("8Gi".to_string()),
+            encryption_key: None,
+        });
+        let stack = Stack::new("sandboxes".to_string())
+            .add(sandbox("plain", &local_image), ResourceLifecycle::Live)
+            .add(stored.clone(), ResourceLifecycle::Live)
+            .build();
+
+        let targets = collect_push_targets(&stack, &Platform::Gcp).expect("collects");
+        assert_eq!(targets.len(), 2, "one push per image environment");
+        assert_eq!(targets[0].resource_ids, vec!["plain".to_string()]);
+        assert!(targets[0].image_environment.is_empty());
+        assert_eq!(targets[1].resource_ids, vec!["stored".to_string()]);
+        let value =
+            &targets[1].image_environment[alien_core::sandbox_egress::ENV_PERSISTENT_STORAGE];
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(value).expect("json"),
+            serde_json::json!({
+                "path": "/workspace",
+                "exclude": ["tmp/"],
+                "maxSizeBytes": 8u64 << 30,
+            })
+        );
+        assert_eq!(targets[1].image_environment.len(), 1);
+
+        for platform in [Platform::Aws, Platform::Azure, Platform::Kubernetes] {
+            let targets = collect_push_targets(&stack, &platform).expect("collects");
+            assert_eq!(targets.len(), 1, "{platform}: one shared push");
+            assert!(targets[0].image_environment.is_empty(), "{platform}");
+        }
+
+        let plain = sandbox("plain", &local_image);
+        assert_eq!(
+            sandbox_push_hash("abc".into(), Platform::Gcp, &plain),
+            sandbox_image_hash("abc".into(), Platform::Gcp),
+            "a sandbox without persistent storage keeps its push key"
+        );
+        assert_ne!(
+            sandbox_push_hash("abc".into(), Platform::Gcp, &stored),
+            sandbox_image_hash("abc".into(), Platform::Gcp)
+        );
+        let mut resized = stored.clone();
+        resized
+            .persistent_storage
+            .as_mut()
+            .expect("declared")
+            .max_size = Some("9Gi".into());
+        assert_ne!(
+            sandbox_push_hash("abc".into(), Platform::Gcp, &stored),
+            sandbox_push_hash("abc".into(), Platform::Gcp, &resized),
+            "a changed declaration pushes again"
+        );
+        assert_eq!(
+            sandbox_push_hash("abc".into(), Platform::Aws, &stored),
+            sandbox_image_hash("abc".into(), Platform::Aws)
+        );
+    }
+
     /// A locally-built base image is the only sandbox image `alien release` claims, and what the
     /// release record ends up carrying is the proxy URI — no local path, and no registry the
     /// developer had to name.
@@ -8070,7 +8212,7 @@ mod sandbox_push_tests {
             )
             .build();
 
-        let targets = collect_push_targets(&stack).expect("collects");
+        let targets = collect_push_targets(&stack, &Platform::Gcp).expect("collects");
         assert_eq!(
             targets.len(),
             1,
@@ -8125,7 +8267,7 @@ mod sandbox_push_tests {
             )
             .build();
 
-        let targets = collect_push_targets(&stack).expect("collects");
+        let targets = collect_push_targets(&stack, &Platform::Gcp).expect("collects");
         let mut types: Vec<&str> = targets.iter().map(|target| target.resource_type).collect();
         types.sort_unstable();
         assert_eq!(types, vec!["sandbox", "worker"]);
@@ -8172,7 +8314,7 @@ mod sandbox_push_tests {
                 ResourceLifecycle::Frozen,
             )
             .build();
-        let targets = collect_push_targets(&stack).expect("collects");
+        let targets = collect_push_targets(&stack, &Platform::Gcp).expect("collects");
         let repository = format!("{host}/proj/sandbox");
 
         for platform in [Platform::Gcp, Platform::Azure] {
@@ -8274,7 +8416,7 @@ mod sandbox_push_tests {
                 ResourceLifecycle::Frozen,
             )
             .build();
-        let targets = collect_push_targets(&stack).expect("collects");
+        let targets = collect_push_targets(&stack, &Platform::Gcp).expect("collects");
         let image = push_target(
             &targets[0],
             &Platform::Kubernetes,
@@ -8342,7 +8484,8 @@ mod sandbox_push_tests {
             )
             .build();
 
-        let error = collect_push_targets(&stack).expect_err("source sandboxes are refused");
+        let error =
+            collect_push_targets(&stack, &Platform::Gcp).expect_err("source sandboxes are refused");
         assert_eq!(error.code, "INVALID_RESOURCE_CONFIG");
         assert!(
             error.to_string().contains("Run 'alien build' first"),

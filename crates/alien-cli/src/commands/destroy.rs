@@ -566,10 +566,8 @@ async fn destroy_tracked_deployment(
         .context(ErrorData::ConfigurationError {
             message: "Failed to deserialize environment_info".to_string(),
         })?;
-    let client_env = client_env_with_stored_region(
-        std::env::vars().collect(),
-        stored_environment_info.as_ref(),
-    );
+    let client_env =
+        client_env_with_stored_region(std::env::vars().collect(), stored_environment_info.as_ref());
     let client_config = ClientConfig::from_env(platform, &client_env)
         .await
         .context(ErrorData::ConfigurationError {
@@ -2032,7 +2030,10 @@ mod tests {
             region: "europe-west4".to_string(),
         });
         let env = client_env_with_stored_region(Default::default(), Some(&stored));
-        assert_eq!(env.get("GCP_REGION").map(String::as_str), Some("europe-west4"));
+        assert_eq!(
+            env.get("GCP_REGION").map(String::as_str),
+            Some("europe-west4")
+        );
 
         let explicit = [("GCP_REGION".to_string(), "us-east1".to_string())]
             .into_iter()
