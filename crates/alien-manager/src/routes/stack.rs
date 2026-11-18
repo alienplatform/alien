@@ -1747,6 +1747,7 @@ async fn prepare_import_stack(
         .resources
         .iter()
         .any(|resource| resource.id == "enable-cloud-quotas");
+    let stack_settings = &settings_with_imported_cluster_namespace(req, stack_settings)?;
     prepare_setup_stack(
         source_stack,
         &PrepareSetupStack {
@@ -1762,6 +1763,47 @@ async fn prepare_import_stack(
         stack_settings,
     )
     .await
+}
+
+/// The Kubernetes namespace the setup installed into, when the registered settings name none.
+///
+/// A Terraform module registers `kubernetes.cluster.ownership` only; the namespace it chose is in
+/// the imported `kubernetes` resource. The Operator's chart always runs the cluster in its Helm
+/// release namespace, so a baseline prepared with the default namespace would read as a change
+/// to the setup-owned cluster at the Operator's first update.
+fn settings_with_imported_cluster_namespace(
+    req: &StackImportRequest,
+    settings: &StackSettings,
+) -> crate::error::Result<StackSettings> {
+    let mut settings = settings.clone();
+    let Some(cluster) = settings
+        .kubernetes
+        .as_mut()
+        .and_then(|kubernetes| kubernetes.cluster.as_mut())
+        .filter(|cluster| cluster.namespace.is_none())
+    else {
+        return Ok(settings);
+    };
+    let Some(resource) = req
+        .resources
+        .iter()
+        .find(|resource| resource.resource_type == alien_core::KubernetesCluster::RESOURCE_TYPE)
+    else {
+        return Ok(settings);
+    };
+    let namespace = match resource.import_data.get("namespace") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(namespace)) => Some(namespace.clone()),
+        Some(_) => {
+            return Err(ErrorData::bad_request(format!(
+                "Invalid import data for the Kubernetes cluster '{}': 'namespace' must be a string",
+                resource.id
+            ))
+            .into())
+        }
+    };
+    cluster.namespace = namespace.filter(|namespace| !namespace.is_empty());
+    Ok(settings)
 }
 
 /// The message of the innermost error in the chain. A wrapper such as "Mutation execution
@@ -3280,6 +3322,82 @@ mod first_setup_marker_tests {
         let metadata =
             import_runtime_metadata(&Stack::new("s".to_string()).build(), Default::default());
         assert!(metadata.first_setup_machines_unselected);
+    }
+}
+
+#[cfg(test)]
+mod imported_cluster_namespace_tests {
+    use super::*;
+    use alien_core::{
+        ImportedResource, KubernetesClusterOwnership, KubernetesClusterSettings, KubernetesSettings,
+    };
+
+    fn settings() -> StackSettings {
+        StackSettings {
+            kubernetes: Some(KubernetesSettings {
+                cluster: Some(KubernetesClusterSettings {
+                    ownership: KubernetesClusterOwnership::Existing,
+                    namespace: None,
+                    cloud: None,
+                }),
+                exposure: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn request(import_data: serde_json::Value) -> StackImportRequest {
+        let mut req: StackImportRequest = serde_json::from_value(serde_json::json!({
+            "setupImportFormatVersion": alien_core::import::CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+            "deploymentGroupToken": "",
+            "deploymentName": "d",
+            "resourcePrefix": "d",
+            "platform": "aws",
+            "region": "r",
+            "setupTarget": "t",
+            "setupFingerprint": "f",
+            "setupFingerprintVersion": 1,
+            "stackSettings": {},
+            "inputValues": {},
+            "resources": []
+        }))
+        .unwrap();
+        req.resources.push(ImportedResource {
+            id: "kubernetes".to_string(),
+            resource_type: alien_core::KubernetesCluster::RESOURCE_TYPE,
+            import_data,
+        });
+        req
+    }
+
+    fn namespace_of(settings: &StackSettings) -> Option<String> {
+        settings
+            .kubernetes
+            .as_ref()?
+            .cluster
+            .as_ref()?
+            .namespace
+            .clone()
+    }
+
+    #[test]
+    fn only_the_namespace_is_read_from_the_cluster_data() {
+        let req = request(serde_json::json!({ "namespace": "alien-e2e" }));
+        let out = settings_with_imported_cluster_namespace(&req, &settings()).unwrap();
+        assert_eq!(namespace_of(&out).as_deref(), Some("alien-e2e"));
+    }
+
+    #[test]
+    fn missing_namespace_keeps_the_settings() {
+        let req = request(serde_json::json!({}));
+        let out = settings_with_imported_cluster_namespace(&req, &settings()).unwrap();
+        assert_eq!(namespace_of(&out), None);
+    }
+
+    #[test]
+    fn a_namespace_that_is_not_a_string_is_refused() {
+        let req = request(serde_json::json!({ "namespace": 7 }));
+        assert!(settings_with_imported_cluster_namespace(&req, &settings()).is_err());
     }
 }
 
