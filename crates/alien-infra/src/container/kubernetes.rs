@@ -1,3 +1,4 @@
+use super::kubernetes_network::{cluster_dns_config, GatewayDns};
 use crate::kubernetes_runtime_credentials::delete_environment_secret;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
@@ -250,6 +251,11 @@ pub struct KubernetesContainerController {
     /// pod-spec build time, so a Helm upgrade that changes it is invisible to config diffing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) applied_priority_class: Option<String>,
+    /// Resolver last applied to the sandbox gateway's pods. Read when the pod spec is built, so a
+    /// later change (the Operator can read the cluster DNS Service, or its address moved) is
+    /// invisible to config diffing. `None` for a gateway created before this was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_gateway_dns: Option<GatewayDns>,
 }
 
 #[controller]
@@ -445,6 +451,12 @@ impl KubernetesContainerController {
                 ctx,
             )
             .await?;
+        self.refresh_gateway_dns(
+            config,
+            crate::sandbox::kubernetes_egress::detected_cluster_domain(),
+            ctx,
+        )
+        .await?;
         self.env_secret.record(env_secret_plan.as_ref());
         self.applied_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
             .map_err(|message| {
@@ -665,6 +677,22 @@ impl KubernetesContainerController {
         self.workload_failure = None;
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Container>()?;
+
+        // A gateway whose resolver does not work never becomes ready, so it never reaches the
+        // Ready handler where the resolver is compared; it is compared here too.
+        if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID
+            && self
+                .gateway_dns_drifted(
+                    crate::sandbox::kubernetes_egress::detected_cluster_domain(),
+                    ctx,
+                )
+                .await?
+        {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
 
         let workload_name = self.workload_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -928,6 +956,12 @@ impl KubernetesContainerController {
                 if self
                     .gateway_environment_drifted(config, workload_name, ctx)
                     .await?
+                    || self
+                        .gateway_dns_drifted(
+                            crate::sandbox::kubernetes_egress::detected_cluster_domain(),
+                            ctx,
+                        )
+                        .await?
                 {
                     return Ok(HandlerAction::Continue {
                         state: UpdateStart,
@@ -1526,6 +1560,12 @@ impl KubernetesContainerController {
                 ctx,
             )
             .await?;
+        self.refresh_gateway_dns(
+            config,
+            crate::sandbox::kubernetes_egress::detected_cluster_domain(),
+            ctx,
+        )
+        .await?;
         self.env_secret.record(env_secret_plan.as_ref());
         self.applied_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
             .map_err(|message| {
@@ -2439,6 +2479,7 @@ mod output_tests {
             update_generation: None,
             workload_failure: None,
             applied_priority_class: None,
+            applied_gateway_dns: None,
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
@@ -2513,6 +2554,7 @@ mod output_tests {
             update_generation: None,
             workload_failure: None,
             applied_priority_class: None,
+            applied_gateway_dns: None,
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
@@ -2586,6 +2628,7 @@ impl KubernetesContainerController {
             update_generation: None,
             workload_failure: None,
             applied_priority_class: None,
+            applied_gateway_dns: None,
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
@@ -3152,6 +3195,16 @@ impl KubernetesContainerController {
             enable_service_links: Some(false),
             ..Default::default()
         };
+        if gateway {
+            // The gateway's DNS must pass its own egress policy, which admits the cluster DNS
+            // pods; a node-local cache address would not match it everywhere. The choice was
+            // resolved and recorded when this create or update started.
+            if let Some(GatewayDns::ClusterService { address, domain }) = &self.applied_gateway_dns
+            {
+                pod_spec.dns_policy = Some("None".into());
+                pod_spec.dns_config = Some(cluster_dns_config(namespace, domain, address));
+            }
+        }
         // A workload that links a sandbox calls the session broker with a token projected for it.
         crate::sandbox::kubernetes_broker_token::project_into(&mut pod_spec, &config.links);
 
@@ -3490,6 +3543,45 @@ mod tests {
                 "all created replicas run the new template, stateful={stateful}"
             );
         }
+    }
+
+    /// A gateway whose resolver does not work never becomes ready, so it waits in
+    /// `WaitingForWorkload` and never reaches the Ready handler where the resolver is compared.
+    /// It must be updated from the wait.
+    #[tokio::test]
+    async fn a_gateway_that_never_became_ready_is_updated_when_its_resolver_changes() {
+        let server = httpmock::MockServer::start_async().await;
+        kube_dns_mock(&server, "10.0.0.10");
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/deployments/web");
+            then.status(200).json_body(serde_json::json!({
+                "metadata":{"name":"web","generation":1},
+                "spec":{"replicas":2,"selector":{},"template":{}},
+                "status":{"replicas":2,"readyReplicas":0,"updatedReplicas":2,"observedGeneration":1}
+            }));
+        });
+        let gateway = gateway_container(GATEWAY_IMAGE);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(gateway), vec![]);
+        let mut ctx = harness.ctx();
+        point_at(&mut ctx, &server);
+        // Built with an address the Service no longer has, and not ready.
+        let mut controller = manifest_test_controller();
+        controller.applied_gateway_dns = Some(GatewayDns::ClusterService {
+            address: "10.0.0.99".into(),
+            domain: "corp.example".into(),
+        });
+        let action = controller.waiting_for_workload(&ctx).await.expect("wait");
+        assert!(
+            matches!(
+                action,
+                KubernetesContainerHandlerAction::Continue {
+                    state: KubernetesContainerState::UpdateStart,
+                    ..
+                }
+            ),
+            "{action:?}"
+        );
     }
 
     #[tokio::test]
@@ -4455,6 +4547,7 @@ mod tests {
             update_generation: None,
             workload_failure: None,
             applied_priority_class: None,
+            applied_gateway_dns: None,
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
@@ -4754,6 +4847,225 @@ mod tests {
             .expect("drift check"));
     }
 
+    const GATEWAY_IMAGE: &str = "example.invalid/gateway@sha256:1111111111111111111111111111111111111111111111111111111111111111";
+
+    fn kube_dns_mock<'a>(server: &'a httpmock::MockServer, address: &'a str) -> httpmock::Mock<'a> {
+        use httpmock::Method::GET;
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/api/v1/namespaces/kube-system/services/kube-dns");
+            then.status(200).json_body(serde_json::json!({
+                "apiVersion":"v1","kind":"Service",
+                "metadata":{"name":"kube-dns","namespace":"kube-system"},
+                "spec":{"clusterIP":address}
+            }));
+        })
+    }
+
+    async fn gateway_pod(
+        controller: &KubernetesContainerController,
+        gateway: &Container,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> k8s_openapi::api::core::v1::PodSpec {
+        controller
+            .build_deployment(gateway, "gateway", "test-ns", "gateway-sa", None, None, ctx)
+            .await
+            .expect("deployment manifest")
+            .spec
+            .expect("deployment spec")
+            .template
+            .spec
+            .expect("pod spec")
+    }
+
+    /// The gateway's lookups go to the cluster DNS Service address, which its egress policy
+    /// admits through the `kube-dns` pod selector, not to a link-local address a node-local
+    /// cache may have put in its resolver file.
+    #[tokio::test]
+    async fn the_gateway_resolves_through_the_cluster_dns_service() {
+        let server = httpmock::MockServer::start_async().await;
+        let dns = kube_dns_mock(&server, "10.0.0.10");
+        let gateway = gateway_container(GATEWAY_IMAGE);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(gateway.clone()), vec![]);
+        let state = secrets_vault_state();
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        point_at(&mut ctx, &server);
+        let mut controller = manifest_test_controller();
+        controller
+            .refresh_gateway_dns(&gateway, Some("corp.example".into()), &ctx)
+            .await
+            .expect("resolver choice");
+        let pod = gateway_pod(&controller, &gateway, &ctx).await;
+        assert_eq!(dns.hits(), 1);
+        assert_eq!(pod.dns_policy.as_deref(), Some("None"));
+        let config = pod.dns_config.expect("resolver settings");
+        assert_eq!(config.nameservers, Some(vec!["10.0.0.10".to_string()]));
+        assert_eq!(
+            config.searches,
+            Some(vec![
+                "test-ns.svc.corp.example".to_string(),
+                "svc.corp.example".to_string(),
+                "corp.example".to_string()
+            ])
+        );
+        assert_eq!(config.options.unwrap()[0].value.as_deref(), Some("5"));
+
+        // A workload that is not the gateway keeps the cluster's resolver and reads nothing.
+        let other = manifest_test_container(&[], false);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(other.clone()), vec![]);
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        point_at(&mut ctx, &server);
+        controller
+            .refresh_gateway_dns(&other, Some("corp.example".into()), &ctx)
+            .await
+            .expect("no choice");
+        let pod = controller
+            .build_deployment(&other, "app", "test-ns", "app-sa", None, None, &ctx)
+            .await
+            .expect("deployment manifest")
+            .spec
+            .expect("deployment spec")
+            .template
+            .spec
+            .expect("pod spec");
+        assert!(pod.dns_policy.is_none() && pod.dns_config.is_none());
+        assert_eq!(dns.hits(), 1);
+    }
+
+    /// An existing gateway (built with the cluster resolver, nothing recorded) rolls exactly when
+    /// the resolver now chosen differs, and not again on the next reconcile.
+    #[tokio::test]
+    async fn the_gateway_rolls_once_when_its_resolved_dns_changes() {
+        let server = httpmock::MockServer::start_async().await;
+        let mut dns = kube_dns_mock(&server, "10.0.0.10");
+        let gateway = gateway_container(GATEWAY_IMAGE);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(gateway.clone()), vec![]);
+        let state = secrets_vault_state();
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        point_at(&mut ctx, &server);
+        let domain = || Some("corp.example".to_string());
+        let mut controller = manifest_test_controller();
+
+        // The cluster default was applied before the choice was recorded: the Service is now
+        // readable, so the gateway rolls once ...
+        assert!(controller
+            .gateway_dns_drifted(domain(), &ctx)
+            .await
+            .unwrap());
+        controller
+            .refresh_gateway_dns(&gateway, domain(), &ctx)
+            .await
+            .unwrap();
+        // ... and neither the next reconcile nor the one after rolls it again.
+        for _ in 0..2 {
+            assert!(!controller
+                .gateway_dns_drifted(domain(), &ctx)
+                .await
+                .unwrap());
+        }
+
+        // The address moves: one more roll.
+        dns.delete();
+        let _moved = kube_dns_mock(&server, "10.0.0.11");
+        assert!(controller
+            .gateway_dns_drifted(domain(), &ctx)
+            .await
+            .unwrap());
+        controller
+            .refresh_gateway_dns(&gateway, domain(), &ctx)
+            .await
+            .unwrap();
+        assert!(!controller
+            .gateway_dns_drifted(domain(), &ctx)
+            .await
+            .unwrap());
+
+        // A cluster that has no cluster domain, or a Service that cannot be read, is no change.
+        assert!(controller.gateway_dns_drifted(None, &ctx).await.unwrap());
+        let mut unrecorded = manifest_test_controller();
+        assert!(!unrecorded.gateway_dns_drifted(None, &ctx).await.unwrap());
+        assert!(unrecorded.applied_gateway_dns.is_some());
+    }
+
+    /// The cluster DNS Service read decides only which resolver the gateway uses, never whether
+    /// it deploys. A refused read (an install made before the Operator could read it, or a cluster
+    /// that does not let the grant be created), an absent Service, a server error and an API server
+    /// that does not answer all leave the gateway the cluster's resolver, and a running gateway is
+    /// not rolled by them.
+    #[tokio::test]
+    async fn a_gateway_keeps_the_cluster_resolver_when_the_dns_service_cannot_be_read() {
+        use httpmock::Method::GET;
+        for status in [Some(403u16), Some(404), Some(500), Some(503), None] {
+            let server = httpmock::MockServer::start_async().await;
+            if let Some(status) = status {
+                server
+                    .mock_async(|when, then| {
+                        when.method(GET)
+                            .path("/api/v1/namespaces/kube-system/services/kube-dns");
+                        then.status(status).json_body(serde_json::json!({
+                            "kind":"Status","apiVersion":"v1","status":"Failure","code":status
+                        }));
+                    })
+                    .await;
+            }
+            let gateway = gateway_container(GATEWAY_IMAGE);
+            let harness =
+                KubernetesManifestTestHarness::new(Resource::new(gateway.clone()), vec![]);
+            let state = secrets_vault_state();
+            let mut ctx = harness.ctx();
+            ctx.state = &state;
+            point_at(&mut ctx, &server);
+            if status.is_none() {
+                // Nothing listens at the address: the request gets no answer.
+                drop(server);
+                let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+                    panic!("Kubernetes config")
+                };
+                let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut()
+                else {
+                    panic!("manual config")
+                };
+                *server_url = "http://127.0.0.1:9".to_string();
+            }
+            let domain = || Some("corp.example".to_string());
+            let mut controller = manifest_test_controller();
+            controller
+                .refresh_gateway_dns(&gateway, domain(), &ctx)
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("{status:?}: a failed read must leave the default resolver: {error}")
+                });
+            let pod = gateway_pod(&controller, &gateway, &ctx).await;
+            assert!(
+                pod.dns_policy.is_none() && pod.dns_config.is_none(),
+                "{status:?}"
+            );
+            assert!(!controller
+                .gateway_dns_drifted(domain(), &ctx)
+                .await
+                .unwrap());
+
+            // A gateway already on the Service address keeps it through the failed read.
+            let applied = GatewayDns::ClusterService {
+                address: "10.0.0.10".into(),
+                domain: "corp.example".into(),
+            };
+            controller.applied_gateway_dns = Some(applied.clone());
+            assert!(!controller
+                .gateway_dns_drifted(domain(), &ctx)
+                .await
+                .unwrap());
+            controller
+                .refresh_gateway_dns(&gateway, domain(), &ctx)
+                .await
+                .unwrap();
+            assert_eq!(controller.applied_gateway_dns, Some(applied), "{status:?}");
+        }
+    }
+
     /// A gateway on an image that reads mounted files gets the vault's configuration Secret and
     /// replica-secret Secret mounted by the kubelet, and the controller reads neither: it only
     /// creates the replica secret before the pods need it. An earlier image still gets the
@@ -4980,6 +5292,7 @@ mod tests {
                 port: 8080,
             });
         }
+        let server = httpmock::MockServer::start_async().await;
         for (config, delay, automount) in [
             (&gateway, Some(GATEWAY_READY_DELAY_SECONDS), Some(false)),
             (&ordinary, None, None),
@@ -4988,6 +5301,7 @@ mod tests {
             let state = secrets_vault_state();
             let mut ctx = harness.ctx();
             ctx.state = &state;
+            point_at(&mut ctx, &server);
             let pod = manifest_test_controller()
                 .build_deployment(config, "web", "test-ns", "web-sa", None, None, &ctx)
                 .await
