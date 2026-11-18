@@ -16,11 +16,9 @@ pub const MANIFEST_VERSION: u32 = 1;
 pub struct Manifest {
     /// Format version, [`MANIFEST_VERSION`] when written by this crate.
     pub version: u32,
-    /// This commit's name.
-    pub commit: ObjectName,
-    /// The commit this one was built on, if any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<ObjectName>,
+    /// This commit's sequence number. Its name also carries the manifest's hash, which a
+    /// manifest cannot contain.
+    pub seq: u64,
     /// The sandbox that wrote it.
     pub writer: String,
     /// Every entry, sorted by path, parents before children.

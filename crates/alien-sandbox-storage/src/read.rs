@@ -2,7 +2,7 @@ use alien_error::AlienError;
 use chrono::Utc;
 
 use crate::error::{ErrorData, Result};
-use crate::layout::{CommitRef, Head, HEAD_OBJECT};
+use crate::layout::{Head, ObjectName, HEAD_OBJECT};
 use crate::pack::chunk_hash;
 use crate::manifest::{Entry, EntryKind, Manifest};
 use crate::store::{ObjectStore, Precondition, PutOutcome};
@@ -24,23 +24,23 @@ pub async fn read_head(store: &dyn ObjectStore) -> Result<Option<(Head, String)>
     Ok(Some((head, object.etag)))
 }
 
-/// The manifest HEAD names, checked against the hash HEAD carries and then parsed.
-pub async fn read_manifest(store: &dyn ObjectStore, commit: &CommitRef) -> Result<Manifest> {
-    let object = commit.name.manifest();
+/// The manifest HEAD names, checked against the hash in its name and then parsed.
+pub async fn read_manifest(store: &dyn ObjectStore, commit: &ObjectName) -> Result<Manifest> {
+    let object = commit.manifest();
     let stored = store.get(&object).await?.ok_or_else(|| {
         AlienError::new(ErrorData::Corrupt {
             object: object.clone(),
             reason: "HEAD names a manifest that does not exist".to_string(),
         })
     })?;
-    if chunk_hash(&stored.bytes) != commit.manifest_sha256 {
+    if chunk_hash(&stored.bytes) != commit.hash {
         return Err(AlienError::new(ErrorData::Corrupt {
             object,
             reason: "the manifest is not the one HEAD names".to_string(),
         }));
     }
     let manifest = Manifest::parse(&object, &stored.bytes)?;
-    if manifest.commit != commit.name {
+    if manifest.seq != commit.seq {
         return Err(AlienError::new(ErrorData::Corrupt {
             object,
             reason: "the manifest names a different commit".to_string(),
