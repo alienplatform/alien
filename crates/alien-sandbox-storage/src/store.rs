@@ -23,11 +23,13 @@ pub async fn create(store: &dyn ObjectStore, object: &str, bytes: Vec<u8>) -> Re
 
 /// The version of an object a conditional put compares against. Stores differ in which one
 /// they check: S3 and Azure compare the `ETag`, GCS compares the generation.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ObjectVersion {
     /// The `ETag`.
     pub etag: String,
     /// A store-specific version where the store has one (the GCS generation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
 }
 

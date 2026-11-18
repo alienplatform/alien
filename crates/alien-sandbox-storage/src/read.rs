@@ -130,7 +130,7 @@ pub trait TreeSink {
 pub async fn restore(
     store: &dyn ObjectStore,
     manifest: &Manifest,
-    sink: &mut dyn TreeSink,
+    sink: &mut (dyn TreeSink + Send),
 ) -> Result<()> {
     let mut dirs = Vec::new();
     for entry in &manifest.entries {

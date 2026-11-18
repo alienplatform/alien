@@ -440,24 +440,40 @@ fn load_state() -> Result<AgentState> {
     // without that state machine need a separate image activation gate.
     #[cfg(target_os = "linux")]
     let wait_for_run_hook = wait_for_run_hook && gateway_egress.is_none();
-    Ok(AgentState {
-        image_process: if image_command_enabled()? {
-            if agent_uid != 0 || isolation != Isolation::UidSplit {
-                return Err(invalid(
-                    ENV_IMAGE_COMMAND,
-                    "requires a root agent with uid-split isolation",
-                ));
-            }
-            if authorization.requires_activation() || wait_for_run_hook {
-                alien_sandbox_agent::image_command::ImageProcess::awaiting_activation()
-            } else {
-                alien_sandbox_agent::image_command::ImageProcess::with_image_user()
-            }
-        } else if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
-            Default::default()
+    #[cfg(target_os = "linux")]
+    let storage = alien_sandbox_agent::storage::attach::StorageConfig::from_env()?;
+    #[cfg(target_os = "linux")]
+    if storage.is_some() && !image_command_enabled()? {
+        return Err(invalid(
+            alien_sandbox_agent::storage::attach::ENV_PERSISTENT_STORAGE,
+            "requires the packaged image command, which the restore holds until the tree is in place",
+        ));
+    }
+    let image_process = if image_command_enabled()? {
+        if agent_uid != 0 || isolation != Isolation::UidSplit {
+            return Err(invalid(
+                ENV_IMAGE_COMMAND,
+                "requires a root agent with uid-split isolation",
+            ));
+        }
+        if authorization.requires_activation() || wait_for_run_hook {
+            alien_sandbox_agent::image_command::ImageProcess::awaiting_activation()
         } else {
-            alien_sandbox_agent::image_command::ImageProcess::not_configured()
-        },
+            alien_sandbox_agent::image_command::ImageProcess::with_image_user()
+        }
+    } else if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
+        Default::default()
+    } else {
+        alien_sandbox_agent::image_command::ImageProcess::not_configured()
+    };
+    #[cfg(target_os = "linux")]
+    let image_process = if storage.is_some() {
+        image_process.awaiting_restore()
+    } else {
+        image_process
+    };
+    Ok(AgentState {
+        image_process,
         session_root,
         authorization,
         exec_identity,
@@ -468,6 +484,10 @@ fn load_state() -> Result<AgentState> {
         gateway_egress,
         preview: Default::default(),
         agent_binary,
+        #[cfg(target_os = "linux")]
+        storage: storage.map(|config| {
+            Arc::new(alien_sandbox_agent::storage::attach::PersistentStorage::new(config))
+        }),
     })
 }
 

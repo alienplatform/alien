@@ -254,6 +254,8 @@ fn agent_state(root: &Path) -> AgentState {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: PathBuf::from(env!("CARGO_BIN_EXE_alien-sandbox-agent")),
+        #[cfg(target_os = "linux")]
+        storage: None,
     }
 }
 

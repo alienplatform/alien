@@ -5,6 +5,7 @@ use alien_sandbox_storage::{
     read_manifest, restore, takeover, CommitOutcome, Committer, MemoryStore, TreeEntryKind,
 };
 
+use super::push::GrantStore;
 use super::tree::{self, DirSink};
 use super::Replicator;
 
@@ -434,7 +435,6 @@ impl alien_sandbox_storage::ObjectStore for KeyView {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_agent_commits_and_restores_through_an_s3_grant() {
-    use super::push::GrantStore;
     let (url, bucket) = fake_s3::serve().await;
     let binding = KeyView(std::sync::Arc::clone(&bucket), "engine-42".to_string());
 
@@ -485,4 +485,90 @@ async fn the_agent_commits_and_restores_through_an_s3_grant() {
     write(source.path(), "notes.md", b"late write");
     writer.commit(&agent).await.expect_err("superseded");
     assert!(writer.is_superseded());
+}
+
+/// The agent's attach as the binding drives it: the key restored into a fresh directory before
+/// the image gate opens, then `sync` publishes a write and the status follows.
+#[tokio::test(flavor = "multi_thread")]
+async fn attach_restores_then_sync_publishes() {
+    use super::attach::{AttachRequest, PersistentStorage, ReplicationState, StorageConfig};
+    let (url, bucket) = fake_s3::serve().await;
+    let binding = KeyView(std::sync::Arc::clone(&bucket), "engine-42".to_string());
+
+    // An earlier sandbox's commit.
+    let source = tempfile::tempdir().expect("tempdir");
+    let staging = tempfile::tempdir().expect("tempdir");
+    write(source.path(), "repo/README", b"hello");
+    let claim = takeover(&binding, "sandbox-1").await.expect("claim");
+    let mut first = Replicator::new(
+        "engine-42",
+        tree::open_root(source.path()).expect("open"),
+        vec![],
+        staging.path().to_path_buf(),
+        None,
+        Committer::new("sandbox-1", claim.head_version, None, None),
+    );
+    first
+        .commit(&GrantStore::new(s3_grant(&url, "engine-42", &[])))
+        .await
+        .expect("commit");
+
+    // The new sandbox: claim, then attach with reads of what the restore needs.
+    let claim = takeover(&binding, "sandbox-2").await.expect("claim");
+    let head = alien_sandbox_storage::read_head(&binding)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let commit = head.commit.clone().expect("a commit");
+    let manifest = claim.manifest.clone().expect("manifest");
+    let mut reads = vec![commit.manifest()];
+    reads.extend(manifest.packs().into_iter().map(|p| p.pack()));
+    let reads: Vec<&str> = reads.iter().map(String::as_str).collect();
+
+    let sandbox = tempfile::tempdir().expect("tempdir");
+    let workspace = sandbox.path().join("workspace");
+    write(&workspace, "stale-from-image", b"x");
+    let storage = std::sync::Arc::new(PersistentStorage::with_staging(
+        StorageConfig {
+            path: workspace.display().to_string(),
+            exclude: vec![],
+            max_size_bytes: None,
+        },
+        staging.path().join("agent"),
+    ));
+    let image = crate::image_command::ImageProcess::default().awaiting_restore();
+    // SAFETY: plain getters.
+    let me = unsafe {
+        crate::exec::ExecIdentity {
+            uid: libc::getuid(),
+            gid: libc::getgid(),
+        }
+    };
+    let request: AttachRequest = serde_json::from_value(serde_json::json!({
+        "key": "engine-42",
+        "writer": "sandbox-2",
+        "headVersion": claim.head_version,
+        "commit": commit,
+        "grant": s3_grant(&url, "engine-42", &reads),
+    }))
+    .expect("the wire shape parses");
+    let status = storage.attach(request, &image, me).await.expect("attach");
+    assert_eq!(status.state, ReplicationState::Replicating);
+    assert!(!image.restore_pending().unwrap());
+    assert_eq!(
+        std::fs::read(workspace.join("repo/README")).unwrap(),
+        b"hello"
+    );
+    assert!(!workspace.join("stale-from-image").exists());
+
+    write(&workspace, "repo/new", b"after restore");
+    let synced = storage.sync().await.expect("sync");
+    assert_eq!(synced.head, Some(2));
+    assert_eq!(
+        alien_sandbox_storage::read_file(&binding, "engine-42", "repo/new")
+            .await
+            .unwrap(),
+        b"after restore"
+    );
 }

@@ -118,7 +118,7 @@ impl Committer {
         store: &dyn ObjectStore,
         key: &str,
         mut walk: Vec<TreeEntry>,
-        source: &mut dyn FileSource,
+        source: &mut (dyn FileSource + Send),
     ) -> Result<CommitOutcome> {
         if self.superseded {
             return Err(AlienError::new(ErrorData::Superseded {
