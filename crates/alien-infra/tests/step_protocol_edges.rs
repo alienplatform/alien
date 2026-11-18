@@ -1402,6 +1402,7 @@ async fn on_eks_the_identity_is_minted_from_the_operator_pods_token() {
 }
 
 /// A reply to another step can't be taken for this one's.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_reply_naming_another_step_fails_the_resource() {
     let reply = json!({ "protocol": 1, "stepId": "not-this-step", "result": "stepped",

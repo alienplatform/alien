@@ -549,6 +549,7 @@ async fn a_retryable_error_is_retried_and_a_fatal_one_is_not() {
     assert_round_trip(&s1.next_state);
 }
 
+#[cfg(unix)]
 fn kill(pid: u32) {
     let status = std::process::Command::new("kill")
         .args(["-9", &pid.to_string()])
@@ -557,6 +558,7 @@ fn kill(pid: u32) {
     assert!(status.success());
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn killing_the_child_mid_step_recovers_on_the_next_step() {
     let config = deployment_config();
@@ -765,6 +767,7 @@ fn deployment_request_body(
     })
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_newer_protocol_version_is_refused_clearly() {
     // A controller that answers a step with protocol 2 and a field version 1 doesn't have.
