@@ -396,7 +396,8 @@ impl SqliteDeploymentStore {
                 .map(String::as_str)
                 .filter(|status| {
                     Self::WORK_STATUSES.contains(status)
-                        || Self::SETUP_TEARDOWN_STATUSES.contains(status)
+                        || (Self::SETUP_TEARDOWN_STATUSES.contains(status)
+                            && Self::runtime_may_claim_handoff(mode))
                         || *status == Self::RUNNING_STATUS
                         // The heartbeat loop requests Running alongside RefreshFailed.
                         // Work-only acquisition must still require an explicit retry.
@@ -459,6 +460,15 @@ impl SqliteDeploymentStore {
             && statuses.iter().any(|status| status == Self::RUNNING_STATUS)
     }
 
+    /// The statuses that wait on the setup owner (`SETUP_TEARDOWN_STATUSES`) are not the
+    /// runtime's to claim: its cleanup is over. A runtime request that names one anyway (an
+    /// Operator asks for its deployment by the status it last reported) would otherwise take
+    /// the lock and make the setup owner's acquire answer "contended" for as long as the
+    /// Operator keeps syncing.
+    fn runtime_may_claim_handoff(mode: Option<DeploymentAcquireMode>) -> bool {
+        mode != Some(DeploymentAcquireMode::Runtime)
+    }
+
     fn acquire_status_matches(
         status: &str,
         failed_claimable: bool,
@@ -478,7 +488,8 @@ impl SqliteDeploymentStore {
         let explicitly_active = statuses.iter().any(|requested| {
             requested == status
                 && (Self::WORK_STATUSES.contains(&status)
-                    || Self::SETUP_TEARDOWN_STATUSES.contains(&status)
+                    || (Self::SETUP_TEARDOWN_STATUSES.contains(&status)
+                        && Self::runtime_may_claim_handoff(mode))
                     || status == Self::RUNNING_STATUS
                     || (status == "refresh-failed"
                         && statuses

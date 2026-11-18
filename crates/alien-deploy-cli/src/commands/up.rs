@@ -409,9 +409,15 @@ mod tests {
                 .await;
             let client = create_manager_client("setup-token", &server.base_url()).unwrap();
             // Stop at acquire, before any provider resources are accessed.
-            let error = push_deletion(&client, "dep_demo", platform, kubernetes_client_config())
-                .await
-                .expect_err("the mock stops teardown at acquire");
+            let error = push_deletion(
+                &client,
+                "dep_demo",
+                platform,
+                kubernetes_client_config(),
+                false,
+            )
+            .await
+            .expect_err("the mock stops teardown at acquire");
             acquire.assert_hits_async(1).await;
             assert!(
                 error.to_string().contains("stop after acquire"),
@@ -1453,6 +1459,7 @@ mod tests {
             "dep_demo",
             Platform::Machines,
             ClientConfig::Machines,
+            false,
         );
         let result = tokio::time::timeout(std::time::Duration::from_secs(60), async {
             tokio::pin!(deletion);
@@ -1473,6 +1480,7 @@ mod tests {
         .expect("the deletion finishes within a minute");
 
         result.expect("a finished teardown whose record is gone must succeed");
+        // The read before the acquire, and the read under the lock (policy and state, reused).
         deployment.assert_hits_async(2).await;
         acquire.assert_hits_async(1).await;
         assert!(progress.hits_async().await >= 1);
@@ -1575,8 +1583,25 @@ mod tests {
         client_config: ClientConfig,
         protocol: u32,
     ) -> (Result<()>, usize, usize) {
+        let (result, kept, changed, _) =
+            run_teardown_with_policy(platform, client_config, protocol, None, false).await;
+        (result, kept, changed)
+    }
+
+    /// The same teardown against a record that carries a deletion policy, run with `erase_data`;
+    /// also returns how often the lock was given back.
+    async fn run_teardown_with_policy(
+        platform: Platform,
+        client_config: ClientConfig,
+        protocol: u32,
+        policy: Option<&str>,
+        erase_data: bool,
+    ) -> (Result<()>, usize, usize, usize) {
         let server = MockServer::start_async().await;
-        let record = recorded_deployment("teardown-required", platform, protocol, None);
+        let mut record = recorded_deployment("teardown-required", platform, protocol, None);
+        if let Some(policy) = policy {
+            record["runtimeMetadata"] = serde_json::json!({"deletionPolicy": policy});
+        }
         server
             .mock_async(|when, then| {
                 when.method(httpmock::Method::GET)
@@ -1601,7 +1626,7 @@ mod tests {
             serde_json::json!({"success": true, "current": null}),
         )
         .await;
-        server
+        let release = server
             .mock_async(|when, then| {
                 when.method(httpmock::Method::POST).path("/v1/sync/release");
                 then.status(200);
@@ -1610,11 +1635,60 @@ mod tests {
         let client = create_manager_client("setup-token", &server.base_url()).unwrap();
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            push_deletion(&client, "dep_demo", platform, client_config),
+            push_deletion(&client, "dep_demo", platform, client_config, erase_data),
         )
         .await
         .expect("teardown finishes");
-        (result, kept.hits_async().await, changed.hits_async().await)
+        (
+            result,
+            kept.hits_async().await,
+            changed.hits_async().await,
+            release.hits_async().await,
+        )
+    }
+
+    /// `push_deletion` hands its caller's erase choice to the acquire: against a recorded retain
+    /// a run that asks for erase is refused with the lock given back, and a run that matches the
+    /// record is not refused. Hard-coding the flag in `run_setup_deletion` fails the first.
+    #[tokio::test]
+    async fn push_deletion_passes_the_erase_choice_to_the_acquire() {
+        let protocol = alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION;
+        for (policy, erase, refused_text) in [
+            ("retain", true, "requested with data retained"),
+            ("erase", false, "requested with data erase"),
+        ] {
+            let (result, _, _, releases) = run_teardown_with_policy(
+                Platform::Gcp,
+                gcp_client_config(),
+                protocol,
+                Some(policy),
+                erase,
+            )
+            .await;
+            let error = result.expect_err("a changed policy is refused");
+            assert!(
+                format!("{error:?}").contains(refused_text),
+                "{policy}/{erase}: {error:?}"
+            );
+            assert_eq!(releases, 1, "{policy}/{erase}: the lock is given back");
+        }
+        for (policy, erase) in [("erase", true), ("retain", false)] {
+            let (result, _, _, _) = run_teardown_with_policy(
+                Platform::Gcp,
+                gcp_client_config(),
+                protocol,
+                Some(policy),
+                erase,
+            )
+            .await;
+            if let Err(error) = result {
+                let text = format!("{error:?}");
+                assert!(
+                    !text.contains("cannot be changed"),
+                    "{policy}/{erase}: a matching run is not refused: {text}"
+                );
+            }
+        }
     }
 
     /// An older manager must acknowledge retention support before teardown executes.
@@ -3192,10 +3266,9 @@ platform = "aws"
                         .path("/v1/initialize")
                         .json_body_partial(r#"{"name":"subdomain-app"}"#)
                         .matches(|req| {
-                            let body: serde_json::Value = serde_json::from_slice(
-                                req.body.as_deref().unwrap_or_default(),
-                            )
-                            .unwrap_or_default();
+                            let body: serde_json::Value =
+                                serde_json::from_slice(req.body.as_deref().unwrap_or_default())
+                                    .unwrap_or_default();
                             body.get("setupCapabilities")
                                 .and_then(|v| v.as_array())
                                 .map_or(true, |v| v.is_empty())
@@ -3256,7 +3329,9 @@ platform = "{platform}"
             .mock_async(|when, then| {
                 when.method(httpmock::Method::POST)
                     .path("/v1/initialize")
-                    .json_body_partial(r#"{"name":"subdomain-app","setupCapabilities":["create-keys"]}"#);
+                    .json_body_partial(
+                        r#"{"name":"subdomain-app","setupCapabilities":["create-keys"]}"#,
+                    );
                 then.status(409).json_body(serde_json::json!({
                     "code": "STOP_AFTER_INITIALIZE",
                     "message": "stop after initialize",
@@ -8951,6 +9026,7 @@ pub async fn push_deletion(
     deployment_id: &str,
     platform: Platform,
     client_config: ClientConfig,
+    erase_data: bool,
 ) -> Result<()> {
     let deployment = client
         .get_deployment()
@@ -9089,6 +9165,7 @@ pub async fn push_deletion(
         &client_config,
         stack_settings.deployment_model,
         service_provider,
+        erase_data,
     )
     .await
 }
@@ -9237,6 +9314,7 @@ async fn run_setup_deletion(
     client_config: &ClientConfig,
     deployment_model: alien_core::DeploymentModel,
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    erase_data: bool,
 ) -> Result<()> {
     let session = format!("push-setup-deletion-{}", uuid::Uuid::new_v4());
     let acquire_outcome = acquire_setup_delete_deployment(
@@ -9246,33 +9324,34 @@ async fn run_setup_deletion(
         &session,
         deployment_model,
         setup_method(state.platform),
+        erase_data,
     )
     .await
     .context(ErrorData::DeploymentFailed {
         operation: "acquire setup teardown lock".to_string(),
     })?;
 
-    let execution_claim = match acquire_outcome {
-        SetupDeleteAcquireOutcome::Acquired { execution_claim } => execution_claim,
+    let (execution_claim, deployment) = match acquire_outcome {
+        SetupDeleteAcquireOutcome::Acquired {
+            execution_claim,
+            deployment,
+        } => (execution_claim, *deployment),
+        SetupDeleteAcquireOutcome::PolicyRefused { message } => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "erase_data".to_string(),
+                message,
+            }));
+        }
+        SetupDeleteAcquireOutcome::LockedReadFailed { message } => {
+            return Err(AlienError::new(ErrorData::ConfigurationError { message }));
+        }
         SetupDeleteAcquireOutcome::AlreadyDeleted => {
             output::success("Deployment deleted successfully.");
             return Ok(());
         }
     };
 
-    // Re-fetch deployment under lock
-    let deployment = client
-        .get_deployment()
-        .id(deployment_id)
-        .send()
-        .await
-        .into_sdk_error()
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to get deployment from manager".to_string(),
-        })?
-        .into_inner();
-
+    // The record the acquire read with the lock held.
     let status = parse_deployment_status(&deployment.status)?;
     state.status = status;
     state.stack_state = deployment

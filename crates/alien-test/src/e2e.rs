@@ -718,6 +718,8 @@ async fn complete_local_deletion(
         ClientConfig::Local {
             state_directory: state_directory.to_string_lossy().into_owned(),
         },
+        // The harness's delete request (TestDeployment::destroy) asks for erase.
+        true,
     )
     .await
     .map_err(|error| anyhow::anyhow!("Local setup teardown failed: {error}"))
