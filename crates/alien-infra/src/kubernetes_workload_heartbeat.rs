@@ -97,6 +97,8 @@ const CRASH_LOOP_MARKER: &str = "is crash-looping";
 
 /// Restarts of a not-ready container, with a non-zero last exit code, that count as a crash loop.
 const CRASH_LOOP_MIN_RESTARTS: i32 = 2;
+/// The last crash must be this recent (seconds) for a pod to count as crash-looping.
+const CRASH_LOOP_RECENT_SECS: i64 = 600;
 
 /// Pod reasons that will not clear by waiting: an update over them fails now.
 const FAIL_FAST_POD_REASONS: [&str; 5] = [
@@ -448,7 +450,10 @@ pub(crate) fn stalled_rollout_message(
 
 /// What the pods of a workload report while they are not ready: the first waiting container
 /// reason (ImagePullBackOff, CrashLoopBackOff, ...) with the pod name.
-pub(crate) fn pod_waiting_reason(pods: &[k8s_openapi::api::core::v1::Pod]) -> Option<String> {
+pub(crate) fn pod_waiting_reason(
+    pods: &[k8s_openapi::api::core::v1::Pod],
+    now_unix: i64,
+) -> Option<String> {
     pods.iter()
         .filter(|pod| pod.metadata.deletion_timestamp.is_none())
         .find_map(|pod| {
@@ -465,7 +470,7 @@ pub(crate) fn pod_waiting_reason(pods: &[k8s_openapi::api::core::v1::Pod]) -> Op
             let name = pod.metadata.name.as_deref().unwrap_or("?");
             match waiting {
                 Some(reason) => Some(format!("pod {name} is waiting: {reason}")),
-                None => crash_loop_reason(pod)
+                None => crash_loop_reason(pod, now_unix)
                     .map(|why| format!("pod {name} {CRASH_LOOP_MARKER}: {why}"))
                     .or_else(|| {
                         unscheduled_reason(pod).map(|why| format!("pod {name} is Pending: {why}"))
@@ -477,7 +482,7 @@ pub(crate) fn pod_waiting_reason(pods: &[k8s_openapi::api::core::v1::Pod]) -> Op
 /// A container that is not ready, has restarted repeatedly and last exited with an error: a
 /// crash loop seen between back-offs (Running or Terminated), e.g. "restarted 3 times, last
 /// exit code 1".
-fn crash_loop_reason(pod: &k8s_openapi::api::core::v1::Pod) -> Option<String> {
+fn crash_loop_reason(pod: &k8s_openapi::api::core::v1::Pod, now_unix: i64) -> Option<String> {
     pod.status
         .as_ref()?
         .container_statuses
@@ -485,8 +490,12 @@ fn crash_loop_reason(pod: &k8s_openapi::api::core::v1::Pod) -> Option<String> {
         .iter()
         .filter(|status| !status.ready && status.restart_count >= CRASH_LOOP_MIN_RESTARTS)
         .find_map(|status| {
-            let code = status.last_state.as_ref()?.terminated.as_ref()?.exit_code;
-            (code != 0).then(|| {
+            let terminated = status.last_state.as_ref()?.terminated.as_ref()?;
+            let code = terminated.exit_code;
+            // restartCount and lastState persist for the life of the pod: only a recent crash
+            // counts. A missing finish time is not a crash loop.
+            let finished = terminated.finished_at.as_ref()?.0.timestamp();
+            (code != 0 && now_unix - finished <= CRASH_LOOP_RECENT_SECS).then(|| {
                 format!(
                     "restarted {} times, last exit code {code}",
                     status.restart_count
@@ -565,7 +574,7 @@ pub(crate) async fn workload_pod_reason(
             .ok()
     }
     .await;
-    let from_pods = pods.and_then(|pods| pod_waiting_reason(&pods.items));
+    let from_pods = pods.and_then(|pods| pod_waiting_reason(&pods.items, Utc::now().timestamp()));
     match (from_pods, workload_failure) {
         (Some(pods), Some(failure)) => Some(format!("{pods}; {failure}")),
         (Some(pods), None) => Some(pods),
@@ -1427,38 +1436,51 @@ mod tests {
             ]))
             .unwrap();
         assert_eq!(
-            pod_waiting_reason(&pods).as_deref(),
+            pod_waiting_reason(&pods, Utc::now().timestamp()).as_deref(),
             Some("pod agent-x7k2p is Pending: Unschedulable \"0/10 nodes are available: Insufficient cpu\"")
         );
     }
 
     #[test]
     fn a_pod_polled_while_running_between_crashes_is_a_crash_loop() {
-        let pods: Vec<k8s_openapi::api::core::v1::Pod> =
-            serde_json::from_value(serde_json::json!([
-                {"metadata":{"name":"web-x"},"status":{"phase":"Running","containerStatuses":[
-                    {"name":"web","image":"i","imageID":"","ready":false,"restartCount":3,
-                     "state":{"running":{}},
-                     "lastState":{"terminated":{"exitCode":1}}}]}}
-            ]))
-            .unwrap();
-        let reason = pod_waiting_reason(&pods).unwrap();
-        assert_eq!(
-            reason,
-            "pod web-x is crash-looping: restarted 3 times, last exit code 1"
-        );
-        assert!(!unchanged_update_rechecks(true, Some(&reason)));
-        // One restart, a clean exit, or a ready container is not a crash loop.
-        for (restarts, code, ready) in [(1, 1, false), (3, 0, false), (3, 1, true)] {
+        let now = 1_800_000_000_i64;
+        let at = |ago: i64| {
+            k8s_openapi::chrono::DateTime::from_timestamp(now - ago, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        let pods_with = |restarts: i32, code: i32, ready: bool, finished: Option<String>| {
+            let mut terminated = serde_json::json!({"exitCode": code});
+            if let Some(finished) = finished {
+                terminated["finishedAt"] = serde_json::json!(finished);
+            }
             let pods: Vec<k8s_openapi::api::core::v1::Pod> =
                 serde_json::from_value(serde_json::json!([
                     {"metadata":{"name":"web-x"},"status":{"phase":"Running","containerStatuses":[
                         {"name":"web","image":"i","imageID":"","ready":ready,"restartCount":restarts,
                          "state":{"running":{}},
-                         "lastState":{"terminated":{"exitCode":code}}}]}}
+                         "lastState":{"terminated":terminated}}]}}
                 ]))
                 .unwrap();
-            assert_eq!(pod_waiting_reason(&pods), None);
+            pods
+        };
+        // A crash 30 s ago is a crash loop.
+        let reason = pod_waiting_reason(&pods_with(3, 1, false, Some(at(30))), now).unwrap();
+        assert_eq!(
+            reason,
+            "pod web-x is crash-looping: restarted 3 times, last exit code 1"
+        );
+        assert!(!unchanged_update_rechecks(true, Some(&reason)));
+        // A crash 2 h ago, a missing finish time, one restart, a clean exit, or a ready
+        // container is not a crash loop.
+        for pods in [
+            pods_with(3, 1, false, Some(at(7200))),
+            pods_with(3, 1, false, None),
+            pods_with(1, 1, false, Some(at(30))),
+            pods_with(3, 0, false, Some(at(30))),
+            pods_with(3, 1, true, Some(at(30))),
+        ] {
+            assert_eq!(pod_waiting_reason(&pods, now), None);
         }
     }
 
