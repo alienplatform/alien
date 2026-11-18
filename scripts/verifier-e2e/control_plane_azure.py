@@ -100,8 +100,7 @@ class Run:
         self.verifier_environment = f"{apps}/managedEnvironments/{self.prefix}-verifier"
         self.verifier_app = f"{apps}/containerApps/{self.prefix}-verifier"
         self.worker_app = f"{apps}/containerApps/{self.prefix}-api"
-        self.not_after = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)) \
-            .replace(microsecond=0).isoformat()
+        self.list_label = "setup"
         self.started = datetime.datetime.now(datetime.timezone.utc)
         self.evidence = pathlib.Path(args.evidence)
         self.evidence.mkdir(parents=True, exist_ok=True)
@@ -179,7 +178,7 @@ class Run:
         log(f"{name}: {'PASS' if ok else 'FAIL'} — {detail}")
 
     def driver(self, command, env=None, check=True):
-        variables = {**os.environ, "PREFIX": self.prefix, "NOT_AFTER": self.not_after, "CLOUD": "azure",
+        variables = {**os.environ, "PREFIX": self.prefix, "LIST_LABEL": self.list_label, "CLOUD": "azure",
                      "AZURE_TOKEN_FILE": self.args.token_file, "AZURE_LOCATION": self.location,
                      "ENVIRONMENT_NAME": self.environment.rsplit("/", 1)[-1],
                      "ENVIRONMENT_DOMAIN": getattr(self, "environment_domain", ""),
@@ -406,10 +405,8 @@ class Run:
                     and self.worker_image() == self.image["b"],
                     f"driver={json.dumps(outcome)[:600]} image={self.worker_image()[-19:]}")
 
-        foreign_after = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=20)) \
-            .replace(microsecond=0).isoformat()
         result = self.driver("update", {"FROM_IMAGE": self.image["b"], "TO_IMAGE": self.image["a"],
-                                        "PROTECTED": "1", "SEQUENCE": "3", "NOT_AFTER": foreign_after},
+                                        "PROTECTED": "1", "SEQUENCE": "3", "LIST_LABEL": "foreign"},
                              check=False)
         outcome = self.outcome(result)
         self.record("2 a release under a signer list setup didn't pin is refused with the reason",

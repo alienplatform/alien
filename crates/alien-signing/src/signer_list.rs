@@ -6,15 +6,12 @@
 //! `adminThreshold` admin keys of the one before. Whoever carries the chain can
 //! withhold a version, but can't change one or add one.
 //!
-//! Every version expires at most [`MAX_LIST_LIFETIME_DAYS`] after it is
-//! signed. An expired list still links to the next version, so admins can
-//! always refresh it, but no statement verifies against it: a withheld
-//! revocation stops counting once the list it was withheld from expires.
+//! A list never expires. An enforcer holds the highest version it accepted
+//! (the install's ledger records it), so an older version can't come back.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use alien_error::AlienError;
-use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::envelope::{Kind, Opened, Role, SignedStatement};
@@ -24,22 +21,43 @@ use crate::key::PublicKey;
 /// Most signers one list may hold.
 pub const MAX_SIGNERS: usize = 256;
 
-/// Longest a signer list version may stay valid.
-pub const MAX_LIST_LIFETIME_DAYS: i64 = 90;
-
-/// Clock difference tolerated between the signer and the enforcer.
-const CLOCK_SKEW_HOURS: i64 = 24;
-
 /// Where a signer's key lives. It is shown to admins and gives no authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SignerKind {
     /// A CI key, in a CI secret or a cloud KMS.
     Ci,
-    /// A key in a laptop's secure hardware.
+    /// A key on a person's machine: in secure hardware or, when there is
+    /// none, a software key in the signing home.
     Device,
     /// The key the recovery code derives.
     Recovery,
+}
+
+/// Where a device key is held. It is shown to admins and gives no authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeyBackend {
+    /// Apple Secure Enclave.
+    SecureEnclave,
+    /// A TPM.
+    Tpm,
+    /// A YubiKey.
+    Yubikey,
+    /// A file: anyone who can read it can sign.
+    Software,
+}
+
+impl KeyBackend {
+    /// The name in JSON and on screen.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SecureEnclave => "secure-enclave",
+            Self::Tpm => "tpm",
+            Self::Yubikey => "yubikey",
+            Self::Software => "software",
+        }
+    }
 }
 
 /// One key on the list.
@@ -52,11 +70,71 @@ pub struct Signer {
     pub key: String,
     /// Where the key lives.
     pub kind: SignerKind,
+    /// Where the key is held, when the signer who added it said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<KeyBackend>,
     /// What the key may sign.
     pub roles: Vec<Role>,
     /// Display label, such as the engineer's email.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+/// The deny-list entry that refuses every statement of the release signed
+/// with `sequence`.
+pub fn release_deny_entry(sequence: u64) -> String {
+    format!("release:{sequence}")
+}
+
+/// What a kept statement is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeptKind {
+    /// A `release/v2` statement.
+    Release,
+    /// A `config/v1` statement.
+    Config,
+}
+
+impl KeptKind {
+    /// The statement kind this names.
+    pub fn kind(self) -> Kind {
+        match self {
+            Self::Release => Kind::Release,
+            Self::Config => Kind::Config,
+        }
+    }
+
+    /// The name in JSON and on screen.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Release => "release",
+            Self::Config => "config",
+        }
+    }
+}
+
+/// Most statements one list may keep.
+pub const MAX_KEEP: usize = 4096;
+
+/// A statement the admins keep running although no signer on the list signed it
+/// any more (its key was removed or rotated). The admin signs the entry with
+/// the list, so enforcers need nothing else to accept the statement: a new
+/// machine or a new Operator instance accepts it from the list alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Keep {
+    /// `sha256:<hex>` of the statement's payload. This is what binds.
+    pub digest: String,
+    /// Whether it is a release or a config.
+    pub kind: KeptKind,
+    /// The release id the control plane gave the statement when the admin kept
+    /// it. The admin saw it on screen; enforcers don't check it, because a
+    /// statement can't name an id the control plane assigns after signing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_id: Option<String>,
+    /// The statement's sequence.
+    pub sequence: u64,
 }
 
 /// The body of a `signer-list/v1` statement.
@@ -69,13 +147,40 @@ pub struct SignerListBody {
     pub admin_threshold: u32,
     /// The keys.
     pub signers: Vec<Signer>,
-    /// Digests of statements that must be refused even though they verify.
+    /// Statements that must be refused even though they verify: a digest
+    /// (`sha256:<hex>`), or `release:<sequence>` for a whole release (every
+    /// platform's statement of one release carries the same sequence).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny: Vec<String>,
+    /// Statements signed by a key that is no longer on the list, which still
+    /// run. Without an entry here everything a removed key signed is refused.
+    /// Later versions carry the entries until an admin drops them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keep: Vec<Keep>,
     /// Set on a version the recovery key signed, so whoever verifies the
     /// install sees that signing was restored with the recovery code.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub recovered: bool,
+}
+
+impl SignerListBody {
+    /// Whether the list refuses this statement: its digest is denied, or it is
+    /// a release whose release is. The one rule every enforcer applies.
+    pub fn refuses(&self, opened: &crate::envelope::Opened) -> bool {
+        self.deny.contains(&opened.digest)
+            || (opened.kind == crate::envelope::Kind::Release
+                && self.deny.contains(&release_deny_entry(opened.sequence)))
+    }
+
+    /// Whether the list keeps this statement: an entry names its digest, kind
+    /// and sequence.
+    pub fn keeps(&self, opened: &crate::envelope::Opened) -> bool {
+        self.keep.iter().any(|kept| {
+            kept.digest == opened.digest
+                && kept.kind.kind() == opened.kind
+                && kept.sequence == opened.sequence
+        })
+    }
 }
 
 /// One trusted version, with its keys parsed.
@@ -85,8 +190,6 @@ pub struct TrustedList {
     pub version: u64,
     /// Digest of the version's payload.
     pub digest: String,
-    /// When the list stops being valid.
-    pub not_after: DateTime<Utc>,
     /// The body.
     pub body: SignerListBody,
     keys: BTreeMap<String, (PublicKey, BTreeSet<Role>)>,
@@ -96,11 +199,6 @@ impl TrustedList {
     /// The key and roles of signer `id`.
     pub fn signer(&self, id: &str) -> Option<(&PublicKey, &BTreeSet<Role>)> {
         self.keys.get(id).map(|(key, roles)| (key, roles))
-    }
-
-    /// Whether the list has expired at `now`.
-    pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
-        now > self.not_after
     }
 
     /// Kind of signer `id`.
@@ -115,6 +213,16 @@ impl TrustedList {
     /// Whether a statement digest is denied.
     pub fn denies(&self, digest: &str) -> bool {
         self.body.deny.iter().any(|denied| denied == digest)
+    }
+
+    /// Whether the list keeps this statement. See [`SignerListBody::keeps`].
+    pub fn keeps(&self, opened: &crate::envelope::Opened) -> bool {
+        self.body.keeps(opened)
+    }
+
+    /// Whether the list refuses this statement. See [`SignerListBody::refuses`].
+    pub fn refuses(&self, opened: &crate::envelope::Opened) -> bool {
+        self.body.refuses(opened)
     }
 
     /// Check every signature on `opened` against this list. Each must be by a
@@ -168,17 +276,14 @@ pub struct SignerChain {
     project: String,
     statements: Vec<SignedStatement>,
     digests: Vec<String>,
-    current: TrustedList,
+    /// Every trusted version, oldest first; the last is the current one.
+    lists: Vec<TrustedList>,
 }
 
 impl SignerChain {
     /// Trust version 1, which must hash to `fingerprint` (`SHA256:<hex>`).
     /// The project is the one version 1 names.
-    pub fn genesis(
-        fingerprint: &str,
-        statement: &SignedStatement,
-        now: DateTime<Utc>,
-    ) -> Result<Self> {
+    pub fn genesis(fingerprint: &str, statement: &SignedStatement) -> Result<Self> {
         let opened = statement.open()?;
         let version = opened.sequence;
         let expected = fingerprint_digest(fingerprint)?;
@@ -192,7 +297,7 @@ impl SignerChain {
                 ),
             ));
         }
-        let list = parse_list(&project, &opened, 1, now)?;
+        let list = parse_list(&project, &opened, 1)?;
         if list.body.previous.is_some() {
             return Err(list_refused(1, "version 1 names a previous version"));
         }
@@ -214,16 +319,12 @@ impl SignerChain {
             project,
             statements: vec![statement.clone()],
             digests: vec![opened.digest],
-            current: list,
+            lists: vec![list],
         })
     }
 
     /// Build a chain from version 1 on, verifying every link.
-    pub fn from_statements(
-        fingerprint: &str,
-        statements: &[SignedStatement],
-        now: DateTime<Utc>,
-    ) -> Result<Self> {
+    pub fn from_statements(fingerprint: &str, statements: &[SignedStatement]) -> Result<Self> {
         let mut opened = statements
             .iter()
             .map(|statement| statement.open().map(|opened| (opened.sequence, statement)))
@@ -232,12 +333,12 @@ impl SignerChain {
         let ((_, first), rest) = opened
             .split_first()
             .ok_or_else(|| list_refused(1, "the chain is empty"))?;
-        let mut chain = Self::genesis(fingerprint, first, now)?;
+        let mut chain = Self::genesis(fingerprint, first)?;
         let rest: Vec<SignedStatement> = rest
             .iter()
             .map(|(_, statement)| (*statement).clone())
             .collect();
-        chain.extend(&rest, now)?;
+        chain.extend(&rest)?;
         Ok(chain)
     }
 
@@ -251,7 +352,14 @@ impl SignerChain {
 
     /// The highest trusted version.
     pub fn current(&self) -> &TrustedList {
-        &self.current
+        self.lists.last().expect("a chain holds version 1")
+    }
+
+    /// Trusted version `version`, if the chain holds it.
+    pub fn version(&self, version: u64) -> Option<&TrustedList> {
+        version
+            .checked_sub(1)
+            .and_then(|index| self.lists.get(index as usize))
     }
 
     /// The project the chain belongs to.
@@ -270,13 +378,13 @@ impl SignerChain {
     /// when they don't, so a second, different version N is reported as a
     /// fork rather than ignored. The rest must follow on in order. Returns
     /// whether the chain grew.
-    pub fn extend(&mut self, statements: &[SignedStatement], now: DateTime<Utc>) -> Result<bool> {
+    pub fn extend(&mut self, statements: &[SignedStatement]) -> Result<bool> {
         let mut opened = statements
             .iter()
             .map(|statement| statement.open().map(|opened| (opened, statement)))
             .collect::<Result<Vec<_>>>()?;
         opened.sort_by_key(|(opened, _)| opened.sequence);
-        let before = self.current.version;
+        let before = self.current().version;
         for (opened, statement) in opened {
             if opened.kind != Kind::SignerList {
                 return Err(list_refused(
@@ -285,7 +393,7 @@ impl SignerChain {
                 ));
             }
             let version = opened.sequence;
-            if version <= self.current.version {
+            if version <= self.current().version {
                 if self.digest_of(version) != Some(opened.digest.as_str()) {
                     return Err(list_refused(
                         version,
@@ -294,50 +402,48 @@ impl SignerChain {
                 }
                 continue;
             }
-            self.advance(&opened, statement, now)?;
+            self.advance(&opened, statement)?;
         }
-        Ok(self.current.version > before)
+        Ok(self.current().version > before)
     }
 
-    fn advance(
-        &mut self,
-        opened: &Opened,
-        statement: &SignedStatement,
-        now: DateTime<Utc>,
-    ) -> Result<()> {
+    fn advance(&mut self, opened: &Opened, statement: &SignedStatement) -> Result<()> {
         let version = opened.sequence;
-        if version != self.current.version + 1 {
+        if version != self.current().version + 1 {
             return Err(list_refused(
                 version,
                 format!(
                     "version {} is missing; the chain is at version {}",
-                    self.current.version + 1,
-                    self.current.version
+                    self.current().version + 1,
+                    self.current().version
                 ),
             ));
         }
-        let next = parse_list(&self.project, opened, self.current.version, now)?;
-        if next.body.previous.as_deref() != Some(self.current.digest.as_str()) {
+        let next = parse_list(&self.project, opened, self.current().version)?;
+        if next.body.previous.as_deref() != Some(self.current().digest.as_str()) {
             return Err(list_refused(
                 version,
-                format!("it does not name version {}'s digest", self.current.version),
+                format!(
+                    "it does not name version {}'s digest",
+                    self.current().version
+                ),
             ));
         }
-        let signers = self.current.check_signatures(opened, Role::Admin)?;
-        let threshold = self.current.body.admin_threshold as usize;
+        let signers = self.current().check_signatures(opened, Role::Admin)?;
+        let threshold = self.current().body.admin_threshold as usize;
         if signers.len() < threshold {
             return Err(list_refused(
                 version,
                 format!(
                     "signed by {} admins of version {}, below its threshold of {threshold}",
                     signers.len(),
-                    self.current.version
+                    self.current().version
                 ),
             ));
         }
         let by_recovery = signers
             .iter()
-            .any(|signer| self.current.signer_kind(signer) == Some(SignerKind::Recovery));
+            .any(|signer| self.current().signer_kind(signer) == Some(SignerKind::Recovery));
         if by_recovery != next.body.recovered {
             return Err(list_refused(
                 version,
@@ -350,7 +456,7 @@ impl SignerChain {
         }
         self.statements.push(statement.clone());
         self.digests.push(opened.digest.clone());
-        self.current = next;
+        self.lists.push(next);
         Ok(())
     }
 }
@@ -398,12 +504,7 @@ fn fingerprint_digest(fingerprint: &str) -> Result<String> {
     Ok(format!("sha256:{hex_part}"))
 }
 
-fn parse_list(
-    project: &str,
-    opened: &Opened,
-    authorizing_version: u64,
-    now: DateTime<Utc>,
-) -> Result<TrustedList> {
+fn parse_list(project: &str, opened: &Opened, authorizing_version: u64) -> Result<TrustedList> {
     let version = opened.sequence;
     if opened.kind != Kind::SignerList {
         return Err(list_refused(
@@ -420,18 +521,8 @@ fn parse_list(
     if opened.install.is_some() {
         return Err(list_refused(version, "a signer list names no install"));
     }
-    let not_after = opened
-        .not_after
-        .ok_or_else(|| list_refused(version, "it has no expiry"))?;
-    let latest = now + Duration::days(MAX_LIST_LIFETIME_DAYS) + Duration::hours(CLOCK_SKEW_HOURS);
-    if not_after > latest {
-        return Err(list_refused(
-            version,
-            format!(
-                "it expires at {}, more than {MAX_LIST_LIFETIME_DAYS} days from now",
-                not_after.to_rfc3339()
-            ),
-        ));
+    if opened.not_after.is_some() {
+        return Err(list_refused(version, "a signer list has no expiry"));
     }
     if version == 0 {
         return Err(list_refused(version, "versions start at 1"));
@@ -451,6 +542,27 @@ fn parse_list(
             version,
             format!("more than {MAX_SIGNERS} signers"),
         ));
+    }
+    if body.keep.len() > MAX_KEEP {
+        return Err(list_refused(
+            version,
+            format!("more than {MAX_KEEP} kept statements"),
+        ));
+    }
+    let mut kept_digests = BTreeSet::new();
+    for kept in &body.keep {
+        if !crate::release::is_sha256_digest(&kept.digest) {
+            return Err(list_refused(
+                version,
+                format!("kept '{}' is not a digest", kept.digest),
+            ));
+        }
+        if !kept_digests.insert(kept.digest.as_str()) {
+            return Err(list_refused(
+                version,
+                format!("{} is kept twice", kept.digest),
+            ));
+        }
     }
     let mut keys = BTreeMap::new();
     let mut key_texts = BTreeSet::new();
@@ -490,7 +602,6 @@ fn parse_list(
     let list = TrustedList {
         version,
         digest: opened.digest.clone(),
-        not_after,
         body,
         keys,
     };
