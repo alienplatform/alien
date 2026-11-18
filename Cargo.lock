@@ -1451,6 +1451,7 @@ dependencies = [
  "hyper-util",
  "libc",
  "nlink",
+ "rcgen 0.14.10",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",

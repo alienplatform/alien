@@ -47,6 +47,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 nlink = { version = "0.32", features = ["sockdiag"] }
 
 [dev-dependencies]
+rcgen = "0.14"
 tempfile = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 libc = "0.2"

@@ -99,6 +99,16 @@ fn main() -> Result<()> {
 
     tracing_subscriber::fmt::init();
 
+    // The store client's extra trust (Azure's inspecting egress proxy), read before any command
+    // runs so none can change it.
+    match alien_sandbox_agent::storage::load_platform_roots_from_env() {
+        Ok(0) => {}
+        Ok(count) => tracing::info!(count, "store client trusts the platform's CA bundle"),
+        // Not fatal: an image can set the variable for its own tools, and only the store needs
+        // it. Without it the store reports the unknown issuer on its first request.
+        Err(error) => tracing::warn!(%error, "store client uses the bundled roots only"),
+    }
+
     // Azure `internet`: the proxy address commands use is a loopback forwarder over both gateway
     // replicas. It must listen before the gate and the workload.
     if let Err(message) = alien_sandbox_agent::proxy_failover::spawn_from_env() {

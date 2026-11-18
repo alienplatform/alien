@@ -5,16 +5,72 @@
 //! Every connection here goes through [`crate::gateway_egress::trusted_connect`], which marks
 //! the socket (and its DNS lookup) as the agent's. One connection per request: commits send a
 //! few objects a second at most.
+//!
+//! Trust: the bundled webpki roots, plus the bundle the platform names in `SSL_CERT_FILE` when
+//! the agent starts. Azure's sandbox egress proxy inspects TLS (`trafficInspection: Full`, which
+//! host rules need) and re-signs every connection, store included, with a CA it hands the guest
+//! that way. The bundle is read once at boot, before any command runs, so a command cannot
+//! change what the agent trusts afterwards.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use http_body_util::{BodyExt, Full};
 use hyper::{body::Bytes, header::HeaderMap, Method, Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio_rustls::{
-    rustls::{pki_types::ServerName, ClientConfig, RootCertStore},
+    rustls::{
+        pki_types::{pem::PemObject, CertificateDer, ServerName},
+        ClientConfig, RootCertStore,
+    },
     TlsConnector,
 };
+
+/// The platform's extra roots, read at boot. Empty when it names none.
+static PLATFORM_ROOTS: OnceLock<Vec<CertificateDer<'static>>> = OnceLock::new();
+
+/// Reads the bundle `SSL_CERT_FILE` names, once. Call at boot, before the workload starts.
+/// An error when the variable is set but the file cannot be read or holds no certificate (the
+/// caller logs it; the bundled roots still apply).
+pub fn load_platform_roots_from_env() -> std::io::Result<usize> {
+    let roots = match std::env::var_os("SSL_CERT_FILE") {
+        None => Vec::new(),
+        Some(path) => parse_bundle(&std::fs::read(&path).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!(
+                    "cannot read SSL_CERT_FILE {}: {error}",
+                    path.to_string_lossy()
+                ),
+            )
+        })?)?,
+    };
+    let count = roots.len();
+    let _ = PLATFORM_ROOTS.set(roots);
+    Ok(PLATFORM_ROOTS.get().map_or(count, Vec::len))
+}
+
+fn parse_bundle(pem: &[u8]) -> std::io::Result<Vec<CertificateDer<'static>>> {
+    let roots = CertificateDer::pem_slice_iter(pem)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| std::io::Error::other(format!("SSL_CERT_FILE: {error}")))?;
+    if roots.is_empty() {
+        return Err(std::io::Error::other("SSL_CERT_FILE holds no certificate"));
+    }
+    Ok(roots)
+}
+
+fn root_store(extra: &[CertificateDer<'static>]) -> RootCertStore {
+    let mut roots = RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    // A bundle (often the whole system store) can carry a certificate rustls cannot use as a
+    // trust anchor; skip that one, keep the rest.
+    let _ = roots.add_parsable_certificates(extra.iter().cloned());
+    roots
+}
 
 /// A response read to its end.
 pub struct Response {
@@ -32,9 +88,13 @@ pub struct TrustedHttp {
 
 impl TrustedHttp {
     pub fn new(timeout: Duration) -> Self {
-        let roots = RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-        };
+        Self::with_roots(
+            timeout,
+            root_store(PLATFORM_ROOTS.get().map_or(&[], Vec::as_slice)),
+        )
+    }
+
+    fn with_roots(timeout: Duration, roots: RootCertStore) -> Self {
         let config = ClientConfig::builder_with_provider(Arc::new(
             tokio_rustls::rustls::crypto::ring::default_provider(),
         ))
@@ -146,6 +206,79 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A TLS server whose certificate is signed by a private CA, the way Azure's egress proxy
+    /// re-signs the store: the bundled roots alone refuse it; with the CA as a platform root the
+    /// exchange completes.
+    #[tokio::test]
+    async fn trusts_the_platform_bundle_and_only_with_it() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio_rustls::rustls::{pki_types::PrivateKeyDer, ServerConfig};
+
+        let ca_key = rcgen::KeyPair::generate().unwrap();
+        let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = ca_params.self_signed(&ca_key).unwrap();
+        let ca_issuer = rcgen::Issuer::new(ca_params, ca_key);
+        let leaf_key = rcgen::KeyPair::generate().unwrap();
+        let leaf = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()])
+            .unwrap()
+            .signed_by(&leaf_key, &ca_issuer)
+            .unwrap();
+
+        let server = ServerConfig::builder_with_provider(Arc::new(
+            tokio_rustls::rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![leaf.der().clone()],
+            PrivateKeyDer::try_from(leaf_key.serialize_der()).unwrap(),
+        )
+        .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(socket).await else {
+                        return;
+                    };
+                    let mut buffer = [0u8; 1024];
+                    let _ = tls.read(&mut buffer).await;
+                    let _ = tls
+                        .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                        .await;
+                    let _ = tls.shutdown().await;
+                });
+            }
+        });
+        let url = format!("https://127.0.0.1:{port}/keys/k1/HEAD");
+
+        let refused = TrustedHttp::new(Duration::from_secs(10))
+            .send(Method::GET, &url, &[], Vec::new())
+            .await
+            .err()
+            .expect("the bundled roots alone do not trust the private CA");
+        assert!(refused.to_string().contains("UnknownIssuer"), "{refused}");
+
+        let bundle = parse_bundle(ca.pem().as_bytes()).unwrap();
+        let response = TrustedHttp::with_roots(Duration::from_secs(10), root_store(&bundle))
+            .send(Method::GET, &url, &[], Vec::new())
+            .await
+            .expect("trusted with the platform bundle");
+        assert_eq!(response.status, StatusCode::NO_CONTENT);
+    }
+
+    #[test]
+    fn a_bundle_without_certificates_is_refused() {
+        assert!(parse_bundle(b"").is_err());
+        assert!(parse_bundle(b"not a certificate\n").is_err());
+    }
 
     /// TLS to a real S3 endpoint with the bundled roots: any HTTP answer proves the handshake
     /// and the exchange.
