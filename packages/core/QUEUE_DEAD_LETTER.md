@@ -74,6 +74,8 @@ const failedTasks = await queue("tasks-failed").receive(10)
 - Both queues are Frozen or both are Live.
 - Kubernetes and machines reject the setting: Alien creates no queue there, so set it on
   the external queue.
+- On a protected Google Cloud install, a Worker triggered by a queue that has `deadLetter`
+  is refused with a clear message.
 
 ## Changing it
 
@@ -84,3 +86,8 @@ with the deployment. Removing `deadLetter` clears the setting in the cloud.
 
 An older manager or runtime cannot read a stack that has `deadLetter` and reports an
 unknown field `deadLetter`. Update them before releasing a stack that uses it.
+
+On Google Cloud, for a Frozen queue with a Worker trigger, the Pub/Sub service agent's
+subscriber grant is shared by the whole project: destroying another stack in the same
+project can remove it. Rerun the setup to restore it. Messages are redelivered meanwhile
+and none are lost.
