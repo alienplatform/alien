@@ -671,28 +671,32 @@ async fn destroy_tracked_deployment(
         &session,
         stack_settings.deployment_model,
         "cli",
+        args.erase_data,
     )
     .await
     .context(ErrorData::ConfigurationError {
         message: "Failed to acquire deployment lock for deletion".to_string(),
     })?;
-    let execution_claim = match acquire_outcome {
-        SetupDeleteAcquireOutcome::Acquired { execution_claim } => execution_claim,
+    let (execution_claim, locked_deployment) = match acquire_outcome {
+        SetupDeleteAcquireOutcome::Acquired {
+            execution_claim,
+            deployment,
+        } => (execution_claim, *deployment),
+        SetupDeleteAcquireOutcome::PolicyRefused { message } => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "erase_data".to_string(),
+                message,
+            }));
+        }
+        SetupDeleteAcquireOutcome::LockedReadFailed { message } => {
+            return Err(AlienError::new(ErrorData::ConfigurationError { message }));
+        }
         SetupDeleteAcquireOutcome::AlreadyDeleted => return Ok(()),
     };
 
     let preparation: Result<()> = async {
-        // Re-fetch under lock
-        let deployment = manager_client
-            .get_deployment()
-            .id(&tracked_deployment.deployment_id)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to re-fetch deployment under lock".to_string(),
-            })?
-            .into_inner();
+        // The record the acquire read with the lock held.
+        let deployment = locked_deployment;
 
         current.status =
             serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
@@ -2022,6 +2026,107 @@ mod tests {
             "destroy must retry setup teardown, got: {error:?}"
         );
         assert_eq!(state.lock().unwrap().release_count, 1);
+    }
+
+    /// `alien destroy` never read the recorded deletion policy: a rerun without `--erase-data`
+    /// after a delete that was requested with erase would erase. The acquire now reads the record
+    /// under the lock, gives the lock back and refuses; nothing is deleted.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn destroy_without_erase_data_refuses_a_delete_recorded_as_erase() {
+        refuses_a_rerun_against_the_recorded_policy("erase", false, "requested with data erase")
+            .await;
+    }
+
+    /// The other direction: `--erase-data` on a delete recorded as retain would erase data the
+    /// first request kept.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn destroy_with_erase_data_refuses_a_delete_recorded_as_retain() {
+        refuses_a_rerun_against_the_recorded_policy("retain", true, "requested with data retained")
+            .await;
+    }
+
+    #[cfg(feature = "platform")]
+    async fn refuses_a_rerun_against_the_recorded_policy(
+        policy: &'static str,
+        erase_data: bool,
+        refusal: &str,
+    ) {
+        let record = {
+            let mut record = deployment_record();
+            record["status"] = serde_json::json!("teardown-required");
+            record["runtimeMetadata"] = serde_json::json!({"deletionPolicy": policy});
+            record
+        };
+        let on_get = record.clone();
+        let on_acquire = record;
+        let state = Shared::default();
+        let app = Router::new()
+            .route(
+                "/v1/deployments/{id}",
+                get(move || async move { Json(on_get) }),
+            )
+            .route(
+                "/v1/sync/acquire",
+                post(move || async move {
+                    Json(serde_json::json!({ "deployments": [{ "deployment": on_acquire }] }))
+                }),
+            )
+            .route("/v1/sync/release", post(release_after_preparation_failure))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind manager");
+        let manager_url = format!("http://{}", listener.local_addr().expect("manager address"));
+        tokio::spawn(async move { axum::serve(listener, app).await.expect("serve manager") });
+
+        let http_client =
+            crate::auth::client_with_auth_and_workspace("Bearer user-session", "ws-name")
+                .expect("user client");
+        let manager_ctx = ManagerContext {
+            manager_url: manager_url.clone(),
+            manager_name: None,
+            manager_is_system: None,
+            manager_cloud: None,
+            client: alien_manager_api::Client::new_with_client(&manager_url, http_client.clone()),
+            http_client,
+            auth_token: Some("user-session".to_string()),
+            repository_name: None,
+            repository_uri: None,
+            workspace: Some("ws-name".to_string()),
+        };
+        let tracked = TrackedDeployment {
+            name: "test".to_string(),
+            deployment_id: "dep_test".to_string(),
+            api_key: DEPLOYMENT_TOKEN.to_string(),
+            workspace_id: "ws_test".to_string(),
+            project_id: "proj_test".to_string(),
+        };
+        let args = DestroyArgs {
+            token: None,
+            name: "test".to_string(),
+            platform: Some("local".to_string()),
+            force: false,
+            erase_data,
+            yes: true,
+        };
+
+        let error = destroy_tracked_deployment(
+            &args,
+            Platform::Local,
+            &tracked,
+            manager_ctx,
+            FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]),
+        )
+        .await
+        .expect_err("a changed policy is refused");
+        assert!(format!("{error:?}").contains(refusal), "{error:?}");
+        assert_eq!(
+            state.lock().unwrap().release_count,
+            1,
+            "the lock is given back"
+        );
     }
 
     #[test]

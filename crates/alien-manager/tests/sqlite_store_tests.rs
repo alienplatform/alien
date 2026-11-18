@@ -3547,6 +3547,68 @@ async fn retention_handoff_is_skipped_by_discovery_and_acquirable_for_setup() {
     assert_eq!(acquired[0].deployment.id, dep.id);
 }
 
+/// An Operator asks for its deployment by the status it last reported. For a status that
+/// waits on the setup owner that request must not take the lock: a lock held by a running
+/// Operator makes the CLI's setup-teardown acquire answer "contended" until it goes stale.
+#[tokio::test]
+async fn runtime_acquire_naming_a_setup_handoff_status_does_not_lock_it() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group = create_test_group(&store).await;
+    let subject = test_subject();
+    for status in ["retention-required", "teardown-required", "teardown-failed"] {
+        let dep = create_test_deployment_with_settings(
+            &store,
+            &group,
+            status,
+            Platform::Kubernetes,
+            StackSettings {
+                deployment_model: DeploymentModel::Pull,
+                ..StackSettings::default()
+            },
+        )
+        .await;
+        store.set_delete_pending(&subject, &dep.id).await.unwrap();
+        db.conn()
+            .lock()
+            .await
+            .execute(
+                &format!(
+                    "UPDATE deployments SET status = '{status}', retry_requested = 1 WHERE id = ?"
+                ),
+                [dep.id.as_str()],
+            )
+            .await
+            .unwrap();
+        let operator = DeploymentFilter {
+            deployment_ids: Some(vec![dep.id.clone()]),
+            statuses: Some(vec![status.into()]),
+            acquire_mode: Some(DeploymentAcquireMode::Runtime),
+            deployment_model: Some(DeploymentModel::Pull),
+            max_deployment_protocol_version: Some(alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION),
+            ..Default::default()
+        };
+        assert!(
+            store
+                .acquire(&subject, "operator", &operator, 1)
+                .await
+                .unwrap()
+                .is_empty(),
+            "{status}: the runtime owner has nothing left to run"
+        );
+        let cli = DeploymentFilter {
+            acquire_mode: Some(DeploymentAcquireMode::SetupTeardown),
+            setup_method: Some("helm".into()),
+            ..operator
+        };
+        assert_eq!(
+            store.acquire(&subject, "cli", &cli, 1).await.unwrap().len(),
+            1,
+            "{status}: the setup owner acquires at once"
+        );
+    }
+}
+
 #[tokio::test]
 async fn setup_retention_checkpoint_survives_late_pull_reports_and_reopens_for_erase() {
     let db = fresh_db().await;
