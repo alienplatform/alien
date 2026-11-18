@@ -921,11 +921,35 @@ impl AzurePermissionsHelper {
 
         if let Err(error) = result {
             if Self::is_existing_role_assignment_conflict(&error) {
+                // A conflict that is still there after the attempts is never read as done unless
+                // the existing assignment IS the one asked for, or it is somebody else's equal
+                // grant (a setup package's), which stands as the grant held and is left alone.
+                let raw = format!("{error}");
+                let Some(existing) = Self::existing_assignment_id(&error, &scope) else {
+                    return Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Azure refused to write role assignment '{role_assignment_id}' because an equal one exists, and its answer does not name that assignment, so it cannot be told apart from one this helper made: {raw}"
+                        ),
+                        resource_id: Some(role_assignment_id.to_string()),
+                    }));
+                };
+                if Self::same_assignment(&existing, role_assignment_id) {
+                    return Ok(full_assignment_id);
+                }
+                if Self::assignment_is_runtime_managed(authorization_client, &existing).await {
+                    return Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Role assignment '{role_assignment_id}' could not be written: an equal assignment this helper made exists as '{existing}' and was not replaced after {attempts} attempts: {raw}"
+                        ),
+                        resource_id: Some(role_assignment_id.to_string()),
+                    }));
+                }
                 warn!(
                     role_assignment_id = %full_assignment_id,
+                    existing_assignment = %existing,
                     principal_id = %principal_id,
                     role_definition_id = %role_definition_id,
-                    "Equivalent Azure role assignment already exists; reusing the existing grant"
+                    "An equal role assignment made by something else already exists; it stands as the grant and is left untouched"
                 );
                 return Ok(full_assignment_id);
             }
@@ -2050,7 +2074,7 @@ mod tests {
         // of ours), so it stands as the grant and is not deleted.
         authorization
             .expect_get_role_assignment_by_id()
-            .times(1)
+            .times(2)
             .returning(|_| {
                 Err(AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
                     resource_type: "RoleAssignment".to_string(),
@@ -2096,6 +2120,111 @@ mod tests {
             "62AFC2C0-4b50-5f94-8cbb-b16c9711c901"
         ));
         assert!(!AzurePermissionsHelper::same_assignment(&id, "other"));
+    }
+
+    fn conflict_naming(existing: &str) -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+            resource_type: "role assignment".to_string(),
+            resource_name: "assignment-123".to_string(),
+            message: format!(
+                "The role assignment already exists. The ID of the existing role assignment is {existing}."
+            ),
+        })
+    }
+
+    async fn write_with(authorization: MockAuthorizationApi) -> Result<String> {
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+        AzurePermissionsHelper::create_role_assignment_at_scope(
+            &authorization,
+            "/subscriptions/sub-123/resourceGroups/rg-123",
+            "assignment-123",
+            "principal-123",
+            "role-definition-123",
+        )
+        .await
+    }
+
+    fn assignment_with_description(
+        description: Option<&str>,
+    ) -> alien_azure_clients::models::authorization_role_assignments::RoleAssignment {
+        use alien_azure_clients::models::authorization_role_assignments::{
+            RoleAssignment, RoleAssignmentProperties,
+        };
+        RoleAssignment {
+            id: None,
+            name: None,
+            type_: None,
+            properties: Some(RoleAssignmentProperties {
+                principal_id: "principal-123".to_string(),
+                role_definition_id: "role-definition-123".to_string(),
+                scope: None,
+                principal_type: Default::default(),
+                condition: None,
+                condition_version: None,
+                delegated_managed_identity_resource_id: None,
+                description: description.map(str::to_string),
+                created_by: None,
+                created_on: None,
+                updated_by: None,
+                updated_on: None,
+            }),
+        }
+    }
+
+    /// An "already exists" answer that does not name the existing assignment cannot be told from
+    /// one this helper made, so it is an error that carries the raw text, never a reuse.
+    #[tokio::test]
+    async fn an_unparseable_already_exists_answer_is_an_error() {
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .times(1)
+            .returning(|_, _| {
+                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+                    resource_type: "role assignment".to_string(),
+                    resource_name: "assignment-123".to_string(),
+                    message: "The role assignment already exists.".to_string(),
+                }))
+            });
+        authorization.expect_delete_role_assignment_by_id().times(0);
+        let error = write_with(authorization).await.expect_err("never a reuse");
+        assert!(
+            format!("{error:?}").contains("The role assignment already exists."),
+            "the raw text is named: {error:?}"
+        );
+    }
+
+    /// An equal assignment this helper made that cannot be replaced is an error, not a reuse.
+    #[tokio::test]
+    async fn an_equal_assignment_of_ours_that_stays_is_an_error() {
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .times(3)
+            .returning(|_, _| Err(conflict_naming("62afc2c04b505f948cbbb16c9711c901")));
+        authorization
+            .expect_get_role_assignment_by_id()
+            .returning(|_| Ok(assignment_with_description(Some(RUNTIME_ROLE_ASSIGNMENT_DESCRIPTION))));
+        authorization
+            .expect_delete_role_assignment_by_id()
+            .times(2)
+            .returning(|_| Ok(None));
+        write_with(authorization)
+            .await
+            .expect_err("ours after three attempts is an error");
+    }
+
+    /// The existing assignment is the one asked for: done, and nothing is read or deleted.
+    #[tokio::test]
+    async fn an_equal_assignment_under_the_target_id_is_done() {
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .times(1)
+            .returning(|_, _| Err(conflict_naming("assignment-123")));
+        authorization.expect_get_role_assignment_by_id().times(0);
+        authorization.expect_delete_role_assignment_by_id().times(0);
+        write_with(authorization).await.expect("done");
     }
 
     /// A changed grant list lands a different role on an assignment id that already holds one.
