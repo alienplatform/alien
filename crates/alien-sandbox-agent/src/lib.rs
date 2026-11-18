@@ -8,6 +8,8 @@ pub mod jobs;
 pub mod metadata;
 #[cfg(unix)]
 pub mod mounts;
+#[cfg(unix)]
+pub mod s3files;
 pub mod paths;
 pub mod peer;
 pub mod pid_namespace;

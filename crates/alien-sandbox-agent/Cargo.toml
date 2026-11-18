@@ -34,6 +34,10 @@ path = "src/main.rs"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+rsa = { version = "0.9", features = ["pkcs5"] }
+sha1 = { workspace = true }
+time = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nlink = { version = "0.32", features = ["sockdiag"] }
