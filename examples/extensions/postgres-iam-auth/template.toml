@@ -1,0 +1,3 @@
+name = "extensions/postgres-iam-auth"
+description = "An extension that turns on IAM authentication for Alien's Postgres on every setup path."
+language = "Rust"

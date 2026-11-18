@@ -20,6 +20,7 @@ packages:
   - command-routing-ts
   - command-routing-ts/services/*
   - github-agent/packages/remote-agent
+  - dataplane-with-extension
 
 overrides:
   '@alienplatform/platform-api': file:../client-sdks/platform/typescript

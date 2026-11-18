@@ -1,0 +1,3 @@
+name = "extensions/resource-tags"
+description = "An extension that adds your tags to the resources Alien's controllers create."
+language = "Rust"

@@ -1,5 +1,10 @@
 [workspace]
-exclude = ["vendor/oci-client"]
+# Each extension example is its own Cargo workspace.
+exclude = [
+  "vendor/oci-client",
+  "examples/extensions",
+  "examples/dataplane-with-extension",
+]
 members = [
   "crates/alien-commands",
   "crates/alien-commands-client",

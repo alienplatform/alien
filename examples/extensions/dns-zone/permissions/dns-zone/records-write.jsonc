@@ -1,0 +1,69 @@
+{
+  "id": "acme/dns-zone/records-write",
+  "description": "Write the zone's DNS records",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets"]
+        },
+        // Covers every hosted zone in the account, not only this zone: Route53 names a zone by
+        // an id it assigns at create, which no binding variable holds, and a hosted zone takes
+        // no tag condition.
+        "binding": {
+          "stack": { "resources": ["arn:aws:route53:::hostedzone/*"] },
+          "resource": { "resources": ["arn:aws:route53:::hostedzone/*"] }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "dns.changes.create",
+            "dns.resourceRecordSets.create",
+            "dns.resourceRecordSets.update",
+            "dns.resourceRecordSets.delete",
+            "dns.resourceRecordSets.list"
+          ]
+        },
+        // Covers every managed zone in the project, not only this zone: Alien binds a Google Cloud
+        // grant on the project or on one topic, subscription, repository or reasoning engine, never
+        // on one managed zone.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        // No SOA: the zone owns it.
+        "grant": {
+          "actions": [
+            "Microsoft.Network/dnszones/A/*",
+            "Microsoft.Network/dnszones/AAAA/*",
+            "Microsoft.Network/dnszones/CAA/*",
+            "Microsoft.Network/dnszones/CNAME/*",
+            "Microsoft.Network/dnszones/MX/*",
+            "Microsoft.Network/dnszones/NS/*",
+            "Microsoft.Network/dnszones/PTR/*",
+            "Microsoft.Network/dnszones/SRV/*",
+            "Microsoft.Network/dnszones/TXT/*",
+            "Microsoft.Network/dnszones/recordsets/read"
+          ]
+        },
+        // Covers every DNS zone in the deployment's resource group, not only this zone: Azure
+        // names a zone by its domain, which no binding variable holds.
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,3 @@
+name = "extensions/budget-alert"
+description = "An extension that adds an AWS budget alert, a custom resource with no controller."
+language = "Rust"

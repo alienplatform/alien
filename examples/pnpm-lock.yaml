@@ -306,6 +306,22 @@ importers:
         specifier: ^4.1.12
         version: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@24.12.0)(vite@7.3.7(@types/node@24.12.0)(jiti@2.7.0)(lightningcss@1.33.0))
 
+  dataplane-with-extension:
+    dependencies:
+      '@alienplatform/core':
+        specifier: file:../../packages/core
+        version: file:../packages/core(@types/json-schema@7.0.15)(openapi-types@12.1.3)
+      hono:
+        specifier: ^4.13.11
+        version: 4.13.13
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.15
+        version: 24.12.0
+      typescript:
+        specifier: ~5.8.3
+        version: 5.8.3
+
   endpoint-agent:
     devDependencies:
       '@alienplatform/core':
