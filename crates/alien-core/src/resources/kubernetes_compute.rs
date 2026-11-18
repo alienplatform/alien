@@ -102,6 +102,15 @@ pub fn kubernetes_compute_architecture(stack: &Stack) -> Result<Option<Architect
     Ok(selected)
 }
 
+/// The architecture a release records for a workload when it records exactly one; several
+/// (a multi-architecture image) or none mean no constraint.
+pub fn single_built_architecture(built_architectures: &[Architecture]) -> Option<Architecture> {
+    match built_architectures {
+        [only] => Some(*only),
+        _ => None,
+    }
+}
+
 /// Match Pod placement to the architecture of the workload's image.
 /// The pool's profile wins; otherwise a single built architecture recorded by
 /// `alien build` for this workload (`Stack::built_architectures_of`) selects nodes; several built architectures
@@ -114,10 +123,7 @@ pub fn kubernetes_compute_node_selector(
     built_architectures: &[Architecture],
 ) -> Result<Option<BTreeMap<String, String>>, String> {
     let stack_architecture = kubernetes_compute_architecture(stack)?;
-    let built = match built_architectures {
-        [only] => Some(*only),
-        _ => None,
-    };
+    let built = single_built_architecture(built_architectures);
     let architecture = pool
         .and_then(|pool| pool.profile.as_ref())
         .and_then(|profile| profile.architecture)

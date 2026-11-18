@@ -30,7 +30,8 @@ use super::kubernetes_command_service::{
     delete_command_service, reconcile_command_service, reconcile_ready_command_service,
 };
 use super::kubernetes_deployment::{
-    build_worker_deployment, kubernetes_namespace, worker_labels, WORKER_CONTAINER_NAME,
+    build_worker_deployment, kubernetes_namespace, recorded_architecture, worker_labels,
+    WORKER_CONTAINER_NAME,
 };
 
 #[controller]
@@ -67,6 +68,12 @@ pub struct KubernetesWorkerController {
     pub(crate) last_recovery_check_unix: Option<i64>,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
+    /// The single architecture the release recorded when the pod spec was last applied (None: no
+    /// record, or several). It is read at pod-spec build time, so a release that records one for
+    /// an existing worker is invisible to config diffing. Only this is compared, never the whole
+    /// selector, so a pool's selector cannot make an unrecorded workload roll.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_architecture: Option<alien_core::instance_catalog::Architecture>,
 }
 
 #[controller]
@@ -224,6 +231,7 @@ impl KubernetesWorkerController {
             ctx,
         )
         .await?;
+        self.applied_architecture = recorded_architecture(ctx, &config.id);
 
         self.expected_generation = None;
         if let Some(mut existing) = existing_deployment {
@@ -818,6 +826,7 @@ impl KubernetesWorkerController {
             ctx,
         )
         .await?;
+        self.applied_architecture = recorded_architecture(ctx, &config.id);
         new_deployment.metadata.resource_version = resource_version;
 
         let updated = deployment_client
@@ -1330,6 +1339,16 @@ impl KubernetesWorkerController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    /// A release that records (or changes) the architecture its image was built for changes the
+    /// node selector without changing the Worker config, so compare what was applied.
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if self.deployment_name.is_none() {
+            return Ok(false);
+        }
+        let config = ctx.desired_resource_config::<Worker>()?;
+        Ok(recorded_architecture(ctx, &config.id) != self.applied_architecture)
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let Some(deployment_name) = &self.deployment_name {
             Some(ResourceOutputs::new(WorkerOutputs {
@@ -1424,6 +1443,7 @@ impl KubernetesWorkerController {
             expected_generation: None,
             zero_ready_observed: false,
             rollout_watch: None,
+            applied_architecture: None,
             recovery_checks: 0,
             recovering: false,
             last_recovery_check_unix: None,
@@ -1436,6 +1456,50 @@ impl KubernetesWorkerController {
 mod tests {
     use super::*;
     use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+    use crate::core::ResourceController as _;
+    use alien_core::Resource;
+
+    #[test]
+    fn needs_update_follows_the_built_architecture_a_release_records() {
+        use alien_core::instance_catalog::Architecture::{Arm64, X86_64};
+        let config = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "registry.example.com/api:1".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let mut controller = KubernetesWorkerController::mock_ready("api", "ns");
+        let mut stack = harness.ctx().desired_stack.clone();
+        // The stack also pins a node selector of its own (the pool architecture): it must
+        // not make a workload with no record, or a multi-architecture one, roll.
+        crate::core::kubernetes_manifest_test_support::add_x86_64_pool(&mut stack);
+        let id = config.id.clone();
+        let wants_update = |controller: &KubernetesWorkerController, stack: &alien_core::Stack| {
+            let mut ctx = harness.ctx();
+            ctx.desired_stack = stack;
+            controller.needs_update(&ctx).expect("needs_update")
+        };
+
+        // A release without the record, or a multi-architecture one: nothing to apply.
+        assert!(!wants_update(&controller, &stack));
+        stack
+            .built_architectures
+            .insert(id.clone(), vec![X86_64, Arm64]);
+        assert!(!wants_update(&controller, &stack));
+
+        // A release that records one architecture updates the existing workload once.
+        stack.built_architectures.insert(id.clone(), vec![X86_64]);
+        assert!(wants_update(&controller, &stack));
+        controller.applied_architecture = Some(X86_64);
+        assert!(!wants_update(&controller, &stack));
+
+        // A later release that changes it updates again; one that drops it updates once more.
+        stack.built_architectures.insert(id.clone(), vec![Arm64]);
+        assert!(wants_update(&controller, &stack));
+        stack.built_architectures.clear();
+        assert!(wants_update(&controller, &stack));
+    }
 
     /// A worker refused before its controller recorded a namespace has nothing recorded: deleting it
     /// completes instead of failing with "Namespace not set in state".
@@ -2023,6 +2087,7 @@ mod tests {
             expected_generation: None,
             zero_ready_observed: false,
             rollout_watch: None,
+            applied_architecture: None,
             recovery_checks: 0,
             recovering: false,
             last_recovery_check_unix: None,
@@ -2067,6 +2132,7 @@ mod tests {
             expected_generation: None,
             zero_ready_observed: false,
             rollout_watch: None,
+            applied_architecture: None,
             recovery_checks: 0,
             recovering: false,
             last_recovery_check_unix: None,

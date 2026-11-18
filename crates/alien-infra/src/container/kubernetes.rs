@@ -251,11 +251,52 @@ pub struct KubernetesContainerController {
     /// pod-spec build time, so a Helm upgrade that changes it is invisible to config diffing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) applied_priority_class: Option<String>,
+    /// The single architecture the release recorded when the pod spec was last applied (None: no
+    /// record, or several). It is read at pod-spec build time, so a release that records one for
+    /// an existing container is invisible to config diffing. Only this is compared, never the whole
+    /// selector, so a pool's selector cannot make an unrecorded workload roll.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_architecture: Option<alien_core::instance_catalog::Architecture>,
     /// Resolver last applied to the sandbox gateway's pods. Read when the pod spec is built, so a
     /// later change (the Operator can read the cluster DNS Service, or its address moved) is
     /// invisible to config diffing. `None` for a gateway created before this was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) applied_gateway_dns: Option<GatewayDns>,
+}
+
+/// The `nodeSelector` the Pod gets: the pool or stack architecture, else the single
+/// architecture the build recorded for this container.
+fn desired_node_selector(
+    ctx: &ResourceControllerContext<'_>,
+    config: &Container,
+) -> Result<Option<BTreeMap<String, String>>> {
+    let pool =
+        alien_core::kubernetes_container_pool(ctx.desired_stack, config).map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
+    let node_selector = alien_core::kubernetes_compute_node_selector(
+        ctx.desired_stack,
+        pool,
+        ctx.desired_stack.built_architectures_of(&config.id),
+    )
+    .map_err(|message| {
+        AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: config.id.clone(),
+            message,
+        })
+    })?;
+    Ok(node_selector)
+}
+
+/// The one architecture the release recorded for this workload, if any.
+fn recorded_architecture(
+    ctx: &ResourceControllerContext<'_>,
+    config_id: &str,
+) -> Option<alien_core::instance_catalog::Architecture> {
+    alien_core::single_built_architecture(ctx.desired_stack.built_architectures_of(config_id))
 }
 
 #[controller]
@@ -465,6 +506,7 @@ impl KubernetesContainerController {
                 message,
             })
         })?;
+        self.applied_architecture = recorded_architecture(ctx, &config.id);
         self.reconcile_network_policy(config, &container_name, &namespace, ctx)
             .await?;
         self.reconcile_internal_service(config, &container_name, &namespace, ctx)
@@ -1574,6 +1616,7 @@ impl KubernetesContainerController {
                 message,
             })
         })?;
+        self.applied_architecture = recorded_architecture(ctx, &config.id);
         self.service_port = first_declared_container_port(config);
         self.reconcile_network_policy(config, workload_name, namespace, ctx)
             .await?;
@@ -2402,6 +2445,9 @@ impl KubernetesContainerController {
         if desired_priority_class != self.applied_priority_class {
             return Ok(true);
         }
+        if recorded_architecture(ctx, &config.id) != self.applied_architecture {
+            return Ok(true);
+        }
         let monitoring_headers = direct_monitoring_auth_headers(ctx);
         Ok(self.env_secret.drifted_with_additional_secrets(
             &config.id,
@@ -2482,6 +2528,7 @@ mod output_tests {
             update_generation: None,
             workload_failure: None,
             applied_priority_class: None,
+            applied_architecture: None,
             applied_gateway_dns: None,
             zero_ready_observed: false,
             rollout_watch: None,
@@ -2557,6 +2604,7 @@ mod output_tests {
             update_generation: None,
             workload_failure: None,
             applied_priority_class: None,
+            applied_architecture: None,
             applied_gateway_dns: None,
             zero_ready_observed: false,
             rollout_watch: None,
@@ -2631,6 +2679,7 @@ impl KubernetesContainerController {
             update_generation: None,
             workload_failure: None,
             applied_priority_class: None,
+            applied_architecture: None,
             applied_gateway_dns: None,
             zero_ready_observed: false,
             rollout_watch: None,
@@ -3147,25 +3196,7 @@ impl KubernetesContainerController {
 
         volumes.extend(security.volumes);
 
-        let pool = alien_core::kubernetes_container_pool(ctx.desired_stack, config).map_err(
-            |message| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: config.id.clone(),
-                    message,
-                })
-            },
-        )?;
-        let node_selector = alien_core::kubernetes_compute_node_selector(
-            ctx.desired_stack,
-            pool,
-            ctx.desired_stack.built_architectures_of(&config.id),
-        )
-        .map_err(|message| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: config.id.clone(),
-                message,
-            })
-        })?;
+        let node_selector = desired_node_selector(ctx, config)?;
         let priority_class_name = alien_core::kubernetes_priority_class_name(config.priority)
             .map_err(|message| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -4550,6 +4581,7 @@ mod tests {
             update_generation: None,
             workload_failure: None,
             applied_priority_class: None,
+            applied_architecture: None,
             applied_gateway_dns: None,
             zero_ready_observed: false,
             rollout_watch: None,
@@ -5994,6 +6026,45 @@ mod tests {
         assert!(!controller
             .needs_update(&harness.ctx())
             .expect("needs_update"));
+    }
+
+    #[test]
+    fn needs_update_follows_the_built_architecture_a_release_records() {
+        use alien_core::instance_catalog::Architecture::{Arm64, X86_64};
+        let config = manifest_test_container(&[], false);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let mut controller = manifest_test_controller();
+        controller.applied_priority_class = None;
+        let mut stack = harness.ctx().desired_stack.clone();
+        // The stack also pins a node selector of its own (the pool architecture): it must
+        // not make a workload with no record, or a multi-architecture one, roll.
+        crate::core::kubernetes_manifest_test_support::add_x86_64_pool(&mut stack);
+        let id = config.id.clone();
+        let wants_update = |controller: &KubernetesContainerController,
+                            stack: &alien_core::Stack| {
+            let mut ctx = harness.ctx();
+            ctx.desired_stack = stack;
+            controller.needs_update(&ctx).expect("needs_update")
+        };
+
+        // A release without the record, or a multi-architecture one: nothing to apply.
+        assert!(!wants_update(&controller, &stack));
+        stack
+            .built_architectures
+            .insert(id.clone(), vec![X86_64, Arm64]);
+        assert!(!wants_update(&controller, &stack));
+
+        // A release that records one architecture updates the existing workload once.
+        stack.built_architectures.insert(id.clone(), vec![X86_64]);
+        assert!(wants_update(&controller, &stack));
+        controller.applied_architecture = Some(X86_64);
+        assert!(!wants_update(&controller, &stack));
+
+        // A later release that changes it updates again; one that drops it updates once more.
+        stack.built_architectures.insert(id.clone(), vec![Arm64]);
+        assert!(wants_update(&controller, &stack));
+        stack.built_architectures.clear();
+        assert!(wants_update(&controller, &stack));
     }
 
     #[test]
