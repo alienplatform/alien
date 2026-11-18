@@ -340,6 +340,7 @@ mod tests {
             ],
             allow_egress: false,
             preview_ports: vec![],
+            persistent_storage: None,
         };
         let importer = AwsSandboxImporter;
         let existing = importer.import(frozen("1.0"), &ctx).expect("first import");

@@ -612,6 +612,7 @@ impl AwsNetworkController {
             gateway_cidrs: vec![],
             workload_cidrs: vec![],
             vpc_cidrs: vec![],
+            persistent_store_endpoint_id: None,
         };
         self.sandbox_network = Some(
             super::super::validate_aws_sandbox_network(

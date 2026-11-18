@@ -5280,6 +5280,7 @@ mod tests {
                     gateway_cidrs: vec![],
                     workload_cidrs: vec![],
                     vpc_cidrs: vec![],
+                    persistent_store_endpoint_id: None,
                 }),
                 ..Default::default()
             }
