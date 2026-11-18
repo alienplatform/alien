@@ -11,6 +11,7 @@ import * as z from "zod";
 export const AwsSandboxNetworkSchema = z.object({
     "gatewayCidrs": z.array(z.string()).describe("Only destinations permitted by the connector security group."),
 "gatewaySubnetIds": z.array(z.string()).describe("Dedicated NAT-routed subnets for the gateway's internal load balancer."),
+"persistentStoreEndpointId": z.string().describe("The S3 gateway endpoint setup put on the connector subnets' route table for sandboxes'\npersistent stores, the one route besides local ones those subnets may have. Absent unless\na sandbox declares persistent storage, so other registrations are unchanged.").nullish(),
 "sandboxCidrs": z.array(z.string()).describe("Source ranges permitted on the gateway proxy port."),
 "sandboxSubnetIds": z.array(z.string()).describe("Route-less connector subnet identifiers."),
 "vpcCidrs": z.array(z.string()).describe("Every associated VPC IPv4 range, denied by the gateway."),
