@@ -159,6 +159,9 @@ enum EndpointStep {
     Waiting {
         kind: EndpointWait,
         suggested_delay: Duration,
+        /// The issuer last reported the certificate as failed (it retries on its own); named in
+        /// the timeout error so the cause is not lost.
+        certificate_failed: bool,
     },
 }
 
@@ -167,6 +170,7 @@ impl EndpointStep {
         Self::Waiting {
             kind: EndpointWait::Endpoint,
             suggested_delay,
+            certificate_failed: false,
         }
     }
 }
@@ -186,6 +190,7 @@ fn apply_wait_deadline(
         EndpointStep::Waiting {
             kind,
             suggested_delay,
+            certificate_failed,
         } => {
             // Not polled for a while: an update or a retry came in between, so this is a new wait.
             if state
@@ -203,9 +208,14 @@ fn apply_wait_deadline(
                 state.clear_waits();
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: format!(
-                        "Timed out after {} seconds waiting for {}",
+                        "Timed out after {} seconds waiting for {}{}",
                         elapsed,
-                        kind.description()
+                        kind.description(),
+                        if certificate_failed {
+                            " (last status: failed)"
+                        } else {
+                            ""
+                        }
                     ),
                     resource_id: Some(resource_id.to_string()),
                 }));
@@ -228,7 +238,7 @@ struct EndpointPlan {
 #[derive(Debug, Clone)]
 enum EndpointPlanResolution {
     Disabled,
-    WaitingForCertificate,
+    WaitingForCertificate { failed: bool },
     Ready(EndpointPlan),
 }
 
@@ -304,10 +314,11 @@ async fn reconcile_endpoint_step(
             state.load_balancer_endpoint = None;
             return Ok(EndpointStep::Ready);
         }
-        EndpointPlanResolution::WaitingForCertificate => {
+        EndpointPlanResolution::WaitingForCertificate { failed } => {
             return Ok(EndpointStep::Waiting {
                 kind: EndpointWait::Certificate,
                 suggested_delay: CERTIFICATE_WAIT,
+                certificate_failed: failed,
             });
         }
         EndpointPlanResolution::Ready(plan) => plan,
@@ -1683,6 +1694,7 @@ fn resolve_endpoint_plan(
             // A renewal does not take the certificate away: while the metadata still carries the
             // material it is used as issued, otherwise what is served stays.
             let has_material = domain.certificate_chain.is_some() && domain.private_key.is_some();
+            let certificate_failed = domain.certificate_status == CertificateStatus::Failed;
             let renewing = matches!(
                 domain.certificate_status,
                 CertificateStatus::Renewing | CertificateStatus::RenewalFailed
@@ -1696,16 +1708,28 @@ fn resolve_endpoint_plan(
                     || state.managed_acm_certificate_arn.is_some())
                 && state.published_certificate_id.as_deref()
                     == Some(domain.certificate_id.as_str())
-                && state.published_hostname.as_deref() == Some(domain.fqdn.as_str());
+                && match state.published_hostname.as_deref() {
+                    Some(published) => published == domain.fqdn,
+                    // State written by an earlier release has no published hostname: the
+                    // served URL tells which hostname the certificate was published for.
+                    None => {
+                        state.public_url.as_deref()
+                            == Some(format!("https://{}", domain.fqdn).as_str())
+                    }
+                };
             if managed && renewing && !has_material && !keep_published {
                 // Nothing was ever published: wait like a certificate that is still pending.
-                return Ok(EndpointPlanResolution::WaitingForCertificate);
+                return Ok(EndpointPlanResolution::WaitingForCertificate {
+                    failed: certificate_failed,
+                });
             }
             let issued = domain.certificate_status == CertificateStatus::Issued
                 || (renewing && has_material);
 
             if !issued && managed && !keep_published {
-                return Ok(EndpointPlanResolution::WaitingForCertificate);
+                return Ok(EndpointPlanResolution::WaitingForCertificate {
+                    failed: certificate_failed,
+                });
             }
 
             let issued = issued || keep_published;
@@ -5024,6 +5048,7 @@ mod tests {
             EndpointStep::Waiting {
                 kind: EndpointWait::Certificate,
                 suggested_delay: CERTIFICATE_WAIT,
+                certificate_failed: false,
             }
         }
 
@@ -5091,6 +5116,10 @@ mod tests {
                     .await
                     .expect_err("past the bound");
             assert!(error.to_string().contains("managed certificate"), "{error}");
+            assert!(
+                error.to_string().ends_with("(last status: failed)"),
+                "{error}"
+            );
         }
 
         /// A renewal does not take the published certificate away, and the Service and route are
@@ -5126,7 +5155,7 @@ mod tests {
                 )
                 .expect("resolves");
                 assert!(
-                    matches!(plan, EndpointPlanResolution::WaitingForCertificate),
+                    matches!(plan, EndpointPlanResolution::WaitingForCertificate { .. }),
                     "{status:?}: {plan:?}"
                 );
             }
@@ -5265,7 +5294,7 @@ mod tests {
                 let plan = resolve_endpoint_plan(&harness.ctx(), &endpoint_target(), &changed)
                     .expect("resolves");
                 assert!(
-                    matches!(plan, EndpointPlanResolution::WaitingForCertificate),
+                    matches!(plan, EndpointPlanResolution::WaitingForCertificate { .. }),
                     "{plan:?}"
                 );
             }
@@ -5291,6 +5320,43 @@ mod tests {
                         ..
                     })
                 ),
+                "{plan:?}"
+            );
+        }
+
+        /// State saved by an earlier release has no `publishedHostname`: a renewal still keeps
+        /// serving what is published, judged by the served URL.
+        #[test]
+        fn renewal_with_state_from_an_earlier_release_keeps_serving() {
+            let harness = harness(CertificateStatus::Renewing, false);
+            let mut json = serde_json::to_value(published_state()).expect("serializes");
+            json.as_object_mut()
+                .expect("object")
+                .remove("publishedHostname");
+            let state: KubernetesPublicEndpointState =
+                serde_json::from_value(json).expect("old state loads");
+            assert_eq!(state.published_hostname, None);
+            let plan = resolve_endpoint_plan(&harness.ctx(), &endpoint_target(), &state)
+                .expect("resolves");
+            assert!(
+                matches!(
+                    plan,
+                    EndpointPlanResolution::Ready(EndpointPlan {
+                        certificate: EndpointCertificate::KeepPublished { .. },
+                        ..
+                    })
+                ),
+                "{plan:?}"
+            );
+            // The served URL of another hostname does not count.
+            let other = KubernetesPublicEndpointState {
+                public_url: Some("https://old.example.com".to_string()),
+                ..state
+            };
+            let plan = resolve_endpoint_plan(&harness.ctx(), &endpoint_target(), &other)
+                .expect("resolves");
+            assert!(
+                matches!(plan, EndpointPlanResolution::WaitingForCertificate { .. }),
                 "{plan:?}"
             );
         }
