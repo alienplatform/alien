@@ -21,7 +21,7 @@ use crate::exec::ExecIdentity;
 use crate::image_command::ImageProcess;
 
 /// Set by setup on a sandbox that declares persistent storage: `{ path, exclude, maxSizeBytes }`.
-pub const ENV_PERSISTENT_STORAGE: &str = "ALIEN_SANDBOX_PERSISTENT_STORAGE";
+pub const ENV_PERSISTENT_STORAGE: &str = alien_core::sandbox_egress::ENV_PERSISTENT_STORAGE;
 
 /// How often the directory is checked for changes. With one commit in flight at a time, a write
 /// is committed within about two of these plus the upload.
@@ -242,7 +242,9 @@ impl PersistentStorage {
             ))
         };
         let grant_expires_at = request.grant.expires_at();
-        let store = Arc::new(GrantStore::new(request.grant));
+        let store = Arc::new(
+            GrantStore::new(request.grant).map_err(|e| storage_failed("use the key's grant", e))?,
+        );
         let manifest = match &request.commit {
             Some(commit) => Some(
                 read_manifest(store.as_ref(), commit)
@@ -303,7 +305,9 @@ impl PersistentStorage {
             })
         })?;
         let expires_at = request.grant.expires_at();
-        live.store.renew(request.grant);
+        live.store
+            .renew(request.grant)
+            .map_err(|e| storage_failed("renew the key's grant", e))?;
         self.update(|s| {
             s.grant_expires_at = Some(expires_at);
             s.grant_issued_at = Some(Utc::now());

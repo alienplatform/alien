@@ -343,6 +343,9 @@ pub struct AzureSandboxBinding {
     pub memory: Option<BindingValue<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disk: Option<BindingValue<String>>,
+    /// The declared persistent storage, if any: the directory and the sandbox's own store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistent_storage: Option<SandboxPersistentStorageBinding>,
 }
 
 /// GCP Agent Platform sandbox binding configuration.
@@ -446,12 +449,13 @@ impl SandboxBinding {
             Self::Local(value) => value.egress.as_ref(),
         }
     }
-    /// The declared persistent storage. Only AWS and Local can carry one.
+    /// The declared persistent storage. AWS, Azure and Local can carry one.
     pub fn persistent_storage(&self) -> Option<&SandboxPersistentStorageBinding> {
         match self {
             Self::Aws(value) => value.persistent_storage.as_ref(),
+            Self::Azure(value) => value.persistent_storage.as_ref(),
             Self::Local(value) => value.persistent_storage.as_ref(),
-            Self::Azure(_) | Self::GcpAgentPlatform(_) | Self::Kubernetes(_) => None,
+            Self::GcpAgentPlatform(_) | Self::Kubernetes(_) => None,
         }
     }
 
@@ -516,6 +520,7 @@ impl SandboxBinding {
             cpu: None,
             memory: None,
             disk: None,
+            persistent_storage: None,
         })
     }
 

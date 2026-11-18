@@ -43,4 +43,19 @@ pub const AZURE_SANDBOX_ITEMS: &[(&str, DirectSetup)] = &[
     ("role-assignment:access", DirectSetup::Creates),
     ("role-assignment:images", DirectSetup::Creates),
     ("role-assignment:workload", DirectSetup::Creates),
+    (
+        "storage-store",
+        DirectSetup::PackageOnly(
+            "persistent storage needs the store account and container the package creates; a \
+             direct setup run refuses it and names the package",
+        ),
+    ),
+    (
+        "role-assignment:storage-store",
+        DirectSetup::PackageOnly(
+            "the store's grants (Blob Delegator on the account, Blob Data Contributor on its \
+             container) come with the package's store; a direct setup run refuses persistent \
+             storage",
+        ),
+    ),
 ];

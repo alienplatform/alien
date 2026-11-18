@@ -500,6 +500,8 @@ impl ResolvedRemoteBinding {
                         // isn't open-egress, and preview is not offered through remote access.
                         max_lifetime_seconds: None,
                         preview_ports: Vec::new(),
+                        // The core refuses persistent storage on a remotely published sandbox.
+                        persistent_storage: None,
                     }),
                     create_via_manager,
                     client_config: Box::new(alien_core::AzureClientConfig {

@@ -455,7 +455,7 @@ async fn the_agent_commits_and_restores_through_an_s3_grant() {
 
     // The binding claims the key, then grants the agent its rights.
     let claim = takeover(&binding, "sandbox-1").await.expect("claim");
-    let agent = GrantStore::new(s3_grant(&url, "engine-42", &[]));
+    let agent = GrantStore::new(s3_grant(&url, "engine-42", &[])).unwrap();
     let source = tempfile::tempdir().expect("tempdir");
     let staging = tempfile::tempdir().expect("tempdir");
     write(source.path(), "notes.md", b"remember this");
@@ -484,7 +484,7 @@ async fn the_agent_commits_and_restores_through_an_s3_grant() {
     let mut reads = vec![commit.manifest()];
     reads.extend(manifest.packs().into_iter().map(|p| p.pack()));
     let reads: Vec<&str> = reads.iter().map(String::as_str).collect();
-    let restorer = GrantStore::new(s3_grant(&url, "engine-42", &reads));
+    let restorer = GrantStore::new(s3_grant(&url, "engine-42", &reads)).unwrap();
     let target = tempfile::tempdir().expect("tempdir");
     restore(
         &restorer,
@@ -522,7 +522,7 @@ async fn attach_restores_then_sync_publishes() {
         Committer::new("sandbox-1", claim.head_version, None, None),
     );
     first
-        .commit(&GrantStore::new(s3_grant(&url, "engine-42", &[])))
+        .commit(&GrantStore::new(s3_grant(&url, "engine-42", &[])).unwrap())
         .await
         .expect("commit");
 
@@ -641,7 +641,9 @@ async fn an_expired_grant_reports_denied_until_renewed() {
         sandbox.path().join("staging"),
     ));
     let mut expired = s3_grant(&url, "engine-42", &[]);
-    let alien_sandbox_storage::StorageGrant::S3 { post, .. } = &mut expired;
+    let alien_sandbox_storage::StorageGrant::S3 { post, .. } = &mut expired else {
+        unreachable!("an S3 grant")
+    };
     post.fields
         .insert("policy".to_string(), "expired".to_string());
     let image = crate::image_command::ImageProcess::default().awaiting_restore();
@@ -690,9 +692,11 @@ async fn an_expired_grant_sends_nothing() {
     use alien_sandbox_storage::{ObjectStore, Precondition};
     let (url, bucket) = fake_s3::serve().await;
     let mut grant = s3_grant(&url, "engine-42", &[]);
-    let alien_sandbox_storage::StorageGrant::S3 { expires_at, .. } = &mut grant;
+    let alien_sandbox_storage::StorageGrant::S3 { expires_at, .. } = &mut grant else {
+        unreachable!("an S3 grant")
+    };
     *expires_at = chrono::Utc::now() - chrono::Duration::seconds(1);
-    let store = GrantStore::new(grant);
+    let store = GrantStore::new(grant).expect("an S3 grant");
     store
         .put_if("packs/1-x", b"x".to_vec(), Precondition::Absent)
         .await

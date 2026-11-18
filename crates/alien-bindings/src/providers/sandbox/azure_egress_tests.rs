@@ -542,3 +542,227 @@ async fn gateway_readback_refuses_changed_or_unknown_enforcement() {
         .await
         .unwrap();
 }
+
+fn with_store(egress: alien_core::SandboxEgress) -> AzureSandbox {
+    AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        egress,
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    )
+    .with_persistent_storage(
+        Some(alien_core::bindings::SandboxPersistentStorageBinding {
+            path: "/workspace".to_string(),
+            store: alien_core::bindings::PersistentStoreLocator::Azure {
+                account: alien_core::bindings::BindingValue::Value("acmeagents1a2b3c4d".into()),
+                container: alien_core::bindings::BindingValue::Value("keys".into()),
+                prefix: String::new(),
+            },
+            exclude: Vec::new(),
+            max_size_bytes: None,
+        }),
+        "agents",
+    )
+    .expect("an Azure store")
+}
+
+/// Under `none` the store's blob host is the one host the platform lets through, ahead of the
+/// deny-all, so the agent reaches it; Full inspection and the Deny default stay as they were.
+#[test]
+fn a_declared_none_sandbox_opens_its_store_host_and_nothing_else() {
+    let policy = with_store(alien_core::SandboxEgress::None)
+        .native_policy()
+        .expect("none sends a policy");
+    let rules: Vec<(&str, &str)> = policy
+        .host_rules
+        .iter()
+        .map(|rule| (rule.pattern.as_str(), rule.action.as_str()))
+        .collect();
+    assert_eq!(
+        rules,
+        [
+            ("acmeagents1a2b3c4d.blob.core.windows.net", "Allow"),
+            ("*", "Deny")
+        ]
+    );
+    assert_eq!(policy.default_action, "Deny");
+    assert_eq!(policy.traffic_inspection.as_deref(), Some("Full"));
+}
+
+/// An open sandbox sends no policy with or without the store, and a sandbox without persistent
+/// storage sends exactly what it sent before.
+#[test]
+fn the_store_host_changes_nothing_else() {
+    assert!(with_store(alien_core::SandboxEgress::Allow)
+        .native_policy()
+        .is_none());
+    let plain = AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        alien_core::SandboxEgress::None,
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    );
+    assert_eq!(
+        plain.native_policy(),
+        alien_azure_clients::azure::sandbox_data_plane::egress_policy(
+            &alien_core::SandboxEgress::None
+        )
+    );
+}
+
+/// A binding whose store is not Azure's is refused when the provider is built, not at create.
+#[test]
+fn a_non_azure_store_is_refused() {
+    let error = AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        alien_core::SandboxEgress::None,
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    )
+    .with_persistent_storage(
+        Some(alien_core::bindings::SandboxPersistentStorageBinding {
+            path: "/workspace".to_string(),
+            store: alien_core::bindings::PersistentStoreLocator::Aws {
+                bucket: alien_core::bindings::BindingValue::Value("bucket".into()),
+                prefix: String::new(),
+            },
+            exclude: Vec::new(),
+            max_size_bytes: None,
+        }),
+        "agents",
+    )
+    .expect_err("refused");
+    assert_eq!(error.code, "BINDING_CONFIG_INVALID", "{error}");
+}
+
+/// Under `internet` the gateway floor also lets the store's host through, first, and the agent is
+/// told to keep guest sockets to the gateway replicas and the platform resolver.
+#[tokio::test]
+async fn an_internet_sandbox_with_storage_opens_its_store_host_and_keeps_commands_on_the_gateway() {
+    let h = Harness::new().await;
+    let sandbox = with_store(alien_core::SandboxEgress::Internet).with_egress_manager(
+        Arc::new(h.reopen_with_replicas(&["10.0.6.4", "10.0.6.5"]).await),
+        None,
+    );
+    let policy = sandbox.native_policy().expect("the gateway floor");
+    let rules: Vec<(&str, &str)> = policy
+        .host_rules
+        .iter()
+        .map(|rule| (rule.pattern.as_str(), rule.action.as_str()))
+        .collect();
+    assert_eq!(
+        rules,
+        [
+            ("acmeagents1a2b3c4d.blob.core.windows.net", "Allow"),
+            ("*", "Deny")
+        ]
+    );
+    assert_eq!(policy.default_action, "Allow");
+    assert_eq!(policy.traffic_inspection.as_deref(), Some("Partial"));
+    assert_eq!(
+        sandbox.guest_egress().unwrap().as_deref(),
+        Some("only:10.0.6.4,10.0.6.5,168.63.129.16")
+    );
+}
+
+/// `none` asks the agent for no direct guest egress; open egress and an undeclared sandbox ask
+/// for nothing, so their boot is unchanged.
+#[test]
+fn guest_egress_follows_the_mode_and_the_declaration() {
+    assert_eq!(
+        with_store(alien_core::SandboxEgress::None)
+            .guest_egress()
+            .unwrap()
+            .as_deref(),
+        Some("none")
+    );
+    assert_eq!(
+        with_store(alien_core::SandboxEgress::Allow)
+            .guest_egress()
+            .unwrap(),
+        None
+    );
+    let plain = AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        alien_core::SandboxEgress::None,
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    );
+    assert_eq!(plain.guest_egress().unwrap(), None);
+}
+
+/// Plan time refuses persistent storage with allowDomains on Azure; a hand-written binding that
+/// combines them is refused too.
+#[test]
+fn allow_domains_with_storage_is_refused() {
+    let error = AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        alien_core::SandboxEgress::AllowDomains {
+            domains: vec!["example.com".into()],
+        },
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    )
+    .with_persistent_storage(
+        Some(alien_core::bindings::SandboxPersistentStorageBinding {
+            path: "/workspace".to_string(),
+            store: alien_core::bindings::PersistentStoreLocator::Azure {
+                account: alien_core::bindings::BindingValue::Value("acmeagents1a2b3c4d".into()),
+                container: alien_core::bindings::BindingValue::Value("keys".into()),
+                prefix: String::new(),
+            },
+            exclude: Vec::new(),
+            max_size_bytes: None,
+        }),
+        "agents",
+    )
+    .expect_err("refused");
+    assert_eq!(error.code, "BINDING_CONFIG_INVALID", "{error}");
+}
+
+/// The agent of a declared sandbox is told the declaration and the proxy root to trust for its
+/// store; a sandbox without persistent storage gets neither.
+#[test]
+fn a_declared_sandbox_tells_its_agent_which_proxy_root_to_trust() {
+    let env: BTreeMap<String, String> = with_store(alien_core::SandboxEgress::None)
+        .storage_environment()
+        .into_iter()
+        .collect();
+    assert_eq!(
+        env.get(alien_core::ENV_ALIEN_SANDBOX_STORE_TRUST_ROOTS)
+            .map(String::as_str),
+        Some("/etc/ssl/certs/adc-egress-proxy-ca.crt")
+    );
+    assert!(env.contains_key(alien_core::sandbox_egress::ENV_PERSISTENT_STORAGE));
+    let plain = AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        alien_core::SandboxEgress::None,
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    );
+    assert!(plain.storage_environment().is_empty());
+}

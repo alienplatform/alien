@@ -11,7 +11,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 alien-core = { workspace = true, features = ["sandbox-capability", "sandbox-process"] }
 alien-error = { workspace = true }
-alien-sandbox-storage = { workspace = true }
+alien-sandbox-storage = { workspace = true, features = ["azure-blob"] }
 async-trait = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 serde = { workspace = true }
@@ -47,6 +47,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 nlink = { version = "0.32", features = ["sockdiag"] }
 
 [dev-dependencies]
+rcgen = "0.14"
 tempfile = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 libc = "0.2"

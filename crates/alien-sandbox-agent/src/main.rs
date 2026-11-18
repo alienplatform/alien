@@ -99,6 +99,17 @@ fn main() -> Result<()> {
 
     tracing_subscriber::fmt::init();
 
+    // The store client's extra root (Azure's egress proxy), read before any command runs so
+    // none can change it. A sandbox whose binding names one cannot reach its store without it.
+    match alien_sandbox_agent::storage::load_platform_roots_from_env() {
+        Ok(0) => {}
+        Ok(count) => tracing::info!(count, "store client trusts the platform's proxy root"),
+        Err(error) => {
+            eprintln!("cannot trust the platform's proxy root: {error}");
+            std::process::exit(1);
+        }
+    }
+
     // Azure `internet`: the proxy address commands use is a loopback forwarder over both gateway
     // replicas. It must listen before the gate and the workload.
     if let Err(message) = alien_sandbox_agent::proxy_failover::spawn_from_env() {
@@ -124,8 +135,15 @@ fn main() -> Result<()> {
     let state = Arc::new(load_state()?);
     let port: u16 = parse(ENV_PORT)?;
     state.preview.set_own_ports(&[port]);
-    let network_admin = (std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() || aws_image_transport)
-        && !alien_sandbox_agent::gateway_egress::network_enforced_externally()?;
+    let guest_drop = image_command_enabled()?
+        && std::env::var(ENV_AUTHORIZATION).as_deref() == Ok("native-file")
+        && std::env::var_os(alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS).is_some();
+    let network_admin = retains_network_admin(
+        std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some(),
+        aws_image_transport,
+        guest_drop,
+        alien_sandbox_agent::gateway_egress::network_enforced_externally()?,
+    );
     #[cfg(target_os = "linux")]
     if aws_image_transport && state.gateway_egress.is_none() {
         alien_sandbox_agent::gateway_egress::isolate_control_callers()?;
@@ -581,6 +599,19 @@ where
         .map_err(|error| invalid(name, &format!("{error}")))
 }
 
+/// Whether the agent keeps NET_ADMIN after bootstrap: only when it installed guest network rules
+/// it must keep out of their way. Under the Azure guest drop rule its own sockets start with the
+/// guest mark (it runs in the guest cgroup) and reach its store only once it re-marks them,
+/// which takes NET_ADMIN. Commands never inherit it.
+fn retains_network_admin(
+    egress_declared: bool,
+    aws_image_transport: bool,
+    guest_drop: bool,
+    enforced_externally: bool,
+) -> bool {
+    (egress_declared || aws_image_transport || guest_drop) && !enforced_externally
+}
+
 /// `none` allows guest sockets no direct destination; `only:a,b` allows those addresses alone.
 fn guest_egress_allowed(value: &str) -> Option<Vec<std::net::Ipv4Addr>> {
     if value == "none" {
@@ -611,6 +642,17 @@ fn failed(operation: &str, reason: String) -> ErrorData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Azure guest drop rule needs the agent to re-mark its own store sockets, so an agent
+    /// that installed it keeps NET_ADMIN; one with no guest rules does not.
+    #[test]
+    fn an_agent_under_the_guest_drop_rule_keeps_network_admin() {
+        assert!(retains_network_admin(false, false, true, false));
+        assert!(!retains_network_admin(false, false, false, false));
+        assert!(retains_network_admin(true, false, false, false));
+        assert!(retains_network_admin(false, true, false, false));
+        assert!(!retains_network_admin(true, true, true, true));
+    }
 
     /// The guest egress the Azure binding asks for: nothing, or a fixed set of addresses.
     /// Anything else, including an empty list, refuses to start.

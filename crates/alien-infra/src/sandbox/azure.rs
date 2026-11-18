@@ -161,6 +161,10 @@ pub struct AzureSandboxController {
     /// Ceilings every sandbox is created with, from the declaration.
     #[serde(default)]
     pub(crate) limits: Option<SandboxLimits>,
+    /// The store setup created for a sandbox that declares persistent storage, from the import.
+    /// Published on the binding as is; absent for every other sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) persistent_storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
 }
 
 impl super::egress::RecordsEgressKey for AzureSandboxController {
@@ -767,6 +771,7 @@ impl AzureSandboxController {
         azure.preview_ports = self.preview_ports.clone();
         azure.max_lifetime_seconds = self.max_lifetime_seconds;
         azure.egress = egress.clone();
+        azure.persistent_storage = self.persistent_storage.clone();
         azure.default_policy = self
             .default_policy
             .clone()
@@ -805,6 +810,26 @@ impl AzureSandboxController {
 fn uses_gateway(ctx: &ResourceControllerContext<'_>, config: &Sandbox) -> bool {
     config.egress == SandboxEgress::Internet
         && alien_core::sandbox_egress::has_sandbox_gateway(ctx.desired_stack)
+}
+
+
+/// Why a direct setup cannot create this sandbox, if it cannot: what it needs only the Terraform
+/// setup package creates.
+fn direct_setup_refusal(config: &Sandbox) -> Option<&'static str> {
+    if matches!(config.egress, SandboxEgress::Internet) {
+        return Some(
+            "an Azure sandbox with internet egress needs the dedicated sandbox subnets the \
+             Terraform setup package creates; set it up with the package, or declare egress none \
+             or allow",
+        );
+    }
+    if config.persistent_storage.is_some() {
+        return Some(
+            "an Azure sandbox with persistent storage needs the store account, its container and \
+             their grants, which the Terraform setup package creates; set it up with the package",
+        );
+    }
+    None
 }
 
 impl AzureSandboxController {
@@ -1387,12 +1412,9 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
         config: &Sandbox,
     ) -> Result<AzureSandboxHandlerAction> {
-        if matches!(config.egress, SandboxEgress::Internet) {
+        if let Some(message) = direct_setup_refusal(config) {
             return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: "an Azure sandbox with internet egress needs the dedicated sandbox \
-                          subnets the Terraform setup package creates; set it up with the \
-                          package, or declare egress none or allow"
-                    .to_string(),
+                message: message.to_string(),
                 resource_id: Some(config.id.clone()),
             }));
         }
@@ -1468,12 +1490,9 @@ impl AzureSandboxController {
         })?;
         // The dedicated sandbox subnets an internet-egress group connects to are created by the
         // setup package; a direct setup has no network that carries them.
-        if matches!(config.egress, SandboxEgress::Internet) {
+        if let Some(message) = direct_setup_refusal(config) {
             return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: "an Azure sandbox with internet egress needs the dedicated sandbox \
-                          subnets the Terraform setup package creates; set it up with the \
-                          package, or declare egress none or allow"
-                    .to_string(),
+                message: message.to_string(),
                 resource_id: Some(config.id.clone()),
             }));
         }
@@ -1709,6 +1728,7 @@ mod tests {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
+            persistent_storage: None,
             _internal_stay_count: None,
         };
 
@@ -1772,6 +1792,7 @@ mod tests {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
+            persistent_storage: None,
             _internal_stay_count: None,
         };
 
@@ -1965,6 +1986,7 @@ mod tests {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
+            persistent_storage: None,
             _internal_stay_count: None,
         };
         let config = Sandbox::new("sbx".to_string())
@@ -2024,6 +2046,7 @@ mod tests {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
+            persistent_storage: None,
             _internal_stay_count: None,
         };
         let config = Sandbox::new("sbx".to_string())
@@ -2091,6 +2114,7 @@ mod tests {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
+            persistent_storage: None,
             _internal_stay_count: None,
         };
 
@@ -2135,6 +2159,7 @@ mod tests {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
+            persistent_storage: None,
             _internal_stay_count: None,
         };
 
@@ -2253,6 +2278,7 @@ mod tests {
                 group_absent: false,
                 group_role_definitions: Vec::new(),
                 default_policy: None,
+                persistent_storage: None,
                 _internal_stay_count: None,
             }
         }
@@ -4416,6 +4442,24 @@ mod direct_setup_tests {
         .await;
         drive(&mut executor).await;
         assert_ne!(executor.status(), ResourceStatus::Running);
+    }
+
+    /// Persistent storage needs the store the package creates, so a direct setup refuses it as it
+    /// refuses internet egress; a plain sandbox is not refused.
+    #[test]
+    fn a_persistent_storage_sandbox_needs_the_package() {
+        let mut declared = sandbox(SandboxEgress::None);
+        assert_eq!(direct_setup_refusal(&declared), None);
+        declared.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+            path: "/workspace".into(),
+            exclude: Vec::new(),
+            max_size: None,
+            encryption_key: None,
+        });
+        assert!(direct_setup_refusal(&declared)
+            .is_some_and(|message| message.contains("persistent storage")));
+        assert!(direct_setup_refusal(&sandbox(SandboxEgress::Internet))
+            .is_some_and(|message| message.contains("internet egress")));
     }
 
     /// Delete removes a group this controller created, and leaves an imported one to its package.

@@ -11,6 +11,7 @@ pub mod runner;
 pub mod runtime_less;
 pub mod sandbox;
 pub mod sandbox_storage;
+pub mod sandbox_storage_azure;
 pub mod storage_cleanup;
 pub mod storage_notifications;
 

@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// A grant to write one key, for the push transport. Each cloud adds its variant (Azure: a SAS scoped
-/// to the key's directory); the agent receives them on attach and on every renewal.
+/// A grant to write one key, for the push transport, one variant per cloud; the agent receives
+/// it on attach and on every renewal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StorageGrant {
@@ -26,13 +26,36 @@ pub enum StorageGrant {
         /// When the earliest of these expires; the binding renews before then.
         expires_at: DateTime<Utc>,
     },
+    /// Azure: a user-delegation SAS scoped to the key's directory (`sr=d` on a
+    /// hierarchical-namespace account) with read, add, create and write rights. It reaches no
+    /// other key, and can neither list nor delete.
+    #[serde(rename = "azureSas", rename_all = "camelCase")]
+    AzureSas {
+        /// `https://<account>.blob.core.windows.net/<container>/<key>/`, ending in `/`.
+        key_url: String,
+        /// The SAS query string, without the leading `?`.
+        sas: SasToken,
+        /// When the SAS (and the delegation key it is signed with) expires.
+        expires_at: DateTime<Utc>,
+    },
+}
+
+/// A SAS query string. A credential: serialized as is, never printed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SasToken(pub String);
+
+impl std::fmt::Debug for SasToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SasToken(..)")
+    }
 }
 
 impl StorageGrant {
     /// When these rights expire.
     pub fn expires_at(&self) -> DateTime<Utc> {
         match self {
-            Self::S3 { expires_at, .. } => *expires_at,
+            Self::S3 { expires_at, .. } | Self::AzureSas { expires_at, .. } => *expires_at,
         }
     }
 }

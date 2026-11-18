@@ -18,7 +18,9 @@ fn env(name: &str) -> String {
 }
 
 async fn post(grant: &StorageGrant, key: &str, bytes: &[u8]) -> reqwest::StatusCode {
-    let StorageGrant::S3 { post, .. } = grant;
+    let StorageGrant::S3 { post, .. } = grant else {
+        panic!("an S3 grant")
+    };
     // The same form the agent sends: fields in order, the file last.
     let boundary = "alien-live-test-boundary";
     let mut body = Vec::new();
@@ -85,7 +87,10 @@ async fn an_s3_grant_reaches_one_key_and_moves_head_only_from_the_version_it_saw
         post: policy,
         head_put_url,
         ..
-    } = &grant;
+    } = &grant
+    else {
+        panic!("an S3 grant")
+    };
     assert_eq!(policy.key_prefix, format!("{prefix}engine-42/"));
 
     // Inside the key: accepted. Outside it, or above the size cap: refused by S3.
@@ -131,7 +136,9 @@ async fn an_s3_grant_reaches_one_key_and_moves_head_only_from_the_version_it_saw
         )
         .await
         .expect("grant");
-    let StorageGrant::S3 { reads, .. } = &reader;
+    let StorageGrant::S3 { reads, .. } = &reader else {
+        panic!("an S3 grant")
+    };
     assert_eq!(reads.len(), 1);
     let range = client
         .get(&reads["packs/1-test"])

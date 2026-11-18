@@ -542,8 +542,10 @@ impl SandboxCapabilities {
             // No Alien process runs the command at all — the platform's own data plane does,
             // so there is no separate supervisor identity to speak of.
             supervisor_isolation: false,
-            // The replication transport for Azure sandboxes is not built yet.
-            persistent_storage: false,
+            // The agent replicates the directory to the declaration's own hierarchical-namespace
+            // account with a SAS for one key's directory. It needs the agent, so a catalog image
+            // is refused at plan time.
+            persistent_storage: true,
         }
     }
 
@@ -1366,7 +1368,31 @@ impl Sandbox {
         }
 
         if let Some(storage) = &self.persistent_storage {
+            // Azure's platform policy opens the store's host to the whole sandbox; under `none`
+            // and `internet` the agent keeps commands from it by dropping all their direct
+            // egress, which an allow-list of domains cannot coexist with.
+            if platform == Platform::Azure
+                && matches!(self.egress, SandboxEgress::AllowDomains { .. })
+            {
+                return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                    capability: "persistentStorage with egress allowDomains (Azure keeps \
+                                 commands from the store by refusing all their direct egress; \
+                                 declare egress none or internet)"
+                        .to_string(),
+                    platform: platform.to_string(),
+                }));
+            }
             capabilities.require(SandboxCapability::PersistentStorage, platform)?;
+            if platform == Platform::Azure
+                && matches!(self.azure_image(), Ok(AzureSandboxImage::Catalog(_)))
+            {
+                return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                    capability: "persistentStorage (a catalog image runs without the Alien agent \
+                                 that replicates the directory; build the sandbox from source)"
+                        .to_string(),
+                    platform: platform.to_string(),
+                }));
+            }
             storage.validate(&self.id)?;
         }
 
@@ -2621,7 +2647,7 @@ mod tests {
         sandbox
             .validate_for_platform(Platform::Local)
             .expect("Local keeps a host directory per key");
-        for platform in [Platform::Azure, Platform::Gcp, Platform::Kubernetes] {
+        for platform in [Platform::Gcp, Platform::Kubernetes] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("no transport on this platform yet");
@@ -2632,6 +2658,51 @@ mod tests {
                 error.message
             );
         }
+    }
+
+    /// Azure replicates through the agent, which a sandbox built from a registry image carries
+    /// and a catalog image does not; the refusal says what to do instead.
+    #[test]
+    fn azure_carries_persistent_storage_on_an_image_with_the_agent_only() {
+        let mut built = with_storage(workspace());
+        built.code = SandboxCode::Image {
+            image: "registry.example/agents:1".to_string(),
+            bundled_from: None,
+        };
+        built
+            .validate_for_platform(Platform::Azure)
+            .expect("a built image carries the agent");
+        let catalog = with_storage(workspace());
+        let error = catalog
+            .validate_for_platform(Platform::Azure)
+            .expect_err("a catalog image has no agent");
+        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+        assert!(
+            error.message.contains("build the sandbox from source"),
+            "{}",
+            error.message
+        );
+    }
+
+    /// On Azure the store's host is opened to the whole sandbox and commands are kept from it by
+    /// losing all direct egress, so an allow-list of domains is refused, with a reason that names
+    /// what to declare instead.
+    #[test]
+    fn azure_refuses_persistent_storage_with_allow_domains() {
+        let mut sandbox = with_storage(workspace());
+        sandbox.egress = SandboxEgress::AllowDomains {
+            domains: vec!["example.com".to_string()],
+        };
+        let error = sandbox
+            .validate_for_platform(Platform::Azure)
+            .expect_err("refused");
+        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+        assert!(error.message.contains("allowDomains"), "{}", error.message);
+        assert!(
+            error.message.contains("none or internet"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

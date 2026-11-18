@@ -178,6 +178,12 @@ pub enum TestApp {
     /// A Live sandbox with persistent storage on `/workspace` and a Worker that drives its
     /// sessions (`tests/e2e/test-apps/sandbox-storage`).
     SandboxStorage,
+    /// A remote-free sandbox with persistent storage the test drives through the binding, on
+    /// Azure (`tests/e2e/test-apps/sandbox-storage-azure`).
+    SandboxStorageAzure,
+    /// The same sandbox with internet egress through the gateway
+    /// (`tests/e2e/test-apps/sandbox-storage-azure/alien.internet.ts`).
+    SandboxStorageAzureInternet,
 }
 
 impl std::fmt::Display for TestApp {
@@ -197,6 +203,8 @@ impl std::fmt::Display for TestApp {
             TestApp::SandboxSession => write!(f, "sandbox-session"),
             TestApp::SandboxRemote => write!(f, "sandbox-remote"),
             TestApp::SandboxStorage => write!(f, "sandbox-storage"),
+            TestApp::SandboxStorageAzure => write!(f, "sandbox-storage-azure"),
+            TestApp::SandboxStorageAzureInternet => write!(f, "sandbox-storage-azure-internet"),
         }
     }
 }
@@ -433,6 +441,9 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::SandboxSession => "test-apps/sandbox-session",
         TestApp::SandboxRemote => "test-apps/sandbox-remote",
         TestApp::SandboxStorage => "test-apps/sandbox-storage",
+        TestApp::SandboxStorageAzure | TestApp::SandboxStorageAzureInternet => {
+            "test-apps/sandbox-storage-azure"
+        }
     }
 }
 
@@ -440,6 +451,15 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
 ///
 /// The default alien config file name used by all test apps.
 const CONFIG_FILE: &str = "alien.ts";
+
+/// The config file of `app`: [`CONFIG_FILE`] unless the app is a variant of another app's
+/// directory.
+fn config_file(app: TestApp) -> &'static str {
+    match app {
+        TestApp::SandboxStorageAzureInternet => "alien.internet.ts",
+        _ => CONFIG_FILE,
+    }
+}
 
 fn deployment_environment_variables(
     app: TestApp,
@@ -455,7 +475,9 @@ fn deployment_environment_variables(
         | TestApp::StorageNotifications
         | TestApp::SandboxSession
         | TestApp::SandboxRemote
-        | TestApp::SandboxStorage => None,
+        | TestApp::SandboxStorage
+        | TestApp::SandboxStorageAzure
+        | TestApp::SandboxStorageAzureInternet => None,
         TestApp::ByoEncryptionKey | TestApp::ByoAi => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {
@@ -897,7 +919,7 @@ pub async fn deploy_test_app(
 ) -> anyhow::Result<(TestDeployment, Stack)> {
     let e2e_root = e2e_test_apps_root()?;
     let app_path = e2e_root.join(test_app_path(app));
-    let cfg_file = CONFIG_FILE;
+    let cfg_file = config_file(app);
 
     let deployment_name = format!(
         "e2e-{}-{}-{}-{}",
@@ -1137,7 +1159,7 @@ pub async fn developer_setup(
 ) -> anyhow::Result<DeveloperSetupResult> {
     let e2e_root = e2e_test_apps_root()?;
     let app_path = e2e_root.join(test_app_path(app));
-    let cfg_file = CONFIG_FILE;
+    let cfg_file = config_file(app);
 
     info!(
         app_path = %app_path.display(),

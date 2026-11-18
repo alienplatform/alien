@@ -27,6 +27,8 @@ pub mod persistent_store;
 
 #[cfg(feature = "azure")]
 pub mod azure;
+#[cfg(feature = "azure")]
+pub(crate) mod azure_storage;
 
 #[cfg(feature = "gcp")]
 pub mod gcp_agent_platform;

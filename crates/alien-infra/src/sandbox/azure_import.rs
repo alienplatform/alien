@@ -94,6 +94,7 @@ impl ResourceImporter for AzureSandboxImporter {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: sandbox.default_policy.clone(),
+            persistent_storage: data.persistent_storage,
             _internal_stay_count: None,
         };
         make_imported_state_with_status(controller, ctx, status)
@@ -139,7 +140,10 @@ impl ResourceImporter for AzureSandboxImporter {
         if !same_group || torn_down {
             return Ok(imported);
         }
-        let merged = existing_controller;
+        // The store is setup's, like the group: a re-import is what carries a store setup just
+        // created (a declaration added in an update) or removed.
+        let mut merged = existing_controller;
+        merged.persistent_storage = imported_controller.persistent_storage;
         let remote_binding_params = if ctx.resource.publishes_binding_params() {
             merged.get_binding_params().map_err(|error| {
                 AlienError::new(CoreErrorData::GenericError {
@@ -211,6 +215,7 @@ mod tests {
             sandbox_group: "sbg".to_string(),
             region: "swedencentral".to_string(),
             resource_group: "rg".to_string(),
+            persistent_storage: None,
         }
     }
 
@@ -375,6 +380,100 @@ mod tests {
             .expect("the re-import replaces a torn-down entry");
         assert_eq!(rebuilt.status, ResourceStatus::Provisioning);
         assert_eq!(controller_of(rebuilt).sandbox_group.as_deref(), Some("sbg"));
+    }
+
+    /// Setup creates a declaring sandbox's store, and the controller is what publishes the binding
+    /// the deployment's own workloads read, so the import carries the store onto it. A re-import
+    /// takes setup's current store and keeps the built disk image.
+    #[test]
+    fn the_imported_store_reaches_the_binding_and_a_reimport_takes_setups_current_one() {
+        use alien_core::bindings::{
+            BindingValue, PersistentStoreLocator, SandboxPersistentStorageBinding,
+        };
+        const PYTHON: &str = "docker.io/library/python:3.14-slim";
+        let resource = entry(Resource::new(
+            Sandbox::new("sbx".to_string())
+                .code(SandboxCode::Image {
+                    image: PYTHON.to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+        ));
+        let settings = StackSettings::default();
+        let ctx = import_context(&settings, &resource);
+        let store = |account: &str| SandboxPersistentStorageBinding {
+            path: "/workspace".to_string(),
+            store: PersistentStoreLocator::Azure {
+                account: BindingValue::value(account.to_string()),
+                container: BindingValue::value("keys".to_string()),
+                prefix: String::new(),
+            },
+            exclude: vec!["tmp/".to_string()],
+            max_size_bytes: Some(2 << 30),
+        };
+        let with_store = |account: &str| AzureSandboxImportData {
+            persistent_storage: Some(store(account)),
+            ..import_data()
+        };
+        let controller_of = |state: &StackResourceState| -> AzureSandboxController {
+            serde_json::from_value(state.internal_state.clone().unwrap()).unwrap()
+        };
+        let serving = |data: AzureSandboxImportData| {
+            let mut existing = AzureSandboxImporter.import(data, &ctx).unwrap();
+            let mut controller = controller_of(&existing);
+            controller.state = AzureSandboxState::Ready;
+            controller.disk_image = Some(PYTHON.to_string());
+            controller.disk_image_id = Some("img-1".to_string());
+            existing.internal_state = Some(serialize_controller(&controller).unwrap());
+            existing.status = ResourceStatus::Running;
+            existing
+        };
+
+        let binding = controller_of(&serving(with_store("acct1")))
+            .get_binding_params()
+            .unwrap()
+            .expect("a binding");
+        assert_eq!(
+            binding["persistentStorage"],
+            serde_json::json!({
+                "path": "/workspace",
+                "store": {"type": "azure", "account": "acct1", "container": "keys"},
+                "exclude": ["tmp/"],
+                "maxSizeBytes": 2u64 << 30,
+            }),
+            "{binding}"
+        );
+
+        let moved = AzureSandboxImporter
+            .merge_reimport(
+                serving(with_store("acct1")),
+                AzureSandboxImporter
+                    .import(with_store("acct2"), &ctx)
+                    .unwrap(),
+                &ctx,
+            )
+            .unwrap();
+        let moved = controller_of(&moved);
+        assert_eq!(moved.disk_image_id.as_deref(), Some("img-1"));
+        assert_eq!(moved.persistent_storage, Some(store("acct2")));
+
+        let removed = AzureSandboxImporter
+            .merge_reimport(
+                serving(with_store("acct1")),
+                AzureSandboxImporter.import(import_data(), &ctx).unwrap(),
+                &ctx,
+            )
+            .unwrap();
+        let binding = controller_of(&removed)
+            .get_binding_params()
+            .unwrap()
+            .expect("a binding");
+        assert!(binding.get("persistentStorage").is_none(), "{binding}");
     }
 
     /// Azure creates a sandbox only from a catalog image, so a source-built sandbox is refused at

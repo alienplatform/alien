@@ -10,6 +10,7 @@
 
 pub mod attach;
 mod http;
+pub use http::load_platform_roots_from_env;
 pub mod push;
 mod sqlite;
 pub mod tree;

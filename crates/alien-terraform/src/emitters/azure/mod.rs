@@ -26,6 +26,7 @@ pub mod resource_group;
 pub mod sandbox;
 mod sandbox_gateway_vm;
 mod sandbox_network;
+mod sandbox_store;
 pub mod service_account;
 pub mod service_activation;
 pub mod service_bus_namespace;
