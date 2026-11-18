@@ -905,9 +905,8 @@ async fn test_message_peek_lock_and_complete(ctx: &ServiceBusTestContext) -> Res
 #[test_context(ServiceBusTestContext)]
 #[tokio::test]
 async fn test_message_abandon_and_renew_lock(ctx: &ServiceBusTestContext) -> Result<(), Error> {
-    let suffix = Uuid::new_v4().to_string().replace('-', "")[..8].to_lowercase();
-    let namespace_name = format!("dlq2082-sb-{suffix}");
-    let queue_name = format!("dlq2082-q-{suffix}");
+    let namespace_name = ctx.generate_unique_namespace_name();
+    let queue_name = ctx.generate_unique_queue_name();
 
     ctx.create_test_namespace(&namespace_name).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
