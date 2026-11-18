@@ -1055,15 +1055,31 @@ pub(crate) async fn accept_target(
     // target and needs its own approval (compared by the hash the loop uses).
     // Only the newest record of all counts as a repeat: a target that returns
     // after another release was proposed (a rollback) is asked about again.
+    // The record must also be for what this Operator has installed or is
+    // targeting: an older approved release that returns after another release
+    // was deployed without a record (approval was off) is a new proposal.
     let covered = match state.db.get_latest_approval().await? {
         Some(latest) => {
-            crate::db::approved_target_hash(
-                latest.release_info.as_ref(),
-                &latest.deployment_config,
-            )? == crate::db::approved_target_hash(
-                Some(&target_deployment.release_info),
-                &target_deployment.config,
-            )?
+            let latest_release_id = latest
+                .release_info
+                .as_ref()
+                .and_then(|release| release.release_id.as_deref());
+            let held_release = |release: Option<&alien_core::ReleaseInfo>| {
+                latest_release_id.is_some()
+                    && release.and_then(|release| release.release_id.as_deref())
+                        == latest_release_id
+            };
+            let is_held = previous_state.as_ref().is_some_and(|previous| {
+                held_release(previous.target_release.as_ref())
+                    || held_release(previous.current_release.as_ref())
+            });
+            is_held
+                && same_target(
+                    latest.release_info.as_ref(),
+                    &latest.deployment_config,
+                    &target_deployment.release_info,
+                    &target_deployment.config,
+                )
         }
         None => false,
     };
@@ -1099,6 +1115,53 @@ pub(crate) async fn accept_target(
     }
 
     Ok(())
+}
+
+/// Whether a target re-sent by the manager is the one a stored approval
+/// record covers: the release and the whole configuration are equal as
+/// serialized values. Only fields the manager regenerates on every sync are
+/// left out:
+/// - `deploymentToken`: the Operator's own bearer token, taken from the sync
+///   request's header;
+/// - `environmentVariables.createdAt`: the snapshot's creation timestamp (its
+///   `hash` and every variable stay compared).
+///
+/// Fields that serde skips (`setup_run`, `deployment_id`, `setup_run_id`,
+/// `release_statements`, `image_registry`, `image_pull_secrets`,
+/// `deletion_policy`) are set by the Operator itself and never arrive in a
+/// target. Any other field counts: a spurious new record only asks again, a
+/// missed change would apply an unapproved one.
+fn same_target(
+    stored_release: Option<&alien_core::ReleaseInfo>,
+    stored_config: &alien_core::DeploymentConfig,
+    release: &alien_core::ReleaseInfo,
+    config: &alien_core::DeploymentConfig,
+) -> bool {
+    fn comparable(
+        release: Option<&alien_core::ReleaseInfo>,
+        config: &alien_core::DeploymentConfig,
+    ) -> Option<serde_json::Value> {
+        let mut config = serde_json::to_value(config).ok()?;
+        let object = config.as_object_mut()?;
+        object.remove("deploymentToken");
+        if let Some(snapshot) = object
+            .get_mut("environmentVariables")
+            .and_then(|value| value.as_object_mut())
+        {
+            snapshot.remove("createdAt");
+        }
+        Some(serde_json::json!([
+            serde_json::to_value(release).ok()?,
+            config
+        ]))
+    }
+    match (
+        comparable(stored_release, stored_config),
+        comparable(Some(release), config),
+    ) {
+        (Some(stored), Some(incoming)) => stored == incoming,
+        _ => false,
+    }
 }
 
 /// Whether a maintenance target can be served by refreshing what is installed:
@@ -2875,6 +2938,104 @@ mod tests {
             vec![],
         );
         super::accept_target(&state, &other, false).await.unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+    }
+
+    async fn approve_first_target(
+        db: &OperatorDb,
+        state: &OperatorState,
+        target: &alien_core::sync::TargetDeployment,
+    ) {
+        super::accept_target(state, target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// The manager mints a new token and snapshot timestamp on every sync; a
+    /// target that differs only in those is a repeat.
+    #[tokio::test]
+    async fn a_target_resent_with_fresh_per_sync_values_is_a_repeat() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        approve_first_target(&db, &state, &target).await;
+        let mut resent = target.clone();
+        resent.config.deployment_token = Some("fresh-token".to_string());
+        resent.config.environment_variables.created_at = "2030-01-01T00:00:00Z".to_string();
+        super::accept_target(&state, &resent, false).await.unwrap();
+        assert_eq!(approval_records(&db, &release_id).await, 1);
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Approved)
+        );
+    }
+
+    /// A field the approval hash does not cover still changes what is applied.
+    #[tokio::test]
+    async fn an_approved_target_resent_with_frozen_changes_needs_a_new_approval() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        approve_first_target(&db, &state, &target).await;
+        let mut changed = target.clone();
+        changed.config.allow_frozen_changes = true;
+        super::accept_target(&state, &changed, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+        assert_eq!(approval_records(&db, &release_id).await, 2);
+    }
+
+    #[tokio::test]
+    async fn an_approved_target_resent_with_a_volume_restore_needs_a_new_approval() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        approve_first_target(&db, &state, &target).await;
+        let mut changed = target.clone();
+        changed
+            .config
+            .volume_restores
+            .push(alien_core::VolumeRestoreRequest {
+                request_id: "restore-1".to_string(),
+                resource_id: "data".to_string(),
+                ordinal: 0,
+                snapshot_id: "snap-1".to_string(),
+            });
+        super::accept_target(&state, &changed, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+        assert_eq!(approval_records(&db, &release_id).await, 2);
+    }
+
+    /// Approval turned off, another release deployed with no record, approval
+    /// turned on: the old record is the newest but is not what is installed.
+    #[tokio::test]
+    async fn an_approved_release_resent_after_another_was_installed_needs_a_new_approval() {
+        use crate::protected::tests as fixtures;
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        approve_first_target(&db, &state, &target).await;
+        let other = fixtures::signed_release(6, &fixtures::stack(&fixtures::pinned()));
+        let mut installed = db.get_deployment_state().await.unwrap().unwrap();
+        installed.current_release = Some(other.clone());
+        installed.target_release = Some(other);
+        db.set_deployment_state(&installed).await.unwrap();
         super::accept_target(&state, &target, false).await.unwrap();
         assert_eq!(
             db.get_approval_status_for_release(&release_id)
