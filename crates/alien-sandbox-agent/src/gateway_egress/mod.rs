@@ -5,6 +5,7 @@
 )]
 
 mod dns;
+mod guest_drop;
 mod guest_network;
 #[cfg(test)]
 mod guest_network_tests;
@@ -118,6 +119,23 @@ pub fn isolate_image_devices() -> Result<()> {
     guest_network::install(false)
         .into_alien_error()
         .context(failed("isolate guest devices before starting image code"))
+}
+
+/// Azure under `none` with persistent storage: the platform lets the store's host through for
+/// the agent, so the guest keeps commands from it (and from everything else, which `none`
+/// already denies them). Guest sockets are marked, and marked traffic is dropped on its way out
+/// by a rule that needs no connection tracking, which the Azure guest kernel lacks. Commands
+/// cannot open IPv6 sockets either. Installed once, before capabilities are reduced; this
+/// replaces `isolate_image_devices`, whose device filter it also installs.
+pub fn isolate_guest_without_egress() -> Result<()> {
+    guest_network::install(true)
+        .into_alien_error()
+        .context(failed("isolate guest sockets before starting image code"))?;
+    guest_drop::install()
+        .into_alien_error()
+        .context(failed("drop guest egress before starting image code"))?;
+    crate::privilege::block_command_ipv6();
+    Ok(())
 }
 
 impl GatewayEgress {

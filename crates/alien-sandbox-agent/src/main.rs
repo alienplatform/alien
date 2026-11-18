@@ -133,7 +133,16 @@ fn main() -> Result<()> {
     #[cfg(target_os = "linux")]
     if image_command_enabled()? && std::env::var(ENV_AUTHORIZATION).as_deref() == Ok("native-file")
     {
-        alien_sandbox_agent::gateway_egress::isolate_image_devices()?;
+        match std::env::var(alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS).as_deref() {
+            Err(_) => alien_sandbox_agent::gateway_egress::isolate_image_devices()?,
+            Ok("none") => alien_sandbox_agent::gateway_egress::isolate_guest_without_egress()?,
+            Ok(_) => {
+                return Err(invalid(
+                    alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS,
+                    "the only guest egress the agent enforces is `none`",
+                ))
+            }
+        }
     }
     if network_admin || image_command_enabled()? {
         #[cfg(target_os = "linux")]
