@@ -64,6 +64,15 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                         sandbox.id()
                     ));
                 }
+                // Behind a connector the store's network path is opened to the connector, and
+                // only the agent's in-guest redirect keeps commands off it.
+                if platform == Platform::Aws {
+                    if let Some(reason) =
+                        alien_core::sandbox_egress::aws_persistent_storage_refusal(stack, sandbox)
+                    {
+                        return Some(format!("Sandbox '{}': {reason}", sandbox.id()));
+                    }
+                }
                 // Azure hosts the gateway as two VMs that setup creates in the deployment's VNet,
                 // and the sandbox reaches it through the agent's startup gate. A catalog image
                 // runs no agent, so nothing inside it could prove or use that path.
@@ -338,6 +347,34 @@ mod tests {
     /// A ceiling outside the platform's own sizing rule is refused at plan time: Azure sizes cpu
     /// in steps of 250m, so `333m` is a size it will not create. Caught while planning rather
     /// than at the first session, where it reads as a runtime fault, not a fixable declaration.
+    /// Under `none` on AWS the store is reachable from the connector; without the image command
+    /// contract no in-guest redirect keeps commands off it, so plan time refuses.
+    #[tokio::test]
+    async fn aws_persistent_storage_without_the_image_command_contract_is_refused() {
+        let declared = |image_user: Option<u32>| {
+            let mut sandbox = sandbox("agent", None, SandboxEgress::None);
+            sandbox.image_user = image_user;
+            sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+                path: "/workspace".to_string(),
+                exclude: vec![],
+                max_size: None,
+                encryption_key: None,
+            });
+            stack_with(sandbox)
+        };
+        let refused = SandboxPlatformSupportCheck
+            .check(&declared(None), Platform::Aws)
+            .await
+            .expect("check runs");
+        assert!(!refused.success);
+        assert!(refused.errors.join(" ").contains("imageUser"));
+        let accepted = SandboxPlatformSupportCheck
+            .check(&declared(Some(1001)), Platform::Aws)
+            .await
+            .expect("check runs");
+        assert!(accepted.success, "{:?}", accepted.errors);
+    }
+
     #[tokio::test]
     async fn ceilings_outside_the_platform_rule_fail_at_plan_time() {
         let mut limits = ceilings();

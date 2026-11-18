@@ -25,7 +25,7 @@ fn failed(operation: &str, object: &str, reason: impl Into<String>) -> AlienErro
 /// A key's store as a grant reaches it. The grant is replaced on renewal.
 pub struct GrantStore {
     grant: RwLock<StorageGrant>,
-    http: reqwest::Client,
+    http: super::http::TrustedHttp,
     /// Set when the store refused the grant (403) and cleared by a renewal.
     denied: std::sync::atomic::AtomicBool,
 }
@@ -35,10 +35,7 @@ impl GrantStore {
     pub fn new(grant: StorageGrant) -> Self {
         Self {
             grant: RwLock::new(grant),
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
-                .build()
-                .expect("a client with rustls builds"),
+            http: super::http::TrustedHttp::new(std::time::Duration::from_secs(60)),
             denied: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -50,8 +47,13 @@ impl GrantStore {
             || self.grant().expires_at() <= chrono::Utc::now()
     }
 
-    fn observe(&self, status: reqwest::StatusCode) {
-        if status == reqwest::StatusCode::FORBIDDEN {
+    /// Marks the grant denied when the store refused it: 403, or the 400 S3 gives a POST whose
+    /// policy expired (a clock behind the store's can let one through the local check).
+    fn observe(&self, status: hyper::StatusCode, body: &[u8]) {
+        if status == hyper::StatusCode::FORBIDDEN
+            || (status == hyper::StatusCode::BAD_REQUEST
+                && String::from_utf8_lossy(body).contains("Policy expired"))
+        {
             self.denied.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
@@ -74,11 +76,11 @@ impl GrantStore {
     }
 }
 
-fn version_of(response: &reqwest::Response) -> ObjectVersion {
+fn version_of(response: &super::http::Response) -> ObjectVersion {
     ObjectVersion::etag(
         response
-            .headers()
-            .get(reqwest::header::ETAG)
+            .headers
+            .get(hyper::header::ETAG)
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default(),
     )
@@ -111,23 +113,18 @@ impl ObjectStore for GrantStore {
             .ok_or_else(|| failed("get", object, "the grant does not cover this object"))?;
         let response = self
             .http
-            .get(url)
-            .send()
+            .send(hyper::Method::GET, &url, &[], Vec::new())
             .await
             .map_err(|e| failed("get", object, e.to_string()))?;
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
+        if response.status == hyper::StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        if !response.status().is_success() {
-            return Err(failed("get", object, format!("HTTP {}", response.status())));
+        if !response.status.is_success() {
+            return Err(failed("get", object, format!("HTTP {}", response.status)));
         }
         let version = version_of(&response);
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| failed("get", object, e.to_string()))?;
         Ok(Some(StoredObject {
-            bytes: bytes.to_vec(),
+            bytes: response.body.to_vec(),
             version,
         }))
     }
@@ -139,24 +136,16 @@ impl ObjectStore for GrantStore {
         let url = self
             .read_url(object)
             .ok_or_else(|| failed("get", object, "the grant does not cover this object"))?;
+        let range = format!("bytes={offset}-{}", offset + len - 1);
         let response = self
             .http
-            .get(url)
-            .header(
-                reqwest::header::RANGE,
-                format!("bytes={offset}-{}", offset + len - 1),
-            )
-            .send()
+            .send(hyper::Method::GET, &url, &[("range", range)], Vec::new())
             .await
             .map_err(|e| failed("get", object, e.to_string()))?;
-        if !response.status().is_success() {
-            return Err(failed("get", object, format!("HTTP {}", response.status())));
+        if !response.status.is_success() {
+            return Err(failed("get", object, format!("HTTP {}", response.status)));
         }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| failed("get", object, e.to_string()))?;
-        Ok(bytes.to_vec())
+        Ok(response.body.to_vec())
     }
 
     async fn put_if(
@@ -175,14 +164,13 @@ impl ObjectStore for GrantStore {
             post, head_put_url, ..
         } = grant;
         let response = if object == HEAD_OBJECT {
-            let request = self.http.put(head_put_url).body(bytes);
-            let request = match &precondition {
-                Precondition::Matches(version) => {
-                    request.header(reqwest::header::IF_MATCH, version.etag.clone())
-                }
-                Precondition::Absent => request.header(reqwest::header::IF_NONE_MATCH, "*"),
+            let condition = match &precondition {
+                Precondition::Matches(version) => ("if-match", version.etag.clone()),
+                Precondition::Absent => ("if-none-match", "*".to_string()),
             };
-            request.send().await
+            self.http
+                .send(hyper::Method::PUT, &head_put_url, &[condition], bytes)
+                .await
         } else {
             // Packs and manifests are named by their hash, so an existing name holds the same
             // bytes; a POST upload cannot be made create-only and does not need to be.
@@ -195,23 +183,25 @@ impl ObjectStore for GrantStore {
             );
             let (content_type, body) = form(&fields, &bytes);
             self.http
-                .post(&post.url)
-                .header(reqwest::header::CONTENT_TYPE, content_type)
-                .body(body)
-                .send()
+                .send(
+                    hyper::Method::POST,
+                    &post.url,
+                    &[("content-type", content_type)],
+                    body,
+                )
                 .await
         }
         .map_err(|e| failed("put", object, e.to_string()))?;
-        self.observe(response.status());
-        match response.status() {
-            reqwest::StatusCode::PRECONDITION_FAILED | reqwest::StatusCode::CONFLICT => {
+        self.observe(response.status, &response.body);
+        match response.status {
+            hyper::StatusCode::PRECONDITION_FAILED | hyper::StatusCode::CONFLICT => {
                 Ok(PutOutcome::Conflict)
             }
             status if status.is_success() => Ok(PutOutcome::Written {
                 version: version_of(&response),
             }),
             status => {
-                let text = response.text().await.unwrap_or_default();
+                let text = String::from_utf8_lossy(&response.body);
                 Err(failed(
                     "put",
                     object,

@@ -287,7 +287,15 @@ mod fake_s3 {
         };
         let key = String::from_utf8_lossy(key).to_string();
         // The fake's policy is the allowed prefix itself; "expired" stands for a lapsed grant.
-        if policy == b"expired" || !key.starts_with(std::str::from_utf8(policy).unwrap()) {
+        // As S3 answers a lapsed POST policy (measured in the test account).
+        if policy == b"expired" {
+            return (
+                StatusCode::BAD_REQUEST,
+                "<Error><Code>AccessDenied</Code><Message>Invalid according to Policy: Policy expired.</Message></Error>",
+            )
+                .into_response();
+        }
+        if !key.starts_with(std::str::from_utf8(policy).unwrap()) {
             return StatusCode::FORBIDDEN.into_response();
         }
         let version = bucket.next();
@@ -993,4 +1001,36 @@ async fn an_expired_grant_sends_nothing() {
         .expect_err("expired");
     assert!(store.denied());
     assert!(bucket.objects.lock().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_same_size_rewrite_right_after_a_commit_is_committed() {
+    // Inode times tick with the coarse clock (a few ms), so a rewrite of the same length right
+    // after a commit read the file often keeps size, ctime and mtime. Many rounds make one
+    // such rewrite near certain.
+    let source = tempfile::tempdir().expect("tempdir");
+    let staging = tempfile::tempdir().expect("tempdir");
+    let root = source.path();
+    let store = MemoryStore::new();
+    write(root, "f", b"round-000");
+    let mut replicator = replicator(&store, root, staging.path(), &[]).await;
+    for round in 1..=200 {
+        replicator.commit(&store).await.expect("commit");
+        let next = format!("round-{round:03}");
+        write(root, "f", next.as_bytes());
+        replicator.commit(&store).await.expect("commit");
+        let target = tempfile::tempdir().expect("tempdir");
+        restore(
+            &store,
+            replicator.head().expect("head"),
+            &mut DirSink::new(tree::open_root(target.path()).expect("open"), false),
+        )
+        .await
+        .expect("restore");
+        assert_eq!(
+            std::fs::read_to_string(target.path().join("f")).expect("read"),
+            next,
+            "round {round}"
+        );
+    }
 }
