@@ -101,7 +101,7 @@ where
         }
     };
     let api = SigningApi::from_context(&signing.ctx).await?;
-    let (chain, signer) = signing::project_signer(&api, Role::Operate).await?;
+    let (chain, signer) = signing::project_signer(&api, Role::Release).await?;
 
     let keys = SessionKeys::generate().context(ErrorData::SigningFailed {
         message: "Could not create the session key".to_string(),

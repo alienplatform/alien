@@ -818,13 +818,14 @@ async fn run_remote_exec_attach(
     // The session token goes in the handshake's Authorization header: a token
     // in the URL ends up in access logs and proxies.
     let request = remote_exec_ws_request(&ws_url, &session.client_token)?;
-    let (socket, _) = connect_async(request)
-        .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to dial remote exec session".to_string(),
-            url: Some(session.attach_url.clone()),
-        })?;
+    let (socket, _) =
+        connect_async(request)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to dial remote exec session".to_string(),
+                url: Some(session.attach_url.clone()),
+            })?;
     let (mut sink, mut stream) = socket.split();
 
     let _raw_guard = if session.tty && std::io::stdin().is_terminal() {

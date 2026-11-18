@@ -326,7 +326,7 @@ impl KubernetesDaemonController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: Some(60),
+                max_times: None,
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -446,7 +446,7 @@ impl KubernetesDaemonController {
             self.reconcile_endpoint(ctx).await?
         {
             return Ok(HandlerAction::Stay {
-                max_times: Some(60),
+                max_times: None,
                 suggested_delay: Some(suggested_delay),
             });
         }
@@ -707,7 +707,7 @@ impl KubernetesDaemonController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: Some(60),
+                max_times: None,
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -1283,8 +1283,12 @@ impl KubernetesDaemonController {
                     message,
                 })
             })?;
-        let node_selector = alien_core::kubernetes_compute_node_selector(ctx.desired_stack, pool)
-            .map_err(|message| {
+        let node_selector = alien_core::kubernetes_compute_node_selector(
+            ctx.desired_stack,
+            pool,
+            ctx.desired_stack.built_architectures_of(&config.id),
+        )
+        .map_err(|message| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: config.id.clone(),
                 message,
@@ -1306,6 +1310,11 @@ impl KubernetesDaemonController {
             volumes: (!security.volumes.is_empty()).then_some(security.volumes),
             containers: vec![container],
             restart_policy: Some("Always".to_string()),
+            // Kubernetes would otherwise inject `<SERVICE>_SERVICE_HOST`, `<SERVICE>_PORT_<n>_TCP*`
+            // and similar variables for every Service in the namespace. A workload sets its own
+            // variables explicitly, which Kubernetes does not overwrite; Alien's bindings carry each
+            // address, so the extra variables only add names a workload can collide with.
+            enable_service_links: Some(false),
             image_pull_secrets,
             // Honor the configured stop grace period during pod shutdown
             // (K8s default is 30s when unset).
@@ -1723,6 +1732,31 @@ mod tests {
         );
     }
 
+    /// Service-link variables of the namespace's Services must not reach the daemon.
+    #[tokio::test]
+    async fn daemonset_pod_does_not_get_service_link_variables() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let pod = manifest_test_controller()
+            .build_daemonset(
+                &config,
+                "agent",
+                "test-ns",
+                Some("agent-sa"),
+                None,
+                None,
+                &harness.ctx(),
+            )
+            .await
+            .expect("daemonset manifest")
+            .spec
+            .expect("spec")
+            .template
+            .spec
+            .expect("pod spec");
+        assert_eq!(pod.enable_service_links, Some(false));
+    }
+
     #[tokio::test]
     async fn daemonset_pod_spec_carries_the_class_mapped_to_the_declared_priority() {
         unsafe {
@@ -1936,5 +1970,47 @@ mod tests {
         assert!(!controller
             .needs_update(&harness.ctx())
             .expect("needs_update"));
+    }
+
+    /// See `check_certificate_wait`: the same wait, on first install and on update.
+    #[tokio::test]
+    async fn endpoint_waits_for_the_certificate_on_create_and_update() {
+        use crate::core::kubernetes_manifest_test_support::check_certificate_wait;
+        let config = Daemon::new("agent".to_string())
+            .code(DaemonCode::Image {
+                image: "registry.example.com/agent:1".to_string(),
+            })
+            .permissions("default".to_string())
+            .public_endpoint(alien_core::PublicEndpoint {
+                name: "default".into(),
+                port: 8080,
+                protocol: alien_core::ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .build();
+        let mut harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        for (state, status) in [
+            (
+                KubernetesDaemonState::ReconcilePublicEndpoint,
+                ResourceStatus::Provisioning,
+            ),
+            (
+                KubernetesDaemonState::ReconcilePublicEndpointAfterUpdate,
+                ResourceStatus::Updating,
+            ),
+        ] {
+            let controller = KubernetesDaemonController {
+                state,
+                ..manifest_test_controller()
+            };
+            check_certificate_wait(&mut harness, controller, "agent", status, |c, at| {
+                c.public_endpoint.wait_started_unix.insert(
+                    crate::kubernetes_public_endpoint::EndpointWait::Certificate,
+                    at,
+                );
+            })
+            .await;
+        }
     }
 }

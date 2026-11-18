@@ -33,10 +33,13 @@ fn external_ai_config(resource_id: &str) -> DeploymentConfig {
     let mut external_bindings = ExternalBindings::new();
     external_bindings.insert(
         resource_id,
-        ExternalBinding::Ai(ExternalAiBinding {
-            provider: "openai".to_string(),
-            api_key: "sk-test".into(),
-        }),
+        ExternalBinding::Ai(
+            ExternalAiBinding {
+                provider: "openai".to_string(),
+                api_key: "sk-test".into(),
+            }
+            .into(),
+        ),
     );
 
     DeploymentConfig::builder()

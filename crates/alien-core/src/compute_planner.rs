@@ -2051,6 +2051,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
         }
     }
 
@@ -2854,6 +2855,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
         };
 
         let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");

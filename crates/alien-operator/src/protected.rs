@@ -20,9 +20,10 @@
 //!
 //! - a target's stack comes only from its verified statement; the manager may
 //!   move an image to another registry, never change its digest;
-//! - a signer list older than the one accepted is refused; a release or
-//!   config signed by a key no longer on the list is refused too, so after a
-//!   signer is removed the current release is signed again by a current signer;
+//! - a signer list older than the one accepted is refused; a new release or
+//!   config must be signed by a key on the current list, while a statement
+//!   whose signer was removed runs only when the current list's `keep` names
+//!   it (and the deny-list doesn't); the ledger never makes one verify;
 //! - the deployment configuration is rebuilt here: environment variables only
 //!   for the input mappings the signed stack declares, developer inputs and
 //!   configurable env only from the deployment's signed `config/v1`, deployer
@@ -392,8 +393,8 @@ pub struct VerifiedRelease {
     pub digest: String,
     /// The stack, read from the signed bytes.
     pub stack: Stack,
-    /// Signers whose signatures counted; empty for the release the install
-    /// already accepted, which is kept rather than verified again.
+    /// Signers whose signatures counted; empty for a release the current
+    /// signer list keeps, which needs no signature.
     pub signers: Vec<String>,
     /// The verified release body.
     pub body: ReleaseBody,
@@ -479,9 +480,10 @@ impl ReleaseSigning {
     /// air-gapped bundles and the deployment loop all check releases here.
     ///
     /// The signer chain starts from the one this Operator accepted, so a
-    /// manager can deliver newer list versions but never an older one. The
-    /// release must verify under the current list: one whose signer has left
-    /// the list is refused until a current signer signs it.
+    /// manager can deliver newer list versions but never an older one. A new
+    /// release must verify under the current list. One this install accepted
+    /// keeps verifying after its signer leaves the list, unless the list
+    /// denies it. This runs before every pass.
     pub fn verify_release(
         &self,
         platform: Platform,
@@ -500,9 +502,8 @@ impl ReleaseSigning {
             self.install.clone(),
             chain,
             &stored.ledger,
-            now,
         )?;
-        trust.extend_chain(&release.signer_lists, now)?;
+        trust.extend_chain(&release.signer_lists)?;
         let verified = trust.verify_release(signed, now)?;
         let (sequence, digest, body, signers) = (
             verified.sequence,
@@ -536,13 +537,13 @@ impl ReleaseSigning {
     ) -> Result<(TargetDeployment, VerifiedRelease, OperatorTrust), Refusal> {
         let verified = self.verify_release(platform, &target.release_info, stored)?;
         let mut ledger = stored.ledger.clone();
-        let (signed_config, config_sequence) = match &target.signed_config {
-            None => (ConfigBody::default(), None),
+        let (signed_config, config_sequence, config_digest) = match &target.signed_config {
+            None => (ConfigBody::default(), None, None),
             Some(signed) => {
                 let config = verified
                     .trust
                     .verify_config(signed, &verified.body, Utc::now())?;
-                (config.body, Some(config.sequence))
+                (config.body, Some(config.sequence), Some(config.digest))
             }
         };
         verified.trust.record(&mut ledger)?;
@@ -827,14 +828,6 @@ pub(crate) fn test_key(seed: u8) -> alien_signing::SecretKey {
     alien_signing::SecretKey::from_secret_bytes(&secret).unwrap()
 }
 
-/// One `notAfter` for every test signer list in this process, so building
-/// the same list twice gives the same digest.
-#[cfg(test)]
-fn test_not_after() -> chrono::DateTime<Utc> {
-    static NOT_AFTER: std::sync::OnceLock<chrono::DateTime<Utc>> = std::sync::OnceLock::new();
-    *NOT_AFTER.get_or_init(|| Utc::now() + chrono::Duration::days(60))
-}
-
 /// A statement of `kind` for `project`, unsigned.
 #[cfg(test)]
 pub(crate) fn test_statement<B: Serialize>(
@@ -850,7 +843,7 @@ pub(crate) fn test_statement<B: Serialize>(
         project: project.to_string(),
         install: install.map(str::to_string),
         sequence,
-        not_after: (kind == Kind::SignerList).then(test_not_after),
+        not_after: None,
         signer_list_version,
         body,
     };
@@ -880,6 +873,7 @@ fn test_list_body(previous: Option<String>, with_ci: bool) -> alien_signing::Sig
         id: id.to_string(),
         key: test_key(seed).public_key().as_str().to_string(),
         kind,
+        backend: None,
         roles,
         label: None,
     };
@@ -897,6 +891,7 @@ fn test_list_body(previous: Option<String>, with_ci: bool) -> alien_signing::Sig
         admin_threshold: 1,
         signers,
         deny: Vec::new(),
+        keep: Vec::new(),
         recovered: false,
     }
 }
@@ -904,17 +899,32 @@ fn test_list_body(previous: Option<String>, with_ci: bool) -> alien_signing::Sig
 /// Version 2 of the test signer list, which removes the CI key.
 #[cfg(test)]
 pub(crate) fn test_signer_list_without_ci(project: &str) -> SignedStatement {
+    test_signer_list_without_ci_keeping(project, Vec::new())
+}
+
+/// Version 2 of the test signer list, which removes the CI key and keeps `keep`.
+#[cfg(test)]
+pub(crate) fn test_signer_list_without_ci_keeping(
+    project: &str,
+    keep: Vec<alien_signing::Keep>,
+) -> SignedStatement {
     let previous = test_signer_list(project).open().unwrap().digest;
-    test_statement(
-        project,
-        Kind::SignerList,
-        None,
-        2,
-        1,
-        test_list_body(Some(previous), false),
-    )
-    .sign_with("alice-laptop", &test_key(2))
-    .unwrap()
+    let mut body = test_list_body(Some(previous), false);
+    body.keep = keep;
+    test_statement(project, Kind::SignerList, None, 2, 1, body)
+        .sign_with("alice-laptop", &test_key(2))
+        .unwrap()
+}
+
+/// Version 2 of the test signer list, which denies `digests`.
+#[cfg(test)]
+pub(crate) fn test_signer_list_denying(project: &str, digests: &[String]) -> SignedStatement {
+    let previous = test_signer_list(project).open().unwrap().digest;
+    let mut body = test_list_body(Some(previous), true);
+    body.deny = digests.to_vec();
+    test_statement(project, Kind::SignerList, None, 2, 1, body)
+        .sign_with("alice-laptop", &test_key(2))
+        .unwrap()
 }
 
 /// A protected configuration for tests: settings pinning the test signer
@@ -1229,37 +1239,81 @@ pub(crate) mod tests {
         );
     }
 
-    /// Removing a signer withdraws the vendor's word for everything that key signed, the release
-    /// the install runs included. The release is signed again by a current signer.
+    /// Removing a signer keeps what the signer list keeps running, and refuses what is new
+    /// from that key. The ledger plays no part.
     #[test]
-    fn removing_the_ci_key_refuses_what_it_signed_until_a_current_signer_signs_it() {
+    fn removing_the_ci_key_keeps_what_the_list_keeps_and_refuses_what_is_new() {
         let accepted_release = signed_release(5, &stack(&pinned()));
-        let stored = accept(&fresh(), &target(accepted_release.clone(), vec![])).unwrap();
+        let mut accepted = target(accepted_release.clone(), vec![]);
+        let config = signed_config(
+            1,
+            &this_install(),
+            serde_json::json!({"inputs": {"logLevel": "info"}}),
+        );
+        accepted.signed_config = Some(config.clone());
+        let stored = accept(&fresh(), &accepted).unwrap();
 
+        let keep_of = |statement: &SignedStatement, kind| {
+            let opened = statement.open().unwrap();
+            alien_signing::Keep {
+                digest: opened.digest,
+                kind,
+                release_id: None,
+                sequence: opened.sequence,
+            }
+        };
+        let keep = vec![
+            keep_of(
+                accepted_release.signed.as_ref().unwrap(),
+                alien_signing::KeptKind::Release,
+            ),
+            keep_of(&config, alien_signing::KeptKind::Config),
+        ];
+        let lists = vec![
+            signer_list(),
+            test_signer_list_without_ci_keeping("shop", keep),
+        ];
         let mut without_ci = accepted_release.clone();
-        without_ci.signer_lists = vec![signer_list(), test_signer_list_without_ci("shop")];
+        without_ci.signer_lists = lists.clone();
 
-        let refusal = signing()
+        // The Operator's re-check before a pass: the kept release and config still verify.
+        let verified = signing()
             .verify_release(Platform::Kubernetes, &without_ci, &stored)
-            .err()
-            .expect("the CI key is gone from the list")
+            .expect("the release the list keeps runs after its signer left");
+        assert!(verified.trust.chain().current().version == 2);
+        let mut kept = accepted.clone();
+        kept.release_info.signer_lists = lists.clone();
+        let stored = accept(&stored, &kept).expect("the kept config runs too");
+
+        // A new Operator instance with an empty ledger accepts them from the list alone.
+        accept(&fresh(), &kept).expect("a new instance needs nothing from the ledger");
+
+        // A list that keeps nothing refuses what the removed key signed.
+        let by_hand = fresh();
+        let mut dropped = accepted.clone();
+        dropped.release_info.signer_lists =
+            vec![signer_list(), test_signer_list_without_ci("shop")];
+        let refusal = accept(&by_hand, &dropped).unwrap_err().to_string();
+        assert!(
+            refusal.contains("not on signer list version 2"),
+            "{refusal}"
+        );
+
+        // A new release by the removed CI key is refused.
+        let mut new_by_ci = release_by(6, &stack(&pinned()), "production", "ci");
+        new_by_ci.signer_lists = lists.clone();
+        let refusal = accept(&stored, &target(new_by_ci, vec![]))
+            .unwrap_err()
             .to_string();
         assert!(
             refusal.contains("not on signer list version 2"),
             "{refusal}"
         );
 
-        // The same release signed by a key still on the list lands.
-        let mut by_device = release_by(5, &stack(&pinned()), "production", "alice-laptop");
-        by_device.signer_lists = without_ci.signer_lists.clone();
-        let stored =
-            accept(&stored, &target(by_device, vec![])).expect("a current signer's release");
-        assert_eq!(stored.ledger.signer_list.as_ref().unwrap().sequence, 2);
-
-        // A config the removed CI key signed is refused too.
+        // So is a new config by it, under a release a current signer signed.
         let mut next_release = release_by(6, &stack(&pinned()), "production", "alice-laptop");
-        next_release.signer_lists = without_ci.signer_lists.clone();
-        let mut new_config = target(next_release, vec![]);
+        next_release.signer_lists = lists.clone();
+        let mut new_config = target(next_release.clone(), vec![]);
         new_config.signed_config = Some(signed_config(
             2,
             &this_install(),
@@ -1270,6 +1324,30 @@ pub(crate) mod tests {
             refusal.contains("not on signer list version 2"),
             "{refusal}"
         );
+
+        // A release a current signer signs lands.
+        let stored = accept(&stored, &target(next_release, vec![])).unwrap();
+        assert_eq!(stored.ledger.signer_list.as_ref().unwrap().sequence, 2);
+    }
+
+    /// The deny-list stops a release the install runs, and a rollback to it.
+    #[test]
+    fn a_denied_release_is_refused_also_as_a_rollback() {
+        let release5 = signed_release(5, &stack(&pinned()));
+        let digest = release5.signed.as_ref().unwrap().open().unwrap().digest;
+        let stored = accept(&fresh(), &target(release5.clone(), vec![])).unwrap();
+        let newer = signed_release(6, &stack(&pinned()));
+        let stored = accept(&stored, &target(newer, vec![])).unwrap();
+
+        let mut denying = release5.clone();
+        denying.signer_lists = vec![
+            signer_list(),
+            test_signer_list_denying("shop", std::slice::from_ref(&digest)),
+        ];
+        let refusal = accept(&stored, &target(denying, vec![]))
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("deny-list"), "{refusal}");
     }
 
     #[test]

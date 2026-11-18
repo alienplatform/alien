@@ -10,6 +10,11 @@ pub(crate) mod kubernetes;
 #[cfg(feature = "kubernetes")]
 pub use kubernetes::*;
 
+#[cfg(feature = "azure")]
+mod azure_gateway;
+#[cfg(feature = "azure")]
+pub use azure_gateway::*;
+
 #[cfg(feature = "local")]
 mod local_utils;
 

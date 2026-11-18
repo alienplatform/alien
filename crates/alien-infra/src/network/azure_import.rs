@@ -116,6 +116,7 @@ mod tests {
                 "sandboxCidrs": ["10.0.16.0/23"],
                 "sandboxCidrsByResource": {"box": ["10.0.16.0/23"]},
                 "gatewayCidrs": ["10.0.6.0/24"],
+                "gatewayIps": ["10.0.6.4", "10.0.6.5"],
                 "workloadCidrs": ["10.0.0.0/24", "10.0.1.0/24"],
                 "vpcCidrs": ["10.0.0.0/16"]
             },

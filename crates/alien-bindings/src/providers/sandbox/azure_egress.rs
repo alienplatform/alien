@@ -6,7 +6,7 @@ use crate::{
 };
 use alien_azure_clients::azure::sandbox_data_plane::{EgressHostRule, EgressPolicy, Sandbox};
 use alien_core::{EgressPolicy as RuntimePolicy, SANDBOX_EXPIRY_LABEL};
-use alien_error::{AlienError, ContextError};
+use alien_error::AlienError;
 use std::{collections::BTreeMap, sync::Arc};
 
 const IDENTITY_LABEL: &str = "alien-egress-identity";
@@ -26,6 +26,10 @@ fn gateway_policy_holds(expected: &EgressPolicy, effective: &EgressPolicy) -> bo
             Some(http) => serde_json::from_value(http).is_ok_and(enforced_matches),
         }
 }
+
+/// Where the agent's failover forwarder listens in the guest (see `alien-sandbox-agent`
+/// `proxy_failover`); commands' proxy variables point here when two gateway replicas exist.
+const PROXY_LOOPBACK: &str = "127.0.0.1:18128";
 
 impl AzureSandbox {
     /// Use the deployment's gateway for policy writes and create-time proxy credentials.
@@ -61,30 +65,22 @@ impl AzureSandbox {
     }
 
     pub(super) fn native_policy(&self) -> Option<EgressPolicy> {
-        let Some(manager) = &self.egress_manager else {
+        if self.egress_manager.is_none() {
             return super::egress_policy(&self.egress);
-        };
+        }
         // Full/default-Deny inspects the inner CONNECT destination and rejects the gateway.
-        // Partial requires default-Allow. The ordered catch-all blocks other HTTP requests;
-        // setup's NSG allows the linked gateway ports and denies platform DNS/IMDS and other
-        // traffic. The admin port is reachable through the link but requires an admin JWT.
+        // Partial requires default-Allow. The one ordered catch-all closes the :80/:443
+        // interposer. There is no gateway rule: Azure refuses a host:port pattern, and a host
+        // rule for an IP does not open a TCP port. Setup's NSG allows the linked gateway ports
+        // and denies platform DNS/IMDS and other traffic; the admin port has no rule and is not
+        // reachable from sandboxes.
         Some(EgressPolicy {
             default_action: "Allow".into(),
             traffic_inspection: Some("Partial".into()),
-            host_rules: vec![
-                EgressHostRule {
-                    pattern: manager.gateway_authority().into(),
-                    action: "Allow".into(),
-                },
-                EgressHostRule {
-                    pattern: manager.gateway_admin_authority().into(),
-                    action: "Allow".into(),
-                },
-                EgressHostRule {
-                    pattern: "*".into(),
-                    action: "Deny".into(),
-                },
-            ],
+            host_rules: vec![EgressHostRule {
+                pattern: "*".into(),
+                action: "Deny".into(),
+            }],
             rules: Vec::new(),
             unmodelled: Default::default(),
         })
@@ -107,12 +103,50 @@ impl AzureSandbox {
         // Azure chooses its vendor id after create; the label persists the pre-created identity.
         let identity = uuid::Uuid::new_v4().to_string();
         let token = manager.mint_identity(&identity, expires / 1000).await?;
-        let proxy = format!("http://alien:{}@{}", token, manager.gateway_authority());
+        // An agent image can run the loopback forwarder, so with several replicas its proxy
+        // address is the loopback and the agent fails over between the replicas per connection.
+        // Without the agent there is no forwarder: the one gateway address stays.
+        let replicas = manager.proxy_authorities();
+        let failover = self.agent && replicas.len() > 1;
+        let proxy_authority = if failover {
+            PROXY_LOOPBACK
+        } else {
+            manager.gateway_authority()
+        };
+        let proxy = format!("http://alien:{}@{}", token, proxy_authority);
         for name in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] {
             environment.insert(name.into(), proxy.clone());
         }
         for name in ["NO_PROXY", "no_proxy"] {
             environment.insert(name.into(), "localhost,127.0.0.1".into());
+        }
+        // The gateway answers its first connect slowly (measured 7-20 s), so a packaged agent
+        // proves the path itself before the ENTRYPOINT starts: the gateway must connect and the
+        // public canaries must drop, retried for up to 60 s, and the workload never starts if
+        // they do not. The variables are reserved, so a caller cannot have set them.
+        if self.agent {
+            for (name, value) in [
+                ("ALIEN_SANDBOX_STARTUP_EGRESS_GATE", "1"),
+                ("ALIEN_SANDBOX_STARTUP_GATE_VNET", "1"),
+                ("ALIEN_SANDBOX_STARTUP_GATE_BOUND_SECS", "60"),
+                (
+                    "ALIEN_SANDBOX_STARTUP_GATE_CONTROL",
+                    replicas.join(",").as_str(),
+                ),
+                (
+                    alien_core::sandbox_image::ENV_MUST_DROP_PUBLIC,
+                    // Not :443 or :80: Azure's interposer accepts TCP there and answers 403, so a
+                    // connect proves nothing. Those ports are contained by the interposer and the
+                    // gateway's policy; the NSG drops every other public port.
+                    "1.1.1.1:8443,1.1.1.1:8080",
+                ),
+            ] {
+                environment.insert(name.into(), value.into());
+            }
+            if failover {
+                environment.insert("ALIEN_SANDBOX_PROXY_REPLICAS".into(), replicas.join(","));
+                environment.insert("ALIEN_SANDBOX_PROXY_LISTEN".into(), PROXY_LOOPBACK.into());
+            }
         }
         labels.insert(IDENTITY_LABEL.into(), identity.clone());
         // The gateway has no policy for this identity yet and denies all outbound requests.
@@ -165,17 +199,18 @@ impl AzureSandbox {
         identity: Option<&str>,
         reason: AlienError<ErrorData>,
     ) -> AlienError<ErrorData> {
-        let reason = if let (Some(manager), Some(identity)) = (&self.egress_manager, identity) {
-            match manager.delete(identity).await {
-                Ok(()) => reason,
-                Err(_) => reason.context(ErrorData::SandboxCommandFailed {
-                    failure: "egressRevocationFailed".into(),
-                    reason: "could not revoke the failed create's gateway identity; terminating its sandbox".into(),
-                }),
+        // A failed revocation is logged, not wrapped around the reason: wrapping would replace the
+        // publish failure's cause and retryability with the cleanup's. The identity is bound to the
+        // sandbox being deleted below and expires with it.
+        if let (Some(manager), Some(identity)) = (&self.egress_manager, identity) {
+            if let Err(error) = manager.delete(identity).await {
+                tracing::warn!(
+                    sandbox = %sandbox_id,
+                    %error,
+                    "could not revoke the gateway identity of a failed create; terminating its sandbox"
+                );
             }
-        } else {
-            reason
-        };
+        }
         self.discard(sandbox_id, reason).await
     }
 }

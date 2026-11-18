@@ -524,17 +524,21 @@ async fn prepare_target(
     .map_err(|e| e.into_generic())
 }
 
-/// The cluster settings the baseline was prepared with, when the stored
-/// settings name none.
+/// The cluster settings the target is prepared with: the stored ones, with the
+/// install-time fields they leave out taken from the baseline.
+///
+/// A Helm install stores no cluster settings. A Terraform setup stores the
+/// cluster's ownership and no namespace. Either way the namespace the Operator
+/// runs in is only in the baseline.
 fn installed_cluster_settings(
     deployment: &DeploymentRecord,
     settings: &alien_core::StackSettings,
 ) -> Option<alien_core::KubernetesClusterSettings> {
-    if settings
+    let stored = settings
         .kubernetes
         .as_ref()
-        .is_some_and(|kubernetes| kubernetes.cluster.is_some())
-    {
+        .and_then(|kubernetes| kubernetes.cluster.as_ref());
+    if stored.is_some_and(|cluster| cluster.namespace.is_some()) {
         return None;
     }
     let baseline = deployment
@@ -546,10 +550,16 @@ fn installed_cluster_settings(
         let cluster = entry
             .config
             .downcast_ref::<alien_core::KubernetesCluster>()?;
-        Some(alien_core::KubernetesClusterSettings {
-            ownership: cluster.ownership,
-            namespace: Some(cluster.namespace.clone()),
-            cloud: cluster.cloud.clone(),
+        Some(match stored {
+            Some(stored) => alien_core::KubernetesClusterSettings {
+                namespace: Some(cluster.namespace.clone()),
+                ..stored.clone()
+            },
+            None => alien_core::KubernetesClusterSettings {
+                ownership: cluster.ownership,
+                namespace: Some(cluster.namespace.clone()),
+                cloud: cluster.cloud.clone(),
+            },
         })
     })
 }
@@ -859,6 +869,27 @@ pub(super) mod tests {
     /// adds a permission grant must not read as a change to that cluster.
     #[tokio::test]
     async fn a_permission_only_release_on_a_chart_installed_in_its_own_namespace_mints() {
+        permission_only_release_mints_with_stored_settings(None).await;
+    }
+
+    /// A Terraform setup registers the cluster's ownership and no namespace, so the
+    /// stored settings name a cluster whose namespace is only in the Operator's settings.
+    #[tokio::test]
+    async fn a_permission_only_release_on_a_terraform_registered_cluster_mints() {
+        permission_only_release_mints_with_stored_settings(Some(alien_core::KubernetesSettings {
+            cluster: Some(alien_core::KubernetesClusterSettings {
+                ownership: alien_core::KubernetesClusterOwnership::External,
+                namespace: None,
+                cloud: None,
+            }),
+            exposure: None,
+        }))
+        .await;
+    }
+
+    async fn permission_only_release_mints_with_stored_settings(
+        stored_kubernetes: Option<alien_core::KubernetesSettings>,
+    ) {
         use alien_core::{PermissionProfile, PermissionsConfig};
 
         let stack = |extra_grant: bool| {
@@ -924,8 +955,9 @@ pub(super) mod tests {
         record.runtime_metadata.as_mut().unwrap().prepared_stack = Some(prepared.clone());
 
         // What the manager rebuilds from the settings it stores.
-        let stored_settings = record.stack_settings.clone().unwrap();
+        let mut stored_settings = record.stack_settings.clone().unwrap();
         assert!(stored_settings.kubernetes.is_none());
+        stored_settings.kubernetes = stored_kubernetes;
         let target = prepare_target(&waiting, &record, &stored_settings, &stack_state)
             .await
             .unwrap();
@@ -946,6 +978,45 @@ pub(super) mod tests {
             matches!(decision, ReportDecision::Mint(_)),
             "expected a mint, got {decision:?}"
         );
+    }
+
+    #[test]
+    fn a_stored_cluster_without_a_namespace_takes_it_from_the_baseline() {
+        let cluster = |namespace: &str| {
+            Stack::new("app".to_string())
+                .add(
+                    alien_core::KubernetesCluster::new("kubernetes".to_string())
+                        .provider(alien_core::KubernetesClusterProvider::Generic)
+                        .ownership(alien_core::KubernetesClusterOwnership::Existing)
+                        .namespace(namespace.to_string())
+                        .heartbeat_mode(alien_core::KubernetesHeartbeatMode::KubernetesApi)
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+        };
+        let settings = |namespace: Option<&str>| alien_core::StackSettings {
+            kubernetes: Some(alien_core::KubernetesSettings {
+                cluster: Some(alien_core::KubernetesClusterSettings {
+                    ownership: alien_core::KubernetesClusterOwnership::Existing,
+                    namespace: namespace.map(str::to_string),
+                    cloud: None,
+                }),
+                exposure: None,
+            }),
+            ..Default::default()
+        };
+        for namespace in ["default", "product"] {
+            let record = deployment(cluster(namespace));
+            let filled = installed_cluster_settings(&record, &settings(None)).unwrap();
+            assert_eq!(filled.namespace.as_deref(), Some(namespace));
+            assert_eq!(
+                filled.ownership,
+                alien_core::KubernetesClusterOwnership::Existing
+            );
+            // A namespace the settings name is never overridden.
+            assert!(installed_cluster_settings(&record, &settings(Some("named"))).is_none());
+        }
     }
 
     #[test]

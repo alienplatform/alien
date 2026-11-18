@@ -10,7 +10,7 @@ use alien_signing::{
     fingerprint, ConfigBody, Kind, ReleaseBody, Role, SecretKey, SignedStatement, Signer,
     SignerKind, SignerListBody, SigningSettings, Workload,
 };
-use chrono::{DateTime, Duration, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::Serialize;
 
 pub const PROJECT: &str = "prj_shop";
@@ -74,14 +74,14 @@ pub fn statement_under<B: Serialize>(
 }
 
 /// Signer list version 1 of `project` with `key` as its one admin and
-/// releaser, valid for 60 days from `now`.
-pub fn signer_list_of(project: &str, key: &SecretKey, now: DateTime<Utc>) -> SignedStatement {
+/// releaser.
+pub fn signer_list_of(project: &str, key: &SecretKey) -> SignedStatement {
     statement(
         project,
         Kind::SignerList,
         None,
         1,
-        Some(now + Duration::days(60)),
+        None,
         SignerListBody {
             previous: None,
             admin_threshold: 1,
@@ -89,10 +89,12 @@ pub fn signer_list_of(project: &str, key: &SecretKey, now: DateTime<Utc>) -> Sig
                 id: "ci".to_string(),
                 key: key.public_key().as_str().to_string(),
                 kind: SignerKind::Ci,
+                backend: None,
                 roles: vec![Role::Admin, Role::Release],
                 label: None,
             }],
             deny: Vec::new(),
+            keep: Vec::new(),
             recovered: false,
         },
     )
@@ -101,7 +103,7 @@ pub fn signer_list_of(project: &str, key: &SecretKey, now: DateTime<Utc>) -> Sig
 }
 
 pub fn signer_list() -> SignedStatement {
-    signer_list_of(PROJECT, &ci(), now())
+    signer_list_of(PROJECT, &ci())
 }
 
 pub fn settings_for(list: &SignedStatement, prefix: &str, channel: &str) -> SigningSettings {

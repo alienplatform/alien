@@ -20,7 +20,8 @@ use alien_signing::ReleaseBody;
 use crate::error::{ErrorData, Result};
 use crate::function::Accepting;
 use crate::machines::{
-    check_setup_ids, check_zone, roll_basics, ImageFacts, ImagePins, RollMachines,
+    check_setup_ids, check_zone, machine_agent_from_description, roll_basics, ImageFacts,
+    ImagePins, RollMachines,
 };
 use crate::plan::{Place, SetupNetwork};
 
@@ -105,6 +106,9 @@ pub fn image_facts(path: &str, image: &Value) -> Result<ImageFacts> {
         architecture: architecture.to_string(),
         created: created.with_timezone(&Utc),
         root_disk_gib,
+        machine_agent: image["description"]
+            .as_str()
+            .and_then(machine_agent_from_description),
     })
 }
 
@@ -480,7 +484,8 @@ mod tests {
     /// An image as images.get returns it (fields the verifier reads).
     fn image(created: &str) -> Value {
         json!({"name": "machine-x86-20261101", "status": "READY", "architecture": "X86_64",
-               "creationTimestamp": created, "diskSizeGb": "40"})
+               "creationTimestamp": created, "diskSizeGb": "40",
+               "description": format!("machine-agent=sha256:{}", "2".repeat(64))})
     }
 
     /// Records each call the way Compute Engine receives it.

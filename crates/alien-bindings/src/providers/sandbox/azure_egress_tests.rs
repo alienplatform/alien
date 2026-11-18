@@ -90,6 +90,117 @@ fn provider(manager: SandboxEgressManager, corrupt: bool) -> (AzureSandbox, Reco
 }
 
 #[tokio::test]
+async fn an_agent_sandbox_boots_behind_a_60s_gateway_startup_gate() {
+    let h = Harness::new().await;
+    let mut sandbox = AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        alien_core::SandboxEgress::Internet,
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    )
+    .with_egress_manager(Arc::new(h.reopen().await), None);
+    sandbox.agent = true;
+    let mut env = BTreeMap::new();
+    let mut labels = BTreeMap::from([(
+        SANDBOX_EXPIRY_LABEL.to_string(),
+        (chrono::Utc::now().timestamp_millis() + 600_000).to_string(),
+    )]);
+    sandbox
+        .prepare_identity(&mut env, &mut labels)
+        .await
+        .unwrap();
+    assert_eq!(env["ALIEN_SANDBOX_STARTUP_EGRESS_GATE"], "1");
+    assert_eq!(env["ALIEN_SANDBOX_STARTUP_GATE_VNET"], "1");
+    assert_eq!(env["ALIEN_SANDBOX_STARTUP_GATE_BOUND_SECS"], "60");
+    assert!(env["ALIEN_SANDBOX_STARTUP_GATE_CONTROL"].contains(':'));
+    // That variable makes the agent install its in-guest transparent redirect, which the Azure
+    // kernel cannot run (no nftables, no `ip rule`); the agent would never become ready.
+    assert!(!env.contains_key("ALIEN_SANDBOX_EGRESS_GATEWAY"));
+    assert_eq!(
+        env["ALIEN_SANDBOX_MUST_DROP_PUBLIC"],
+        "1.1.1.1:8443,1.1.1.1:8080"
+    );
+}
+
+#[tokio::test]
+async fn an_agent_sandbox_with_two_gateway_replicas_proxies_through_a_loopback_failover() {
+    let h = Harness::new().await;
+    let mut sandbox = AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        alien_core::SandboxEgress::Internet,
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    )
+    .with_egress_manager(
+        Arc::new(h.reopen_with_replicas(&["10.0.6.4", "10.0.6.5"]).await),
+        None,
+    );
+    sandbox.agent = true;
+    let mut env = BTreeMap::new();
+    let mut labels = BTreeMap::from([(
+        SANDBOX_EXPIRY_LABEL.to_string(),
+        (chrono::Utc::now().timestamp_millis() + 600_000).to_string(),
+    )]);
+    sandbox
+        .prepare_identity(&mut env, &mut labels)
+        .await
+        .unwrap();
+    // Neither replica's address is in a command's environment: the agent forwards to both.
+    for name in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] {
+        assert!(env[name].starts_with("http://alien:"), "{name}");
+        assert!(env[name].ends_with("@127.0.0.1:18128"), "{}", env[name]);
+    }
+    assert_eq!(
+        env["ALIEN_SANDBOX_PROXY_REPLICAS"],
+        "10.0.6.4:3128,10.0.6.5:3128"
+    );
+    assert_eq!(env["ALIEN_SANDBOX_PROXY_LISTEN"], "127.0.0.1:18128");
+    // Either replica proves the path at startup.
+    assert_eq!(
+        env["ALIEN_SANDBOX_STARTUP_GATE_CONTROL"],
+        "10.0.6.4:3128,10.0.6.5:3128"
+    );
+}
+
+#[tokio::test]
+async fn an_image_without_the_agent_keeps_the_single_gateway_address() {
+    let h = Harness::new().await;
+    let sandbox = AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        alien_core::SandboxEgress::Internet,
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    )
+    .with_egress_manager(
+        Arc::new(h.reopen_with_replicas(&["10.0.6.4", "10.0.6.5"]).await),
+        None,
+    );
+    let mut env = BTreeMap::new();
+    let mut labels = BTreeMap::from([(
+        SANDBOX_EXPIRY_LABEL.to_string(),
+        (chrono::Utc::now().timestamp_millis() + 600_000).to_string(),
+    )]);
+    sandbox
+        .prepare_identity(&mut env, &mut labels)
+        .await
+        .unwrap();
+    assert!(env["HTTPS_PROXY"].ends_with("@10.0.6.4:3128"));
+    assert!(!env.contains_key("ALIEN_SANDBOX_PROXY_REPLICAS"));
+}
+
+#[tokio::test]
 async fn durable_identity_drives_create_reconnect_update_and_termination() {
     let h = Harness::new().await;
     let (sandbox, record, request) = provider(h.reopen().await, false);
@@ -141,15 +252,11 @@ async fn durable_identity_drives_create_reconnect_update_and_termination() {
     let floor = req.egress.unwrap();
     assert_eq!(floor.default_action, "Allow");
     assert_eq!(floor.traffic_inspection.as_deref(), Some("Partial"));
-    assert_eq!(floor.host_rules[0].pattern, "127.0.0.1:3128");
-    assert_eq!(floor.host_rules.len(), 3);
-    assert_eq!(floor.host_rules[1].action, "Allow");
-    assert_eq!(
-        floor.host_rules[1].pattern,
-        h.reopen().await.gateway_admin_authority()
-    );
-    assert_eq!(floor.host_rules[2].action, "Deny");
-    assert_eq!(floor.host_rules[2].pattern, "*");
+    // Azure refuses a host:port pattern, and an IP host rule would not open a TCP port anyway:
+    // the single catch-all closes the :80/:443 interposer and the NSG carries the gateway path.
+    assert_eq!(floor.host_rules.len(), 1);
+    assert_eq!(floor.host_rules[0].action, "Deny");
+    assert_eq!(floor.host_rules[0].pattern, "*");
 
     // Reopening the manager loses all in-process state; the provider label remains authoritative.
     let reopened = AzureSandbox {
@@ -294,8 +401,8 @@ async fn a_changed_native_floor_is_refused_before_policy_updates() {
         .egress_policy
         .as_mut()
         .unwrap()
-        .host_rules
-        .reverse();
+        .host_rules[0]
+        .pattern = "example.com".into();
     let error = sandbox
         .update_egress(
             "571fa784-7be7-5d9e-9cff-8e9a11414684",
@@ -353,6 +460,31 @@ async fn admin_failure_discards_create_and_does_not_prevent_termination() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_failed_publish_keeps_its_cause_and_retryability_when_the_revocation_also_fails() {
+    let h = Harness::new().await;
+    // Both replicas are away (nothing listens there), so no replica acknowledges the new grant and
+    // the cleanup revocation cannot reach any either.
+    let (sandbox, record, _) = provider(
+        h.reopen_with_replicas(&["127.0.0.1", "127.0.0.2"]).await,
+        false,
+    );
+    let error = sandbox
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect_err("publish refused");
+    assert!(record.lock().unwrap().is_none(), "the sandbox is discarded");
+    assert_eq!(
+        error.code, "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE",
+        "{error:?}"
+    );
+    assert!(error.source.is_none(), "no revocation wrapper: {error:?}");
+    assert!(
+        error.retryable,
+        "the publish failure is retryable and the revocation failure must not override it: {error:?}"
+    );
+}
+
 #[tokio::test]
 async fn gateway_readback_refuses_changed_or_unknown_enforcement() {
     let h = Harness::new().await;
@@ -373,8 +505,8 @@ async fn gateway_readback_refuses_changed_or_unknown_enforcement() {
         ("/enforcementMode", serde_json::json!("Audit")),
         ("/http/enforcementMode", serde_json::json!("Audit")),
         ("/http/defaultAction", serde_json::json!("Deny")),
-        ("/http/hostRules/2/action", serde_json::json!("Allow")),
-        ("/hostRules/0/pattern", serde_json::json!("*")),
+        ("/http/hostRules/0/action", serde_json::json!("Allow")),
+        ("/hostRules/0/pattern", serde_json::json!("example.com")),
         ("/http", serde_json::json!(null)),
     ];
     for (path, value) in changes {

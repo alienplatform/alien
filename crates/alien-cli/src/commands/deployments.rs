@@ -1695,13 +1695,11 @@ async fn sign_config(
     let (chain, signer) =
         crate::signing::project_signer(&api, alien_signing::Role::Release).await?;
     let stored = api.config_statements(&deployment).await?;
-    let now = chrono::Utc::now();
     let (release_id, release) = release_for_config(ctx, target, &install.deployment).await?;
     let install = &install.id;
-    let mut body =
-        crate::signing::latest_config(&chain, install, &stored, now)?.unwrap_or_default();
+    let mut body = crate::signing::latest_config(&chain, install, &stored)?.unwrap_or_default();
     change(&mut body);
-    crate::signing::check_config_for_release(&chain, &release_id, &release, &body, now)?;
+    crate::signing::check_config_for_release(&chain, &release_id, &release, &body)?;
     let envelope =
         crate::signing::envelope(alien_signing::Kind::Config, &chain, Some(install), body);
     if let Some(gesture) = signer.gesture() {

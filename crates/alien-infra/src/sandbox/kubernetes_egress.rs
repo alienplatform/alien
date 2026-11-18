@@ -155,9 +155,11 @@ pub(super) async fn configure(
         // Writers resolve this relative name through their own search path, so a write
         // reaches every ready replica even if replica discovery is misconfigured.
         replicas: Some(SandboxEgressReplicas {
+            addresses: vec![],
             dns: format!("{peer}.{namespace}.svc"),
             port: 3129,
             count: gateway_replicas(ctx),
+            min_protocol: 0,
         }),
     }))
 }
@@ -743,9 +745,11 @@ mod tests {
         assert_eq!(
             gateway.replicas,
             Some(SandboxEgressReplicas {
+                addresses: vec![],
                 dns: "sandbox-egress-gateway-peers.test-ns.svc".into(),
                 port: 3129,
                 count: 1,
+                min_protocol: 0,
             })
         );
         let stored = vault.get_secret(egress::GATEWAY_CONFIG).await.unwrap();

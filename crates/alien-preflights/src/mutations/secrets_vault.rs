@@ -1055,6 +1055,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: IndexMap::from([(
                 "compute".to_string(),
@@ -1345,6 +1346,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1496,6 +1498,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2312,6 +2315,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2392,6 +2396,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2985,6 +2990,245 @@ mod tests {
         }
     }
 
+    /// A release that drops a deployer secret input mapped to a workload changes nothing the
+    /// developer declared on that workload's identity except the read grant the input implied.
+    /// Records what preparation produces for the installed stack and for the release without
+    /// the input.
+    async fn prepared_with_and_without_the_input(
+        platform: Platform,
+    ) -> (Stack, Stack, DeploymentConfig) {
+        let stack = deployer_secret_stack(&[("api", "api")], &["api"]);
+        let mut release = stack.clone();
+        release.inputs.clear();
+        prepared_pair(platform, stack, release).await
+    }
+
+    /// Prepares `installed` as setup would, records its frozen resources as installed state,
+    /// then prepares `release` against that state as an update does.
+    async fn prepared_pair(
+        platform: Platform,
+        stack: Stack,
+        release: Stack,
+    ) -> (Stack, Stack, DeploymentConfig) {
+        let mut state = StackState::new(platform);
+        let config = deployer_secret_config();
+        let prepare = |stack: Stack, state: StackState| {
+            let config = config.clone();
+            async move {
+                let stack = DeployerSecretsVaultMutation
+                    .mutate(stack, &state, &config)
+                    .await
+                    .unwrap();
+                ServiceAccountMutation
+                    .mutate(stack, &state, &config)
+                    .await
+                    .unwrap()
+            }
+        };
+        let installed = prepare(stack, state.clone()).await;
+        for (id, entry) in &installed.resources {
+            if entry.lifecycle == ResourceLifecycle::Frozen {
+                let mut resource = StackResourceState::new_pending(
+                    entry.config.resource_type().to_string(),
+                    entry.config.clone(),
+                    Some(entry.lifecycle),
+                    entry.dependencies.clone(),
+                );
+                resource.status = alien_core::ResourceStatus::Running;
+                state.resources.insert(id.clone(), resource);
+            }
+        }
+        let updated = prepare(release, state).await;
+        (installed, updated, config)
+    }
+
+    /// `stack` with `count` secret inputs `key0..` mapped to the `api` container.
+    fn stack_with_secrets(count: usize) -> Stack {
+        let mut stack = deployer_secret_stack(&[("api", "api")], &["api"]);
+        let template = stack.inputs[0].clone();
+        stack.inputs = (0..count)
+            .map(|index| {
+                let mut input = template.clone();
+                input.id = format!("key{index}");
+                input.env[0].name = format!("KEY_{index}");
+                input
+            })
+            .collect();
+        stack
+    }
+
+    async fn setup_check_errors(
+        platform: Platform,
+        installed: &Stack,
+        updated: &Stack,
+        config: &DeploymentConfig,
+    ) -> Vec<String> {
+        let mut errors = PermissionProfilesUnchangedCheck
+            .check_with_config(installed, updated, config, platform)
+            .await
+            .unwrap()
+            .errors;
+        errors.extend(
+            FrozenResourcesUnchangedCheck { platform }
+                .check_with_config(installed, updated, config, platform)
+                .await
+                .unwrap()
+                .errors,
+        );
+        errors
+    }
+
+    /// The shape that blocked a real deployment: a workload that keeps several other secrets
+    /// when one is removed. The read grant keeps its id and its body shrinks.
+    #[tokio::test]
+    async fn removing_one_of_eight_secrets_is_not_a_setup_change_but_swapping_one_is() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let mut removed = stack_with_secrets(8);
+            removed.inputs.remove(3);
+            let (installed, updated, config) =
+                prepared_pair(platform, stack_with_secrets(8), removed).await;
+            let errors = setup_check_errors(platform, &installed, &updated, &config).await;
+            assert!(errors.is_empty(), "{platform:?}: {errors:?}");
+
+            // One removed and a new one added: the grant gains a resource.
+            let mut swapped = stack_with_secrets(8);
+            swapped.inputs.remove(3);
+            let mut added = swapped.inputs[0].clone();
+            added.id = "newKey".to_string();
+            added.env[0].name = "NEW_KEY".to_string();
+            swapped.inputs.push(added);
+            let (installed, updated, config) =
+                prepared_pair(platform, stack_with_secrets(8), swapped).await;
+            let errors = setup_check_errors(platform, &installed, &updated, &config).await;
+            assert!(!errors.is_empty(), "{platform:?}");
+        }
+    }
+
+    /// Another profile with a stack-wide vault grant is denied the slots it does not map.
+    /// Removing a slot shrinks that deny, which is a widening: it needs setup.
+    #[tokio::test]
+    async fn a_shrinking_deny_of_another_profile_still_needs_setup() {
+        let platform = Platform::Aws;
+        let with_other = |count: usize| {
+            let mut stack = stack_with_secrets(count);
+            let (id, resource) = (
+                "other".to_string(),
+                deployer_secret_container("other", "other"),
+            );
+            stack.resources.insert(id, resource);
+            stack.permissions.profiles.insert(
+                "other".to_string(),
+                PermissionProfile::new().global(["vault/data-read"]),
+            );
+            stack
+        };
+        let mut removed = with_other(3);
+        removed.inputs.remove(1);
+        let (installed, updated, config) = prepared_pair(platform, with_other(3), removed).await;
+        let errors = setup_check_errors(platform, &installed, &updated, &config).await;
+        assert!(
+            errors.iter().any(|error| error.contains("'other'")),
+            "{errors:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_a_deployer_secret_input_is_not_a_setup_change() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let (installed, updated, config) = prepared_with_and_without_the_input(platform).await;
+            // The installed vault stays in the target for the install, only its grant goes.
+            assert!(
+                updated.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID),
+                "{platform:?}"
+            );
+            for result in [
+                PermissionProfilesUnchangedCheck
+                    .check_with_config(&installed, &updated, &config, platform)
+                    .await
+                    .unwrap(),
+                FrozenResourcesUnchangedCheck { platform }
+                    .check_with_config(&installed, &updated, &config, platform)
+                    .await
+                    .unwrap(),
+            ] {
+                assert!(
+                    result.errors.is_empty(),
+                    "{platform:?}: {:?}",
+                    result.errors
+                );
+            }
+        }
+    }
+
+    /// After a release dropped its secret input and setup later removed the grant and the vault,
+    /// the next release neither pauses nor brings the vault or the grant back, and what
+    /// registration prepares from the setup equals what the update prepares from its state.
+    #[tokio::test]
+    async fn a_removed_secret_input_stays_removed_after_setup_removed_its_vault() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let (installed, _narrowed, config) =
+                prepared_with_and_without_the_input(platform).await;
+            let mut release = deployer_secret_stack(&[("api", "api")], &["api"]);
+            release.inputs.clear();
+            let prepare = |state: StackState| {
+                let (release, config) = (release.clone(), config.clone());
+                async move {
+                    let stack = DeployerSecretsVaultMutation
+                        .mutate(release, &state, &config)
+                        .await
+                        .unwrap();
+                    ServiceAccountMutation
+                        .mutate(stack, &state, &config)
+                        .await
+                        .unwrap()
+                }
+            };
+            // What registration prepares: no state, no inputs.
+            let registered = prepare(StackState::new(platform)).await;
+            // The state after setup: the account is imported, the vault is gone.
+            let mut after_setup = StackState::new(platform);
+            let account = &registered.resources["api-sa"];
+            let mut resource = StackResourceState::new_pending(
+                account.config.resource_type().to_string(),
+                account.config.clone(),
+                Some(account.lifecycle),
+                account.dependencies.clone(),
+            );
+            resource.status = alien_core::ResourceStatus::Running;
+            after_setup.resources.insert("api-sa".to_string(), resource);
+            let next = prepare(after_setup).await;
+
+            assert!(
+                !next.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID),
+                "{platform:?}"
+            );
+            assert_eq!(registered.setup_update_digest(), next.setup_update_digest());
+            for result in [
+                PermissionProfilesUnchangedCheck
+                    .check_with_config(&registered, &next, &config, platform)
+                    .await
+                    .unwrap(),
+                FrozenResourcesUnchangedCheck { platform }
+                    .check_with_config(&registered, &next, &config, platform)
+                    .await
+                    .unwrap(),
+            ] {
+                assert!(result.success, "{platform:?}: {:?}", result.errors);
+                assert!(
+                    result.warnings.is_empty(),
+                    "{platform:?}: {:?}",
+                    result.warnings
+                );
+            }
+            // Putting the input back needs a vault and a grant setup has not made.
+            let readded = FrozenResourcesUnchangedCheck { platform }
+                .check_with_config(&next, &installed, &config, platform)
+                .await
+                .unwrap();
+            assert!(!readded.success, "{platform:?}");
+        }
+    }
+
     #[tokio::test]
     async fn installed_vault_does_not_turn_stored_only_mappings_into_slots() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
@@ -3125,6 +3369,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -3214,6 +3459,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -3303,6 +3549,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -3373,6 +3620,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: resources.clone(),
             permissions: PermissionsConfig {
@@ -3471,6 +3719,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -3568,6 +3817,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -3640,6 +3890,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {

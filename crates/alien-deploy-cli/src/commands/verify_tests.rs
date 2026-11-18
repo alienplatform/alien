@@ -31,6 +31,7 @@ pub(crate) fn signer(
         id: id.to_string(),
         key: key(seed).public_key().as_str().to_string(),
         kind,
+        backend: None,
         roles: roles.to_vec(),
         label: label.map(str::to_string),
     }
@@ -69,7 +70,7 @@ pub(crate) fn genesis() -> SignedStatement {
         Kind::SignerList,
         1,
         1,
-        Some(now() + Duration::days(80)),
+        None,
         SignerListBody {
             previous: None,
             admin_threshold: 1,
@@ -78,7 +79,7 @@ pub(crate) fn genesis() -> SignedStatement {
                     "alice-mbp",
                     1,
                     SignerKind::Device,
-                    &[Role::Release, Role::Operate, Role::Admin],
+                    &[Role::Release, Role::Admin],
                     Some("alice@acme.com"),
                 ),
                 signer(
@@ -91,6 +92,7 @@ pub(crate) fn genesis() -> SignedStatement {
                 signer("recovery", 3, SignerKind::Recovery, &[Role::Admin], None),
             ],
             deny: Vec::new(),
+            keep: Vec::new(),
             recovered: false,
         },
         &[("alice-mbp", 1)],
@@ -168,15 +170,14 @@ fn release(channel: &str, sequence: u64, template: &str, by: (&str, u8)) -> Sign
     )
 }
 
-fn ledger(running: Option<&SignedStatement>) -> Vec<u8> {
-    let mut ledger = serde_json::json!({
+fn ledger() -> Vec<u8> {
+    let ledger = serde_json::json!({
         "prefix": PREFIX,
         "created": true,
         "fingerprint": fingerprint(),
         "install": format!("aws:111122223333:us-east-1:{PREFIX}"),
         "signerList": { "sequence": 1, "digest": genesis().open().unwrap().digest },
     });
-    let _ = running;
     ledger.to_string().into_bytes()
 }
 
@@ -205,7 +206,7 @@ fn observed() -> Observed {
             .into_bytes(),
             Some(now() - Duration::days(1)),
         )),
-        ledger: Some(ledger(Some(&running))),
+        ledger: Some(ledger()),
         signer_lists: vec![genesis()],
         releases: vec![
             ("2026-11-04.3".to_string(), running),
@@ -326,7 +327,7 @@ fn a_protected_stack_that_matches_its_signed_release_passes_on_one_screen() {
              Template             matches release 2026-11-04.3 · production · {template}  ✓\n\
              Parameters           fingerprint pinned · 4 customer choices allowed  ✓\n\
              Managed by           arn:aws:iam::999988887777:role/vendor-manager · with an external id\n\
-             Trusted keys         alice@acme.com, GitHub Actions (acme/app), recovery  (list v1, expires 2027-01-24)\n"
+             Trusted keys         alice@acme.com, GitHub Actions (acme/app), recovery  (list v1)\n"
         )
     );
 }
@@ -428,7 +429,7 @@ fn a_control_plane_that_signs_its_own_release_or_list_is_not_believed() {
         Kind::SignerList,
         1,
         1,
-        Some(now() + Duration::days(80)),
+        None,
         body,
         &[("alice-mbp", 9)],
     )];
@@ -479,11 +480,28 @@ fn a_release_whose_signer_was_removed_keeps_running_and_says_so() {
     let mut body: SignerListBody = genesis().open().unwrap().body().unwrap();
     body.previous = Some(genesis().open().unwrap().digest);
     body.signers.retain(|signer| signer.kind != SignerKind::Ci);
+    // The admins keep the release the removed key signed.
+    for (_, statement) in &observed.releases {
+        let opened = statement.open().unwrap();
+        if opened
+            .signatures
+            .iter()
+            .any(|s| s.signer == "github-acme-app")
+        {
+            body.keep.push(alien_signing::Keep {
+                digest: opened.digest,
+                kind: alien_signing::KeptKind::Release,
+                release_id: None,
+                sequence: opened.sequence,
+            });
+        }
+    }
+    assert_eq!(body.keep.len(), 1);
     observed.signer_lists.push(signed(
         Kind::SignerList,
         2,
         1,
-        Some(now() + Duration::days(85)),
+        None,
         body,
         &[("alice-mbp", 1)],
     ));

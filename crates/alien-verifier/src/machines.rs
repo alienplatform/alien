@@ -337,6 +337,19 @@ pub struct ImageFacts {
     pub created: DateTime<Utc>,
     /// Size of its root disk in GiB; a machine's root disk can't be smaller.
     pub root_disk_gib: u32,
+    /// The machine agent build (`sha256:<hex>`) the publisher says the image
+    /// carries, read from the image's description. `None` when it names none.
+    pub machine_agent: Option<String>,
+}
+
+/// The machine agent digest a publisher records in an image description as
+/// `machine-agent=sha256:<64 hex digits>`.
+pub fn machine_agent_from_description(description: &str) -> Option<String> {
+    let rest = description.split("machine-agent=").nth(1)?;
+    let digest = rest.split_whitespace().next()?;
+    let hex = digest.strip_prefix("sha256:")?;
+    (hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| digest.to_ascii_lowercase())
 }
 
 /// The images this build boots, compiled in by the release workflow.
@@ -496,10 +509,27 @@ pub fn roll_basics(
     };
     // Machines run only the agent build the signed release pins; one that
     // pins none boots nothing.
-    if !release.components.contains_key(component) {
+    let Some(pinned) = release.components.get(component) else {
         return Err(refused(format!(
             "the release pins no {component} build, so no machine may boot it"
         )));
+    };
+    // The image must carry that build, not just any build for its
+    // architecture.
+    match image.machine_agent.as_deref() {
+        Some(carried) if carried.eq_ignore_ascii_case(pinned.as_str()) => {}
+        Some(carried) => {
+            return Err(refused(format!(
+                "image {} carries machine agent {carried}, not the {pinned} the release pins for {component}",
+                request.machine_image
+            )))
+        }
+        None => {
+            return Err(refused(format!(
+                "image {} does not say which machine agent build it carries, so it cannot be matched to the release's pin",
+                request.machine_image
+            )))
+        }
     }
     let image_disk = i32::try_from(image.root_disk_gib).map_err(|_| {
         refused(format!(
@@ -849,6 +879,10 @@ impl<E: Ec2Api, A: AutoScalingApi> MachineApi for AwsMachines<E, A> {
                     architecture: image.architecture.ok_or_else(|| missing("architecture"))?,
                     created: created.with_timezone(&Utc),
                     root_disk_gib: root_disk,
+                    machine_agent: image
+                        .description
+                        .as_deref()
+                        .and_then(machine_agent_from_description),
                 })
             })
             .transpose()
@@ -1121,7 +1155,42 @@ mod tests {
             architecture: "arm64".to_string(),
             created: "2026-09-01T00:00:00Z".parse().unwrap(),
             root_disk_gib: 8,
+            machine_agent: Some(AGENT.to_string()),
         }
+    }
+
+    #[test]
+    fn an_image_must_carry_the_agent_build_the_release_pins() {
+        let other = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+        let roll = |agent: Option<&str>| {
+            plan_roll(
+                &place(),
+                &release(),
+                &request(),
+                &pins(),
+                &ImageFacts {
+                    machine_agent: agent.map(str::to_string),
+                    ..arm_image(PUBLISHER)
+                },
+            )
+        };
+        roll(Some(AGENT)).unwrap();
+        assert!(reason(roll(Some(other))).contains(&format!("carries machine agent {other}")));
+        assert!(reason(roll(None)).contains("does not say which machine agent build"));
+    }
+
+    #[test]
+    fn the_agent_digest_is_read_from_the_image_description() {
+        let hex = "2".repeat(64);
+        assert_eq!(
+            machine_agent_from_description(&format!("Machine image machine-agent=sha256:{hex} v3")),
+            Some(format!("sha256:{hex}"))
+        );
+        assert_eq!(
+            machine_agent_from_description("machine-agent=sha256:abc"),
+            None
+        );
+        assert_eq!(machine_agent_from_description("no digest"), None);
     }
 
     #[test]

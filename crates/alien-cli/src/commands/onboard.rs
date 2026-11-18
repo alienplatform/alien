@@ -2117,7 +2117,7 @@ impl HelmInstall {
              printf '%s' \"$ALIEN_TOKEN\" | helm registry login {registry}{login_flags} --username {customer} --password-stdin\n\n\
              printf 'management:\\n  token: %s\\n' \"$ALIEN_TOKEN\" | \\\n\
              helm install {release} {chart}{install_flags} \\\n  \
-             --namespace {release} --create-namespace \\\n  \
+             --namespace {release} --create-namespace --timeout 15m \\\n  \
              --set management.name={customer}{values} \\\n  \
              --values -",
             registry = self.registry(),
@@ -2346,6 +2346,8 @@ mod tests {
             command.contains("helm install test-stack oci://m.example.com/charts/test-stack \\")
         );
         assert!(command.contains("--set management.name=c1"));
+        // The setup check hook may take several minutes on slow nodes; Helm's default is 5.
+        assert!(command.contains("--timeout 15m"));
         assert!(command.ends_with("--values -"));
         assert!(!command.contains("--plain-http"));
         assert!(

@@ -46,7 +46,7 @@ pub struct AzureNetworkImportData {
     pub is_byo_vnet: bool,
 }
 
-/// Setup-owned subnet coordinates consumed by an internal sandbox gateway load balancer.
+/// Setup-owned subnet coordinates consumed by the sandbox gateway VMs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
@@ -54,7 +54,7 @@ pub struct AzureNetworkImportData {
 pub struct AzureSandboxNetwork {
     /// Dedicated delegated subnets whose sandboxes use the gateway.
     pub sandbox_subnet_ids: Vec<String>,
-    /// Undelegated subnet reserved for the gateway load balancer's frontend.
+    /// Undelegated subnet reserved for the gateway replicas' static NICs.
     pub gateway_subnet_ids: Vec<String>,
     /// Sandbox source ranges allowed on the proxy listener.
     pub sandbox_cidrs: Vec<String>,
@@ -64,6 +64,10 @@ pub struct AzureSandboxNetwork {
     /// Gateway ranges allowed by the sandbox subnet NSGs on TCP 3128. Deployments set up before
     /// the admin port was removed from that rule also allow TCP 3129; both are accepted.
     pub gateway_cidrs: Vec<String>,
+    /// Static private IPs of the setup-created gateway VMs (one per replica). Setup releases
+    /// that predate the VMs leave this empty, and Internet sandboxes then refuse to start.
+    #[serde(default)]
+    pub gateway_ips: Vec<String>,
     /// Workload source ranges allowed on the authenticated admin listener.
     pub workload_cidrs: Vec<String>,
     /// Every VNet range excluded from gateway destinations.

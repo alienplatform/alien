@@ -64,8 +64,40 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                         sandbox.id()
                     ));
                 }
+                // Azure hosts the gateway as two VMs that setup creates in the deployment's VNet,
+                // and the sandbox reaches it through the agent's startup gate. A catalog image
+                // runs no agent, so nothing inside it could prove or use that path.
+                if platform == Platform::Azure
+                    && sandbox.egress == SandboxEgress::Internet
+                    && matches!(sandbox.azure_image(), Ok(AzureSandboxImage::Catalog(_)))
+                {
+                    return Some(format!(
+                        "Sandbox '{}': SANDBOX_EGRESS_GATEWAY_UNAVAILABLE: egress internet on Azure \
+                         needs an image with the Alien sandbox agent, and a catalog image has none; \
+                         use an OCI registry image or a Dockerfile",
+                        sandbox.id()
+                    ));
+                }
+                // Setup would build the gateway VMs before the first sandbox create could find
+                // out the gateway image cannot serve the sandbox binding, so every path that
+                // builds, renders or deploys the stack refuses it first.
+                if platform == Platform::Azure
+                    && sandbox.egress == SandboxEgress::Internet
+                    && !alien_core::sandbox_egress::gateway_image_serves_admin_protocol(
+                        alien_core::sandbox_egress::planned_gateway_image(stack),
+                    )
+                {
+                    return Some(format!(
+                        "Sandbox '{}': {}",
+                        sandbox.id(),
+                        alien_core::sandbox_egress::AZURE_INTERNET_SANDBOX_UNAVAILABLE
+                    ));
+                }
                 if sandbox.egress == SandboxEgress::Internet
-                    && !matches!(platform, Platform::Aws | Platform::Kubernetes | Platform::Gcp)
+                    && !matches!(
+                        platform,
+                        Platform::Aws | Platform::Kubernetes | Platform::Azure | Platform::Gcp
+                    )
                 {
                     return Some(format!(
                         "Sandbox '{}': SANDBOX_EGRESS_GATEWAY_UNAVAILABLE: {platform} does not yet \
@@ -168,6 +200,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -476,12 +509,124 @@ mod tests {
         }
     }
 
+    /// The gateway image this release installs cannot serve the Azure sandbox binding, so an
+    /// Azure internet stack is refused at build and render, before setup creates the gateway VMs.
+    /// Other clouds and other egress modes are unaffected, and a newer gateway digest lifts it.
+    #[tokio::test]
+    async fn azure_internet_is_refused_until_the_gateway_serves_the_admin_protocol() {
+        let internet = |id: &str, egress: SandboxEgress| {
+            let mut value = sandbox(id, None, egress);
+            value.code = SandboxCode::Image {
+                image: "example.azurecr.io/agent:1".to_string(),
+                bundled_from: None,
+            };
+            stack_with(value)
+        };
+        let refused = SandboxPlatformSupportCheck
+            .check(&internet("agent", SandboxEgress::Internet), Platform::Azure)
+            .await
+            .unwrap();
+        assert!(!refused.success);
+        assert_eq!(
+            refused.errors,
+            vec![format!(
+                "Sandbox 'agent': {}",
+                alien_core::sandbox_egress::AZURE_INTERNET_SANDBOX_UNAVAILABLE
+            )]
+        );
+
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Kubernetes] {
+            let result = SandboxPlatformSupportCheck
+                .check(&internet("agent", SandboxEgress::Internet), platform)
+                .await
+                .unwrap();
+            assert!(result.success, "{platform}: {:?}", result.errors);
+        }
+        for egress in [SandboxEgress::None, SandboxEgress::Allow] {
+            let result = SandboxPlatformSupportCheck
+                .check(&internet("agent", egress), Platform::Azure)
+                .await
+                .unwrap();
+            assert!(result.success, "{:?}", result.errors);
+        }
+
+        // A stack whose gateway already names a newer digest is accepted.
+        let gateway_id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+        let mut newer = internet("agent", SandboxEgress::Internet);
+        newer.resources.insert(
+            gateway_id.into(),
+            ResourceEntry {
+                config: alien_core::Resource::new(
+                    alien_core::Container::new(gateway_id.into())
+                        .code(alien_core::ContainerCode::Image {
+                            image: "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000001".into(),
+                        })
+                        .cpu(alien_core::ResourceSpec {
+                            min: "0.25".into(),
+                            desired: "0.25".into(),
+                        })
+                        .memory(alien_core::ResourceSpec {
+                            min: "512Mi".into(),
+                            desired: "512Mi".into(),
+                        })
+                        .replicas(1)
+                        .permissions(gateway_id.into())
+                        .port(3128)
+                        .build(),
+                ),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: vec![],
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let accepted = SandboxPlatformSupportCheck
+            .check(&newer, Platform::Azure)
+            .await
+            .unwrap();
+        assert!(accepted.success, "{:?}", accepted.errors);
+    }
+
+    /// `alien build`, `alien release` and the Terraform/CloudFormation render all run these
+    /// checks, so none of them reaches the point of creating gateway VMs.
+    #[tokio::test]
+    async fn build_and_template_preflights_refuse_azure_internet() {
+        let mut value = sandbox("agent", None, SandboxEgress::Internet);
+        value.code = SandboxCode::Image {
+            image: "example.azurecr.io/agent:1".to_string(),
+            bundled_from: None,
+        };
+        let stack = stack_with(value);
+        let runner = crate::runner::PreflightRunner::new();
+        let build = runner
+            .run_build_time_preflights(&stack, Platform::Azure)
+            .await
+            .expect_err("build refuses");
+        let template = runner
+            .run_template_preflights(&stack, Platform::Azure)
+            .await
+            .expect_err("render refuses");
+        for error in [format!("{build:?}"), format!("{template:?}")] {
+            assert!(
+                error.contains(alien_core::sandbox_egress::AZURE_INTERNET_SANDBOX_UNAVAILABLE),
+                "{error}"
+            );
+        }
+        assert!(runner
+            .run_build_time_preflights(&stack, Platform::Aws)
+            .await
+            .is_ok());
+    }
+
     #[tokio::test]
     async fn a_stack_with_no_sandbox_is_not_checked() {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: alien_core::permissions::PermissionsConfig::default(),

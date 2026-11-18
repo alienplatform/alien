@@ -52,6 +52,8 @@ fn free_port() -> u16 {
 /// A TPM simulator, unless the environment already names one.
 struct Tpm {
     tcti: String,
+    /// "software" makes the CLI use software keys even where tpm2-tools exist.
+    backend: &'static str,
     _process: Option<Process>,
     _state: TempDir,
 }
@@ -61,6 +63,7 @@ fn start_tpm() -> Tpm {
     if let Ok(tcti) = std::env::var("TPM2TOOLS_TCTI") {
         return Tpm {
             tcti,
+            backend: "",
             _process: None,
             _state: state,
         };
@@ -96,6 +99,7 @@ fn start_tpm() -> Tpm {
     }
     Tpm {
         tcti,
+        backend: "",
         _process: Some(Process(child)),
         _state: state,
     }
@@ -204,6 +208,7 @@ impl World {
             .env("ALIEN_SIGNING_HOME", person.home.join("signing"))
             .env("ALIEN_DEVICE_KEY_PIN", PIN)
             .env("TPM2TOOLS_TCTI", &self.tpm.tcti)
+            .env("ALIEN_DEVICE_KEY_BACKEND", &self.tpm.backend)
             .env("USER", person.name)
             .env("GIT_CONFIG_GLOBAL", person.home.join("gitconfig"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -496,7 +501,7 @@ async fn lists(manager: &Manager) -> Vec<SignedStatement> {
 }
 
 async fn chain(manager: &Manager, fingerprint: &str) -> SignerChain {
-    SignerChain::from_statements(fingerprint, &lists(manager).await, chrono::Utc::now())
+    SignerChain::from_statements(fingerprint, &lists(manager).await)
         .expect("the stored lists verify from the fingerprint")
 }
 
@@ -526,7 +531,6 @@ async fn newest_release(manager: &Manager, fingerprint: &str) -> Option<String> 
         InstallId::parse(&format!("aws:111122223333:us-east-1:{prefix}")).unwrap(),
         &lists(manager).await,
         &Ledger::new(prefix),
-        chrono::Utc::now(),
     )
     .unwrap();
     let verified: alien_signing::Verified<ReleaseBody> = trust
@@ -745,7 +749,7 @@ async fn signing_from_first_release_to_recovery() {
     );
     assert!(
         output.contains(&format!(
-            "Asked admins (alice@example.com) to trust {bob_id}."
+            "Asked admins (alice@example.com) to trust {bob_id} (tpm)."
         )),
         "{output}"
     );
@@ -762,7 +766,9 @@ async fn signing_from_first_release_to_recovery() {
         &[("Code from Bob ▸", "0000-0000-0000-0000\n")],
     ));
     assert!(
-        output.contains(&format!("{bob_id} (bob@example.com) asks to: release")),
+        output.contains(&format!(
+            "{bob_id} (bob@example.com) · tpm asks to: release"
+        )),
         "{output}"
     );
     assert!(output.contains("That isn't the pairing code"), "{output}");
@@ -891,11 +897,20 @@ async fn signing_from_first_release_to_recovery() {
     );
 
     // CI is not an admin: it can't approve or change the devices.
-    let output = failed(world.run_ci(&app, &ci_key, &["devices", "remove", bob_id]));
+    let output = failed(world.run_ci(
+        &app,
+        &ci_key,
+        &["devices", "remove", bob_id, "--keep-running"],
+    ));
     assert!(output.contains("This device"), "{output}");
 
     // Bob is removed; his device can no longer sign.
-    let output = ok(world.run_in_terminal(&alice, &app, &["devices", "remove", bob_id], &[]));
+    let output = ok(world.run_in_terminal(
+        &alice,
+        &app,
+        &["devices", "remove", bob_id, "--keep-running"],
+        &[],
+    ));
     assert!(
         output.contains(&format!("{bob_id} can no longer sign")),
         "{output}"
@@ -947,6 +962,7 @@ async fn signing_from_first_release_to_recovery() {
         id: "attacker".to_string(),
         key: attacker.public_key().as_str().to_string(),
         kind: alien_signing::SignerKind::Ci,
+        backend: None,
         roles: vec![alien_signing::Role::Release, alien_signing::Role::Admin],
         label: None,
     });
@@ -956,7 +972,7 @@ async fn signing_from_first_release_to_recovery() {
             project: PROJECT.to_string(),
             install: None,
             sequence: restored.current().version + 1,
-            not_after: Some(chrono::Utc::now() + chrono::Duration::days(30)),
+            not_after: None,
             signer_list_version: restored.current().version,
             body,
         }
@@ -1150,4 +1166,284 @@ async fn setup_templates_are_stored_as_signed() {
         );
         assert_eq!(bytes, rendered[name].bytes, "{name}");
     }
+}
+
+/// A TPM stand-in for a test that signs with software device keys only.
+fn no_tpm() -> Tpm {
+    Tpm {
+        tcti: "none".to_string(),
+        backend: "software",
+        _process: None,
+        _state: TempDir::new().unwrap(),
+    }
+}
+
+/// Every release statement for the `test` platform the manager holds, with its id.
+async fn release_statements(manager: &Manager) -> Vec<(String, SignedStatement)> {
+    get(manager, "/v1/releases").await["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|release| !release["signedStacks"]["test"].is_null())
+        .map(|release| {
+            (
+                release["id"].as_str().unwrap().to_string(),
+                serde_json::from_value(release["signedStacks"]["test"].clone()).unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn protected_trust(fingerprint: &str, lists: &[SignedStatement], ledger: &Ledger) -> Trust {
+    let prefix = "acme-prod";
+    Trust::new(
+        SigningSettings {
+            fingerprint: fingerprint.to_string(),
+            prefix: prefix.to_string(),
+            channel: "production".to_string(),
+        },
+        InstallId::parse(&format!("aws:111122223333:us-east-1:{prefix}")).unwrap(),
+        lists,
+        ledger,
+    )
+    .unwrap()
+}
+
+/// Removing or rotating a CI key keeps the release that runs, prints it, and the signer
+/// list carries it: a machine or instance with an empty ledger accepts it. A new release by
+/// the removed key is refused, even with its digest in the ledger. `--revoke` keeps none.
+#[tokio::test]
+#[ignore = "needs script"]
+async fn rotating_a_key_keeps_what_runs_and_revoke_keeps_nothing() {
+    let work = TempDir::new().unwrap();
+    let gh_dir = fake_gh(work.path());
+    let world = World {
+        manager: start_manager().await,
+        tpm: no_tpm(),
+        gh_dir,
+        work,
+    };
+    let alice = world.person("alice");
+    let app = world.checkout("app");
+    ok(world.run_in_terminal(
+        &alice,
+        &app,
+        &["devices", "init"],
+        &[("last 4 characters", "{recovery-tail}\n")],
+    ));
+    let pin: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(app.join(".alien/signing.json")).unwrap()).unwrap();
+    let fingerprint = pin["fingerprint"].as_str().unwrap().to_string();
+
+    // A CI key signs the release that is current on production.
+    let ci_file = world.work.path().join("ci.pem");
+    ok(world.run(
+        &alice,
+        &app,
+        &[
+            "devices",
+            "add-key",
+            "ci",
+            "--out",
+            ci_file.to_str().unwrap(),
+        ],
+    ));
+    let ci_key = std::fs::read_to_string(&ci_file).unwrap();
+    ok(world.run_ci(&app, &ci_key, RELEASE));
+    let releases = release_statements(&world.manager).await;
+    assert_eq!(releases.len(), 1);
+    let (release1_id, release1) = releases[0].clone();
+    let opened1 = release1.open().unwrap();
+
+    // Rotating it keeps that release by default, and prints exactly what it keeps.
+    // A key that can't be written is never trusted: nothing is published.
+    let before = lists(&world.manager).await.len();
+    let unwritable = ci_file.join("inside-a-file.pem");
+    for args in [
+        vec!["devices", "rotate", "ci", "--keep-running"],
+        vec!["devices", "add-key", "never"],
+    ] {
+        let mut args = args;
+        args.extend(["--out", unwritable.to_str().unwrap()]);
+        failed(world.run(&alice, &app, &args));
+        assert_eq!(
+            lists(&world.manager).await.len(),
+            before,
+            "{args:?} published a list although the key was not written"
+        );
+    }
+
+    let ci2_file = world.work.path().join("ci2.pem");
+    let output = ok(world.run(
+        &alice,
+        &app,
+        &[
+            "devices",
+            "rotate",
+            "ci",
+            "--keep-running",
+            "--out",
+            ci2_file.to_str().unwrap(),
+        ],
+    ));
+    println!("--- rotate ci\n{output}");
+    assert!(
+        output.contains("Keeping these 1 statement(s) ci signed"),
+        "{output}"
+    );
+    assert!(output.contains(&opened1.digest), "{output}");
+    assert!(output.contains("current on production"), "{output}");
+    assert!(
+        output.contains(&format!("called {release1_id} by the control plane")),
+        "{output}"
+    );
+    let lists_now = lists(&world.manager).await;
+    let chain_now = SignerChain::from_statements(&fingerprint, &lists_now).unwrap();
+    let kept = &chain_now.current().body.keep;
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(kept[0].digest, opened1.digest);
+    assert_eq!(kept[0].sequence, opened1.sequence);
+
+    // The release the old key signed still runs: an enforcer with an empty ledger (a new
+    // machine, a new Operator instance) accepts it from the list alone.
+    let empty = Ledger::new("acme-prod");
+    let new_machine = protected_trust(&fingerprint, &lists_now, &empty);
+    let verified = new_machine
+        .verify_release(&release1, chrono::Utc::now())
+        .expect("a kept release runs on a new machine");
+    assert!(verified.kept);
+
+    // A new release by the removed key is refused: by the CLI, and by an enforcer, even
+    // after its digest is written into the ledger by hand.
+    let output = ok(world.run_ci(&app, &ci_key, RELEASE));
+    assert!(
+        output.contains("not signed: the CI key isn't on the device list"),
+        "the removed key signs nothing: {output}"
+    );
+    assert_eq!(
+        release_statements(&world.manager).await.len(),
+        1,
+        "the release the removed key made is unsigned"
+    );
+    let old_key = SecretKey::from_pkcs8_pem(&ci_key).unwrap();
+    let body: ReleaseBody = opened1.body().unwrap();
+    let by_old_key = SignedStatement::new(
+        &alien_signing::Envelope {
+            kind: alien_signing::Kind::Release.as_str().to_string(),
+            project: PROJECT.to_string(),
+            install: None,
+            sequence: opened1.sequence + 1,
+            not_after: None,
+            signer_list_version: 1,
+            body,
+        }
+        .to_payload()
+        .unwrap(),
+    )
+    .sign_with("ci", &old_key)
+    .unwrap();
+    let error = new_machine
+        .verify_release(&by_old_key, chrono::Utc::now())
+        .unwrap_err();
+    assert_eq!(error.code, "SIGNING_SIGNATURE_REFUSED", "{error:?}");
+
+    // The new key signs the next release, which is current from now on.
+    let ci2_key = std::fs::read_to_string(&ci2_file).unwrap();
+    ok(world.run_ci(&app, &ci2_key, RELEASE));
+    // A second CI key signs one more; rotating it with --revoke keeps none of it.
+    let ci_b_file = world.work.path().join("ci-b.pem");
+    ok(world.run(
+        &alice,
+        &app,
+        &[
+            "devices",
+            "add-key",
+            "ci-b",
+            "--out",
+            ci_b_file.to_str().unwrap(),
+        ],
+    ));
+    let ci_b_key = std::fs::read_to_string(&ci_b_file).unwrap();
+    ok(world.run_ci(&app, &ci_b_key, RELEASE));
+    let releases = release_statements(&world.manager).await;
+    let by_b = releases
+        .iter()
+        .find(|(_, statement)| {
+            statement
+                .open()
+                .unwrap()
+                .signatures
+                .iter()
+                .any(|signature| signature.signer == "ci-b")
+        })
+        .unwrap()
+        .1
+        .clone();
+    let ci_b2_file = world.work.path().join("ci-b2.pem");
+    let output = ok(world.run(
+        &alice,
+        &app,
+        &[
+            "devices",
+            "rotate",
+            "ci-b",
+            "--revoke",
+            "--out",
+            ci_b2_file.to_str().unwrap(),
+        ],
+    ));
+    println!("--- rotate ci-b --revoke\n{output}");
+    assert!(output.contains("--revoke: keeping none"), "{output}");
+    assert!(output.contains(&by_b.open().unwrap().digest), "{output}");
+    let lists_now = lists(&world.manager).await;
+    let chain_now = SignerChain::from_statements(&fingerprint, &lists_now).unwrap();
+    assert_eq!(
+        chain_now.current().body.keep.len(),
+        1,
+        "keep is carried, not extended"
+    );
+    let trust = protected_trust(&fingerprint, &lists_now, &Ledger::new("acme-prod"));
+    assert_eq!(
+        trust
+            .verify_release(&by_b, chrono::Utc::now())
+            .unwrap_err()
+            .code,
+        "SIGNING_SIGNATURE_REFUSED"
+    );
+    // What was kept earlier is carried into the later list versions.
+    trust
+        .verify_release(&release1, chrono::Utc::now())
+        .expect("keep is carried into later list versions");
+
+    // `alien releases revoke --sequence` prints every entry it adds, and then even a kept
+    // release is refused.
+    let output = ok(world.run(
+        &alice,
+        &app,
+        &[
+            "releases",
+            "revoke",
+            "--sequence",
+            &opened1.sequence.to_string(),
+        ],
+    ));
+    println!("--- releases revoke --sequence\n{output}");
+    assert!(
+        output.contains(&format!("Release signed as {}", opened1.sequence)),
+        "{output}"
+    );
+    assert!(output.contains("Adding 2 deny-list entries"), "{output}");
+    assert!(
+        output.contains(&format!("called {release1_id} by the control plane")),
+        "{output}"
+    );
+    let lists_now = lists(&world.manager).await;
+    let trust = protected_trust(&fingerprint, &lists_now, &Ledger::new("acme-prod"));
+    assert_eq!(
+        trust
+            .verify_release(&release1, chrono::Utc::now())
+            .unwrap_err()
+            .code,
+        "SIGNING_DENIED"
+    );
 }

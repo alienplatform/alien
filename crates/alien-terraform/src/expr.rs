@@ -25,6 +25,15 @@ pub fn raw(text: impl AsRef<str>) -> Expression {
     parse(text.as_ref()).unwrap_or_else(|_| Expression::String(text.as_ref().to_string()))
 }
 
+/// `yamlencode(...)` HCL function call.
+pub fn yamlencode(value: Expression) -> Expression {
+    Expression::FuncCall(Box::new(
+        hcl::expr::FuncCall::builder(hcl::Identifier::sanitized("yamlencode"))
+            .arg(value)
+            .build(),
+    ))
+}
+
 /// `jsonencode(...)` HCL function call.
 pub fn jsonencode(value: Expression) -> Expression {
     Expression::FuncCall(Box::new(

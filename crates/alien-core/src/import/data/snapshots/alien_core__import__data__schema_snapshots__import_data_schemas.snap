@@ -1247,7 +1247,7 @@ expression: schemas
     "$schema": "http://json-schema.org/draft-07/schema#",
     "definitions": {
       "AzureSandboxNetwork": {
-        "description": "Setup-owned subnet coordinates consumed by an internal sandbox gateway load balancer.",
+        "description": "Setup-owned subnet coordinates consumed by the sandbox gateway VMs.",
         "properties": {
           "gatewayCidrs": {
             "description": "Gateway ranges allowed by the sandbox subnet NSGs on TCP 3128. Deployments set up before the admin port was removed from that rule also allow TCP 3129; both are accepted.",
@@ -1256,8 +1256,16 @@ expression: schemas
             },
             "type": "array"
           },
+          "gatewayIps": {
+            "default": [],
+            "description": "Static private IPs of the setup-created gateway VMs (one per replica). Setup releases that predate the VMs leave this empty, and Internet sandboxes then refuse to start.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "gatewaySubnetIds": {
-            "description": "Undelegated subnet reserved for the gateway load balancer's frontend.",
+            "description": "Undelegated subnet reserved for the gateway replicas' static NICs.",
             "items": {
               "type": "string"
             },

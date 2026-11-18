@@ -42,10 +42,8 @@ pub enum Kind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Role {
-    /// Releases and developer config.
+    /// Releases, developer config and exec sessions.
     Release,
-    /// Exec sessions.
-    Operate,
     /// The next version of the signer list.
     Admin,
 }
@@ -55,7 +53,6 @@ impl Role {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Release => "release",
-            Self::Operate => "operate",
             Self::Admin => "admin",
         }
     }
@@ -83,8 +80,7 @@ impl Kind {
     /// Role a signer needs to sign this kind.
     pub fn role(self) -> Role {
         match self {
-            Self::Release | Self::Config => Role::Release,
-            Self::Session => Role::Operate,
+            Self::Release | Self::Config | Self::Session => Role::Release,
             Self::SignerList => Role::Admin,
         }
     }
