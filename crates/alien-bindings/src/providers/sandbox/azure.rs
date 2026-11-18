@@ -77,6 +77,9 @@ pub struct AzureSandbox {
     create_route: Option<std::sync::Arc<dyn SandboxCreateRoute>>,
     /// The declared persistent storage, which makes `storageKey` required on create.
     persistent_storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
+    /// The store's account, resolved from `persistent_storage`: the one host a declared
+    /// sandbox's policy opens for the agent.
+    store_account: Option<String>,
 }
 
 /// Creates a sandbox for a caller whose own identity may not: the request carries only the
@@ -121,6 +124,7 @@ impl AzureSandbox {
             disk,
             create_route: None,
             persistent_storage: None,
+            store_account: None,
         }
     }
 
@@ -191,13 +195,40 @@ impl AzureSandbox {
         self
     }
 
-    /// Supplies the persistent storage the declaration carries.
+    /// Supplies the persistent storage the declaration carries. Its store must be an Azure
+    /// account named by a concrete value: the sandbox policy opens that host.
     pub fn with_persistent_storage(
         mut self,
         storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
-    ) -> Self {
+        binding_name: &str,
+    ) -> Result<Self> {
+        self.store_account = match &storage {
+            None => None,
+            Some(declared) => match &declared.store {
+                alien_core::bindings::PersistentStoreLocator::Azure { account, .. } => Some(
+                    account
+                        .clone()
+                        .into_value(binding_name, "persistentStorage.store.account")
+                        .map_err(|error| {
+                            AlienError::new(ErrorData::BindingConfigInvalid {
+                                binding_name: binding_name.to_string(),
+                                env_var: alien_core::bindings::binding_env_var_name(binding_name),
+                                reason: error.message,
+                            })
+                        })?,
+                ),
+                _ => {
+                    return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                        binding_name: binding_name.to_string(),
+                        env_var: alien_core::bindings::binding_env_var_name(binding_name),
+                        reason: "an Azure sandbox's persistent storage needs an Azure store"
+                            .to_string(),
+                    }))
+                }
+            },
+        };
         self.persistent_storage = storage;
-        self
+        Ok(self)
     }
 
     /// Declares the ports a preview capability may be granted for.
@@ -1389,7 +1420,7 @@ impl AzureSandbox {
                 }));
             }
         }
-        let Some(asked) = egress_policy(&self.egress) else {
+        let Some(asked) = self.with_store_host(egress_policy(&self.egress)) else {
             return Ok(());
         };
         if policy_holds(&asked, sandbox.egress_policy.as_ref()) {

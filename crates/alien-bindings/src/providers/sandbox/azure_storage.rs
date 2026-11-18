@@ -222,16 +222,20 @@ mod create_tests {
             "2048Mi".into(),
             None,
         )
-        .with_persistent_storage(Some(SandboxPersistentStorageBinding {
-            path: "/workspace".to_string(),
-            store: PersistentStoreLocator::Azure {
-                account: BindingValue::Value("acmeagents1a2b3c4d".to_string()),
-                container: BindingValue::Value("keys".to_string()),
-                prefix: String::new(),
-            },
-            exclude: Vec::new(),
-            max_size_bytes: None,
-        }))
+        .with_persistent_storage(
+            Some(SandboxPersistentStorageBinding {
+                path: "/workspace".to_string(),
+                store: PersistentStoreLocator::Azure {
+                    account: BindingValue::Value("acmeagents1a2b3c4d".to_string()),
+                    container: BindingValue::Value("keys".to_string()),
+                    prefix: String::new(),
+                },
+                exclude: Vec::new(),
+                max_size_bytes: None,
+            }),
+            "agents",
+        )
+        .expect("an Azure store")
     }
 
     /// A declared sandbox needs a key on create, and until the attach lands a key is refused

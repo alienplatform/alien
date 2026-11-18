@@ -57,6 +57,25 @@ impl AzureSandbox {
         Ok(Some(policy))
     }
 
+    /// A bounded policy (`none`, `allowDomains`) with the persistent storage store's blob host
+    /// allowed ahead of every other rule, so the agent reaches its store. Commands are kept from
+    /// it inside the guest: their sockets carry the guest mark, which the agent drops on the way
+    /// out. An open policy (or none at all) is returned as is.
+    pub(super) fn with_store_host(&self, policy: Option<EgressPolicy>) -> Option<EgressPolicy> {
+        let Some(account) = self.store_account.as_ref() else {
+            return policy;
+        };
+        let mut policy = policy?;
+        policy.host_rules.insert(
+            0,
+            EgressHostRule {
+                pattern: format!("{account}.blob.core.windows.net"),
+                action: alien_azure_clients::azure::sandbox_data_plane::ALLOW.to_string(),
+            },
+        );
+        Some(policy)
+    }
+
     pub(super) fn creation_deadline(&self) -> Option<i64> {
         self.egress_manager.as_ref().map(|_| {
             chrono::Utc::now().timestamp_millis()
@@ -66,7 +85,7 @@ impl AzureSandbox {
 
     pub(super) fn native_policy(&self) -> Option<EgressPolicy> {
         if self.egress_manager.is_none() {
-            return super::egress_policy(&self.egress);
+            return self.with_store_host(super::egress_policy(&self.egress));
         }
         // Full/default-Deny inspects the inner CONNECT destination and rejects the gateway.
         // Partial requires default-Allow. The one ordered catch-all closes the :80/:443
