@@ -84,6 +84,7 @@ impl Agent {
             interactive: Default::default(),
             preview: Default::default(),
             agent_binary: agent_binary(),
+            storage_spool: Default::default(),
         });
 
         let served = Arc::clone(&state);
@@ -471,6 +472,7 @@ async fn transport_authorization_needs_no_capability() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        storage_spool: Default::default(),
     });
 
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -521,6 +523,7 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        storage_spool: Default::default(),
     });
 
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -617,6 +620,7 @@ async fn the_validate_hook_passes_and_leaves_the_session_root_empty() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        storage_spool: Default::default(),
     })
     .await
     .expect("a working agent must validate");
@@ -647,6 +651,7 @@ async fn the_validate_hook_refuses_a_caller_running_as_the_exec_identity() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        storage_spool: Default::default(),
     }))
     .await;
 
@@ -697,6 +702,7 @@ async fn the_validate_hook_refuses_a_caller_without_a_capability() {
         // A check that ran would answer 500 on this, so a 401 is the refusal and not a failed check.
         preview: Default::default(),
         agent_binary: root.join("no-such-agent"),
+        storage_spool: Default::default(),
     }))
     .await;
 
@@ -744,6 +750,7 @@ async fn the_validate_hook_names_the_file_check_when_the_session_root_is_not_wri
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        storage_spool: Default::default(),
     })
     .await;
 
@@ -786,6 +793,7 @@ async fn the_validate_hook_names_the_identity_check_when_the_probe_cannot_run_as
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        storage_spool: Default::default(),
     }))
     .await;
 
@@ -1031,6 +1039,7 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        storage_spool: Default::default(),
     });
 
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -1286,6 +1295,7 @@ async fn root_image_cannot_call_control_routes() {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        storage_spool: Default::default(),
     });
     let base = serve(state).await;
     let mut command = std::process::Command::new("python3");
@@ -2006,6 +2016,7 @@ async fn transport_agent_listening_on(own_ports: &[u16]) -> (String, TempDir) {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        storage_spool: Default::default(),
     });
     state.preview.set_own_ports(own_ports);
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -2524,6 +2535,7 @@ async fn native_file_agent() -> (String, String, TempDir) {
         interactive: Default::default(),
         preview: Default::default(),
         agent_binary: agent_binary(),
+        storage_spool: Default::default(),
     });
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
         .await
@@ -2917,4 +2929,234 @@ async fn read_file_pages_by_offset_and_length() {
         .expect("rewrite");
     assert!(put.status().is_success());
     assert_ne!(page(300, 200).await["version"], second["version"]);
+}
+
+/// The binding's side of the pull transport, speaking the `:execute` envelope to a live agent.
+struct EnvelopeChannel<'a> {
+    agent: &'a Agent,
+    client: reqwest::Client,
+}
+
+impl EnvelopeChannel<'_> {
+    async fn call(
+        &self,
+        body: serde_json::Value,
+    ) -> alien_sandbox_storage::Result<serde_json::Value> {
+        let response = self
+            .client
+            .post(format!("{}/", self.agent.base_url))
+            .bearer_auth(self.agent.capability())
+            .json(&body)
+            .send()
+            .await
+            .expect("responds");
+        let status = response.status();
+        let body = response.text().await.expect("body");
+        if !status.is_success() {
+            return Err(alien_error::AlienError::new(
+                alien_sandbox_storage::ErrorData::StoreFailed {
+                    operation: "agent".to_string(),
+                    object: String::new(),
+                    reason: format!("{status}: {body}"),
+                },
+            ));
+        }
+        Ok(serde_json::from_str(&body).expect("json"))
+    }
+}
+
+#[async_trait::async_trait]
+impl alien_sandbox_storage::PullChannel for EnvelopeChannel<'_> {
+    async fn pending(
+        &self,
+    ) -> alien_sandbox_storage::Result<Option<alien_sandbox_storage::Pending>> {
+        let body = self.call(json!({"v": 1, "op": "storagePending"})).await?;
+        Ok(serde_json::from_value(body["pending"].clone()).expect("pending parses"))
+    }
+    async fn read(
+        &self,
+        object: &str,
+        offset: u64,
+        len: u64,
+    ) -> alien_sandbox_storage::Result<Vec<u8>> {
+        let body = self
+            .call(json!({"v": 1, "op": "storageRead", "object": object, "offset": offset, "length": len}))
+            .await?;
+        Ok(BASE64
+            .decode(body["contentsBase64"].as_str().expect("contents"))
+            .expect("base64"))
+    }
+    async fn ack(
+        &self,
+        generation: u64,
+        outcome: alien_sandbox_storage::AckOutcome,
+    ) -> alien_sandbox_storage::Result<()> {
+        self.call(json!({"v": 1, "op": "storageAck", "generation": generation, "outcome": outcome}))
+            .await
+            .map(|_| ())
+    }
+    async fn seed(
+        &self,
+        object: &str,
+        offset: u64,
+        bytes: Vec<u8>,
+        last: bool,
+    ) -> alien_sandbox_storage::Result<()> {
+        self.call(
+            json!({"v": 1, "op": "storageSeed", "object": object, "offset": offset,
+            "contentsBase64": BASE64.encode(bytes), "last": last}),
+        )
+        .await
+        .map(|_| ())
+    }
+}
+
+struct OneFile(Vec<u8>);
+
+impl alien_sandbox_storage::FileSource for OneFile {
+    fn open(&mut self, _: &str) -> alien_sandbox_storage::Result<Box<dyn std::io::Read + '_>> {
+        Ok(Box::new(&self.0[..]))
+    }
+}
+
+/// A commit the agent spooled reaches the store through the envelope ops and restores into a new
+/// sandbox's spool the same way: the wire contract the GCP binding drives over `:execute`.
+#[tokio::test]
+async fn storage_pulls_and_seeds_through_the_envelope() {
+    use alien_sandbox_storage::{
+        read_head, restore, seed, takeover, Committer, MemoryStore, PullOutcome, Puller, Spool,
+        TreeEntry, TreeEntryKind,
+    };
+
+    let store = MemoryStore::new();
+    let agent = Agent::start().await;
+    let channel = EnvelopeChannel {
+        agent: &agent,
+        client: reqwest::Client::new(),
+    };
+    let refused = channel
+        .call(json!({"v": 1, "op": "storagePending"}))
+        .await
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("400"),
+        "no spool, no storage ops: {refused}"
+    );
+
+    let start = takeover(&store, "sandbox-1").await.unwrap();
+    let spool = Arc::new(Spool::new(agent.root.join("spool"), start.head_etag.clone()).unwrap());
+    agent.state.storage_spool.set(Arc::clone(&spool)).unwrap();
+
+    // Larger than one page, so reads are paged by the agent's cap.
+    let content: Vec<u8> = (0..2_500_000u32).map(|i| (i % 251) as u8).collect();
+    let mut committer = Committer::new("sandbox-1", start.head_etag.clone(), None, None);
+    let walk = vec![TreeEntry {
+        path: "data.bin".to_string(),
+        kind: TreeEntryKind::File {
+            size: content.len() as u64,
+            change_token: 1,
+        },
+        mode: 0o644,
+        uid: 1000,
+        gid: 1000,
+        mtime_ns: 1,
+    }];
+    committer
+        .commit(spool.as_ref(), "k", walk, &mut OneFile(content.clone()))
+        .await
+        .unwrap();
+
+    // The binding asks for more than the cap; the agent answers at most the cap per read.
+    let pending = spool.pending().unwrap();
+    let pack = pending
+        .objects
+        .iter()
+        .find(|object| object.name.starts_with("packs/"))
+        .unwrap();
+    assert!(pack.size > 900_000);
+    let page = alien_sandbox_storage::PullChannel::read(&channel, &pack.name, 0, 4_000_000)
+        .await
+        .unwrap();
+    assert_eq!(page.len(), 900_000);
+    let mut puller = Puller::new("sandbox-1", start.head_etag, 4_000_000);
+    let outcome = puller.pull(&channel, &store, "k").await.unwrap();
+    assert!(
+        matches!(outcome, PullOutcome::Published { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(spool.pending(), None);
+
+    // A new sandbox's spool, seeded through the same envelope.
+    let second = Agent::start().await;
+    let channel = EnvelopeChannel {
+        agent: &second,
+        client: reqwest::Client::new(),
+    };
+    let next = takeover(&store, "sandbox-2").await.unwrap();
+    let spool = Arc::new(Spool::new(second.root.join("spool"), next.head_etag).unwrap());
+    second.state.storage_spool.set(Arc::clone(&spool)).unwrap();
+    let (head, _) = read_head(&store).await.unwrap().unwrap();
+    let manifest = seed(&channel, &store, head.commit.as_ref().unwrap(), 900_000)
+        .await
+        .unwrap();
+
+    struct Collect(Vec<u8>);
+    impl alien_sandbox_storage::TreeSink for Collect {
+        fn dir(&mut self, _: &alien_sandbox_storage::Entry) -> alien_sandbox_storage::Result<()> {
+            Ok(())
+        }
+        fn begin_file(
+            &mut self,
+            _: &alien_sandbox_storage::Entry,
+        ) -> alien_sandbox_storage::Result<()> {
+            Ok(())
+        }
+        fn append(&mut self, bytes: &[u8]) -> alien_sandbox_storage::Result<()> {
+            self.0.extend_from_slice(bytes);
+            Ok(())
+        }
+        fn end_file(
+            &mut self,
+            _: &alien_sandbox_storage::Entry,
+        ) -> alien_sandbox_storage::Result<()> {
+            Ok(())
+        }
+        fn symlink(
+            &mut self,
+            _: &alien_sandbox_storage::Entry,
+            _: &str,
+        ) -> alien_sandbox_storage::Result<()> {
+            Ok(())
+        }
+        fn hard_link(
+            &mut self,
+            _: &alien_sandbox_storage::Entry,
+            _: &str,
+        ) -> alien_sandbox_storage::Result<()> {
+            Ok(())
+        }
+        fn finish(
+            &mut self,
+            _: &[&alien_sandbox_storage::Entry],
+        ) -> alien_sandbox_storage::Result<()> {
+            Ok(())
+        }
+    }
+    let mut restored = Collect(Vec::new());
+    restore(spool.as_ref(), &manifest, &mut restored)
+        .await
+        .unwrap();
+    assert!(restored.0 == content, "the restored file matches");
+}
+
+#[tokio::test]
+async fn storage_ops_need_a_capability() {
+    let agent = Agent::start().await;
+    let response = reqwest::Client::new()
+        .post(format!("{}/", agent.base_url))
+        .json(&json!({"v": 1, "op": "storagePending"}))
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
 }

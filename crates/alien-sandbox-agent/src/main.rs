@@ -468,6 +468,7 @@ fn load_state() -> Result<AgentState> {
         gateway_egress,
         preview: Default::default(),
         agent_binary,
+        storage_spool: Default::default(),
     })
 }
 
