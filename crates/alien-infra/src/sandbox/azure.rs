@@ -4197,23 +4197,46 @@ mod direct_setup_tests {
 
     /// An authorization fake that behaves as Azure does for the case that matters here: a write
     /// of an assignment equal to one that exists under another id is refused with "already
-    /// exists", a write onto an existing id replaces its role, and a delete removes it.
+    /// exists" naming the existing one, a write onto an existing id replaces its role, a read
+    /// returns what was written, and a delete removes it.
     type AzureAssignments =
-        Arc<std::sync::Mutex<std::collections::BTreeMap<String, (String, String)>>>;
+        Arc<std::sync::Mutex<std::collections::BTreeMap<String, (String, String, Option<String>)>>>;
 
     fn azure_like_authorization(store: AzureAssignments) -> MockAuthorizationApi {
-        use alien_azure_clients::models::authorization_role_assignments::RoleAssignment;
+        use alien_azure_clients::models::authorization_role_assignments::{
+            RoleAssignment, RoleAssignmentProperties,
+        };
         use alien_azure_clients::models::authorization_role_definitions::RoleDefinition;
         let mut authorization = MockAuthorizationApi::new();
+        let reads = store.clone();
         authorization
             .expect_get_role_assignment_by_id()
-            .returning(|_| {
-                Err(AlienError::new(
+            .returning(move |id| match reads.lock().unwrap().get(&id) {
+                Some((principal, role, description)) => Ok(RoleAssignment {
+                    id: Some(id),
+                    name: None,
+                    type_: None,
+                    properties: Some(RoleAssignmentProperties {
+                        principal_id: principal.clone(),
+                        role_definition_id: role.clone(),
+                        scope: None,
+                        principal_type: Default::default(),
+                        condition: None,
+                        condition_version: None,
+                        delegated_managed_identity_resource_id: None,
+                        description: description.clone(),
+                        created_by: None,
+                        created_on: None,
+                        updated_by: None,
+                        updated_on: None,
+                    }),
+                }),
+                None => Err(AlienError::new(
                     alien_client_core::ErrorData::RemoteResourceNotFound {
                         resource_type: "RoleAssignment".to_string(),
-                        resource_name: "a".to_string(),
+                        resource_name: id,
                     },
-                ))
+                )),
             });
         authorization
             .expect_get_role_definition()
@@ -4238,16 +4261,24 @@ mod direct_setup_tests {
                     properties.role_definition_id.clone(),
                 );
                 let mut store = writes.lock().unwrap();
-                if store.iter().any(|(other, held)| *other != id && *held == wanted) {
+                if let Some((other, _)) = store
+                    .iter()
+                    .find(|(other, (p, r, _))| **other != id && (p.clone(), r.clone()) == wanted)
+                {
                     return Err(AlienError::new(
                         alien_client_core::ErrorData::RemoteResourceConflict {
                             resource_type: "role assignment".to_string(),
-                            resource_name: id,
-                            message: "The role assignment already exists.".to_string(),
+                            resource_name: id.clone(),
+                            message: format!(
+                                "The role assignment already exists. The ID of the existing role assignment is '{other}'."
+                            ),
                         },
                     ));
                 }
-                store.insert(id, wanted);
+                store.insert(
+                    id,
+                    (wanted.0, wanted.1, properties.description.clone()),
+                );
                 Ok(assignment.clone())
             });
         authorization
@@ -4274,69 +4305,94 @@ mod direct_setup_tests {
         }
     }
 
-    /// Assignment ids are numbered by position, so a profile that drops its first grant moves
-    /// the next grant onto the dropped one's id. Azure refuses a write equal to an assignment
-    /// that exists under another id, and the writer reads that as "already there". With the
-    /// grant on `execute` then `images`, dropping `execute` must leave `images` held, and
-    /// `execute` gone. Before the stale ones were removed first, the `images` assignment was
-    /// deleted as stale while `execute` stayed.
-    #[tokio::test]
-    async fn a_profile_that_drops_its_first_grant_keeps_the_rest_and_loses_the_dropped_one() {
-        let store = AzureAssignments::default();
-        let run = |controller: AzureSandboxController, sets: &'static [&'static str]| {
-            let store = store.clone();
-            async move {
-                let mut groups = MockSandboxGroupsApi::new();
-                groups
-                    .expect_get_sandbox_group()
-                    .returning(|_, _| Ok(group("Succeeded")));
-                let mut executor = executor_with_profile_sets(
-                    controller,
-                    groups,
-                    true,
-                    SandboxEgress::None,
-                    azure_like_authorization(store),
-                    sets,
-                    false,
-                )
-                .await;
-                executor
-                    .update(sandbox(SandboxEgress::None))
-                    .expect("update is accepted");
-                drive(&mut executor).await;
-                assert_eq!(
-                    executor.status(),
-                    ResourceStatus::Running,
-                    "the rerun settles"
-                );
-                executor
-                    .internal_state::<AzureSandboxController>()
-                    .unwrap()
-                    .clone()
-            }
-        };
-        let installed = run(ready_group_controller(), &["sandbox/execute", "sandbox/images"]).await;
-        let both: Vec<String> = store.lock().unwrap().values().map(|(_, r)| r.clone()).collect();
-        assert!(
-            both.iter().any(|role| role.contains("c24cf47c")),
-            "the execute role is placed: {both:?}"
-        );
-
-        run(installed, &["sandbox/images"]).await;
-        let after: Vec<String> = store.lock().unwrap().values().map(|(_, r)| r.clone()).collect();
-        let expected: Vec<String> = both
-            .iter()
-            .filter(|role| !role.contains("c24cf47c"))
-            .cloned()
-            .collect();
-        let mut after_sorted = after.clone();
-        after_sorted.sort();
-        let mut expected_sorted = expected.clone();
-        expected_sorted.sort();
+    /// Runs one setup run of the sandbox with the `runtime` profile holding `sets`, against
+    /// `store`, and returns the controller as it ends.
+    async fn setup_run_with_grants(
+        controller: AzureSandboxController,
+        store: &AzureAssignments,
+        sets: &[&str],
+    ) -> AzureSandboxController {
+        let mut groups = MockSandboxGroupsApi::new();
+        groups
+            .expect_get_sandbox_group()
+            .returning(|_, _| Ok(group("Succeeded")));
+        let mut executor = executor_with_profile_sets(
+            controller,
+            groups,
+            true,
+            SandboxEgress::None,
+            azure_like_authorization(store.clone()),
+            sets,
+            false,
+        )
+        .await;
+        executor
+            .update(sandbox(SandboxEgress::None))
+            .expect("update is accepted");
+        drive(&mut executor).await;
         assert_eq!(
-            after_sorted, expected_sorted,
-            "only the dropped execute grant is gone; every other grant is still held"
+            executor.status(),
+            ResourceStatus::Running,
+            "the rerun settles"
         );
+        executor
+            .internal_state::<AzureSandboxController>()
+            .unwrap()
+            .clone()
+    }
+
+    fn held_roles(store: &AzureAssignments) -> Vec<String> {
+        let mut roles: Vec<String> = store
+            .lock()
+            .unwrap()
+            .values()
+            .map(|(_, role, _)| role.clone())
+            .collect();
+        roles.sort();
+        roles
+    }
+
+    /// Assignment ids are numbered by position, and written one at a time. A setup rerun that
+    /// changes a profile's grants must end holding exactly what a fresh install of the new
+    /// grants holds, whichever grant was dropped or moved: `[a,b,c]` to `[b,c]` moves `b` onto
+    /// `a`'s id while `b` still exists under its own, and Azure refuses that write as "already
+    /// exists". Every case compares the end state of the rerun with a fresh install.
+    #[tokio::test]
+    async fn a_setup_rerun_ends_holding_exactly_the_grants_a_fresh_install_holds() {
+        const E: &str = "sandbox/execute";
+        const I: &str = "sandbox/images";
+        const H: &str = "sandbox/heartbeat";
+        const M: &str = "sandbox/management";
+        let cases: [(&[&str], &[&str]); 5] = [
+            (&[E, I, H], &[I, H]),
+            (&[E, I, H], &[E, H]),
+            (&[E, I, H], &[E, I]),
+            (&[E, I], &[I, E]),
+            (&[E, I], &[I, M]),
+        ];
+        for (before, after) in cases {
+            let store = AzureAssignments::default();
+            let installed = setup_run_with_grants(ready_group_controller(), &store, before).await;
+            let at_install = held_roles(&store);
+            assert!(
+                at_install.len() >= before.len(),
+                "{before:?} places its grants: {at_install:?}"
+            );
+            setup_run_with_grants(installed, &store, after).await;
+            let fresh = AzureAssignments::default();
+            setup_run_with_grants(ready_group_controller(), &fresh, after).await;
+            assert_eq!(
+                held_roles(&store),
+                held_roles(&fresh),
+                "{before:?} -> {after:?}: the rerun holds what a fresh install of the new grants holds"
+            );
+            let ids = store.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+            assert_eq!(
+                ids.len(),
+                held_roles(&fresh).len(),
+                "no duplicate assignment is left behind: {ids:?}"
+            );
+        }
     }
 
     /// An internet-egress group connects to subnets only the package creates, so a direct setup

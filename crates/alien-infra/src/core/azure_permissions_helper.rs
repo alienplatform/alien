@@ -856,7 +856,7 @@ impl AzurePermissionsHelper {
             properties: Some(RoleAssignmentProperties {
                 principal_id: principal_id.to_string(),
                 role_definition_id: role_definition_id.to_string(),
-                scope: Some(scope),
+                scope: Some(scope.clone()),
                 principal_type,
                 condition: None,
                 condition_version: None,
@@ -869,41 +869,54 @@ impl AzurePermissionsHelper {
             }),
         };
 
-        let mut result = authorization_client
-            .create_or_update_role_assignment_by_id(full_assignment_id.clone(), &role_assignment)
-            .await;
-
         // Assignment ids are numbered by position, so a changed grant list can land a different
-        // role on an id that already holds one. Azure answers that with exactly
-        // `RoleAssignmentUpdateNotPermitted` (it refuses to change the role, principal or scope
-        // of an assignment). Only then, and only for an assignment this helper wrote (its
-        // description is read first), the old one is removed and the new one created. Any other
-        // error, and any assignment somebody else made under that id, is left as it is.
-        if let Err(error) = &result {
-            if Self::is_role_assignment_update_refused(error)
-                && Self::assignment_is_runtime_managed(authorization_client, &full_assignment_id)
-                    .await
-            {
-                warn!(
-                    role_assignment_id = %full_assignment_id,
-                    "Azure refused to change an existing role assignment this helper made; replacing it"
-                );
-                authorization_client
-                    .delete_role_assignment_by_id(full_assignment_id.clone())
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to remove the previous role assignment '{full_assignment_id}' before replacing it"
-                        ),
-                        resource_id: Some(role_assignment_id.to_string()),
-                    })?;
-                result = authorization_client
-                    .create_or_update_role_assignment_by_id(
-                        full_assignment_id.clone(),
-                        &role_assignment,
-                    )
-                    .await;
+        // role on an id that already holds one, or ask for a grant that exists under another id.
+        // Azure answers the first with exactly `RoleAssignmentUpdateNotPermitted` (it refuses to
+        // change the role, principal or scope of an assignment), and the second with "role
+        // assignment already exists" naming the existing assignment. Only for an assignment this
+        // helper wrote (its description is read first) is the old one removed and the new one
+        // written. An equal assignment under another id that somebody else made is a grant that
+        // is already held, so it stands. Any other error is left as it is.
+        let mut result;
+        let mut attempts = 0;
+        loop {
+            result = authorization_client
+                .create_or_update_role_assignment_by_id(
+                    full_assignment_id.clone(),
+                    &role_assignment,
+                )
+                .await;
+            attempts += 1;
+            let Err(error) = &result else { break };
+            if attempts >= 3 {
+                break;
             }
+            let remove = if Self::is_role_assignment_update_refused(error) {
+                Some(full_assignment_id.clone())
+            } else if Self::is_existing_role_assignment_conflict(error) {
+                Self::existing_assignment_id(error, &scope)
+                    .filter(|existing| !Self::same_assignment(existing, role_assignment_id))
+            } else {
+                None
+            };
+            let Some(remove) = remove else { break };
+            if !Self::assignment_is_runtime_managed(authorization_client, &remove).await {
+                break;
+            }
+            warn!(
+                role_assignment_id = %remove,
+                wanted_id = %full_assignment_id,
+                "Azure refused to write a role assignment next to one this helper made; replacing the old one"
+            );
+            authorization_client
+                .delete_role_assignment_by_id(remove.clone())
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to remove the previous role assignment '{remove}' before replacing it"
+                    ),
+                    resource_id: Some(role_assignment_id.to_string()),
+                })?;
         }
 
         if let Err(error) = result {
@@ -971,6 +984,36 @@ impl AzurePermissionsHelper {
             == Some(RUNTIME_ROLE_ASSIGNMENT_DESCRIPTION)
     }
 
+    /// The assignment id Azure names in its "already exists" answer, as a full resource id.
+    fn existing_assignment_id(
+        error: &AlienError<CloudClientErrorData>,
+        scope: &str,
+    ) -> Option<String> {
+        let Some(CloudClientErrorData::RemoteResourceConflict { message, .. }) =
+            error.error.as_ref()
+        else {
+            return None;
+        };
+        const MARK: &str = "existing role assignment is '";
+        let start = message.find(MARK)? + MARK.len();
+        let id = message[start..].split('\'').next()?.trim();
+        if id.is_empty() {
+            return None;
+        }
+        Some(if id.starts_with('/') {
+            id.to_string()
+        } else {
+            Self::role_assignment_resource_id(scope, id)
+        })
+    }
+
+    fn same_assignment(existing_id: &str, wanted_name: &str) -> bool {
+        existing_id
+            .rsplit('/')
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case(wanted_name))
+    }
+
     fn is_existing_role_assignment_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
         matches!(
             error.error.as_ref(),
@@ -994,38 +1037,31 @@ impl AzurePermissionsHelper {
     ) -> Result<()> {
         Self::record_planned_role_assignment_ids(&assignments, role_assignment_ids);
 
-        let futures = assignments.into_iter().map(|assignment| {
-            let authorization_client = authorization_client.clone();
-            let resource_id = resource_id.to_string();
+        // In plan order, one at a time: a write may have to remove an assignment of this helper
+        // that an earlier write in the plan is about to move onto, so they cannot race.
+        for assignment in assignments {
+            Self::create_role_assignment_as(
+                authorization_client,
+                &assignment.scope,
+                &assignment.role_assignment_id,
+                &assignment.principal_id,
+                &assignment.role_definition_id,
+                assignment.principal_type,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: assignment.failure_message,
+                resource_id: Some(resource_id.to_string()),
+            })?;
 
-            async move {
-                Self::create_role_assignment_as(
-                    &authorization_client,
-                    &assignment.scope,
-                    &assignment.role_assignment_id,
-                    &assignment.principal_id,
-                    &assignment.role_definition_id,
-                    assignment.principal_type,
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: assignment.failure_message,
-                    resource_id: Some(resource_id),
-                })?;
-
-                info!(
-                    role_assignment_id = %assignment.role_assignment_id,
-                    principal_id = %assignment.principal_id,
-                    role_definition_id = %assignment.role_definition_id,
-                    permission_set = %assignment.permission_set_id,
-                    "Successfully created Azure role assignment"
-                );
-
-                Ok::<_, AlienError<ErrorData>>(())
-            }
-        });
-
-        futures::future::try_join_all(futures).await?;
+            info!(
+                role_assignment_id = %assignment.role_assignment_id,
+                principal_id = %assignment.principal_id,
+                role_definition_id = %assignment.role_definition_id,
+                permission_set = %assignment.permission_set_id,
+                "Successfully created Azure role assignment"
+            );
+        }
         Ok(())
     }
 
@@ -1991,6 +2027,18 @@ mod tests {
                     },
                 ))
             });
+        // The equal assignment under another id was not made by this helper (no description
+        // of ours), so it stands as the grant and is not deleted.
+        authorization
+            .expect_get_role_assignment_by_id()
+            .times(1)
+            .returning(|_| {
+                Err(AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "RoleAssignment".to_string(),
+                    resource_name: "existing-assignment".to_string(),
+                }))
+            });
+        authorization.expect_delete_role_assignment_by_id().times(0);
         let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
 
         let assignment_id = AzurePermissionsHelper::create_role_assignment_at_scope(
