@@ -81,16 +81,8 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 panic!("remote AI checks failed: {error:#}");
             }
         }
-        TestApp::QueueDeadLetter if std::env::var("DLQ_E2E_UPGRADE").as_deref() == Ok("1") => {
-            common::queue_dead_letter::check_upgrade(ctx).await;
-        }
         TestApp::QueueDeadLetter => {
-            common::queue_dead_letter::check(
-                &ctx.deployment,
-                "m",
-                ctx.platform != alien_core::Platform::Gcp,
-            )
-            .await;
+            common::queue_dead_letter::check_upgrade(ctx).await;
         }
         TestApp::StorageNotifications => {
             common::storage_notifications::check_delivery(&ctx.deployment).await;
@@ -903,6 +895,12 @@ macro_rules! distribution_test_context {
         impl test_context::AsyncTestContext for $name {
             async fn setup() -> Self {
                 alien_test::e2e::init_tracing();
+                if $app == TestApp::QueueDeadLetter {
+                    // The upgrade check starts from a release without `deadLetter` (what an
+                    // existing install runs), then adds, changes and removes the setting.
+                    std::env::set_var("DLQ_E2E_NO_DEAD_LETTER", "1");
+                    std::env::set_var("DLQ_E2E_UPGRADE", "1");
+                }
                 let ctx = alien_test::e2e::setup_distribution($flow, $app)
                     .await
                     .expect(concat!(stringify!($name), " setup failed"));

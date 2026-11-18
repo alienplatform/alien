@@ -292,10 +292,11 @@ async fn await_pull(
     attempts
 }
 
-/// The upgrade path, for a deployment installed from a stack without the setting (run with
-/// `DLQ_E2E_NO_DEAD_LETTER=1 DLQ_E2E_UPGRADE=1`): poison messages wait in `pulled`, then a release
-/// adds the setting (refused until setup is rerun), and the messages sent before the rerun must
-/// still be there and end in `pulled-failed`. Then the attempts change and the setting is removed.
+/// The upgrade path, for a deployment installed from a stack without the setting (the
+/// distribution tests set `DLQ_E2E_NO_DEAD_LETTER=1 DLQ_E2E_UPGRADE=1` themselves): poison
+/// messages wait in `pulled`, then a release adds the setting (refused until setup is rerun).
+/// The messages sent before the rerun must still be there and end in `pulled-failed`. Then the
+/// attempts change and the setting is removed.
 pub async fn check_upgrade(ctx: &mut alien_test::TestContext) {
     let url = super::bindings::deployment_url(&ctx.deployment)
         .unwrap()
