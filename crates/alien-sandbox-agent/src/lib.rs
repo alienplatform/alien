@@ -11,7 +11,7 @@ pub mod mounts;
 #[cfg(unix)]
 pub mod s3files;
 #[cfg(target_os = "linux")]
-pub(crate) mod s3files_mount;
+pub mod s3files_mount;
 pub mod paths;
 pub mod peer;
 pub mod pid_namespace;
