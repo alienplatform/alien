@@ -1507,15 +1507,17 @@ impl DeploymentStore for SqliteDeploymentStore {
             .value(Deployments::Status, "update-pending")
             .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(id))
-            .and_where(Expr::col(Deployments::Status).is_not_in([
-                "retention-required",
-                "retained",
-                "delete-pending",
-                "deleting",
-                "deleted",
-                "teardown-required",
-                "teardown-failed",
-            ]))
+            .and_where(
+                Expr::col(Deployments::Status).is_not_in([
+                    "retention-required",
+                    "retained",
+                    "delete-pending",
+                    "deleting",
+                    "deleted",
+                    "teardown-required",
+                    "teardown-failed",
+                ]),
+            )
             .to_string(SqliteQueryBuilder);
         let changed = self.db.execute_returning_rows_affected(&sql).await?;
         if changed == 0 && self.get_deployment(caller, id).await?.is_some() {
