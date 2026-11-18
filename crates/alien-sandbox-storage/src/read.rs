@@ -3,8 +3,8 @@ use chrono::Utc;
 
 use crate::error::{ErrorData, Result};
 use crate::layout::{Head, ObjectName, HEAD_OBJECT};
-use crate::manifest::{Entry, EntryKind, Manifest};
 use crate::pack::chunk_hash;
+use crate::manifest::{Entry, EntryKind, Manifest};
 use crate::store::{ObjectStore, Precondition, PutOutcome};
 
 /// Largest single ranged read a restore issues; adjacent chunks of one pack are merged up to it.
