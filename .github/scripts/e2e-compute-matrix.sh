@@ -129,6 +129,7 @@ if [ "$PUSH_GCP_CLI" = "true" ]; then
   fi
   if [ "$APP" = "All" ] || [ "$APP" = "queue-dead-letter" ]; then
     PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-queue-dead-letter","test_filter":"push_gcp_queue_dead_letter","needs_oidc":false,"resource_suffix":"gcpdlq","bindings_arch":"x86_64","timeout_minutes":90}]')
+    PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-live-queue-dead-letter","test_filter":"push_gcp_live_queue_dead_letter","needs_oidc":false,"resource_suffix":"gcplivedlq","bindings_arch":"x86_64","timeout_minutes":90}]')
   fi
   if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
     PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-automatic-setup","test_filter":"push_gcp_automatic_setup","needs_oidc":false,"resource_suffix":"autogcp","timeout_minutes":60}]')
