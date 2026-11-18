@@ -34,6 +34,8 @@ use alien_permissions::{
 use hcl::expr::Expression;
 use std::collections::HashSet;
 
+use super::sandbox_store::{self, StoreHolder};
+
 /// The preview API version the sandbox group is created at. Must match the ARM and data-plane
 /// clients: ARM still answers older previews, so a version that drifts here fails as a response
 /// mismatch, not a rejected request.
@@ -163,7 +165,12 @@ impl TfEmitter for AzureSandboxEmitter {
 
         emit_remote_access(ctx, label, &mut fragment)?;
         emit_image_management(ctx, label, &mut fragment)?;
-        emit_workload_access(ctx, label, &mut fragment)?;
+        let store_holders = emit_workload_access(ctx, label, &mut fragment)?;
+        // A published group cannot declare persistent storage (the core refuses it), so its
+        // store holders are always the workload identities that create its sandboxes.
+        if sandbox.persistent_storage.is_some() {
+            sandbox_store::emit_store(ctx, label, &store_holders, &mut fragment);
+        }
         Ok(fragment)
     }
 
@@ -179,7 +186,7 @@ impl TfEmitter for AzureSandboxEmitter {
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
-        let _ = required_label(ctx)?;
+        required_label(ctx)?;
         // The declared value as is: the provider resolves a registry image to the disk image the
         // controller built from it.
         let disk_image = sandbox.azure_image()?.as_str().to_string();
@@ -244,6 +251,13 @@ impl TfEmitter for AzureSandboxEmitter {
             fields.push(("cpu", Expression::String(limits.cpu.clone())));
             fields.push(("memory", Expression::String(limits.memory.clone())));
             fields.push(("disk", Expression::String(limits.disk.clone())));
+        }
+
+        if let Some(storage) = &sandbox.persistent_storage {
+            fields.push((
+                "persistentStorage",
+                sandbox_store::binding(required_label(ctx)?, storage)?,
+            ));
         }
 
         if let Some(policy) = &sandbox.default_policy {
@@ -487,11 +501,15 @@ fn emit_image_management(
 /// The management identity never reaches this loop. The stack keeps it in `Stack::management()`,
 /// outside `permission_profiles()`, and a user profile named `management` gets no service account,
 /// so `service_account_principal_id` skips it. Its sandbox grant is `emit_image_management`'s.
+///
+/// Returns the identities that hold `sandbox/execute` or `sandbox/remote-execute` here: they create
+/// this group's sandboxes, so they are the store holders.
 fn emit_workload_access(
     ctx: &EmitContext<'_>,
     label: &str,
     fragment: &mut TfFragment,
-) -> Result<()> {
+) -> Result<Vec<StoreHolder>> {
+    let mut holders = Vec::new();
     let group_scope_suffix = format!(
         "/providers/Microsoft.App/sandboxGroups/{}",
         sandbox_group_name(ctx)
@@ -551,6 +569,16 @@ fn emit_workload_access(
                 return Err(refuse(
                     "the sandbox is published for remote access and belongs to its remote caller; no workload identity can hold a grant on it",
                 ));
+            }
+            if SESSION_CREATING_SETS.contains(&name)
+                && !holders
+                    .iter()
+                    .any(|holder: &StoreHolder| holder.key == *identity_label)
+            {
+                holders.push(StoreHolder {
+                    key: identity_label.to_string(),
+                    principal_id: principal_id.clone(),
+                });
             }
             let plan = AzureRuntimePermissionsGenerator::new()
                 .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
@@ -668,8 +696,11 @@ fn emit_workload_access(
         }
     }
 
-    Ok(())
+    Ok(holders)
 }
+
+/// The sets whose holder creates sandboxes on the group.
+const SESSION_CREATING_SETS: &[&str] = &["sandbox/execute", "sandbox/remote-execute"];
 
 /// A grant the setup will not render on a sandbox group. Not retryable: the stack has to change.
 fn refused(
@@ -959,7 +990,8 @@ mod tests {
         use alien_core::{Network, NetworkSettings, RemoteBindings, RemoteStackManagement};
         use std::collections::BTreeSet;
 
-        // Remote access excludes internet egress, so two stacks between them reach every item.
+        // Remote access excludes internet egress and persistent storage, so two stacks between
+        // them reach every item.
         let build = |remote_access: bool| {
             let base = Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
@@ -994,10 +1026,17 @@ mod tests {
                     ResourceLifecycle::Frozen,
                 )
             } else {
-                builder.add(
-                    base.egress(SandboxEgress::Internet).build(),
-                    ResourceLifecycle::Frozen,
-                )
+                let mut sandbox = base.egress(SandboxEgress::Internet).build();
+                sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+                    path: "/workspace".to_string(),
+                    storage: alien_core::ResourceRef::new(
+                        alien_core::Storage::RESOURCE_TYPE,
+                        "files",
+                    ),
+                    exclude: Vec::new(),
+                    max_size: None,
+                });
+                builder.add(sandbox, ResourceLifecycle::Frozen)
             };
             builder
                 .management(ManagementPermissions::Extend(
@@ -1034,6 +1073,10 @@ mod tests {
                 let item = match kind {
                     "azapi_resource" if label.ends_with("_vnet") => "vnet-connection",
                     "azapi_resource" => "sandbox-group",
+                    "azurerm_storage_account" | "azurerm_storage_container" => "storage-store",
+                    "azurerm_role_assignment" if label.contains("_store-") => {
+                        "role-assignment:storage-store"
+                    }
                     "azurerm_role_assignment" if label.contains("_access_") => {
                         "role-assignment:access"
                     }
@@ -1058,8 +1101,10 @@ mod tests {
             .collect();
         // The workload assignment needs a profile's service account in the stack, which this
         // fixture does not build; the profile-grant generator tests cover that row.
+        // The store grants follow the workload ones, covered by `azure_sandbox_store_tests`.
         let mut listed_here = listed;
         listed_here.remove("role-assignment:workload");
+        listed_here.remove("role-assignment:storage-store");
         assert_eq!(
             emitted, listed_here,
             "the emitter's items and alien_core::sandbox_setup_parity::AZURE_SANDBOX_ITEMS differ"

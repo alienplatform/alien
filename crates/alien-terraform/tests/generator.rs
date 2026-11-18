@@ -36,6 +36,7 @@ mod generator {
     pub mod azure_profile_grant_tests;
     pub mod azure_protected_verifier_tests;
     pub mod azure_queue_grant_tests;
+    pub mod azure_sandbox_store_tests;
     pub mod azure_shared_grant_tests;
     pub mod azure_storage_settings_tests;
     pub mod boundary_tests;
