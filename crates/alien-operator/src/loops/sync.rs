@@ -1412,6 +1412,20 @@ fn repaired_cluster_namespace(
             && resource.status != ResourceStatus::Pending
     });
     if ran_live {
+        // Only an install that still records its cluster in the default namespace logs
+        // this, so a stuck install whose repair does not apply can be told apart.
+        let recorded_in_default = stack_state.resources.values().any(|resource| {
+            resource
+                .config
+                .downcast_ref::<KubernetesCluster>()
+                .is_some_and(|cluster| cluster.namespace == MANAGER_DEFAULT_CLUSTER_NAMESPACE)
+        });
+        if recorded_in_default {
+            info!(
+                own_namespace = %own_namespace,
+                "The cluster is recorded in the default namespace, but a resource already ran there; leaving the record unchanged"
+            );
+        }
         return None;
     }
     let mut replaced = None;
