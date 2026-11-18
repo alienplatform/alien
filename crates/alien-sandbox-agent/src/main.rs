@@ -99,14 +99,15 @@ fn main() -> Result<()> {
 
     tracing_subscriber::fmt::init();
 
-    // The store client's extra trust (Azure's inspecting egress proxy), read before any command
-    // runs so none can change it.
+    // The store client's extra root (Azure's egress proxy), read before any command runs so
+    // none can change it. A sandbox whose binding names one cannot reach its store without it.
     match alien_sandbox_agent::storage::load_platform_roots_from_env() {
         Ok(0) => {}
-        Ok(count) => tracing::info!(count, "store client trusts the platform's CA bundle"),
-        // Not fatal: an image can set the variable for its own tools, and only the store needs
-        // it. Without it the store reports the unknown issuer on its first request.
-        Err(error) => tracing::warn!(%error, "store client uses the bundled roots only"),
+        Ok(count) => tracing::info!(count, "store client trusts the platform's proxy root"),
+        Err(error) => {
+            eprintln!("cannot trust the platform's proxy root: {error}");
+            std::process::exit(1);
+        }
     }
 
     // Azure `internet`: the proxy address commands use is a loopback forwarder over both gateway

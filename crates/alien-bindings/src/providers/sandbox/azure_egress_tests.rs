@@ -739,3 +739,30 @@ fn allow_domains_with_storage_is_refused() {
     .expect_err("refused");
     assert_eq!(error.code, "BINDING_CONFIG_INVALID", "{error}");
 }
+
+/// The agent of a declared sandbox is told the declaration and the proxy root to trust for its
+/// store; a sandbox without persistent storage gets neither.
+#[test]
+fn a_declared_sandbox_tells_its_agent_which_proxy_root_to_trust() {
+    let env: BTreeMap<String, String> = with_store(alien_core::SandboxEgress::None)
+        .storage_environment()
+        .into_iter()
+        .collect();
+    assert_eq!(
+        env.get(alien_core::ENV_ALIEN_SANDBOX_STORE_TRUST_ROOTS)
+            .map(String::as_str),
+        Some("/etc/ssl/certs/adc-egress-proxy-ca.crt")
+    );
+    assert!(env.contains_key(alien_core::sandbox_egress::ENV_PERSISTENT_STORAGE));
+    let plain = AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        alien_core::SandboxEgress::None,
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    );
+    assert!(plain.storage_environment().is_empty());
+}

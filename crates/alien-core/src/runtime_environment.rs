@@ -41,6 +41,15 @@ pub const ENV_ALIEN_SANDBOX_NETWORK_ENFORCER: &str = "ALIEN_SANDBOX_NETWORK_ENFO
 /// addresses: `none` (no address) or `only:<ipv4>,<ipv4>...` (under `internet`: the gateway
 /// replicas and the platform resolver). Agent-read only; any other value refuses to start.
 pub const ENV_ALIEN_SANDBOX_GUEST_EGRESS: &str = "ALIEN_SANDBOX_GUEST_EGRESS";
+/// Set by the Azure binding on a sandbox with persistent storage: the PEM file holding the root
+/// the platform's egress proxy signs with. The proxy terminates every HTTPS connection under an
+/// enforcing policy (the store's included; no per-host exemption exists), so the agent's store
+/// client trusts this root in addition to its bundled ones. The agent reads it once at boot and
+/// refuses a file a non-root user could have written. Agent-read only.
+pub const ENV_ALIEN_SANDBOX_STORE_TRUST_ROOTS: &str = "ALIEN_SANDBOX_STORE_TRUST_ROOTS";
+/// Where Azure's sandbox guest receives its egress proxy's root CA (one certificate, root-owned,
+/// written at sandbox start; the guest's own `NODE_EXTRA_CA_CERTS`).
+pub const AZURE_EGRESS_PROXY_CA_PATH: &str = "/etc/ssl/certs/adc-egress-proxy-ca.crt";
 /// JSON array of tolerations for sandbox pods (`sandbox.tolerations`).
 pub const ENV_ALIEN_SANDBOX_TOLERATIONS: &str = "ALIEN_SANDBOX_TOLERATIONS";
 /// JSON object mapping workload priority levels (`critical`, `high`, `normal`, `low`) to

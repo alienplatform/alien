@@ -553,18 +553,7 @@ impl Sandbox for AzureSandbox {
             );
         }
 
-        if let Some(storage) = &self.persistent_storage {
-            // The agent's half of the declaration; the store and the rights arrive at attach.
-            request.env.insert(
-                alien_core::sandbox_egress::ENV_PERSISTENT_STORAGE.to_string(),
-                serde_json::json!({
-                    "path": storage.path,
-                    "exclude": storage.exclude,
-                    "maxSizeBytes": storage.max_size_bytes,
-                })
-                .to_string(),
-            );
-        }
+        request.env.extend(self.storage_environment());
         if let Some(guest) = self.guest_egress()? {
             request.env.insert(
                 alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS.to_string(),

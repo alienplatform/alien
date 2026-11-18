@@ -6,11 +6,12 @@
 //! the socket (and its DNS lookup) as the agent's. One connection per request: commits send a
 //! few objects a second at most.
 //!
-//! Trust: the bundled webpki roots, plus the bundle the platform names in `SSL_CERT_FILE` when
-//! the agent starts. Azure's sandbox egress proxy inspects TLS (`trafficInspection: Full`, which
-//! host rules need) and re-signs every connection, store included, with a CA it hands the guest
-//! that way. The bundle is read once at boot, before any command runs, so a command cannot
-//! change what the agent trusts afterwards.
+//! Trust: the bundled webpki roots, plus the root the platform's egress proxy signs with when
+//! the binding names one (`ALIEN_SANDBOX_STORE_TRUST_ROOTS`, Azure). Azure's proxy terminates
+//! every HTTPS connection under an enforcing policy, the store's included, and no policy option
+//! exempts a host (evidence in the Azure persistent storage PR). The file is read once at boot,
+//! before any command runs, from a descriptor whose owner and mode are checked: only root may
+//! have been able to write it or replace it.
 
 use std::{
     sync::{Arc, OnceLock},
@@ -28,36 +29,69 @@ use tokio_rustls::{
     TlsConnector,
 };
 
-/// The platform's extra roots, read at boot. Empty when it names none.
+/// The platform's extra roots, read at boot. Empty when the binding names none.
 static PLATFORM_ROOTS: OnceLock<Vec<CertificateDer<'static>>> = OnceLock::new();
 
-/// Reads the bundle `SSL_CERT_FILE` names, once. Call at boot, before the workload starts.
-/// An error when the variable is set but the file cannot be read or holds no certificate (the
-/// caller logs it; the bundled roots still apply).
+/// Reads the roots `ALIEN_SANDBOX_STORE_TRUST_ROOTS` names, once; returns how many. Call at
+/// boot, before the workload starts. Refused when the file, or its directory, is not owned by
+/// root or is writable by anyone else, or holds no certificate.
 pub fn load_platform_roots_from_env() -> std::io::Result<usize> {
-    let roots = match std::env::var_os("SSL_CERT_FILE") {
+    let roots = match std::env::var_os(alien_core::ENV_ALIEN_SANDBOX_STORE_TRUST_ROOTS) {
         None => Vec::new(),
-        Some(path) => parse_bundle(&std::fs::read(&path).map_err(|error| {
-            std::io::Error::new(
-                error.kind(),
-                format!(
-                    "cannot read SSL_CERT_FILE {}: {error}",
-                    path.to_string_lossy()
-                ),
-            )
-        })?)?,
+        Some(path) => read_root_owned(std::path::Path::new(&path), 0)
+            .and_then(|pem| parse_bundle(&pem))
+            .map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "{} {}: {error}",
+                        alien_core::ENV_ALIEN_SANDBOX_STORE_TRUST_ROOTS,
+                        path.to_string_lossy()
+                    ),
+                )
+            })?,
     };
     let count = roots.len();
     let _ = PLATFORM_ROOTS.set(roots);
     Ok(PLATFORM_ROOTS.get().map_or(count, Vec::len))
 }
 
+/// The file's bytes, when it is an absolute path to a regular file owned by `owner` that no one
+/// else can write, in a directory with the same property. Ownership is checked on the open
+/// descriptor the bytes are read from.
+fn read_root_owned(path: &std::path::Path, owner: u32) -> std::io::Result<Vec<u8>> {
+    use std::{io::Read, os::unix::fs::MetadataExt};
+    let writable_by_others =
+        |meta: &std::fs::Metadata| meta.uid() != owner || meta.mode() & 0o022 != 0;
+    if !path.is_absolute() {
+        return Err(std::io::Error::other("not an absolute path"));
+    }
+    let directory = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("no directory"))?;
+    if writable_by_others(&std::fs::metadata(directory)?) {
+        return Err(std::io::Error::other(
+            "its directory may be written by a user other than root",
+        ));
+    }
+    let mut file = std::fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() || writable_by_others(&meta) {
+        return Err(std::io::Error::other(
+            "not a regular file only root may write",
+        ));
+    }
+    let mut pem = Vec::new();
+    file.read_to_end(&mut pem)?;
+    Ok(pem)
+}
+
 fn parse_bundle(pem: &[u8]) -> std::io::Result<Vec<CertificateDer<'static>>> {
     let roots = CertificateDer::pem_slice_iter(pem)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| std::io::Error::other(format!("SSL_CERT_FILE: {error}")))?;
+        .map_err(std::io::Error::other)?;
     if roots.is_empty() {
-        return Err(std::io::Error::other("SSL_CERT_FILE holds no certificate"));
+        return Err(std::io::Error::other("holds no certificate"));
     }
     Ok(roots)
 }
@@ -66,8 +100,7 @@ fn root_store(extra: &[CertificateDer<'static>]) -> RootCertStore {
     let mut roots = RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     };
-    // A bundle (often the whole system store) can carry a certificate rustls cannot use as a
-    // trust anchor; skip that one, keep the rest.
+    // A certificate rustls cannot use as a trust anchor is skipped; the rest stay.
     let _ = roots.add_parsable_certificates(extra.iter().cloned());
     roots
 }
@@ -272,6 +305,35 @@ mod tests {
             .await
             .expect("trusted with the platform bundle");
         assert_eq!(response.status, StatusCode::NO_CONTENT);
+    }
+
+    /// Only a file and directory the owner alone may write are read. The test uses its own uid
+    /// as the owner; the agent passes root's.
+    #[test]
+    fn roots_are_read_only_from_a_file_no_one_else_can_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let me = unsafe { libc::geteuid() };
+        let directory = tempfile::tempdir().unwrap();
+        let set = |path: &std::path::Path, mode: u32| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+        };
+        set(directory.path(), 0o755);
+        let file = directory.path().join("proxy-ca.crt");
+        std::fs::write(&file, b"pem").unwrap();
+        set(&file, 0o644);
+        assert_eq!(read_root_owned(&file, me).unwrap(), b"pem");
+
+        // Another owner, a file others may write, a directory others may write, a relative
+        // path, a directory in its place.
+        assert!(read_root_owned(&file, me + 1).is_err());
+        set(&file, 0o664);
+        assert!(read_root_owned(&file, me).is_err());
+        set(&file, 0o644);
+        set(directory.path(), 0o777);
+        assert!(read_root_owned(&file, me).is_err());
+        set(directory.path(), 0o755);
+        assert!(read_root_owned(std::path::Path::new("proxy-ca.crt"), me).is_err());
+        assert!(read_root_owned(directory.path(), me).is_err());
     }
 
     #[test]

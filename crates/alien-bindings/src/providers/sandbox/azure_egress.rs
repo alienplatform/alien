@@ -112,6 +112,30 @@ impl AzureSandbox {
         Ok(Some(format!("only:{}", allowed.join(","))))
     }
 
+    /// What the agent needs of the persistent storage declaration at boot: its half of the
+    /// declaration (the store and the rights arrive at attach), and the root the platform's
+    /// egress proxy re-signs the store's TLS with. Empty when nothing is declared.
+    pub(super) fn storage_environment(&self) -> Vec<(String, String)> {
+        let Some(storage) = &self.persistent_storage else {
+            return Vec::new();
+        };
+        vec![
+            (
+                alien_core::sandbox_egress::ENV_PERSISTENT_STORAGE.to_string(),
+                serde_json::json!({
+                    "path": storage.path,
+                    "exclude": storage.exclude,
+                    "maxSizeBytes": storage.max_size_bytes,
+                })
+                .to_string(),
+            ),
+            (
+                alien_core::ENV_ALIEN_SANDBOX_STORE_TRUST_ROOTS.to_string(),
+                alien_core::AZURE_EGRESS_PROXY_CA_PATH.to_string(),
+            ),
+        ]
+    }
+
     pub(super) fn creation_deadline(&self) -> Option<i64> {
         self.egress_manager.as_ref().map(|_| {
             chrono::Utc::now().timestamp_millis()
