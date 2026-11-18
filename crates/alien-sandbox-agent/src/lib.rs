@@ -38,3 +38,5 @@ pub mod native_token;
 pub mod protected_files;
 #[cfg(target_os = "linux")]
 pub mod read_only_mounts;
+#[cfg(target_os = "linux")]
+pub mod storage;
