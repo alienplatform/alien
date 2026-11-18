@@ -1452,6 +1452,138 @@ async fn live_gateway_replace() {
     assert!(failed.is_empty(), "failed: {failed:#?}");
 }
 
+/// Revoking a sandbox's gateway identity while one gateway VM is stopped. The operator stops
+/// the VM from outside and drives the stages through the vault secret `revoke-signal`:
+/// `ready` (this test is waiting) -> `stopped` (the VM is powered off) -> `vm-back` (it serves
+/// again) -> `done`. Measured: `terminate` of a sandbox with every gateway serving (baseline),
+/// with one VM stopped (how long it retries, and the error it ends with), and after the VM is
+/// back. Terminate deletes the sandbox even when the revocation fails.
+#[tokio::test]
+#[ignore = "live Azure: run inside the deployment's VNet; the operator stops and starts one gateway VM"]
+async fn live_revoke_stopped_vm() {
+    let provider = live_bindings(&[]);
+    let sandbox = provider.load_sandbox("box").await.expect("loads");
+    let sandbox: &dyn alien_bindings::traits::Sandbox = sandbox.as_ref();
+    let vault = provider.load_vault("secrets").await.expect("vault");
+    let mut log = Vec::<String>::new();
+    let mut failures = Vec::<String>::new();
+    let policy = || Some(allow(&["example.com"]));
+    let signal = |wanted: &'static str| {
+        let vault = vault.clone();
+        async move {
+            for _ in 0..600 {
+                if vault.get_secret("revoke-signal").await.unwrap_or_default() == wanted {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
+            false
+        }
+    };
+    let make = || async {
+        sandbox
+            .create(CreateSandboxRequest {
+                egress: policy(),
+                ..Default::default()
+            })
+            .await
+            .map(|created| created.sandbox_id)
+            .map_err(|error| format!("create: {error}"))
+    };
+    let timed_terminate = |id: String| async move {
+        let started = Instant::now();
+        let result = sandbox.terminate(&id).await;
+        (started.elapsed(), result)
+    };
+    let outcome = std::panic::AssertUnwindSafe(async {
+        let baseline = make().await?;
+        let (a, b) = (make().await?, make().await?);
+        let seen = proxy(sandbox, &a, "example.com", 443, "").await;
+        log.push(format!("before: example.com through a sandbox: {seen}"));
+        if !connected(&seen) {
+            failures.push(format!("before: {seen}"));
+        }
+        let (took, result) = timed_terminate(baseline).await;
+        log.push(format!(
+            "baseline terminate, every gateway serving: {:.1}s -> {}",
+            took.as_secs_f64(),
+            result
+                .as_ref()
+                .map_or_else(|e| format!("Err {e}"), |_| "Ok".into())
+        ));
+        if result.is_err() {
+            failures.push("baseline terminate failed".into());
+        }
+        vault
+            .set_secret("revoke-signal", "ready")
+            .await
+            .map_err(|error| format!("signal: {error}"))?;
+        if !signal("stopped").await {
+            return Err("no `stopped` signal".to_string());
+        }
+        let (took, result) = timed_terminate(a).await;
+        match &result {
+            Err(error) => log.push(format!(
+                "terminate with one gateway VM stopped: {:.1}s -> Err retryable={} code={} {}",
+                took.as_secs_f64(),
+                error.retryable,
+                error.code,
+                error.message.chars().take(160).collect::<String>()
+            )),
+            Ok(()) => log.push(format!(
+                "terminate with one gateway VM stopped: {:.1}s -> Ok",
+                took.as_secs_f64()
+            )),
+        }
+        match result {
+            Err(error) if error.retryable => {}
+            other => failures.push(format!(
+                "stopped VM: expected a retryable error, got {other:?}"
+            )),
+        }
+        vault
+            .set_secret("revoke-signal", "terminated-stopped")
+            .await
+            .map_err(|error| format!("signal: {error}"))?;
+        if !signal("vm-back").await {
+            return Err("no `vm-back` signal".to_string());
+        }
+        let (took, result) = timed_terminate(b).await;
+        log.push(format!(
+            "terminate after the VM is back: {:.1}s -> {}",
+            took.as_secs_f64(),
+            result
+                .as_ref()
+                .map_or_else(|e| format!("Err {e}"), |_| "Ok".into())
+        ));
+        if result.is_err() {
+            failures.push("terminate after the VM is back failed".into());
+        }
+        let new = make().await?;
+        let seen = proxy(sandbox, &new, "example.com", 443, "").await;
+        log.push(format!("after: a NEW sandbox, example.com: {seen}"));
+        if !connected(&seen) {
+            failures.push(format!("after: a NEW sandbox {seen}"));
+        }
+        let _ = sandbox.terminate(&new).await;
+        Ok::<(), String>(())
+    })
+    .catch_unwind()
+    .await;
+    match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => failures.push(error),
+        Err(_) => failures.push("the test panicked".to_string()),
+    }
+    let heading = if failures.is_empty() { "DONE" } else { "FAIL" };
+    let mut text = format!("{heading}\n{}", log.join("\n"));
+    for failure in &failures {
+        text.push_str(&format!("\nFAIL: {failure}"));
+    }
+    publish(&provider, &text).await;
+    assert!(failures.is_empty(), "failed: {failures:#?}");
+}
+
 #[test]
 fn the_leak_probe_verdict_fails_on_a_missing_probe_a_wireserver_connect_or_a_foreign_answer() {
     let round = |wire: &str, extra: &str| {
