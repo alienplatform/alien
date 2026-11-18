@@ -511,6 +511,19 @@ impl Build for AcaBuild {
                 } else {
                     None
                 };
+                if end_time.is_some() {
+                    // A finished job has nothing left to run. The build grants cover every job
+                    // in the resource group, so a job that stays behind is a job another holder
+                    // could start or change. This call already read the terminal status; a later
+                    // call finds no job and reports the build as cancelled.
+                    if let Err(error) = self
+                        .client
+                        .delete_job(&self.resource_group_name, job_name)
+                        .await
+                    {
+                        tracing::warn!(job = %job_name, error = %error, "Failed to delete the job of a finished build");
+                    }
+                }
                 Ok(BuildExecution {
                     id: build_id.to_string(),
                     status,
@@ -771,7 +784,21 @@ mod tests {
     }
 
     fn status_of_execution(status: &'static str) -> MockContainerAppsApi {
+        status_of_execution_counting(status, Arc::new(std::sync::atomic::AtomicUsize::new(0)))
+    }
+
+    fn status_of_execution_counting(
+        status: &'static str,
+        deletes: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> MockContainerAppsApi {
         let mut client = MockContainerAppsApi::new();
+        client
+            .expect_delete_job()
+            .withf(|rg, job| rg == "rg" && job == "build-p-1")
+            .returning(move |_, _| {
+                deletes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(OperationResult::Completed(()))
+            });
         client
             .expect_get_job_execution()
             .withf(|rg, job, exec| rg == "rg" && job == "build-p-1" && exec == "e1")
@@ -805,6 +832,29 @@ mod tests {
             assert_eq!(
                 got.end_time.is_some(),
                 want != BuildStatus::Running,
+                "{azure}"
+            );
+        }
+    }
+
+    /// A finished build's job is deleted (nothing else removes it, and the grants cover every
+    /// job in the group); a running build's job is left alone.
+    #[tokio::test]
+    async fn a_finished_build_deletes_its_job_and_a_running_one_does_not() {
+        for (azure, deleted) in [
+            ("Running", 0),
+            ("Succeeded", 1),
+            ("Failed", 1),
+            ("Stopped", 1),
+        ] {
+            let deletes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            build(status_of_execution_counting(azure, deletes.clone()))
+                .get_build_status("build-p-1/executions/e1")
+                .await
+                .unwrap();
+            assert_eq!(
+                deletes.load(std::sync::atomic::Ordering::SeqCst),
+                deleted,
                 "{azure}"
             );
         }
