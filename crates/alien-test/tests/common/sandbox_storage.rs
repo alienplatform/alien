@@ -681,8 +681,10 @@ echo store-via-gateway=$(curl -s -m 20 -o /dev/null -w '%{{http_code}}' https://
     } else {
         script += "curl -sS -m 8 -o /dev/null https://management.azure.com/ && echo REACHED_OUT || echo outbound-refused; ";
     }
-    script += r#"env | grep -c 'sig=' || true; cat /proc/1/environ >/dev/null 2>&1 && echo READ_PID1_ENV || echo pid1-env-denied; echo begin-grep;
-grep -rls 'sig=' /proc/[0-9]*/environ /proc/[0-9]*/cmdline /tmp /workspace /opt/alien 2>/dev/null | head -5; echo end-grep"#;
+    // `si[g]=` matches a SAS but not this script's own command line, nor grep's arguments; each
+    // hit names its process so a real one can be told apart.
+    script += r#"env | grep -c 'si[g]=' || true; cat /proc/1/environ >/dev/null 2>&1 && echo READ_PID1_ENV || echo pid1-env-denied; echo begin-grep;
+for f in $(grep -rls 'si[g]=' /proc/[0-9]*/environ /proc/[0-9]*/cmdline /tmp /workspace /opt/alien 2>/dev/null | head -5); do echo "$f $(cat "${f%/*}/comm" 2>/dev/null)"; done; echo end-grep"#;
     let probe = sh(sandbox, &first, &script).await?;
     eprintln!("command-uid probe:\n{}{}", probe.stdout, probe.stderr);
     let says = |line: &str| probe.stdout.lines().any(|l| l == line);
