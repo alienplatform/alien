@@ -56,7 +56,7 @@ jobs:
               echo "::error::Release qualification requires a Linear-derived branch"
               exit 1
             fi
-            allowed='^(Cargo.toml|Cargo.lock|packages/(core|permissions|commands|sdk|testing|bindings|ai-gateway)/package.json|packages/permissions/generated/(bytes\.js|compiler\.js|compiler\.d\.ts)|crates/alien-bindings-node/package.json|client-sdks/(platform|manager)/typescript/(package.json|jsr.json|package-lock.json|src/lib/config.ts|\.speakeasy/(gen.yaml|gen.lock))|packages/bindings/npm/(darwin-arm64|darwin-x64|linux-x64-gnu|linux-arm64-gnu)/package.json|infra/helm/alien-manager/Chart.yaml|infra/aws-ecs-manager/variables.tf)$'
+            allowed='^(Cargo.toml|Cargo.lock|packages/(core|permissions|commands|sdk|testing|bindings|ai-gateway)/package.json|packages/permissions/generated/(bytes\.js|compiler\.js|compiler\.d\.ts)|crates/alien-bindings-node/package.json|client-sdks/(platform|manager)/typescript/(package.json|jsr.json|package-lock.json|src/lib/config.ts|\.speakeasy/(gen.yaml|gen.lock))|packages/bindings/npm/(darwin-arm64|darwin-x64|linux-x64-gnu|linux-arm64-gnu)/package.json|infra/helm/alien-manager/Chart.yaml|infra/aws-ecs-manager/variables.tf|crates/alien-manager/src/routes/pull_compat.rs)$'
             unexpected=$(git diff --name-only "$BASE_SHA" "$SOURCE_REF" | grep -Ev "$allowed" || true)
             if [ -n "$unexpected" ]; then
               echo "::error::Release PR contains non-version files:"
@@ -136,6 +136,16 @@ jobs:
                 requireVersion(path, module, new RegExp('ghcr\\.io/alienplatform/alien-manager:v' + releaseVersion + '"'));
                 base = normalizeModule(fromRef(process.env.BASE_SHA, path));
                 head = normalizeModule(module);
+              } else if (path === 'crates/alien-manager/src/routes/pull_compat.rs') {
+                // Only the NEXT_RELEASE line may change, and it must be the
+                // release version with the patch plus one.
+                const [major, minor, patch] = process.env.RELEASE_VERSION.split('.');
+                const nextRelease = major + '.' + minor + '.' + (Number(patch) + 1);
+                const nextPattern = /^(pub\(crate\) const NEXT_RELEASE: &str = ")[0-9.]+(";)$/m;
+                const source = fromRef(process.env.SOURCE_REF, path);
+                requireVersion(path, source, new RegExp('^pub\\(crate\\) const NEXT_RELEASE: &str = "' + nextRelease.replaceAll('.', '\\.') + '";$', 'm'));
+                base = fromRef(process.env.BASE_SHA, path).replace(nextPattern, '$1__NEXT_RELEASE__$2');
+                head = source.replace(nextPattern, '$1__NEXT_RELEASE__$2');
               } else {
                 continue;
               }

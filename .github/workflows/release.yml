@@ -215,6 +215,13 @@ jobs:
         env:
           VERSION: ${{ steps.bump.outputs.version }}
 
+      # The pull-target compatibility table names the next unreleased version.
+      - name: Set next release in the pull-target compatibility table
+        if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
+        run: .github/scripts/bump-next-release.sh "$VERSION"
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+
       - name: Set JavaScript package versions
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
         run: |
