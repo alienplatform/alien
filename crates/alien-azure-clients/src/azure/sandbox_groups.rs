@@ -230,7 +230,8 @@ impl SandboxGroupsApi for AzureSandboxGroupsClient {
         location: &str,
         tags: std::collections::BTreeMap<String, String>,
     ) -> Result<SandboxGroup> {
-        self.put_group(resource_group, name, location, tags, false).await
+        self.put_group(resource_group, name, location, tags, false)
+            .await
     }
 
     async fn create_sandbox_group_if_absent(
@@ -240,7 +241,8 @@ impl SandboxGroupsApi for AzureSandboxGroupsClient {
         location: &str,
         tags: std::collections::BTreeMap<String, String>,
     ) -> Result<SandboxGroup> {
-        self.put_group(resource_group, name, location, tags, true).await
+        self.put_group(resource_group, name, location, tags, true)
+            .await
     }
 
     async fn get_sandbox_group(&self, resource_group: &str, name: &str) -> Result<SandboxGroup> {
