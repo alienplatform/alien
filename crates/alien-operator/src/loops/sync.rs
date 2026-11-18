@@ -581,6 +581,7 @@ async fn sync_with_manager(
             if let Some(mut local_state) = state.db.get_deployment_state().await? {
                 if apply_manager_control_signals(&mut local_state, &manager_state) {
                     state.db.set_deployment_state(&local_state).await?;
+                    state.db.request_deployment();
                     state_hydrated = true;
                     info!("Applied deployment control signals from manager");
                 }
@@ -590,11 +591,13 @@ async fn sync_with_manager(
             .is_none_or(is_uninitialized_deployment_state)
         {
             state.db.set_deployment_state(&manager_state).await?;
+            state.db.request_deployment();
             state_hydrated = true;
             info!("Hydrated deployment state from manager");
         } else if let Some(mut local_state) = local_state {
             if apply_manager_control_state(&mut local_state, &manager_state) {
                 state.db.set_deployment_state(&local_state).await?;
+                state.db.request_deployment();
                 state_hydrated = true;
                 info!("Applied deployment control state from manager");
             } else {
@@ -1025,16 +1028,62 @@ pub(crate) async fn accept_target(
         );
     }
 
-    // Save state and config
-    state.db.set_deployment_state(&deployment_state).await?;
-    state
-        .db
-        .set_deployment_config(&target_deployment.config)
-        .await?;
+    // The manager replays a target on every sync. Only a target that changes the
+    // deployment's state or what is applied wakes the loop: a replay must not cut
+    // short the wait a step asked for.
+    let previous_state = state.db.get_deployment_state().await?;
+    let previous_config = state.db.get_deployment_config().await?;
+    let changed = serde_json::to_value(&previous_state).ok()
+        != serde_json::to_value(Some(&deployment_state)).ok()
+        || match (&previous_state, &previous_config) {
+            (Some(previous), Some(config)) => {
+                crate::db::approved_target_hash(previous.target_release.as_ref(), config)?
+                    != crate::db::approved_target_hash(
+                        deployment_state.target_release.as_ref(),
+                        &target_deployment.config,
+                    )?
+            }
+            _ => true,
+        };
 
-    // Handle deployment approval if required. A refresh changes nothing that
-    // was not already approved.
-    if !refresh && state.config.requires_deployment_approval() {
+    // Open the approval before the target is saved: the deployment loop treats a
+    // release with no approval record as approved, so the pending record must
+    // exist by the time the target can be read or the loop is woken. A refresh
+    // changes nothing that was not already approved. A target sent again while
+    // its approval is still pending, or already decided, keeps that record: a
+    // newer one would hide the decision. A changed release or config is a new
+    // target and needs its own approval (compared by the hash the loop uses).
+    // Only the newest record of all counts as a repeat: a target that returns
+    // after another release was proposed (a rollback) is asked about again.
+    // The record must also be for what this Operator has installed or is
+    // targeting: an older approved release that returns after another release
+    // was deployed without a record (approval was off) is a new proposal.
+    let covered = match state.db.get_latest_approval().await? {
+        Some(latest) => {
+            let latest_release_id = latest
+                .release_info
+                .as_ref()
+                .and_then(|release| release.release_id.as_deref());
+            let held_release = |release: Option<&alien_core::ReleaseInfo>| {
+                latest_release_id.is_some()
+                    && release.and_then(|release| release.release_id.as_deref())
+                        == latest_release_id
+            };
+            let is_held = previous_state.as_ref().is_some_and(|previous| {
+                held_release(previous.target_release.as_ref())
+                    || held_release(previous.current_release.as_ref())
+            });
+            is_held
+                && same_target(
+                    latest.release_info.as_ref(),
+                    &latest.deployment_config,
+                    &target_deployment.release_info,
+                    &target_deployment.config,
+                )
+        }
+        None => false,
+    };
+    if !refresh && state.config.requires_deployment_approval() && !covered {
         let apr_id = format!("apr_{}", Uuid::new_v4().simple());
         let approval = Approval {
             id: apr_id.clone(),
@@ -1053,7 +1102,66 @@ pub(crate) async fn accept_target(
             "Created approval for new target release"
         );
     }
+
+    // Save state and config
+    state.db.set_deployment_state(&deployment_state).await?;
+    state
+        .db
+        .set_deployment_config(&target_deployment.config)
+        .await?;
+    if changed {
+        // Written last: the loop reads the config together with the target.
+        state.db.request_deployment();
+    }
+
     Ok(())
+}
+
+/// Whether a target re-sent by the manager is the one a stored approval
+/// record covers: the release and the whole configuration are equal as
+/// serialized values. Only fields the manager regenerates on every sync are
+/// left out:
+/// - `deploymentToken`: the Operator's own bearer token, taken from the sync
+///   request's header;
+/// - `environmentVariables.createdAt`: the snapshot's creation timestamp (its
+///   `hash` and every variable stay compared).
+///
+/// Fields that serde skips (`setup_run`, `deployment_id`, `setup_run_id`,
+/// `release_statements`, `image_registry`, `image_pull_secrets`,
+/// `deletion_policy`) are set by the Operator itself and never arrive in a
+/// target. Any other field counts: a spurious new record only asks again, a
+/// missed change would apply an unapproved one.
+fn same_target(
+    stored_release: Option<&alien_core::ReleaseInfo>,
+    stored_config: &alien_core::DeploymentConfig,
+    release: &alien_core::ReleaseInfo,
+    config: &alien_core::DeploymentConfig,
+) -> bool {
+    fn comparable(
+        release: Option<&alien_core::ReleaseInfo>,
+        config: &alien_core::DeploymentConfig,
+    ) -> Option<serde_json::Value> {
+        let mut config = serde_json::to_value(config).ok()?;
+        let object = config.as_object_mut()?;
+        object.remove("deploymentToken");
+        if let Some(snapshot) = object
+            .get_mut("environmentVariables")
+            .and_then(|value| value.as_object_mut())
+        {
+            snapshot.remove("createdAt");
+        }
+        Some(serde_json::json!([
+            serde_json::to_value(release).ok()?,
+            config
+        ]))
+    }
+    match (
+        comparable(stored_release, stored_config),
+        comparable(Some(release), config),
+    ) {
+        (Some(stored), Some(incoming)) => stored == incoming,
+        _ => false,
+    }
 }
 
 /// Whether a maintenance target can be served by refreshing what is installed:
@@ -1375,8 +1483,11 @@ fn apply_manager_control_state(
             | alien_core::DeploymentStatus::TeardownFailed
             | alien_core::DeploymentStatus::Deleted
     ) {
+        // The manager reports this state on every sync: only a different one is a change.
+        let changed =
+            serde_json::to_value(&*local_state).ok() != serde_json::to_value(manager_state).ok();
         *local_state = manager_state.clone();
-        return true;
+        return changed;
     }
     let protocol_changed = manager_state.protocol_version > local_state.protocol_version
         && alien_core::accepts_deployment_protocol_report(
@@ -2448,6 +2559,560 @@ mod tests {
                 .status,
             DeploymentStatus::DeletePending
         );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_held_deployment_still_reports_its_status_to_the_manager() {
+        for status in [
+            DeploymentStatus::TeardownRequired,
+            DeploymentStatus::RetentionRequired,
+            DeploymentStatus::Retained,
+            DeploymentStatus::TeardownFailed,
+        ] {
+            let data_dir = tempfile::tempdir().unwrap();
+            let db = Arc::new(
+                OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                    .await
+                    .unwrap(),
+            );
+            db.set_deployment_id("dep_held").await.unwrap();
+            let held = DeploymentState {
+                platform: Platform::Local,
+                status,
+                current_release: None,
+                target_release: None,
+                stack_state: None,
+                runtime_metadata: None,
+                error: None,
+                environment_info: None,
+                retry_requested: false,
+                protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            };
+            db.set_deployment_state(&held).await.unwrap();
+            let captured = Arc::new(Mutex::new(None));
+            let request_capture = captured.clone();
+            let held_reply = held.clone();
+            let app = Router::new().route(
+                "/v1/sync",
+                post(move |Json(body): Json<Value>| {
+                    *request_capture.lock().unwrap() = Some(body);
+                    // The manager reports the same state on every sync.
+                    let response = json!({"currentState": held_reply});
+                    async move { Json(response) }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            let state = OperatorState {
+                config: OperatorConfig::builder()
+                    .platform(Platform::Local)
+                    .data_dir(data_dir.path().to_str().unwrap())
+                    .encryption_key(TEST_ENCRYPTION_KEY)
+                    .build(),
+                db,
+                service_provider: None,
+                operations_sync_handler: None,
+                pod_log_collection: false,
+                cancel: CancellationToken::new(),
+            };
+            // The deployment loop holds in this status; the sync loop reports it.
+            super::super::deployment::run_deployment_continuously(&state)
+                .await
+                .unwrap();
+            sync_with_manager(
+                &state,
+                &create_authenticated_client("fake-token").unwrap(),
+                &url,
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+            let request = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("manager was contacted");
+            assert_eq!(
+                request["currentState"]["status"],
+                serde_json::to_value(status).unwrap(),
+                "{status:?}"
+            );
+            server.abort();
+        }
+    }
+
+    /// Whether the deployment loop was woken (consuming the wake).
+    async fn deployment_woken(db: &OperatorDb) -> bool {
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            db.wait_for_deployment(),
+        )
+        .await
+        .is_ok()
+    }
+
+    #[tokio::test]
+    async fn an_accepted_target_wakes_the_deployment_loop() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        assert!(!deployment_woken(&db).await);
+        super::accept_target(&state, &fixtures::target(release, vec![]), false)
+            .await
+            .unwrap();
+        assert!(deployment_woken(&db).await);
+    }
+
+    fn approval_required_state(data_dir: &std::path::Path, db: Arc<OperatorDb>) -> OperatorState {
+        OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .maybe_stack_settings(Some(alien_core::StackSettings {
+                    airgapped: false,
+                    updates: alien_core::UpdatesMode::ApprovalRequired,
+                    telemetry: alien_core::TelemetryMode::Auto,
+                    heartbeats: alien_core::HeartbeatsMode::On,
+                    deployment_model: alien_core::DeploymentModel::Pull,
+                    network: None,
+                    domains: None,
+                    kubernetes: None,
+                    external_bindings: None,
+                    compute: None,
+                    public_endpoints: None,
+                    quota_warning_overrides: Vec::new(),
+                    endpoint_access: alien_core::EndpointAccess::Internet,
+                    setup_management: alien_core::SetupManagement::Manual,
+                    signing: None,
+                }))
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    /// With manual approval, the pending approval exists by the time the new
+    /// target can be read or the deployment loop is woken, so a pass that runs
+    /// at the earliest moment sees Pending and deploys nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_pending_approval_exists_before_the_target_is_readable() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = approval_required_state(data_dir.path(), db.clone());
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let release_id = release.release_id.clone().unwrap();
+
+        // The loop's earliest pass: woken, it reads the approval for the target.
+        let watcher_db = db.clone();
+        let watcher_release = release_id.clone();
+        let watcher = tokio::spawn(async move {
+            watcher_db.wait_for_deployment().await;
+            watcher_db
+                .get_approval_status_for_release(&watcher_release)
+                .await
+                .unwrap()
+        });
+        // A poll that does not wait for a wake sees the target as soon as it is saved.
+        let poller_db = db.clone();
+        let poller_release = release_id.clone();
+        let poller = tokio::spawn(async move {
+            loop {
+                if poller_db
+                    .get_deployment_state()
+                    .await
+                    .unwrap()
+                    .is_some_and(|s| s.target_release.is_some())
+                {
+                    return poller_db
+                        .get_approval_status_for_release(&poller_release)
+                        .await
+                        .unwrap();
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+
+        super::accept_target(&state, &fixtures::target(release, vec![]), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            watcher.await.unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+        assert_eq!(
+            poller.await.unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+    }
+
+    /// A target sent again before a decision keeps the one pending approval: a
+    /// second, newer record would hide the decision on the first.
+    #[tokio::test]
+    async fn a_replayed_target_keeps_one_pending_approval() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = approval_required_state(data_dir.path(), db.clone());
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let target = fixtures::target(release, vec![]);
+        super::accept_target(&state, &target, false).await.unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        assert_eq!(pending.len(), 1);
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let release_id = target.release_info.release_id.clone().unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Approved)
+        );
+    }
+
+    async fn approval_fixture() -> (
+        tempfile::TempDir,
+        Arc<OperatorDb>,
+        OperatorState,
+        alien_core::sync::TargetDeployment,
+        String,
+    ) {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = approval_required_state(data_dir.path(), db.clone());
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let release_id = release.release_id.clone().unwrap();
+        let target = fixtures::target(release, vec![]);
+        (data_dir, db, state, target, release_id)
+    }
+
+    async fn approval_records(db: &OperatorDb, release_id: &str) -> usize {
+        db.count_approvals_for_release(release_id).await.unwrap()
+    }
+
+    /// The manager repeats the target on every sync. A decided approval stays
+    /// the answer: the repeat must not open a newer Pending record over it.
+    #[tokio::test]
+    async fn a_target_repeated_after_approval_stays_approved() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Approved)
+        );
+        assert_eq!(approval_records(&db, &release_id).await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_target_repeated_after_rejection_stays_rejected() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Rejected,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Rejected)
+        );
+        assert_eq!(approval_records(&db, &release_id).await, 1);
+    }
+
+    /// The same release with a changed config is a new thing to approve: the
+    /// decision on the old config does not cover it.
+    #[tokio::test]
+    async fn a_changed_config_for_an_approved_release_needs_a_new_approval() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let mut changed = target.clone();
+        changed
+            .config
+            .input_values
+            .insert("logLevel".to_string(), serde_json::json!("trace"));
+        super::accept_target(&state, &changed, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+        // The changed target repeated keeps its one pending record.
+        super::accept_target(&state, &changed, false).await.unwrap();
+        assert_eq!(db.get_pending_approvals().await.unwrap().len(), 1);
+    }
+
+    /// A release that returns after another one was proposed (a rollback) is
+    /// asked about again, as before: its old decision is not a repeat.
+    #[tokio::test]
+    async fn an_older_approved_release_sent_again_after_another_needs_a_new_approval() {
+        use crate::protected::tests as fixtures;
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let other = fixtures::target(
+            fixtures::signed_release(6, &fixtures::stack(&fixtures::pinned())),
+            vec![],
+        );
+        super::accept_target(&state, &other, false).await.unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+    }
+
+    async fn approve_first_target(
+        db: &OperatorDb,
+        state: &OperatorState,
+        target: &alien_core::sync::TargetDeployment,
+    ) {
+        super::accept_target(state, target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// The manager mints a new token and snapshot timestamp on every sync; a
+    /// target that differs only in those is a repeat.
+    #[tokio::test]
+    async fn a_target_resent_with_fresh_per_sync_values_is_a_repeat() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        approve_first_target(&db, &state, &target).await;
+        let mut resent = target.clone();
+        resent.config.deployment_token = Some("fresh-token".to_string());
+        resent.config.environment_variables.created_at = "2030-01-01T00:00:00Z".to_string();
+        super::accept_target(&state, &resent, false).await.unwrap();
+        assert_eq!(approval_records(&db, &release_id).await, 1);
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Approved)
+        );
+    }
+
+    /// A field the approval hash does not cover still changes what is applied.
+    #[tokio::test]
+    async fn an_approved_target_resent_with_frozen_changes_needs_a_new_approval() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        approve_first_target(&db, &state, &target).await;
+        let mut changed = target.clone();
+        changed.config.allow_frozen_changes = true;
+        super::accept_target(&state, &changed, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+        assert_eq!(approval_records(&db, &release_id).await, 2);
+    }
+
+    #[tokio::test]
+    async fn an_approved_target_resent_with_a_volume_restore_needs_a_new_approval() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        approve_first_target(&db, &state, &target).await;
+        let mut changed = target.clone();
+        changed
+            .config
+            .volume_restores
+            .push(alien_core::VolumeRestoreRequest {
+                request_id: "restore-1".to_string(),
+                resource_id: "data".to_string(),
+                ordinal: 0,
+                snapshot_id: "snap-1".to_string(),
+            });
+        super::accept_target(&state, &changed, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+        assert_eq!(approval_records(&db, &release_id).await, 2);
+    }
+
+    /// Approval turned off, another release deployed with no record, approval
+    /// turned on: the old record is the newest but is not what is installed.
+    #[tokio::test]
+    async fn an_approved_release_resent_after_another_was_installed_needs_a_new_approval() {
+        use crate::protected::tests as fixtures;
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        approve_first_target(&db, &state, &target).await;
+        let other = fixtures::signed_release(6, &fixtures::stack(&fixtures::pinned()));
+        let mut installed = db.get_deployment_state().await.unwrap().unwrap();
+        installed.current_release = Some(other.clone());
+        installed.target_release = Some(other);
+        db.set_deployment_state(&installed).await.unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_retry_request_from_the_manager_wakes_the_deployment_loop() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        db.set_deployment_id("dep_retry").await.unwrap();
+        let failed = DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::ProvisioningFailed,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            runtime_metadata: None,
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&failed).await.unwrap();
+        let retry = DeploymentState {
+            retry_requested: true,
+            ..failed
+        };
+        let app = Router::new().route(
+            "/v1/sync",
+            post(move |Json(_): Json<Value>| {
+                let response = json!({"currentState": retry});
+                async move { Json(response) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Local)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        assert!(!deployment_woken(&db).await);
+        sync_with_manager(
+            &state,
+            &create_authenticated_client("fake-token").unwrap(),
+            &url,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            db.get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .retry_requested
+        );
+        assert!(deployment_woken(&db).await);
         server.abort();
     }
 
