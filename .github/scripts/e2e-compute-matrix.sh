@@ -217,6 +217,17 @@ if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
     TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-storage-notifications","test_filter":"terraform_azure_push_storage_notifications","needs_oidc":true,"resource_suffix":"tfazurentf","bindings_arch":"x86_64"}]')
   fi
 fi
+if [ "$APP" = "All" ] || [ "$APP" = "queue-dead-letter" ]; then
+  if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
+    TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-queue-dead-letter","test_filter":"terraform_aws_push_queue_dead_letter","needs_oidc":false,"resource_suffix":"tfawsdlq","bindings_arch":"aarch64"}]')
+  fi
+  if [ "$PUSH_GCP_TERRAFORM" = "true" ]; then
+    TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-queue-dead-letter","test_filter":"terraform_gcp_push_queue_dead_letter","needs_oidc":false,"resource_suffix":"tfgcpdlq","bindings_arch":"x86_64"}]')
+  fi
+  if [ "$PUSH_AZURE_TERRAFORM" = "true" ]; then
+    TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-queue-dead-letter","test_filter":"terraform_azure_push_queue_dead_letter","needs_oidc":true,"resource_suffix":"tfazuredlq","bindings_arch":"x86_64"}]')
+  fi
+fi
 if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
   if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
     TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-automatic-setup","test_filter":"terraform_aws_push_automatic_setup","needs_oidc":false,"resource_suffix":"tfawsauto"}]')
@@ -317,6 +328,9 @@ if [ "$PUSH_AWS_CLOUDFORMATION" = "true" ]; then
   fi
   if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
     CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-storage-notifications","test_filter":"cloudformation_aws_push_storage_notifications","needs_oidc":false,"resource_suffix":"cfawsntf","bindings_arch":"aarch64"}]')
+  fi
+  if [ "$APP" = "All" ] || [ "$APP" = "queue-dead-letter" ]; then
+    CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-queue-dead-letter","test_filter":"cloudformation_aws_push_queue_dead_letter","needs_oidc":false,"resource_suffix":"cfawsdlq","bindings_arch":"aarch64"}]')
   fi
   if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
     CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-automatic-setup","test_filter":"cloudformation_aws_push_automatic_setup","needs_oidc":false,"resource_suffix":"cfawsauto"}]')
