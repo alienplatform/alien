@@ -257,7 +257,11 @@ fn resolver_rule(resolv_conf: Option<&str>) -> Option<NetworkPolicyEgressRule> {
 /// network policy dataplane may not match a link-local address as an address block. The
 /// cluster DNS Service address is matched through the `kube-dns` pod selector in the policy.
 /// The search path and `ndots` are the kubelet's defaults for a pod in `namespace`.
-fn cluster_dns_config(namespace: &str, domain: &str, service_address: &str) -> PodDNSConfig {
+pub(super) fn cluster_dns_config(
+    namespace: &str,
+    domain: &str,
+    service_address: &str,
+) -> PodDNSConfig {
     PodDNSConfig {
         nameservers: Some(vec![service_address.to_string()]),
         searches: Some(vec![
@@ -272,47 +276,92 @@ fn cluster_dns_config(namespace: &str, domain: &str, service_address: &str) -> P
     }
 }
 
+/// The resolver the sandbox gateway's pods use.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum GatewayDns {
+    /// Whatever the cluster writes into every pod.
+    ClusterDefault,
+    /// The `kube-dns` Service address, with the cluster domain for the search path.
+    ClusterService { address: String, domain: String },
+}
+
+/// The resolver the gateway should use now. `None` when the `kube-dns` Service could not be read
+/// for any reason (the read is refused, the Service is absent, the API server answers 5xx or does
+/// not answer): that never decides whether the gateway deploys, and never rolls a running one.
+async fn read_gateway_dns(
+    domain: Option<String>,
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<Option<GatewayDns>> {
+    let Some(domain) = domain else {
+        return Ok(Some(GatewayDns::ClusterDefault));
+    };
+    let service = ctx
+        .service_provider
+        .get_kubernetes_service_client(ctx.get_kubernetes_config()?)
+        .await?
+        .get_service("kube-system", "kube-dns")
+        .await;
+    let service = match service {
+        Ok(service) => service,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "Could not read the cluster DNS Service; the gateway keeps its resolver"
+            );
+            return Ok(None);
+        }
+    };
+    let address = service
+        .spec
+        .and_then(|spec| spec.cluster_ip)
+        .filter(|address| address.parse::<std::net::Ipv4Addr>().is_ok());
+    Ok(Some(match address {
+        Some(address) => GatewayDns::ClusterService { address, domain },
+        None => GatewayDns::ClusterDefault,
+    }))
+}
+
+/// Whether the gateway's pods must roll for `read`. A gateway with no recorded resolver was built
+/// before the choice was recorded, with the cluster default.
+fn gateway_dns_differs(applied: Option<&GatewayDns>, read: &GatewayDns) -> bool {
+    applied.unwrap_or(&GatewayDns::ClusterDefault) != read
+}
+
 impl KubernetesContainerController {
-    /// Applies [`cluster_dns_config`] to a pod that has egress enforced. Left as the cluster
-    /// default when the cluster domain or the `kube-dns` Service cannot be determined, for any reason.
-    pub(super) async fn use_cluster_dns(
-        &self,
-        pod_spec: &mut k8s_openapi::api::core::v1::PodSpec,
-        namespace: &str,
+    /// Resolves and records the gateway's resolver for the pod spec about to be built. A read that
+    /// fails keeps the resolver already applied, or the cluster default.
+    pub(super) async fn refresh_gateway_dns(
+        &mut self,
+        config: &alien_core::Container,
+        domain: Option<String>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<()> {
-        let Some(domain) = crate::sandbox::kubernetes_egress::detected_cluster_domain() else {
+        if config.id != alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
             return Ok(());
-        };
-        let service = ctx
-            .service_provider
-            .get_kubernetes_service_client(ctx.get_kubernetes_config()?)
-            .await?
-            .get_service("kube-system", "kube-dns")
-            .await;
-        let service = match service {
-            Ok(service) => service,
-            Err(error) => {
-                // Whatever the reason (the read is refused, the Service is absent, the API server
-                // answers 5xx or does not answer), the gateway keeps the cluster resolver. The
-                // address only improves a cluster whose resolver is a node-local cache; it never
-                // decides whether the gateway deploys.
-                tracing::warn!(
-                    error = %error,
-                    "Could not read the cluster DNS Service; the gateway keeps the cluster resolver"
-                );
-                return Ok(());
-            }
-        };
-        let address = service
-            .spec
-            .and_then(|spec| spec.cluster_ip)
-            .filter(|address| address.parse::<std::net::Ipv4Addr>().is_ok());
-        if let Some(address) = address {
-            pod_spec.dns_policy = Some("None".into());
-            pod_spec.dns_config = Some(cluster_dns_config(namespace, &domain, &address));
         }
+        let read = read_gateway_dns(domain, ctx).await?;
+        self.applied_gateway_dns = Some(
+            read.or_else(|| self.applied_gateway_dns.take())
+                .unwrap_or(GatewayDns::ClusterDefault),
+        );
         Ok(())
+    }
+
+    /// Whether the resolver now chosen for the gateway differs from the one its pods run with.
+    /// Rolls the gateway once per change; an unreadable Service is no change.
+    pub(super) async fn gateway_dns_drifted(
+        &mut self,
+        domain: Option<String>,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<bool> {
+        let Some(read) = read_gateway_dns(domain, ctx).await? else {
+            return Ok(false);
+        };
+        let differs = gateway_dns_differs(self.applied_gateway_dns.as_ref(), &read);
+        if !differs && self.applied_gateway_dns.is_none() {
+            self.applied_gateway_dns = Some(read);
+        }
+        Ok(differs)
     }
 }
 
