@@ -16,6 +16,71 @@ use crate::error::{ErrorData, Result};
 
 pub(crate) const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
 
+/// Polls (5 s apart) a re-apply whose pod template did not change waits for readiness: nothing
+/// rolls, so the workload is either already healthy or still failing, and 1 minute tells which.
+pub(crate) const UNCHANGED_REAPPLY_MAX_POLLS: u32 = 12;
+
+/// The polls an update waits for readiness: the full rollout limit when the apply changed the
+/// pod template (pods roll), the short bound when it did not.
+pub(crate) fn update_wait_max_polls(template_unchanged: bool) -> u32 {
+    if template_unchanged {
+        UNCHANGED_REAPPLY_MAX_POLLS
+    } else {
+        KUBERNETES_WORKLOAD_READY_MAX_POLLS
+    }
+}
+
+/// Not-ready observations of a Running workload, within one window, that fail its refresh.
+pub(crate) const REFRESH_NOT_READY_OBSERVATIONS: u32 = 3;
+/// A not-ready observation older than this no longer counts towards the bound.
+pub(crate) const REFRESH_NOT_READY_WINDOW_SECS: i64 = 600;
+
+/// Not-ready observations of a Running workload. A ready check in between does not reset the
+/// count (a pod that is ready for part of each crash cycle still fails the refresh); only
+/// `REFRESH_NOT_READY_WINDOW_SECS` without a not-ready observation does.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct NotReadyObservations {
+    #[serde(default)]
+    count: u32,
+    #[serde(default)]
+    last_unix: Option<i64>,
+}
+
+impl NotReadyObservations {
+    /// Records one not-ready observation; true when the bound is reached.
+    pub(crate) fn observe(&mut self, now_unix: i64) -> bool {
+        if self
+            .last_unix
+            .is_some_and(|last| now_unix.saturating_sub(last) > REFRESH_NOT_READY_WINDOW_SECS)
+        {
+            self.count = 0;
+        }
+        self.count += 1;
+        self.last_unix = Some(now_unix);
+        self.count >= REFRESH_NOT_READY_OBSERVATIONS
+    }
+
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// The error of a not-ready refresh: retryable (checked again after a short backoff) until
+    /// the bound is reached, then final so the resource reaches RefreshFailed. The code stays
+    /// `WORKLOAD_NOT_READY` either way. While a refresh-failed resource is being re-checked
+    /// (`recovering`) the error stays retryable and is not counted.
+    pub(crate) fn error(
+        &mut self,
+        mut error: alien_error::AlienError<ErrorData>,
+        recovering: bool,
+        now_unix: i64,
+    ) -> alien_error::AlienError<ErrorData> {
+        if !recovering && self.observe(now_unix) {
+            error.retryable = false;
+        }
+        error
+    }
+}
+
 /// Kubernetes omits replica counters when their value is zero.
 pub(crate) fn deployment_has_ready_replicas(deployment: &Deployment) -> bool {
     let Some(status) = &deployment.status else {
@@ -586,6 +651,54 @@ pub async fn emit_kubernetes_workload_heartbeat(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_ready_check_between_not_ready_observations_does_not_reset_the_count() {
+        let mut watch = NotReadyObservations::default();
+        // Not ready, ready, not ready, ready, not ready: the third observation reaches the bound.
+        assert!(!watch.observe(1_000));
+        assert!(!watch.observe(1_030));
+        assert!(watch.observe(1_060));
+    }
+
+    #[test]
+    fn not_ready_observations_older_than_the_window_are_forgotten() {
+        let mut watch = NotReadyObservations::default();
+        assert!(!watch.observe(1_000));
+        assert!(!watch.observe(1_010));
+        assert!(!watch.observe(1_010 + REFRESH_NOT_READY_WINDOW_SECS + 1));
+    }
+
+    #[test]
+    fn the_error_is_retryable_until_the_bound_and_final_at_it() {
+        let make = || {
+            alien_error::AlienError::new(ErrorData::WorkloadNotReady {
+                resource_id: "x".into(),
+                message: "none ready".into(),
+            })
+        };
+        let mut watch = NotReadyObservations::default();
+        assert!(watch.error(make(), false, 1_000).retryable);
+        assert!(watch.error(make(), false, 1_001).retryable);
+        let last = watch.error(make(), false, 1_002);
+        assert!(!last.retryable);
+        assert_eq!(last.code, "WORKLOAD_NOT_READY");
+        // A refresh-failed resource being re-checked is neither counted nor final.
+        let mut watch = NotReadyObservations::default();
+        for now in 0..10 {
+            assert!(watch.error(make(), true, now).retryable);
+        }
+    }
+
+    #[test]
+    fn an_update_that_changed_nothing_waits_the_short_bound() {
+        assert_eq!(update_wait_max_polls(true), UNCHANGED_REAPPLY_MAX_POLLS);
+        assert_eq!(
+            update_wait_max_polls(false),
+            KUBERNETES_WORKLOAD_READY_MAX_POLLS
+        );
+        assert_eq!(UNCHANGED_REAPPLY_MAX_POLLS * 5, 60);
+    }
+
     use super::*;
     use k8s_openapi::api::apps::v1::{
         DeploymentCondition, DeploymentSpec, DeploymentStatus, StatefulSetSpec, StatefulSetStatus,

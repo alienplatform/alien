@@ -227,7 +227,13 @@ impl StackResourceStateExt for StackResourceState {
             return Ok(false);
         }
 
-        let failed_status = self.status;
+        // Only a failed readiness check is answered by applying the spec again. Real drift (an
+        // edited spec, a missing object) keeps resuming the failed check and reports as before.
+        let failed_readiness = self.status == ResourceStatus::RefreshFailed
+            && self
+                .error
+                .as_ref()
+                .is_some_and(|error| error.code == "WORKLOAD_NOT_READY");
 
         // Use the stored last failed state to resume from where the failure occurred
         match self.take_last_failed_controller() {
@@ -240,9 +246,7 @@ impl StackResourceStateExt for StackResourceState {
                 // A refresh failure of a workload that failed its readiness check resumes at
                 // the check that failed, which gives the same answer until its pods are
                 // applied again. Apply the current spec instead.
-                if failed_status == ResourceStatus::RefreshFailed
-                    && last_failed_state.reapplies_after_failed_refresh()
-                {
+                if failed_readiness && last_failed_state.reapplies_after_failed_refresh() {
                     last_failed_state.transition_to_update()?;
                 }
                 let next_status = last_failed_state.get_status();
@@ -273,7 +277,7 @@ impl StackResourceStateExt for StackResourceState {
                     controller.reset_stay_count();
                     // A workload that failed its readiness check gives the same answer until
                     // its pods are applied again, so the retry applies the current spec.
-                    if controller.reapplies_after_failed_refresh() {
+                    if failed_readiness && controller.reapplies_after_failed_refresh() {
                         controller.transition_to_update()?;
                     }
                     self.status = controller.get_status();
@@ -712,6 +716,25 @@ pub(super) fn prepare_for_destroy_matching(
 
     tracing::info!(prepared_resource_ids = ?prepared_resource_ids, "Completed prepare for destroy operation on stack");
     Ok(prepared_resource_ids)
+}
+
+/// The error a refresh failure saves on the record, for tests: a failed readiness check
+/// (`WORKLOAD_NOT_READY`) or real drift (`RESOURCE_DRIFT`).
+#[cfg(test)]
+pub(crate) fn saved_refresh_error(resource_id: &str, not_ready: bool) -> AlienError {
+    if not_ready {
+        AlienError::new(ErrorData::WorkloadNotReady {
+            resource_id: resource_id.to_string(),
+            message: "no ready replicas".to_string(),
+        })
+        .into_generic()
+    } else {
+        AlienError::new(ErrorData::ResourceDrift {
+            resource_id: resource_id.to_string(),
+            message: "the spec differs".to_string(),
+        })
+        .into_generic()
+    }
 }
 
 #[cfg(test)]
@@ -1226,7 +1249,26 @@ mod tests {
             assert!(state.resources[id].last_failed_state.is_some(), "'{id}'");
         }
 
+        // As saved by the earlier release, a refresh failure carries `RESOURCE_DRIFT`. A retry
+        // resumes the health check, which now reports a workload that is not ready as such, and
+        // the retry after that applies the spec. An update failure is retried as before.
+        let saved = state.clone();
         for (id, record) in &mut state.resources {
+            let was_refresh_failed = record.status == ResourceStatus::RefreshFailed;
+            assert!(record.retry_failed().unwrap(), "'{id}' is retried");
+            assert!(record.error.is_none(), "'{id}'");
+            if !was_refresh_failed {
+                assert_eq!(record.status, ResourceStatus::Updating, "'{id}'");
+            }
+        }
+
+        // Saved by this release, the same records carry `WORKLOAD_NOT_READY` and a retry
+        // applies the current spec.
+        let mut state = saved;
+        for (id, record) in &mut state.resources {
+            if record.status == ResourceStatus::RefreshFailed {
+                record.error = Some(saved_refresh_error(id, true));
+            }
             assert!(record.retry_failed().unwrap(), "'{id}' is retried");
             assert_eq!(record.status, ResourceStatus::Updating, "'{id}'");
             assert!(record.error.is_none(), "'{id}'");

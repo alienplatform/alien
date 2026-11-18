@@ -22,9 +22,9 @@ use crate::kubernetes_workload_heartbeat::{
     assess_rollout, deployment_has_ready_replicas, deployment_rollout_complete,
     emit_kubernetes_workload_heartbeat, label_selector, last_poll, recovery_check,
     rollout_timeout_message, stalled_rollout_message, statefulset_has_ready_replicas,
-    workload_fully_ready, workload_pod_reason, KubernetesWorkload, KubernetesWorkloadDataKind,
-    KubernetesWorkloadHeartbeatInput, RolloutWait, RolloutWatch,
-    KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+    update_wait_max_polls, workload_fully_ready, workload_pod_reason, KubernetesWorkload,
+    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, NotReadyObservations,
+    RolloutWait, RolloutWatch, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -221,6 +221,13 @@ pub struct KubernetesContainerController {
     /// Whether the previous health check also found zero ready replicas.
     #[serde(default)]
     pub(crate) zero_ready_observed: bool,
+    /// Not-ready observations of the Running workload; the third in a window fails the refresh.
+    #[serde(default)]
+    pub(crate) not_ready: NotReadyObservations,
+    /// Whether the last update left the pod template as it was (no pods roll). Such an update
+    /// waits for readiness only briefly.
+    #[serde(default)]
+    pub(crate) update_template_unchanged: bool,
     /// When the current rollout was first seen unfinished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) rollout_watch: Option<RolloutWatch>,
@@ -1167,19 +1174,23 @@ impl KubernetesContainerController {
                 )
                 .await;
                 if healthy || ready_replicas.unwrap_or(0) > 0 {
-                    return Err(AlienError::new(ErrorData::WorkloadNotReady {
-                        resource_id: config.id.clone(),
-                        message: stalled_rollout_message(
-                            workload_kind,
-                            workload_name,
-                            &format!(
-                                "{cause}; {} of {} replicas ready",
-                                ready_replicas.unwrap_or(0),
-                                replicas.unwrap_or(0)
+                    return Err(self.not_ready.error(
+                        AlienError::new(ErrorData::WorkloadNotReady {
+                            resource_id: config.id.clone(),
+                            message: stalled_rollout_message(
+                                workload_kind,
+                                workload_name,
+                                &format!(
+                                    "{cause}; {} of {} replicas ready",
+                                    ready_replicas.unwrap_or(0),
+                                    replicas.unwrap_or(0)
+                                ),
+                                pod_reason.as_deref(),
                             ),
-                            pod_reason.as_deref(),
-                        ),
-                    }));
+                        }),
+                        self.recovering,
+                        chrono::Utc::now().timestamp(),
+                    ));
                 }
             }
             if !healthy && matches!(assessment.wait, RolloutWait::Wait) {
@@ -1199,10 +1210,16 @@ impl KubernetesContainerController {
             if !healthy && zero_ready && !previous_zero {
                 // One zero-ready read can be a pod restart. Confirm it on the
                 // next check before turning a running workload into a failure.
-                return Ok(HandlerAction::Stay {
-                    max_times: None,
-                    suggested_delay: Some(Duration::from_secs(5)),
-                });
+                // The read counts towards the bound even when a ready check follows it: a pod
+                // that is ready for part of each crash cycle must still fail the refresh.
+                let bound_reached =
+                    !self.recovering && self.not_ready.observe(chrono::Utc::now().timestamp());
+                if !bound_reached {
+                    return Ok(HandlerAction::Stay {
+                        max_times: None,
+                        suggested_delay: Some(Duration::from_secs(5)),
+                    });
+                }
             }
             if !healthy {
                 let pod_reason = workload_pod_reason(
@@ -1213,7 +1230,7 @@ impl KubernetesContainerController {
                 )
                 .await;
                 let cause = assessment.stall.clone().unwrap_or_default();
-                return Err(AlienError::new(ErrorData::WorkloadNotReady {
+                return Err(self.not_ready.error(AlienError::new(ErrorData::WorkloadNotReady {
                     resource_id: config.id.clone(),
                     message: format!(
                         "{workload_kind} '{workload_name}' has {} ready replicas out of {} observed{}{}",
@@ -1222,7 +1239,7 @@ impl KubernetesContainerController {
                         if cause.is_empty() { String::new() } else { format!("; {cause}") },
                         pod_reason.map(|r| format!("; {r}")).unwrap_or_default(),
                     ),
-                }));
+                }), self.recovering, chrono::Utc::now().timestamp()));
             }
 
             if self.recovering && !workload_fully_ready(&workload) {
@@ -1394,6 +1411,7 @@ impl KubernetesContainerController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         self.zero_ready_observed = false;
+        self.not_ready.clear();
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Container>()?;
         // A refresh started from Ready (gateway configuration, linked binding drift) can come
@@ -1503,6 +1521,7 @@ impl KubernetesContainerController {
             .await?;
         let registry_secret_name = format!("{}-registry", workload_name);
         let environment_secret_name = format!("{}-env", workload_name);
+        let mut generation_before = None;
         let (resource_version, legacy_registry_owner_proven, legacy_environment_owner_proven) =
             if self.is_stateful {
                 let existing = deployment_client
@@ -1529,6 +1548,7 @@ impl KubernetesContainerController {
                     resource_id: Some(config.id.clone()),
                 }));
                 }
+                generation_before = existing.metadata.generation;
                 let pod_spec = existing
                     .spec
                     .as_ref()
@@ -1569,6 +1589,7 @@ impl KubernetesContainerController {
                     resource_id: Some(config.id.clone()),
                 }));
                 }
+                generation_before = existing.metadata.generation;
                 let pod_spec = existing
                     .spec
                     .as_ref()
@@ -1673,6 +1694,8 @@ impl KubernetesContainerController {
                     message: format!("Failed to update statefulset '{}'.", workload_name),
                     resource_id: Some(config.id.clone()),
                 })?;
+            self.update_template_unchanged =
+                generation_before.is_some_and(|before| Some(before) == updated.metadata.generation);
             self.update_generation = Some(updated.metadata.generation.ok_or_else(|| {
                 AlienError::new(ErrorData::CloudPlatformError {
                     message: format!("Updated statefulset '{}' has no generation", workload_name),
@@ -1700,6 +1723,8 @@ impl KubernetesContainerController {
                     message: format!("Failed to update deployment '{}'.", workload_name),
                     resource_id: Some(config.id.clone()),
                 })?;
+            self.update_template_unchanged =
+                generation_before.is_some_and(|before| Some(before) == updated.metadata.generation);
             self.update_generation = Some(updated.metadata.generation.ok_or_else(|| {
                 AlienError::new(ErrorData::CloudPlatformError {
                     message: format!("Updated deployment '{}' has no generation", workload_name),
@@ -1863,10 +1888,8 @@ impl KubernetesContainerController {
             .or(restricted_hint)
             .or(self.workload_failure.take());
 
-        if last_poll(
-            self._internal_stay_count,
-            KUBERNETES_WORKLOAD_READY_MAX_POLLS,
-        ) {
+        let max_polls = update_wait_max_polls(self.update_template_unchanged);
+        if last_poll(self._internal_stay_count, max_polls) {
             let selector = self.workload_labels(ctx, &config.id, self.build_labels(workload_name));
             let pod_reason =
                 workload_pod_reason(ctx, namespace, &selector, self.workload_failure.as_deref())
@@ -1892,7 +1915,7 @@ impl KubernetesContainerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
+            max_times: Some(max_polls),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -2594,6 +2617,8 @@ mod output_tests {
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
+            not_ready: Default::default(),
+            update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,
@@ -2670,6 +2695,8 @@ mod output_tests {
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
+            not_ready: Default::default(),
+            update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,
@@ -2745,6 +2772,8 @@ impl KubernetesContainerController {
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
+            not_ready: Default::default(),
+            update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,
@@ -4648,6 +4677,8 @@ mod tests {
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
+            not_ready: Default::default(),
+            update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,
@@ -6234,6 +6265,7 @@ mod tests {
         let mut controller = manifest_test_controller();
         controller.state = KubernetesContainerState::RefreshFailed;
         record.status = ResourceStatus::RefreshFailed;
+        record.error = Some(crate::core::state_utils::saved_refresh_error("x", true));
         record
             .set_internal_controller(Some(Box::new(controller)))
             .unwrap();
@@ -6247,6 +6279,35 @@ mod tests {
             .downcast_ref::<KubernetesContainerController>()
             .unwrap();
         assert_eq!(resumed.state, KubernetesContainerState::UpdateStart);
+    }
+
+    /// Real drift (an edited spec, a missing object) is not a failed readiness check: a retry
+    /// does not apply the spec over it, it resumes the check, which reports it again.
+    #[test]
+    fn a_retry_of_a_drift_refresh_failure_does_not_apply_the_spec() {
+        use crate::core::state_utils::StackResourceStateExt;
+        let mut record = alien_core::StackResourceState::new_pending(
+            Container::RESOURCE_TYPE.to_string(),
+            alien_core::Resource::new(manifest_test_container(&[], false)),
+            Some(alien_core::ResourceLifecycle::Live),
+            vec![],
+        );
+        let mut controller = manifest_test_controller();
+        controller.state = KubernetesContainerState::RefreshFailed;
+        record.status = ResourceStatus::RefreshFailed;
+        record.error = Some(crate::core::state_utils::saved_refresh_error("x", false));
+        record
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+
+        assert!(record.retry_failed().unwrap());
+
+        let resumed = record.get_internal_controller().unwrap().unwrap();
+        let resumed = resumed
+            .as_any()
+            .downcast_ref::<KubernetesContainerController>()
+            .unwrap();
+        assert_eq!(resumed.state, KubernetesContainerState::RefreshFailed);
     }
 }
 

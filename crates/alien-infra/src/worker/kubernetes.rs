@@ -14,9 +14,10 @@ use crate::kubernetes_public_endpoint::{
 use crate::kubernetes_workload_heartbeat::{
     assess_rollout, deployment_has_ready_replicas, deployment_rollout_complete,
     emit_kubernetes_workload_heartbeat, label_selector, last_poll, recovery_check,
-    rollout_timeout_message, stalled_rollout_message, workload_fully_ready, workload_pod_reason,
-    KubernetesWorkload, KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, RolloutWait,
-    RolloutWatch, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+    rollout_timeout_message, stalled_rollout_message, update_wait_max_polls, workload_fully_ready,
+    workload_pod_reason, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadHeartbeatInput, NotReadyObservations, RolloutWait, RolloutWatch,
+    KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -68,6 +69,13 @@ pub struct KubernetesWorkerController {
     /// Whether the previous health check also found zero ready replicas.
     #[serde(default)]
     pub(crate) zero_ready_observed: bool,
+    /// Not-ready observations of the Running workload; the third in a window fails the refresh.
+    #[serde(default)]
+    pub(crate) not_ready: NotReadyObservations,
+    /// Whether the last update left the pod template as it was (no pods roll). Such an update
+    /// waits for readiness only briefly.
+    #[serde(default)]
+    pub(crate) update_template_unchanged: bool,
     /// When the current rollout was first seen unfinished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) rollout_watch: Option<RolloutWatch>,
@@ -551,15 +559,19 @@ impl KubernetesWorkerController {
                 // The new version is not rolling out, even if old pods still serve.
                 if healthy || ready_replicas > 0 {
                     let pod_reason = workload_pod_reason(ctx, &namespace, &selector, None).await;
-                    return Err(AlienError::new(ErrorData::WorkloadNotReady {
-                        resource_id: config.id.clone(),
-                        message: stalled_rollout_message(
-                            "Deployment",
-                            &deployment_name,
-                            &format!("{cause}; {ready_replicas} replicas ready"),
-                            pod_reason.as_deref(),
-                        ),
-                    }));
+                    return Err(self.not_ready.error(
+                        AlienError::new(ErrorData::WorkloadNotReady {
+                            resource_id: config.id.clone(),
+                            message: stalled_rollout_message(
+                                "Deployment",
+                                &deployment_name,
+                                &format!("{cause}; {ready_replicas} replicas ready"),
+                                pod_reason.as_deref(),
+                            ),
+                        }),
+                        self.recovering,
+                        chrono::Utc::now().timestamp(),
+                    ));
                 }
             }
             if !healthy && matches!(assessment.wait, RolloutWait::Wait) {
@@ -577,24 +589,34 @@ impl KubernetesWorkerController {
             self.zero_ready_observed = !healthy && zero_ready;
             if !healthy && zero_ready && !previous_zero {
                 // Confirm zero readiness after a possible transient pod restart.
-                return Ok(HandlerAction::Stay {
-                    max_times: None,
-                    suggested_delay: Some(Duration::from_secs(5)),
-                });
+                // The read counts towards the bound even when a ready check follows it: a pod
+                // that is ready for part of each crash cycle must still fail the refresh.
+                let bound_reached =
+                    !self.recovering && self.not_ready.observe(chrono::Utc::now().timestamp());
+                if !bound_reached {
+                    return Ok(HandlerAction::Stay {
+                        max_times: None,
+                        suggested_delay: Some(Duration::from_secs(5)),
+                    });
+                }
             }
             if !healthy {
                 let pod_reason = workload_pod_reason(ctx, &namespace, &selector, None).await;
-                return Err(AlienError::new(ErrorData::WorkloadNotReady {
-                    resource_id: config.id.clone(),
-                    message: format!(
-                        "Deployment '{deployment_name}' does not have the requested ready replicas ({ready_replicas} ready){}{}",
-                        assessment
-                            .stall
-                            .map(|cause| format!("; {cause}"))
-                            .unwrap_or_default(),
-                        pod_reason.map(|r| format!("; {r}")).unwrap_or_default(),
-                    ),
-                }));
+                return Err(self.not_ready.error(
+                    AlienError::new(ErrorData::WorkloadNotReady {
+                        resource_id: config.id.clone(),
+                        message: format!(
+                            "Deployment '{deployment_name}' does not have the requested ready replicas ({ready_replicas} ready){}{}",
+                            assessment
+                                .stall
+                                .map(|cause| format!("; {cause}"))
+                                .unwrap_or_default(),
+                            pod_reason.map(|r| format!("; {r}")).unwrap_or_default(),
+                        ),
+                    }),
+                    self.recovering,
+                    chrono::Utc::now().timestamp(),
+                ));
             }
 
             if self.recovering
@@ -724,6 +746,7 @@ impl KubernetesWorkerController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         self.zero_ready_observed = false;
+        self.not_ready.clear();
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Worker>()?;
 
@@ -779,6 +802,7 @@ impl KubernetesWorkerController {
         }
 
         let resource_version = existing.metadata.resource_version.clone();
+        let generation_before = existing.metadata.generation;
         let registry_secret_name = format!("{}-registry", deployment_name);
         let environment_secret_name = format!("{}-env", deployment_name);
         let pod_spec = existing
@@ -868,6 +892,8 @@ impl KubernetesWorkerController {
                 resource_id: Some(config.id.clone()),
             })?;
 
+        self.update_template_unchanged =
+            generation_before.is_some_and(|before| Some(before) == updated.metadata.generation);
         self.expected_generation = Some(updated.metadata.generation.ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: config.id.clone(),
@@ -962,10 +988,8 @@ impl KubernetesWorkerController {
             }
         }
 
-        if last_poll(
-            self._internal_stay_count,
-            KUBERNETES_WORKLOAD_READY_MAX_POLLS,
-        ) {
+        let max_polls = update_wait_max_polls(self.update_template_unchanged);
+        if last_poll(self._internal_stay_count, max_polls) {
             let selector = worker_labels(deployment_name);
             let pod_reason = workload_pod_reason(ctx, namespace, &selector, None).await;
             return Err(AlienError::new(ErrorData::WorkloadNotReady {
@@ -980,7 +1004,7 @@ impl KubernetesWorkerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
+            max_times: Some(max_polls),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -1499,6 +1523,8 @@ impl KubernetesWorkerController {
             rollout_watch: None,
             applied_architecture: None,
             recovery_checks: 0,
+            not_ready: Default::default(),
+            update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,
@@ -2143,6 +2169,8 @@ mod tests {
             rollout_watch: None,
             applied_architecture: None,
             recovery_checks: 0,
+            not_ready: Default::default(),
+            update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,
@@ -2188,6 +2216,8 @@ mod tests {
             rollout_watch: None,
             applied_architecture: None,
             recovery_checks: 0,
+            not_ready: Default::default(),
+            update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,
@@ -2314,6 +2344,7 @@ mod tests {
         let mut controller = KubernetesWorkerController::default();
         controller.state = KubernetesWorkerState::RefreshFailed;
         record.status = ResourceStatus::RefreshFailed;
+        record.error = Some(crate::core::state_utils::saved_refresh_error("x", true));
         record
             .set_internal_controller(Some(Box::new(controller)))
             .unwrap();
