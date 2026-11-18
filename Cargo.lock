@@ -1303,6 +1303,7 @@ dependencies = [
  "alien-k8s-clients",
  "alien-local",
  "alien-manager-api",
+ "alien-preflights",
  "alien-signing",
  "async-trait",
  "aws-config",
