@@ -136,6 +136,10 @@ runtime:
       enabled: true
       existingClaim: ""
       storageClassName: ""
+      # The install lists StorageClasses (cluster-wide read) to fail early, naming the fix, when the
+      # identity claim could never bind. Helm cannot skip a refused lookup, so an installer without
+      # cluster-wide read access sets this to false.
+      storageClassCheck: true
       accessModes:
         - ReadWriteOnce
       size: 1Gi
@@ -1180,6 +1184,9 @@ postgres: {}
                 },
                 "size": {
                   "type": "string"
+                },
+                "storageClassCheck": {
+                  "type": "boolean"
                 },
                 "storageClassName": {
                   "type": "string"
@@ -3003,6 +3010,39 @@ spec:
 
 === templates/pvc.yaml ===
 {{- if and .Values.runtime.data.persistence.enabled (not .Values.runtime.data.persistence.existingClaim) }}
+{{- /*
+  The identity claim binds only with a StorageClass: the cluster default, one the chart names, or one
+  the chart creates. Without one the claim stays Pending and the Operator never starts, with no
+  message. The check runs only on a fresh claim (an upgrade with a bound claim reads nothing) and only
+  when `lookup` can list StorageClasses (it returns nothing under `helm template`). Helm cannot catch
+  a refused lookup, so an installer without cluster-wide read access sets
+  runtime.data.persistence.storageClassCheck=false.
+*/ -}}
+{{- $claimName := printf "%s-runtime-data" (include "deployment.fullname" .) -}}
+{{- if .Values.runtime.data.persistence.storageClassCheck }}
+{{- if not (lookup "v1" "PersistentVolumeClaim" .Release.Namespace $claimName) }}
+{{- $bootstrapClass := dig "clusterBootstrap" "storageClass" "default" (dict) (.Values | toYaml | fromYaml) -}}
+{{- $bootstrapEnabled := get $bootstrapClass "enabled" -}}
+{{- $named := .Values.runtime.data.persistence.storageClassName -}}
+{{- $classes := lookup "storage.k8s.io/v1" "StorageClass" "" "" -}}
+{{- if hasKey $classes "items" }}
+{{- $hasDefault := false -}}
+{{- $hasNamed := false -}}
+{{- range $classes.items }}
+{{- $annotations := default dict .metadata.annotations -}}
+{{- if or (eq (get $annotations "storageclass.kubernetes.io/is-default-class") "true") (eq (get $annotations "storageclass.beta.kubernetes.io/is-default-class") "true") }}{{ $hasDefault = true }}{{ end }}
+{{- if eq .metadata.name $named }}{{ $hasNamed = true }}{{ end }}
+{{- end }}
+{{- if $named }}
+{{- if and (not $hasNamed) (not (and $bootstrapEnabled (eq (get $bootstrapClass "name") $named))) }}
+{{- fail (printf "runtime.data.persistence.storageClassName is %q, but this cluster has no StorageClass with that name, so the Operator's identity claim %s would stay Pending. Name a StorageClass that exists (kubectl get storageclass), or set clusterBootstrap.storageClass.default.enabled=true with that name and a provisioner so the chart creates it." $named $claimName) }}
+{{- end }}
+{{- else if and (not $hasDefault) (not $bootstrapEnabled) }}
+{{- fail (printf "The cluster has no default StorageClass, so the Operator's identity claim %s would stay Pending and the Operator would never start. Set runtime.data.persistence.storageClassName to a StorageClass of this cluster (EKS Auto Mode: create one with provisioner ebs.csi.eks.amazonaws.com), set clusterBootstrap.storageClass.default.enabled=true with a name and provisioner so the chart creates one, set runtime.data.persistence.existingClaim, or set runtime.data.persistence.storageClassCheck=false to skip this check." $claimName) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -4668,6 +4708,11 @@ in its own Secret on first start. Keep credentials and any values file containin
 ```bash
 helm install default-inputs . --namespace=default-inputs --create-namespace --values install-values.yaml --atomic --wait --timeout 15m
 ```
+
+The install lists the cluster's StorageClasses to fail early, naming the fix, when the
+Operator's identity claim could not bind. An installer limited to the release namespace
+cannot list them, and Helm then fails with a forbidden error; add
+`--set runtime.data.persistence.storageClassCheck=false` for such an installer.
 
 Managed packages can supply the project's resolved management endpoint as a
 chart default. The installation service supplies an override when the selected
