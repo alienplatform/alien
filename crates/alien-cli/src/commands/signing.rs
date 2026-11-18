@@ -1277,8 +1277,8 @@ async fn publish_ci_signer(
 }
 
 /// `alien devices add-key`: a software key with the release role for any CI
-/// system or remote box. The key is shown once, after the list that trusts it
-/// is published.
+/// system or remote box. The key is written (to `--out` or stdout) before the
+/// list that trusts it is published, so a failed write leaves the list unchanged.
 async fn add_key(ctx: &ExecutionMode, name: &str, out: Option<&Path>) -> Result<()> {
     check_key_name(name)?;
     check_out_free(out)?;
