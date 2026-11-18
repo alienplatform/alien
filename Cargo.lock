@@ -994,6 +994,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "workspace-hack",
+ "yaml-rust2",
 ]
 
 [[package]]

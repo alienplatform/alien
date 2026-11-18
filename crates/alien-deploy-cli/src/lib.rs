@@ -63,6 +63,10 @@ pub enum Commands {
     Inputs(InputsArgs),
     /// Check that this install runs only what the vendor signed
     Verify(VerifyArgs),
+    /// Helm's post-renderer for an install the deploy CLI runs: checks the release it reads
+    /// from stdin
+    #[command(hide = true)]
+    CheckHelmRelease(commands::helm_release::CheckReleaseArgs),
 }
 
 /// Loads the configuration embedded in this binary, if it carries one.
@@ -175,6 +179,11 @@ pub fn setup_tracing(verbose: bool) {
 }
 
 pub async fn run_cli(cli: Cli) -> Result<()> {
+    // Helm reads this command's stdout as the release, so nothing else may run or write first.
+    if let Commands::CheckHelmRelease(args) = &cli.command {
+        return commands::helm_release::check_release_command(args);
+    }
+
     // The checksums saved in a deployment must match the next run too.
     alien_deployment::persisted_digest_key::use_user_secrets_digest_key();
 
@@ -196,6 +205,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Rollback(args) => commands::sync::rollback_command(args).await,
         Commands::Inputs(args) => inputs_command(args).await,
         Commands::Verify(args) => verify_command(args, embedded_config.as_ref()).await,
+        Commands::CheckHelmRelease(args) => commands::helm_release::check_release_command(&args),
     }
 }
 

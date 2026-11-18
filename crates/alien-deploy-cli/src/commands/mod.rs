@@ -19,5 +19,6 @@ pub use register::{register_command, RegisterArgs};
 pub use status::{status_command, StatusArgs};
 pub use up::{push_deletion, push_initial_setup, up_command, SetupRunOutcome, UpArgs};
 pub use verify::{verify_command, VerifyArgs};
+pub mod helm_release;
 pub mod sync;
 mod sync_registry;

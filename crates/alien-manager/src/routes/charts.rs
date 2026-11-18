@@ -554,7 +554,7 @@ async fn render(
     let chart = alien_infra::run_hooks({
         let stack = stack.clone();
         move || {
-            generate_helm_chart(
+            let mut chart = generate_helm_chart(
                 &stack,
                 HelmOptions {
                     registry: &registries.helm,
@@ -562,7 +562,12 @@ async fn render(
                     chart_name: stack.id().to_string(),
                 },
             )
-            .map_err(|e| render_failed("failed to generate chart", e))
+            .map_err(|e| render_failed("failed to generate chart", e))?;
+            registries
+                .modifiers
+                .modify_helm(&mut chart)
+                .map_err(|e| render_failed("failed to apply the stack's extensions", e))?;
+            Ok::<_, Response>(chart)
         }
     })
     .await

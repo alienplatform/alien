@@ -11,6 +11,7 @@ use crate::core::{
     serialize_controller, PlatformServiceProvider, ResourceController, ResourceRegistry,
 };
 use crate::import::ImporterRegistry;
+use crate::modifiers::Modifiers;
 use crate::refusal::RefusalContext;
 use crate::step_protocol::{ExtensionProxyController, ProxyFactory};
 use alien_cloudformation::{CfEmitter, CfExpression, CfRegistry, CfResource};
@@ -46,6 +47,8 @@ pub struct DeploymentRegistries {
     pub helm: HelmRegistry,
     pub importers: ImporterRegistry,
     pub resources: Arc<ResourceRegistry>,
+    /// The template modifiers each generator call site runs on what the generator returns.
+    pub modifiers: Modifiers,
 }
 
 /// The registrations of the program that embeds Alien, the layer between Alien's built-ins and
@@ -188,11 +191,13 @@ impl DeploymentRegistries {
         let mut importers = ImporterRegistry::built_in();
         (host.importers)(&mut importers);
 
+        let mut modifiers = Vec::with_capacity(stack.extensions.len());
         for manifest in &stack.extensions {
             let hooks = Arc::new(ExtensionHooks {
                 extension: manifest.name.clone(),
                 module: extensions.hooks.get(&manifest.name).cloned(),
             });
+            modifiers.push(hooks.clone());
             for (resource_type, descriptor) in declared_types(stack, manifest) {
                 let hook = |kind, platform| ExtensionHook {
                     hooks: hooks.clone(),
@@ -239,6 +244,7 @@ impl DeploymentRegistries {
             resources: Arc::new(ResourceRegistry::with_built_ins_and_extensions(
                 stack, extensions,
             )),
+            modifiers: Modifiers::new(modifiers),
         }
     }
 }
@@ -441,6 +447,15 @@ pub(crate) struct ExtensionHooks {
 }
 
 impl ExtensionHooks {
+    /// An extension whose module this process hasn't loaded.
+    #[cfg(test)]
+    pub(crate) fn unloaded(extension: &str) -> Self {
+        Self {
+            extension: extension.to_string(),
+            module: None,
+        }
+    }
+
     /// The extension's module, for running `what`. Fails when this process has not loaded it, or
     /// loaded another extension's module under its name.
     pub(crate) fn module(&self, what: &str) -> Result<&HookModule> {
