@@ -4,6 +4,8 @@ import * as alien from "@alienplatform/core"
 // DLQ_E2E_NO_DEAD_LETTER=1 declares the same stack without the setting, to show what a
 // message that always fails does without it.
 const withDeadLetter = process.env.DLQ_E2E_NO_DEAD_LETTER !== "1"
+// DLQ_E2E_LIVE=1 makes the four queues Live instead of Frozen.
+const queueLifecycle = process.env.DLQ_E2E_LIVE === "1" ? "live" : "frozen"
 const failed = new alien.Queue("tasks-failed").build()
 const tasksBuilder = new alien.Queue("tasks")
 const tasks = (
@@ -32,21 +34,25 @@ const worker = new alien.Worker("consumer")
 
 export default new alien.Stack("queue-dead-letter")
   .platforms(["aws", "gcp", "azure", "local"])
-  .add(failed, "frozen")
-  .add(tasks, "frozen")
-  .add(pulledFailed, "frozen")
-  .add(pulled, "frozen")
+  .add(failed, queueLifecycle)
+  .add(tasks, queueLifecycle)
+  .add(pulledFailed, queueLifecycle)
+  .add(pulled, queueLifecycle)
   .add(results, "frozen")
   .add(worker, "live")
   .permissions({
     profiles: {
-      execution: {
-        tasks: ["queue/data-read", "queue/data-write"],
-        "tasks-failed": ["queue/data-read", "queue/data-write"],
-        pulled: ["queue/data-read", "queue/data-write"],
-        "pulled-failed": ["queue/data-read", "queue/data-write"],
-        results: ["storage/data-read", "storage/data-write"],
-      },
+      execution:
+        process.env.DLQ_E2E_LIVE === "1"
+          ? // AWS rejects resource-scoped data permissions on Live resources.
+            { "*": ["queue/data-read", "queue/data-write", "storage/data-read", "storage/data-write"] }
+          : {
+              tasks: ["queue/data-read", "queue/data-write"],
+              "tasks-failed": ["queue/data-read", "queue/data-write"],
+              pulled: ["queue/data-read", "queue/data-write"],
+              "pulled-failed": ["queue/data-read", "queue/data-write"],
+              results: ["storage/data-read", "storage/data-write"],
+            },
     },
   })
   .build()
