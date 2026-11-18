@@ -4945,8 +4945,8 @@ mod tests {
         /// token request) must keep an in-progress update in Updating, not fail it. The error is
         /// produced by the real AWS loader against a mock metadata server.
         async fn metadata_token_error() -> AlienError {
-            use alien_aws_clients::AwsClientConfigExt;
             use alien_error::ContextError;
+            use alien_infra::ClientConfigExt;
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4972,11 +4972,12 @@ mod tests {
                     "/nonexistent/config".to_string(),
                 ),
             ]);
-            let error = alien_aws_clients::AwsClientConfig::from_env(&env)
+            // The same call the environment credential provider makes, including the
+            // INVALID_CLIENT_CONFIG wrapper it adds around the loader's error.
+            let error = alien_core::ClientConfig::from_env(Platform::Aws, &env)
                 .await
                 .unwrap_err()
                 .into_generic();
-            // The same wrapper the credential path adds around the loader's error.
             error
                 .context(crate::error::ErrorData::CredentialMaterializationFailed {
                     platform: Platform::Aws,

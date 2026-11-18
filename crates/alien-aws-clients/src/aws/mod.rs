@@ -374,11 +374,6 @@ async fn resolve_region(environment_variables: &HashMap<String, String>) -> Resu
         Ok(None) => {}
         Err(profile_error) => {
             if let Some(imds_error) = imds_error {
-                // A transient metadata failure keeps its own error, so callers that retry
-                // can see it is retryable instead of a new permanent configuration error.
-                if imds_error.retryable {
-                    return Err(imds_error);
-                }
                 return Err(AlienError::new(ErrorData::InvalidClientConfig {
                     message: format!(
                         "Failed to resolve AWS region from IMDS and fallback profile '{}': {}; IMDS error: {}",
@@ -459,18 +454,21 @@ async fn resolve_credentials(
         Ok(_) => Ok(AwsCredentials::Profile { name: profile }),
         Err(profile_error) => {
             if let Some(imds_error) = imds_error {
-                // A transient metadata failure keeps its own error, so callers that retry
-                // can see it is retryable instead of a new permanent configuration error.
-                if imds_error.retryable {
-                    return Err(imds_error);
-                }
-                return Err(AlienError::new(ErrorData::InvalidClientConfig {
-                    message: format!(
-                        "Failed to resolve AWS credentials from IMDS and fallback profile '{}': {}; IMDS error: {}",
-                        profile, profile_error, imds_error
-                    ),
-                    errors: None,
-                }));
+                // Keep the combined message for the user, with the metadata error as its
+                // source and its retryability, so a manager that retries sees it is transient.
+                let retryable = imds_error.retryable;
+                let message = format!(
+                    "Failed to resolve AWS credentials from IMDS and fallback profile '{}': {}; IMDS error: {}",
+                    profile, profile_error, imds_error
+                );
+                let mut error = Err::<(), _>(imds_error)
+                    .context(ErrorData::InvalidClientConfig {
+                        message,
+                        errors: None,
+                    })
+                    .unwrap_err();
+                error.retryable = retryable;
+                return Err(error);
             }
             Err(profile_error)
         }
@@ -1422,6 +1420,34 @@ mod tests {
         );
         let error = resolve_credentials(&env).await.unwrap_err();
         assert!(error.retryable, "{error}");
+    }
+
+    #[tokio::test]
+    async fn resolve_credentials_without_imds_or_profile_shows_both_failures() {
+        // Nothing listens on the metadata endpoint and no profile exists.
+        let mut env = HashMap::new();
+        env.insert(
+            "AWS_EC2_METADATA_SERVICE_ENDPOINT".to_string(),
+            "http://127.0.0.1:1".to_string(),
+        );
+        env.insert(
+            "AWS_SHARED_CREDENTIALS_FILE".to_string(),
+            "/nonexistent/credentials".to_string(),
+        );
+        env.insert(
+            "AWS_CONFIG_FILE".to_string(),
+            "/nonexistent/config".to_string(),
+        );
+        let error = resolve_credentials(&env).await.unwrap_err();
+        assert!(
+            error.message.contains("IMDS and fallback profile"),
+            "{error}"
+        );
+        assert!(error.message.contains("IMDS error"), "{error}");
+        assert!(
+            error.source.is_some(),
+            "the metadata error stays as the source"
+        );
     }
 
     #[tokio::test]
