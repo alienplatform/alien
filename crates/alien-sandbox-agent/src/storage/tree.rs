@@ -168,6 +168,32 @@ pub fn excluded(path: &str, exclude: &[String]) -> bool {
     })
 }
 
+/// Whether `path` is a file through which git names objects: `HEAD`, `*_HEAD`, `packed-refs`,
+/// anything under `refs/`, or `index`, in a `.git` directory or one of its `worktrees/<name>/`.
+pub fn names_git_objects(path: &str) -> bool {
+    let mut rest = None;
+    let mut components = path.split('/');
+    while let Some(component) = components.next() {
+        if component == ".git" {
+            rest = Some(components.clone().collect::<Vec<_>>());
+            break;
+        }
+    }
+    let Some(mut rest) = rest else {
+        return false;
+    };
+    if rest.first() == Some(&"refs") {
+        return rest.len() > 1;
+    }
+    if rest.len() == 3 && rest[0] == "worktrees" {
+        rest.drain(..2);
+    }
+    matches!(rest.as_slice(), [name] if *name == "HEAD"
+        || *name == "packed-refs"
+        || *name == "index"
+        || name.ends_with("_HEAD"))
+}
+
 /// Walks the storage directory. Directories, regular files, symlinks and hard links are
 /// recorded; other kinds (sockets, FIFOs, devices) and other file systems mounted inside are
 /// skipped. Nothing is followed.

@@ -735,3 +735,142 @@ async fn a_same_size_rewrite_right_after_a_commit_is_committed() {
         );
     }
 }
+
+#[test]
+fn files_that_name_git_objects_are_refs_heads_and_the_index() {
+    for path in [
+        ".git/HEAD",
+        ".git/ORIG_HEAD",
+        ".git/FETCH_HEAD",
+        ".git/packed-refs",
+        ".git/index",
+        ".git/refs/heads/main",
+        ".git/refs/tags/v1/x",
+        "repos/a/.git/refs/heads/main",
+        ".git/worktrees/wt/HEAD",
+        ".git/worktrees/wt/index",
+    ] {
+        assert!(tree::names_git_objects(path), "{path}");
+    }
+    for path in [
+        "HEAD",
+        "refs/heads/main",
+        ".git",
+        ".git/refs",
+        ".git/config",
+        ".git/objects/ab/cdef",
+        ".git/objects/pack/pack-1.pack",
+        ".git/logs/refs/heads/main",
+        ".git/worktrees/wt/logs/HEAD",
+        "src/index",
+    ] {
+        assert!(!tree::names_git_objects(path), "{path}");
+    }
+}
+
+/// Commits what `stage_with` staged, restores it elsewhere, and returns the restored directory.
+async fn commit_staged(
+    store: &MemoryStore,
+    replicator: &mut Replicator,
+    between: &mut dyn FnMut(super::Phase),
+) -> tempfile::TempDir {
+    let (walk, mut staging) = replicator.stage_with(between).expect("stage");
+    replicator
+        .committer
+        .commit(store, "k", walk, &mut staging)
+        .await
+        .expect("commit");
+    let target = tempfile::tempdir().expect("tempdir");
+    restore(
+        store,
+        replicator.head().expect("head"),
+        &mut DirSink::new(tree::open_root(target.path()).expect("open"), false),
+    )
+    .await
+    .expect("restore");
+    target
+}
+
+/// A loose object `.git/objects/<2>/<rest>` for a name.
+fn object(root: &Path, name: &str) {
+    write(
+        root,
+        &format!(".git/objects/{}/{}", &name[..2], &name[2..]),
+        name.as_bytes(),
+    );
+}
+
+fn object_exists(root: &Path, name: &str) -> bool {
+    root.join(format!(".git/objects/{}/{}", &name[..2], &name[2..]))
+        .exists()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_a_freezer_a_ref_never_names_an_object_the_commit_lacks() {
+    let source = tempfile::tempdir().expect("tempdir");
+    let staging = tempfile::tempdir().expect("tempdir");
+    let root = source.path().to_path_buf();
+    object(&root, "aa01");
+    write(&root, ".git/refs/heads/main", b"aa01");
+    write(&root, ".git/HEAD", b"ref: refs/heads/main");
+    let store = MemoryStore::new();
+    let mut replicator = replicator(&store, &root, staging.path(), &[]).await;
+    replicator.commit(&store).await.expect("first commit");
+    object(&root, "ab0005");
+    write(&root, ".git/refs/heads/main", b"ab0005");
+
+    // Another commit lands after the objects were listed and before the files are copied: git
+    // writes the object, then moves the ref.
+    let restored = commit_staged(&store, &mut replicator, &mut |phase| {
+        if phase == super::Phase::SecondWalk {
+            object(&root, "bb000002");
+            write(&root, ".git/refs/heads/main", b"bb000002");
+        }
+    })
+    .await;
+    let main = std::fs::read_to_string(restored.path().join(".git/refs/heads/main")).expect("ref");
+    assert!(
+        object_exists(restored.path(), &main),
+        "main names {main}, which the commit lacks"
+    );
+    assert_eq!(
+        main, "ab0005",
+        "the ref is the one copied before the objects were listed"
+    );
+
+    // The next commit takes the new ref with its object.
+    let restored = commit_staged(&store, &mut replicator, &mut |_| {}).await;
+    let main = std::fs::read_to_string(restored.path().join(".git/refs/heads/main")).expect("ref");
+    assert_eq!(main, "bb000002");
+    assert!(object_exists(restored.path(), "bb000002"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_a_freezer_refs_come_from_the_first_walk_with_their_directories() {
+    let source = tempfile::tempdir().expect("tempdir");
+    let staging = tempfile::tempdir().expect("tempdir");
+    let root = source.path().to_path_buf();
+    object(&root, "aa01");
+    write(&root, ".git/refs/heads/topic/one", b"aa01");
+    let store = MemoryStore::new();
+    let mut replicator = replicator(&store, &root, staging.path(), &[]).await;
+
+    // Between the walks a branch is deleted with its directory and another is created.
+    let restored = commit_staged(&store, &mut replicator, &mut |phase| {
+        if phase == super::Phase::RefsCopied {
+            std::fs::remove_dir_all(root.join(".git/refs/heads/topic")).expect("rm");
+            object(&root, "cc03");
+            write(&root, ".git/refs/heads/new", b"cc03");
+        }
+    })
+    .await;
+    assert_eq!(
+        std::fs::read(restored.path().join(".git/refs/heads/topic/one")).expect("kept ref"),
+        b"aa01"
+    );
+    assert!(object_exists(restored.path(), "aa01"));
+    assert!(
+        !restored.path().join(".git/refs/heads/new").exists(),
+        "a ref seen only by the second walk waits for the next commit"
+    );
+}

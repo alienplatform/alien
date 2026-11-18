@@ -12,6 +12,7 @@ mod http;
 pub mod push;
 pub mod tree;
 
+use std::collections::HashSet;
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 
@@ -74,38 +75,91 @@ impl Replicator {
         self.committer.is_superseded()
     }
 
-    /// Walks the directory and copies every changed file to staging, with the guest frozen
-    /// where the platform has a freezer. Blocking.
+    /// Walks the directory and copies every changed file to staging. Blocking.
+    ///
+    /// Where the platform has a freezer, one walk and its copies run with the guest frozen, so
+    /// the commit is the state of one instant. Without one (gVisor has no freezer controller),
+    /// each file is copied as it was when read, and files that name git objects are taken
+    /// first: see [`Replicator::stage_unfrozen`].
     pub fn stage(&self) -> StorageResult<(Vec<TreeEntry>, Staging)> {
+        self.stage_with(&mut |_| {})
+    }
+
+    fn stage_with(
+        &self,
+        between: &mut dyn FnMut(Phase),
+    ) -> StorageResult<(Vec<TreeEntry>, Staging)> {
         let mut staging = Staging::new(&self.staging).map_err(|e| io_error("stage", e))?;
-        let frozen = match &self.freezer {
-            Some(freezer) => Some(
-                freezer
-                    .freeze(FREEZE_BOUND)
-                    .map_err(|e| io_error("freeze the guest", e))?,
-            ),
-            None => None,
+        let Some(freezer) = &self.freezer else {
+            return self.stage_unfrozen(staging, between);
         };
-        let mut walk = tree::walk(&self.root, &self.exclude).map_err(|e| io_error("walk", e))?;
-        let changed: Vec<String> = tree::changed_files(&walk, self.committer.head())
-            .into_iter()
-            .map(|entry| entry.path.clone())
-            .collect();
-        for path in &changed {
+        let frozen = freezer
+            .freeze(FREEZE_BOUND)
+            .map_err(|e| io_error("freeze the guest", e))?;
+        let walk = tree::walk(&self.root, &self.exclude).map_err(|e| io_error("walk", e))?;
+        let mut changed = HashSet::new();
+        self.copy_changed(&walk, &mut staging, &mut changed)?;
+        frozen.thaw().map_err(|e| io_error("thaw the guest", e))?;
+        Ok((drop_vanished(walk, &changed, &staging), staging))
+    }
+
+    /// Without a freezer, a ref copied after the objects were listed can name an object written
+    /// in between, and the commit would hold a repository whose ref points at nothing. So the
+    /// files that name git objects (refs, HEADs, the index) are walked and copied first, then
+    /// everything else is walked and copied: every object a copied ref names already existed
+    /// when the second walk listed the objects. Git writes an object before anything names it
+    /// and never rewrites one, so the order holds for any number of repositories in the
+    /// directory. A ref that appears only in the second walk is left for the next commit.
+    fn stage_unfrozen(
+        &self,
+        mut staging: Staging,
+        between: &mut dyn FnMut(Phase),
+    ) -> StorageResult<(Vec<TreeEntry>, Staging)> {
+        let first = tree::walk(&self.root, &self.exclude).map_err(|e| io_error("walk", e))?;
+        let names_objects = |entry: &TreeEntry| {
+            !matches!(entry.kind, TreeEntryKind::Dir) && tree::names_git_objects(&entry.path)
+        };
+        let refs: Vec<TreeEntry> = first.iter().filter(|e| names_objects(e)).cloned().collect();
+        let mut changed = HashSet::new();
+        self.copy_changed(&refs, &mut staging, &mut changed)?;
+        between(Phase::RefsCopied);
+
+        let second = tree::walk(&self.root, &self.exclude).map_err(|e| io_error("walk", e))?;
+        let mut entries: Vec<TreeEntry> =
+            second.into_iter().filter(|e| !names_objects(e)).collect();
+        between(Phase::SecondWalk);
+        self.copy_changed(&entries, &mut staging, &mut changed)?;
+
+        // A ref kept from the first walk keeps its directories, even if they went in between.
+        let mut paths: HashSet<String> = entries.iter().map(|e| e.path.clone()).collect();
+        for item in &refs {
+            let mut parent = item.path.as_str();
+            while let Some((dir, _)) = parent.rsplit_once('/') {
+                parent = dir;
+                if paths.insert(dir.to_string()) {
+                    if let Some(dir_entry) = first.iter().find(|e| e.path == dir) {
+                        entries.push(dir_entry.clone());
+                    }
+                }
+            }
+        }
+        entries.extend(refs);
+        Ok((drop_vanished(entries, &changed, &staging), staging))
+    }
+
+    fn copy_changed(
+        &self,
+        walk: &[TreeEntry],
+        staging: &mut Staging,
+        changed: &mut HashSet<String>,
+    ) -> StorageResult<()> {
+        for entry in tree::changed_files(walk, self.committer.head()) {
+            changed.insert(entry.path.clone());
             staging
-                .copy(&self.root, path)
+                .copy(&self.root, &entry.path)
                 .map_err(|e| io_error("copy to staging", e))?;
         }
-        if let Some(frozen) = frozen {
-            frozen.thaw().map_err(|e| io_error("thaw the guest", e))?;
-        }
-        // A file that vanished between the walk and its copy is not in this commit.
-        walk.retain(|entry| {
-            !matches!(entry.kind, TreeEntryKind::File { .. })
-                || !changed.contains(&entry.path)
-                || staging.contains(&entry.path)
-        });
-        Ok((walk, staging))
+        Ok(())
     }
 
     /// Whether the directory differs from what HEAD names, by a walk without freezing.
@@ -161,6 +215,30 @@ impl Replicator {
             .commit(store, &self.key, walk, &mut staging)
             .await
     }
+}
+
+/// Points in an unfrozen stage where a test can change the directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    /// The first walk's refs are copied; the second walk has not started.
+    RefsCopied,
+    /// The second walk is listed; its files are not copied yet.
+    SecondWalk,
+}
+
+/// A changed file that vanished between the walk and its copy is not in this commit; the next
+/// walk sees the new state.
+fn drop_vanished(
+    mut walk: Vec<TreeEntry>,
+    changed: &HashSet<String>,
+    staging: &Staging,
+) -> Vec<TreeEntry> {
+    walk.retain(|entry| {
+        !matches!(entry.kind, TreeEntryKind::File { .. })
+            || !changed.contains(&entry.path)
+            || staging.contains(&entry.path)
+    });
+    walk
 }
 
 #[cfg(test)]
