@@ -427,6 +427,7 @@ async fn a_command_gets_the_env_and_cwd_it_was_given() {
             manager_url: BindingValue::Value(harness.route.base_url.clone()),
             sandbox_key: BindingValue::Value(SANDBOX.to_string()),
             token_path: BindingValue::Value(harness.route.token_path.display().to_string()),
+            persistent_storage: None,
         },
     )
     .await

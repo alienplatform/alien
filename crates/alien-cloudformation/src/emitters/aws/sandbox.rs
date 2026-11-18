@@ -1174,6 +1174,7 @@ mod tests {
             idle_pause_seconds: Some(600),
             max_lifetime_seconds: Some(1800),
             allow_egress: true,
+            persistent_storage: None,
         })
         .expect("the binding type serializes");
 

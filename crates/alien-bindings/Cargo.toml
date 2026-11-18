@@ -33,6 +33,7 @@ bytes = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true, features = ["tls-webpki-roots"] }
 alien-error = { workspace = true }
+alien-sandbox-storage = { workspace = true }
 alien-core = { workspace = true }
 alien-client-core = { workspace = true }
 alien-client-config = { workspace = true }

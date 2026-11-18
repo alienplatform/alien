@@ -420,6 +420,7 @@ impl SandboxHandle {
         env: Option<std::collections::HashMap<String, String>>,
         timeout_ms: Option<u32>,
         egress: Option<serde_json::Value>,
+        storage_key: Option<String>,
     ) -> napi::Result<SandboxInstanceJs> {
         let sandbox = self.inner.clone();
         let created = sandbox
@@ -429,6 +430,7 @@ impl SandboxHandle {
                 tenant_key,
                 env: into_env(env),
                 timeout_ms: timeout_ms.map(u64::from),
+                storage_key,
             })
             .await
             .map_err(map_alien_error)?;
@@ -468,6 +470,7 @@ impl SandboxHandle {
         env: Option<std::collections::HashMap<String, String>>,
         timeout_ms: Option<u32>,
         egress: Option<serde_json::Value>,
+        storage_key: Option<String>,
     ) -> napi::Result<ResolvedSandboxJs> {
         let sandbox = self.inner.clone();
         let resolved = sandbox
@@ -477,6 +480,7 @@ impl SandboxHandle {
                 tenant_key,
                 env: into_env(env),
                 timeout_ms: timeout_ms.map(u64::from),
+                storage_key,
             })
             .await
             .map_err(map_alien_error)?;

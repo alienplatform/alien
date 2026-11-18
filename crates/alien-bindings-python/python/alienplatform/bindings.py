@@ -631,6 +631,7 @@ class Sandbox:
         env: Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
         egress: EgressPolicy | None = None,
+        storage_key: str | None = None,
     ) -> SandboxInfo:
         value = await (await self._handle.get()).create(
             sandbox_id,
@@ -638,6 +639,7 @@ class Sandbox:
             dict(env) if env else None,
             timeout_ms,
             json.dumps(egress) if egress is not None else None,
+            storage_key,
         )
         return _sandbox_info(value)
 
@@ -655,6 +657,7 @@ class Sandbox:
         env: Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
         egress: EgressPolicy | None = None,
+        storage_key: str | None = None,
     ) -> tuple[SandboxInfo, bool]:
         """Return the sandbox for ``sandbox_id``, creating it when none exists.
 
@@ -669,6 +672,7 @@ class Sandbox:
             dict(env) if env else None,
             timeout_ms,
             json.dumps(egress) if egress is not None else None,
+            storage_key,
         )
         return _sandbox_info(value.sandbox), value.created
 

@@ -345,6 +345,7 @@ dependencies = [
  "alien-permissions",
  "alien-platform-api",
  "alien-sandbox-agent",
+ "alien-sandbox-storage",
  "async-trait",
  "axum 0.8.9",
  "axum-server",

@@ -258,6 +258,7 @@ export interface RawSandboxHandle {
     env?: Record<string, string> | null,
     timeoutMs?: number | null,
     egress?: EgressPolicy | null,
+    storageKey?: string | null,
   ): Promise<RawSandboxInstance>
   get(sandboxId: string): Promise<RawSandboxInstance | null>
   getOrCreate(
@@ -266,6 +267,7 @@ export interface RawSandboxHandle {
     env?: Record<string, string> | null,
     timeoutMs?: number | null,
     egress?: EgressPolicy | null,
+    storageKey?: string | null,
   ): Promise<RawResolvedSandbox>
   updateEgress(sandboxId: string, egress: EgressPolicy): Promise<void>
   list(): Promise<RawSandboxInstance[]>

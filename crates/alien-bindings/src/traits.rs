@@ -1297,6 +1297,11 @@ pub struct CreateSandboxRequest {
     /// so a caller cannot buy itself more life than the deployment allows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Key whose persistent storage the sandbox restores and replicates. Required when the
+    /// sandbox declares persistent storage and refused otherwise. One path segment, chosen by
+    /// the caller; never the sandbox id, which a replacement does not keep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_key: Option<String>,
 }
 
 /// A live sandbox.

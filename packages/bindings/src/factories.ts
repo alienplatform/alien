@@ -202,6 +202,7 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
             options?.env ?? null,
             options?.timeoutMs ?? null,
             options?.egress ?? null,
+            options?.storageKey ?? null,
           ),
         ),
       ),
@@ -223,6 +224,7 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
           options?.env ?? null,
           options?.timeoutMs ?? null,
           options?.egress ?? null,
+          options?.storageKey ?? null,
         )
         return { sandbox: instance(resolved.sandbox), created: resolved.created }
       }),
