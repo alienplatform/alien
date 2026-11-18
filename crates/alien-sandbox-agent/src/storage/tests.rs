@@ -287,7 +287,15 @@ mod fake_s3 {
         };
         let key = String::from_utf8_lossy(key).to_string();
         // The fake's policy is the allowed prefix itself; "expired" stands for a lapsed grant.
-        if policy == b"expired" || !key.starts_with(std::str::from_utf8(policy).unwrap()) {
+        // As S3 answers a lapsed POST policy (measured in the test account).
+        if policy == b"expired" {
+            return (
+                StatusCode::BAD_REQUEST,
+                "<Error><Code>AccessDenied</Code><Message>Invalid according to Policy: Policy expired.</Message></Error>",
+            )
+                .into_response();
+        }
+        if !key.starts_with(std::str::from_utf8(policy).unwrap()) {
             return StatusCode::FORBIDDEN.into_response();
         }
         let version = bucket.next();

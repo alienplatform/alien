@@ -191,9 +191,13 @@ async fn a_grant_signed_with_a_session_ends_with_the_session() {
     println!("{} upload before expiry: {before}", chrono::Utc::now());
     assert!(before.is_success());
 
-    let wait = (expires_at - chrono::Utc::now()).to_std().unwrap_or_default();
+    let wait = (expires_at - chrono::Utc::now())
+        .to_std()
+        .unwrap_or_default();
     tokio::time::sleep(wait + Duration::from_secs(5)).await;
     let after = post(&grant, &pack, b"y").await;
     println!("{} upload after expiry: {after}", chrono::Utc::now());
-    assert_eq!(after, 403);
+    // S3 answers an expired POST policy with 400 ("Invalid according to Policy: Policy
+    // expired"), an expired presigned URL or session with 403.
+    assert!(after == 400 || after == 403, "{after}");
 }

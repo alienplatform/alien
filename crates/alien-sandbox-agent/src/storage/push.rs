@@ -47,8 +47,13 @@ impl GrantStore {
             || self.grant().expires_at() <= chrono::Utc::now()
     }
 
-    fn observe(&self, status: hyper::StatusCode) {
-        if status == hyper::StatusCode::FORBIDDEN {
+    /// Marks the grant denied when the store refused it: 403, or the 400 S3 gives a POST whose
+    /// policy expired (a clock behind the store's can let one through the local check).
+    fn observe(&self, status: hyper::StatusCode, body: &[u8]) {
+        if status == hyper::StatusCode::FORBIDDEN
+            || (status == hyper::StatusCode::BAD_REQUEST
+                && String::from_utf8_lossy(body).contains("Policy expired"))
+        {
             self.denied.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
@@ -187,7 +192,7 @@ impl ObjectStore for GrantStore {
                 .await
         }
         .map_err(|e| failed("put", object, e.to_string()))?;
-        self.observe(response.status);
+        self.observe(response.status, &response.body);
         match response.status {
             hyper::StatusCode::PRECONDITION_FAILED | hyper::StatusCode::CONFLICT => {
                 Ok(PutOutcome::Conflict)
