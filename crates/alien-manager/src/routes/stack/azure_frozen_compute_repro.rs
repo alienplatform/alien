@@ -263,6 +263,7 @@ async fn first_setup_machine_selection_records_the_profile_of_the_chosen_machine
         &StackState::new(Platform::Azure),
         &deploy_config(&chosen),
     )
+    .unwrap()
     .expect("the machine differs from the registered default");
     let runner = alien_preflights::runner::PreflightRunner::new();
     let new = runner
@@ -290,5 +291,8 @@ async fn first_setup_machine_selection_records_the_profile_of_the_chosen_machine
         .flat_map(|r| r.errors.clone())
         .collect();
     println!("DIFF {diff:#?}\nCOMPAT {errors:#?}");
+    // The whole cluster, every group field (machine, profile, min/max, scale policy), is
+    // what the next deployment derives.
+    assert!(diff.is_empty(), "{diff:#?}");
     assert!(errors.is_empty(), "{errors:#?}");
 }

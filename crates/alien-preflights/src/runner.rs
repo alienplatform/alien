@@ -322,7 +322,7 @@ impl PreflightRunner {
             return Ok((None, results));
         };
         Ok((
-            Self::with_chosen_machines(prepared, stack_state, &chosen),
+            Self::with_chosen_machines(prepared, stack_state, &chosen)?,
             results,
         ))
     }
@@ -344,9 +344,11 @@ impl PreflightRunner {
         stack: &Stack,
         stack_state: &StackState,
         chosen: &DeploymentConfig,
-    ) -> Option<Stack> {
+    ) -> Result<Option<Stack>> {
         use alien_core::ComputeCluster;
-        let settings = chosen.stack_settings.compute.as_ref()?;
+        let Some(settings) = chosen.stack_settings.compute.as_ref() else {
+            return Ok(None);
+        };
         let mut updated = stack.clone();
         let mut changed = false;
         for entry in updated.resources.values_mut() {
@@ -377,23 +379,26 @@ impl PreflightRunner {
                 // deployment derives it: a group with only the machine changed would
                 // differ from that derivation and read as a modified frozen resource.
                 let mut moved = group.clone();
-                if let Err(error) = crate::mutations::compute_cluster::materialize_selected_group(
+                // A failure is an error, not a skip: keeping the old group would leave the
+                // pool on the default machine that quota just refused.
+                crate::mutations::compute_cluster::materialize_selected_group(
                     &mut moved,
                     stack_state.platform,
                     selection,
-                ) {
-                    tracing::warn!(
-                        pool = %group.group_id,
-                        error = %error,
-                        "Automatic machine selection could not be recorded for the pool"
-                    );
-                    continue;
-                }
+                )
+                .context(ErrorData::StackMutationFailed {
+                    mutation_name: "FirstSetupMachineSelection".to_string(),
+                    message: format!(
+                        "Could not record machine '{machine}' for pool '{}'",
+                        group.group_id
+                    ),
+                    resource_id: None,
+                })?;
                 *group = moved;
                 changed = true;
             }
         }
-        changed.then_some(updated)
+        Ok(changed.then_some(updated))
     }
 
     /// Apply all stack mutations to a stack.
@@ -1169,6 +1174,7 @@ mod setup_update_authorization_tests {
             &StackState::new(Platform::Azure),
             &chosen,
         )
+        .unwrap()
         .expect("the pool moves");
         let group = updated
             .resources
@@ -1182,6 +1188,52 @@ mod setup_update_authorization_tests {
                 .to_machine_profile();
         assert_eq!(group.instance_type.as_deref(), Some("Standard_D2s_v5"));
         assert_eq!(group.profile, Some(catalog));
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_selection_that_cannot_be_recorded_fails_naming_the_pool_and_machine() {
+        use alien_core::{CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings};
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("Standard_B2s".to_string()),
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+                data_disk_gib_range: None,
+            })
+            .build();
+        let stack = Stack::new("azure-pool".into())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .build();
+        let mut chosen = deployment_config();
+        chosen.stack_settings.compute = Some(ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: Some("Not_A_Machine".to_string()),
+                    failure_domains: None,
+                    data_disk_gib: None,
+                },
+            )]
+            .into(),
+            containers: Default::default(),
+        });
+        let error = PreflightRunner::with_chosen_machines(
+            &stack,
+            &StackState::new(Platform::Azure),
+            &chosen,
+        )
+        .expect_err("an unrecordable choice is an error, not a silent skip");
+        let text = format!("{error:?}");
+        assert!(
+            text.contains("general") && text.contains("Not_A_Machine"),
+            "{text}"
+        );
     }
 
     #[cfg(feature = "runtime-checks")]
@@ -1236,6 +1288,7 @@ mod setup_update_authorization_tests {
         });
 
         let updated = PreflightRunner::with_chosen_machines(&stack, &state, &chosen)
+            .unwrap()
             .expect("the pool without machines moves");
         let machines: Vec<(String, Option<String>)> = updated
             .resources
@@ -1252,7 +1305,9 @@ mod setup_update_authorization_tests {
             ]
         );
         // Nothing to move once the pick matches the stack.
-        assert!(PreflightRunner::with_chosen_machines(&updated, &state, &chosen).is_none());
+        assert!(PreflightRunner::with_chosen_machines(&updated, &state, &chosen)
+            .unwrap()
+            .is_none());
     }
 
     #[cfg(feature = "runtime-checks")]
