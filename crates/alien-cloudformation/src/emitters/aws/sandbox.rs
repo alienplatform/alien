@@ -17,7 +17,8 @@ use crate::{
 };
 use alien_core::sandbox_build_role::sandbox_build_role_name;
 use alien_core::sandbox_egress::{
-    sandbox_egress_network, sandbox_needs_connector, SandboxEgressVpc, LOOPBACK_ONLY_CIDR,
+    aws_sandbox_has_store_path, aws_sandbox_uses_dedicated_subnets, sandbox_egress_network,
+    sandbox_needs_connector, SandboxEgressVpc, LOOPBACK_ONLY_CIDR,
 };
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::sandbox_setup_inputs::aws_sandbox_renders_bundle;
@@ -120,17 +121,24 @@ impl CfEmitter for AwsSandboxEmitter {
             security_group
                 .properties
                 .insert("VpcId".to_string(), vpc_id);
+            // A sandbox with persistent storage also reaches S3 on 443, through the gateway
+            // endpoint on its subnets' route table; only the agent's marked sockets get there.
+            let store_rule =
+                aws_sandbox_has_store_path(ctx.stack, sandbox).then(persistent_store_egress_rule);
             let egress_rules = if matches!(sandbox.egress, SandboxEgress::None) {
-                CfExpression::list([CfExpression::object([
-                    ("IpProtocol", CfExpression::from("-1")),
-                    ("CidrIp", CfExpression::from(LOOPBACK_ONLY_CIDR)),
-                    (
-                        "Description",
-                        CfExpression::from("Sandbox sessions reach nothing outbound"),
-                    ),
-                ])])
+                CfExpression::list(
+                    std::iter::once(CfExpression::object([
+                        ("IpProtocol", CfExpression::from("-1")),
+                        ("CidrIp", CfExpression::from(LOOPBACK_ONLY_CIDR)),
+                        (
+                            "Description",
+                            CfExpression::from("Sandbox sessions reach nothing outbound"),
+                        ),
+                    ]))
+                    .chain(store_rule),
+                )
             } else {
-                super::network::gateway_egress_rules(ctx)?
+                super::network::gateway_egress_rules(ctx, store_rule)?
             };
             security_group
                 .properties
@@ -288,7 +296,7 @@ impl CfEmitter for AwsSandboxEmitter {
         if provisioned_at_runtime(ctx) {
             return runtime_import_ref(ctx, sandbox, image_id);
         }
-        Ok(CfExpression::object([
+        let mut fields = vec![
             ("previewPorts", preview_ports(sandbox)),
             (
                 "egressConnectorArns",
@@ -313,7 +321,9 @@ impl CfEmitter for AwsSandboxEmitter {
                 "imageVersion",
                 CfExpression::get_att(image_id, "LatestActiveImageVersion"),
             ),
-        ]))
+        ];
+        fields.extend(persistent_storage_import(sandbox, image_id));
+        Ok(CfExpression::object(fields))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
@@ -579,8 +589,34 @@ fn profile_policies(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Vec<CfRe
     Ok(resources)
 }
 
+/// Template mapping from region to the AWS-managed S3 prefix list (`alien_core`'s table): a
+/// gateway endpoint does not return its prefix list to CloudFormation.
+pub(crate) const MAPPING_S3_PREFIX_LISTS: &str = "SandboxS3PrefixLists";
+pub(crate) const MAPPING_S3_PREFIX_LIST_KEY: &str = "PrefixListId";
+
+/// The connector rule to S3 over HTTPS, scoped to the region's S3 prefix list.
+fn persistent_store_egress_rule() -> CfExpression {
+    CfExpression::object([
+        ("IpProtocol", CfExpression::from("tcp")),
+        ("FromPort", CfExpression::Integer(443)),
+        ("ToPort", CfExpression::Integer(443)),
+        (
+            "DestinationPrefixListId",
+            CfExpression::find_in_map(
+                MAPPING_S3_PREFIX_LISTS,
+                CfExpression::ref_("AWS::Region"),
+                MAPPING_S3_PREFIX_LIST_KEY,
+            ),
+        ),
+        (
+            "Description",
+            CfExpression::from("Sandbox agent to its persistent store through the S3 endpoint"),
+        ),
+    ])
+}
+
 /// Logical id of the bucket a sandbox's persistent storage lives in.
-fn persistent_store_id(image_id: &str) -> String {
+pub(crate) fn persistent_store_id(image_id: &str) -> String {
     format!("{image_id}PersistentStore")
 }
 
@@ -789,6 +825,16 @@ fn persistent_store_resources(
     Ok(resources)
 }
 
+/// The store setup created, as the import data carries it: the runtime controller publishes the
+/// binding a deployment's own workloads read and learns the store only from this. Only a declaring
+/// sandbox has one, so every other sandbox's import data is unchanged.
+fn persistent_storage_import(
+    sandbox: &Sandbox,
+    image_id: &str,
+) -> Option<(&'static str, CfExpression)> {
+    persistent_storage_binding(sandbox, image_id).map(|storage| ("persistentStorage", storage))
+}
+
 /// The persistent storage half of the binding: where the agent's directory goes, and the store.
 fn persistent_storage_binding(sandbox: &Sandbox, image_id: &str) -> Option<CfExpression> {
     let storage = sandbox.persistent_storage.as_ref()?;
@@ -855,6 +901,7 @@ fn runtime_import_ref(
     if !aws_sandbox_renders_bundle(ctx.stack, sandbox.id()) {
         fields.push(("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)));
     }
+    fields.extend(persistent_storage_import(sandbox, image_id));
     Ok(CfExpression::object(fields))
 }
 
@@ -1211,7 +1258,8 @@ fn egress_network(
             network.id
         ))
     })?;
-    let gateway = matches!(sandbox.egress, SandboxEgress::Internet);
+    // `internet` sessions and those with a path to a persistent store use the dedicated subnets.
+    let gateway = aws_sandbox_uses_dedicated_subnets(ctx.stack, sandbox);
 
     Ok(Some(match network.vpc {
         // Deliberately not `private_subnet_ids_expr`: its use-default branch resolves to
@@ -1235,7 +1283,10 @@ fn egress_network(
                         "PrivateSubnet"
                     },
                 ),
-                CfExpression::ref_(if gateway {
+                // A store path is refused under use-existing by the template's rule (its
+                // endpoint goes on the route table this template creates), so only `internet`
+                // takes the supplied dedicated subnets here.
+                CfExpression::ref_(if matches!(sandbox.egress, SandboxEgress::Internet) {
                     "SandboxSubnetIds"
                 } else {
                     PARAM_PRIVATE_SUBNET_IDS

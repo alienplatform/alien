@@ -72,6 +72,17 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                     {
                         return Some(format!("Sandbox '{}': {reason}", sandbox.id()));
                     }
+                    // The store's bucket is named as a Storage `<sandbox>-ps` would be.
+                    let store_id = format!("{}-ps", sandbox.id());
+                    if sandbox.persistent_storage.is_some()
+                        && stack.resources().any(|(id, _)| *id == store_id)
+                    {
+                        return Some(format!(
+                            "Sandbox '{}': its persistent store takes the bucket name a resource \
+                             '{store_id}' would; rename that resource",
+                            sandbox.id()
+                        ));
+                    }
                 }
                 // GCP keeps a persistent store in a bucket that setup creates and grants to the
                 // sandbox's workloads. A Live sandbox never runs setup, so it would have no store.
@@ -385,6 +396,30 @@ mod tests {
             .await
             .expect("check runs");
         assert!(accepted.success, "{:?}", accepted.errors);
+
+        let mut colliding = declared(Some(1001));
+        let storage = alien_core::Storage::new("agent-ps".to_string()).build();
+        colliding.resources.insert(
+            "agent-ps".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(storage),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let refused = SandboxPlatformSupportCheck
+            .check(&colliding, Platform::Aws)
+            .await
+            .expect("check runs");
+        assert!(
+            refused.errors.join(" ").contains("agent-ps"),
+            "{:?}",
+            refused.errors
+        );
     }
 
     /// Setup creates a GCP sandbox's persistent store, so only a Frozen sandbox may declare one;

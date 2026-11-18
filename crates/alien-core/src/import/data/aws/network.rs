@@ -42,6 +42,11 @@ pub struct AwsSandboxNetwork {
     /// Every associated VPC IPv4 range, denied by the gateway.
     #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
     pub vpc_cidrs: Vec<String>,
+    /// The S3 gateway endpoint setup put on the connector subnets' route table for sandboxes'
+    /// persistent stores, the one route besides local ones those subnets may have. Absent unless
+    /// a sandbox declares persistent storage, so other registrations are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistent_store_endpoint_id: Option<String>,
 }
 
 /// AWS Network ImportData.

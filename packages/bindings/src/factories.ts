@@ -39,6 +39,7 @@ import type {
   RawRemoteStorageHandle,
   RawSandboxHandle,
   RawSandboxInstance,
+  RawSandboxStorageStatus,
   RawStorageHandle,
   RawVaultHandle,
 } from "./loader.js"
@@ -65,6 +66,7 @@ import type {
   RemoteStorage,
   Sandbox,
   SandboxInstance,
+  SandboxStorageStatus,
   SignedUrlOptions,
   Storage,
   StoragePutOptions,
@@ -152,6 +154,26 @@ function makeRemoteStorage(handle: () => Promise<RawRemoteStorageHandle>): Remot
 
 /** The sandbox states the addon and this wrapper agree on. */
 const SANDBOX_STATES = ["starting", "running", "paused", "terminated"] as const
+
+/** The persistent storage states the addon and this wrapper agree on. */
+const SANDBOX_STORAGE_STATES = [
+  "awaitingRestore",
+  "replicating",
+  "behind",
+  "stopped",
+  "denied",
+] as const
+
+function toStorageStatus(raw: RawSandboxStorageStatus): SandboxStorageStatus {
+  return {
+    key: raw.key ?? null,
+    state: narrow("storageState", raw.state, SANDBOX_STORAGE_STATES),
+    lastSyncedAt: raw.lastSyncedAt ?? null,
+    head: raw.head ?? null,
+    lastError: raw.lastError ?? null,
+    grantExpiresAt: raw.grantExpiresAt ?? null,
+  }
+}
 
 /** The output frame kinds that carry data; `exit` is handled separately. */
 const SANDBOX_STREAM_KINDS = ["stdout", "stderr"] as const
@@ -429,6 +451,15 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
     pause: sandboxId => guard(handle, raw => raw.pause(sandboxId)),
     resume: sandboxId => guard(handle, raw => raw.resume(sandboxId)),
     terminate: sandboxId => guard(handle, raw => raw.terminate(sandboxId)),
+    storageStatus: sandboxId =>
+      guard(handle, async raw => {
+        const status = await raw.storageStatus(sandboxId)
+        return status ? toStorageStatus(status) : null
+      }),
+    syncStorage: sandboxId =>
+      guard(handle, async raw => toStorageStatus(await raw.syncStorage(sandboxId))),
+    readStorageFile: (key, path) => guard(handle, raw => raw.readStorageFile(key, path)),
+    deleteStorage: key => guard(handle, raw => raw.deleteStorage(key)),
   }
 }
 

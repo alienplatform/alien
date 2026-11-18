@@ -163,7 +163,7 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> Block {
     )
 }
 
-fn encryption(label: &str, key_label: Option<&str>) -> Block {
+pub(super) fn encryption(label: &str, key_label: Option<&str>) -> Block {
     let mut encryption = vec![attr(
         "sse_algorithm",
         Expression::String(
@@ -187,7 +187,7 @@ fn encryption(label: &str, key_label: Option<&str>) -> Block {
     )
 }
 
-fn ownership_controls(label: &str) -> Block {
+pub(super) fn ownership_controls(label: &str) -> Block {
     let rule = block(
         "rule",
         [attr(
@@ -202,7 +202,7 @@ fn ownership_controls(label: &str) -> Block {
     )
 }
 
-fn public_access_block(label: &str, block_public: bool) -> Block {
+pub(super) fn public_access_block(label: &str, block_public: bool) -> Block {
     let value = Expression::Bool(block_public);
     resource_block(
         "aws_s3_bucket_public_access_block",
@@ -372,7 +372,7 @@ fn versioning(label: &str) -> Block {
     )
 }
 
-fn lifecycle(label: &str, rules: &[LifecycleRule]) -> Block {
+pub(super) fn lifecycle(label: &str, rules: &[LifecycleRule]) -> Block {
     let mut body: Vec<Structure> = vec![attr("bucket", bucket_id(label))];
     for (index, rule) in rules.iter().enumerate() {
         let prefix = rule.prefix.clone().unwrap_or_default();
@@ -424,13 +424,13 @@ fn lifecycle(label: &str, rules: &[LifecycleRule]) -> Block {
     resource_block("aws_s3_bucket_lifecycle_configuration", label, body)
 }
 
-fn bucket_id(label: &str) -> Expression {
+pub(super) fn bucket_id(label: &str) -> Expression {
     expr::traversal(["aws_s3_bucket", label, "id"])
 }
 
 /// Reference path to one of the bucket's own attributes, for the places that
 /// interpolate it into a string rather than emitting an expression.
-fn bucket_path(label: &str, attribute: &str) -> String {
+pub(super) fn bucket_path(label: &str, attribute: &str) -> String {
     format!("aws_s3_bucket.{label}.{attribute}")
 }
 
