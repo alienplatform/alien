@@ -3551,6 +3551,35 @@ mod direct_setup_tests {
         with_profile: bool,
         management_images: bool,
     ) -> SingleControllerExecutor {
+        let sets: &[&str] = if with_profile {
+            &["sandbox/execute"]
+        } else {
+            &[]
+        };
+        executor_with_profile_sets(
+            controller,
+            groups,
+            setup_run,
+            egress,
+            authorization,
+            sets,
+            management_images,
+        )
+        .await
+    }
+
+    /// The same, with the sandbox grants the `runtime` profile holds given by name (none means
+    /// the profile and its identity are absent).
+    async fn executor_with_profile_sets(
+        controller: AzureSandboxController,
+        groups: MockSandboxGroupsApi,
+        setup_run: bool,
+        egress: SandboxEgress,
+        authorization: MockAuthorizationApi,
+        profile_sets: &[&str],
+        management_images: bool,
+    ) -> SingleControllerExecutor {
+        let with_profile = !profile_sets.is_empty();
         let authorization: Arc<dyn alien_azure_clients::authorization::AuthorizationApi> =
             Arc::new(authorization);
         let groups: Arc<dyn alien_azure_clients::sandbox_groups::SandboxGroupsApi> =
@@ -3603,7 +3632,8 @@ mod direct_setup_tests {
             )
             .permission_profile(
                 "runtime",
-                alien_core::permissions::PermissionProfile::new().resource("box_one", ["sandbox/execute"]),
+                alien_core::permissions::PermissionProfile::new()
+                    .resource("box_one", profile_sets.iter().copied().collect::<Vec<_>>()),
             );
         }
         if management_images {
@@ -4165,68 +4195,147 @@ mod direct_setup_tests {
         assert!(!runtime.needs_update().unwrap());
     }
 
-    /// Assignment ids are numbered by position, so a profile that drops its first grant moves
-    /// the next grant onto the dropped one's id. Azure refuses an assignment equal to one that
-    /// exists under another id, which the controller reads as "already there": the dropped
-    /// grants must be removed before the new ones are written, or the grant the stack still asks
-    /// for is deleted as stale while the one it dropped stays.
-    #[tokio::test]
-    async fn a_setup_rerun_removes_dropped_grants_before_it_places_the_rest() {
-        let stale = "/subscriptions/s/resourceGroups/default-resource-group/providers/Microsoft.App/sandboxGroups/g/providers/Microsoft.Authorization/roleAssignments/old";
-        let controller = AzureSandboxController {
+    /// An authorization fake that behaves as Azure does for the case that matters here: a write
+    /// of an assignment equal to one that exists under another id is refused with "already
+    /// exists", a write onto an existing id replaces its role, and a delete removes it.
+    type AzureAssignments =
+        Arc<std::sync::Mutex<std::collections::BTreeMap<String, (String, String)>>>;
+
+    fn azure_like_authorization(store: AzureAssignments) -> MockAuthorizationApi {
+        use alien_azure_clients::models::authorization_role_assignments::RoleAssignment;
+        use alien_azure_clients::models::authorization_role_definitions::RoleDefinition;
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_get_role_assignment_by_id()
+            .returning(|_| {
+                Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "RoleAssignment".to_string(),
+                        resource_name: "a".to_string(),
+                    },
+                ))
+            });
+        authorization
+            .expect_get_role_definition()
+            .returning(|_, id| {
+                Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "RoleDefinition".to_string(),
+                        resource_name: id,
+                    },
+                ))
+            });
+        authorization
+            .expect_create_or_update_role_definition()
+            .returning(|_, _, definition: &RoleDefinition| Ok(definition.clone()));
+        let writes = store.clone();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .returning(move |id, assignment: &RoleAssignment| {
+                let properties = assignment.properties.as_ref().expect("properties");
+                let wanted = (
+                    properties.principal_id.clone(),
+                    properties.role_definition_id.clone(),
+                );
+                let mut store = writes.lock().unwrap();
+                if store.iter().any(|(other, held)| *other != id && *held == wanted) {
+                    return Err(AlienError::new(
+                        alien_client_core::ErrorData::RemoteResourceConflict {
+                            resource_type: "role assignment".to_string(),
+                            resource_name: id,
+                            message: "The role assignment already exists.".to_string(),
+                        },
+                    ));
+                }
+                store.insert(id, wanted);
+                Ok(assignment.clone())
+            });
+        authorization
+            .expect_delete_role_assignment_by_id()
+            .returning(move |id| {
+                store.lock().unwrap().remove(&id);
+                Ok(None)
+            });
+        authorization
+    }
+
+    fn ready_group_controller() -> AzureSandboxController {
+        AzureSandboxController {
             state: AzureSandboxState::Ready,
             sandbox_group: Some("g".to_string()),
             region: Some("eastus".to_string()),
             resource_group: Some("default-resource-group".to_string()),
             created_group: true,
             reconciled_grants: None,
-            group_assignment_ids: vec![stale.to_string()],
+            group_assignment_ids: Vec::new(),
             group_create_intent: true,
             group_absent: false,
             ..Default::default()
-        };
-        let mut groups = MockSandboxGroupsApi::new();
-        groups
-            .expect_get_sandbox_group()
-            .returning(|_, _| Ok(group("Succeeded")));
-        let log = Assigned::default();
-        let mut authorization = recording_authorization(log.clone());
-        let delete_log = log.clone();
-        authorization
-            .expect_delete_role_assignment_by_id()
-            .returning(move |id| {
-                delete_log
-                    .lock()
+        }
+    }
+
+    /// Assignment ids are numbered by position, so a profile that drops its first grant moves
+    /// the next grant onto the dropped one's id. Azure refuses a write equal to an assignment
+    /// that exists under another id, and the writer reads that as "already there". With the
+    /// grant on `execute` then `images`, dropping `execute` must leave `images` held, and
+    /// `execute` gone. Before the stale ones were removed first, the `images` assignment was
+    /// deleted as stale while `execute` stayed.
+    #[tokio::test]
+    async fn a_profile_that_drops_its_first_grant_keeps_the_rest_and_loses_the_dropped_one() {
+        let store = AzureAssignments::default();
+        let run = |controller: AzureSandboxController, sets: &'static [&'static str]| {
+            let store = store.clone();
+            async move {
+                let mut groups = MockSandboxGroupsApi::new();
+                groups
+                    .expect_get_sandbox_group()
+                    .returning(|_, _| Ok(group("Succeeded")));
+                let mut executor = executor_with_profile_sets(
+                    controller,
+                    groups,
+                    true,
+                    SandboxEgress::None,
+                    azure_like_authorization(store),
+                    sets,
+                    false,
+                )
+                .await;
+                executor
+                    .update(sandbox(SandboxEgress::None))
+                    .expect("update is accepted");
+                drive(&mut executor).await;
+                assert_eq!(
+                    executor.status(),
+                    ResourceStatus::Running,
+                    "the rerun settles"
+                );
+                executor
+                    .internal_state::<AzureSandboxController>()
                     .unwrap()
-                    .push((format!("DELETE {id}"), String::new(), String::new()));
-                Ok(None)
-            });
-        let mut executor = executor_with_authorization(
-            controller,
-            groups,
-            true,
-            SandboxEgress::None,
-            authorization,
-            true,
-            false,
-        )
-        .await;
-        executor
-            .update(sandbox(SandboxEgress::None))
-            .expect("update is accepted");
-        drive(&mut executor).await;
-        let log = log.lock().unwrap();
-        let delete = log
-            .iter()
-            .position(|(id, _, _)| id.starts_with("DELETE "))
-            .expect("the dropped grant is removed");
-        let first_put = log
-            .iter()
-            .position(|(id, _, _)| !id.starts_with("DELETE "))
-            .expect("the remaining grants are placed");
+                    .clone()
+            }
+        };
+        let installed = run(ready_group_controller(), &["sandbox/execute", "sandbox/images"]).await;
+        let both: Vec<String> = store.lock().unwrap().values().map(|(_, r)| r.clone()).collect();
         assert!(
-            delete < first_put,
-            "the dropped grant is removed before any grant is written: {log:?}"
+            both.iter().any(|role| role.contains("c24cf47c")),
+            "the execute role is placed: {both:?}"
+        );
+
+        run(installed, &["sandbox/images"]).await;
+        let after: Vec<String> = store.lock().unwrap().values().map(|(_, r)| r.clone()).collect();
+        let expected: Vec<String> = both
+            .iter()
+            .filter(|role| !role.contains("c24cf47c"))
+            .cloned()
+            .collect();
+        let mut after_sorted = after.clone();
+        after_sorted.sort();
+        let mut expected_sorted = expected.clone();
+        expected_sorted.sort();
+        assert_eq!(
+            after_sorted, expected_sorted,
+            "only the dropped execute grant is gone; every other grant is still held"
         );
     }
 
