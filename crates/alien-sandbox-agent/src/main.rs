@@ -624,7 +624,14 @@ mod tests {
                 std::net::Ipv4Addr::new(168, 63, 129, 16)
             ])
         );
-        for refused in ["", "all", "only:", "only:10.0.6.4,", "only:host.example", "only:::1"] {
+        for refused in [
+            "",
+            "all",
+            "only:",
+            "only:10.0.6.4,",
+            "only:host.example",
+            "only:::1",
+        ] {
             assert_eq!(super::guest_egress_allowed(refused), None, "{refused}");
         }
     }

@@ -8,6 +8,7 @@
 
 pub mod attach;
 pub mod freeze;
+mod http;
 pub mod push;
 pub mod tree;
 

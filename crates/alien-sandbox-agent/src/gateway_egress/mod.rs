@@ -55,6 +55,28 @@ fn invalid(reason: &str) -> AlienError<ErrorData> {
     AlienError::new(failed(reason))
 }
 
+/// Connects one of the agent's own sockets to `host:port`: resolved through a marked DNS socket
+/// and marked itself where the agent holds NET_ADMIN (it installed guest network rules), so the
+/// in-guest redirect that catches every command socket leaves it alone. Without NET_ADMIN no
+/// rules exist, and plain sockets reach the network as they always did.
+pub async fn trusted_connect(host: &str, port: u16) -> std::io::Result<TcpStream> {
+    let marked = can_mark();
+    let address = dns::resolve_gateway(&format!("{host}:{port}"), marked).await?;
+    let socket = redirect::socket(marked)?;
+    timeout(TIMEOUT, socket.connect(address))
+        .await
+        .map_err(|_| std::io::Error::other(format!("connect {host}:{port} timed out")))?
+}
+
+/// Whether this process may set the agent's socket mark.
+fn can_mark() -> bool {
+    static CAN_MARK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CAN_MARK.get_or_init(|| {
+        std::net::UdpSocket::bind("0.0.0.0:0")
+            .is_ok_and(|socket| redirect::mark(socket.as_raw_fd()).is_ok())
+    })
+}
+
 /// True when the pod's NetworkPolicy, not this agent, enforces the egress limit (Kubernetes only).
 /// The agent then keeps no NET_ADMIN and installs no cgroup, BPF or iptables rules.
 pub fn network_enforced_externally() -> Result<bool> {
