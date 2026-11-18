@@ -527,6 +527,97 @@ async fn a_pull_overtaken_by_another_puller_is_idle_not_failed() {
     assert!(!sandbox.spool.is_superseded());
 }
 
+/// What the spool listed at one moment, as a puller that took its snapshot earlier still sees it.
+struct Snapshot<'a> {
+    spool: &'a Spool,
+    pending: Pending,
+}
+
+#[async_trait]
+impl PullChannel for Snapshot<'_> {
+    async fn pending(&self) -> Result<Option<Pending>> {
+        Ok(Some(self.pending.clone()))
+    }
+    async fn read(&self, object: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
+        self.spool.read(object, offset, len)
+    }
+    async fn ack(&self, generation: u64, outcome: AckOutcome) -> Result<()> {
+        self.spool.ack(generation, outcome)
+    }
+    async fn seed(&self, object: &str, offset: u64, bytes: Vec<u8>, last: bool) -> Result<()> {
+        self.spool.seed(object, offset, &bytes, last)
+    }
+}
+
+/// Lets another puller finish publishing an older snapshot just before this pull's first read.
+struct OvertakenByAnOlderSnapshot<'a> {
+    spool: &'a Spool,
+    store: &'a MemoryStore,
+    other: tokio::sync::Mutex<Option<(Puller, Pending)>>,
+}
+
+#[async_trait]
+impl PullChannel for OvertakenByAnOlderSnapshot<'_> {
+    async fn pending(&self) -> Result<Option<Pending>> {
+        Ok(self.spool.pending())
+    }
+    async fn read(&self, object: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
+        if let Some((mut other, pending)) = self.other.lock().await.take() {
+            let older = Snapshot {
+                spool: self.spool,
+                pending,
+            };
+            other.pull(&older, self.store, "engine-42").await.unwrap();
+        }
+        self.spool.read(object, offset, len)
+    }
+    async fn ack(&self, generation: u64, outcome: AckOutcome) -> Result<()> {
+        self.spool.ack(generation, outcome)
+    }
+    async fn seed(&self, object: &str, offset: u64, bytes: Vec<u8>, last: bool) -> Result<()> {
+        self.spool.seed(object, offset, &bytes, last)
+    }
+}
+
+/// Two pullers of one sandbox, the first still copying commit 1 when commit 2 lands. The second
+/// lists both commits; the first's publish of commit 1 drops commit 1's objects, but the spool's
+/// generation stays at commit 2's. The second pull is overtaken, not failed: the next pull
+/// publishes commit 2 (found by the live suite as `sandbox.sync` failing on a `storageRead`).
+#[tokio::test]
+async fn a_pull_overtaken_by_an_older_snapshot_is_idle_and_the_next_pull_publishes() {
+    let store = MemoryStore::new();
+    let mut sandbox = sandbox(&store, "sandbox-1").await;
+    let start = read_head(&store).await.unwrap().unwrap().1;
+    sandbox.commit(&sample()).await.unwrap();
+    let first = sandbox.spool.pending().unwrap();
+    let edited = sample().file("late.txt", pattern(CHUNK_SIZE + 7, 5), 2);
+    sandbox.commit(&edited).await.unwrap();
+
+    let channel = OvertakenByAnOlderSnapshot {
+        spool: &sandbox.spool,
+        store: &store,
+        other: tokio::sync::Mutex::new(Some((
+            Puller::new("sandbox-1", start.clone(), PAGE),
+            first,
+        ))),
+    };
+    let mut puller = Puller::new("sandbox-1", start, PAGE);
+    assert_eq!(
+        puller.pull(&channel, &store, "engine-42").await.unwrap(),
+        PullOutcome::Idle
+    );
+    assert_eq!(files_at_head(&store).await, sample().files());
+
+    let outcome = puller.pull(&channel, &store, "engine-42").await.unwrap();
+    assert!(
+        matches!(outcome, PullOutcome::Published { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(files_at_head(&store).await, edited.files());
+    assert_eq!(sandbox.spool.pending(), None);
+    assert!(!sandbox.spool.is_superseded());
+}
+
 /// `since` is the oldest unpublished commit: later commits do not move it, a publish clears it.
 #[tokio::test]
 async fn pending_says_since_when_writes_have_waited() {

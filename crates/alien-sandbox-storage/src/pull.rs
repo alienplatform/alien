@@ -527,10 +527,17 @@ impl Puller {
             let bytes = match self.read_object(channel, object).await {
                 Ok(bytes) => bytes,
                 // Another puller of this sandbox (a second binding instance) published this
-                // snapshot meanwhile, and its ack dropped the objects from the spool: the commit
-                // is in the store, nothing is left for this pull.
+                // snapshot, or an older one that held this object, meanwhile, and its ack dropped
+                // the object from the spool: it is in the store. An older snapshot's ack leaves
+                // the generation as it was, so the object no longer being pending says so too.
+                // The next pull lists what is left.
                 Err(error) => match channel.pending().await {
-                    Ok(now) if now.as_ref().map(|p| p.generation) != Some(pending.generation) => {
+                    Ok(now)
+                        if now.as_ref().is_none_or(|now| {
+                            now.generation != pending.generation
+                                || !now.objects.iter().any(|o| o.name == object.name)
+                        }) =>
+                    {
                         return Ok(PullOutcome::Idle);
                     }
                     _ => return Err(error),
