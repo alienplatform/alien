@@ -3441,7 +3441,7 @@ async fn load_release(
 }
 
 /// Loads the target and installed releases a run starts from. The target is
-/// the desired release. A setup update also needs the installed release: it
+/// the desired release. Every run also needs the installed release: it
 /// reconciles state with the manager at every step, and without the installed
 /// release that would clear it. A failed refresh has no update in flight, so
 /// the deployment has no desired release; its setup retry applies the
@@ -3463,14 +3463,19 @@ where
         Some(release_id) => Some(load(release_id.to_string()).await?),
         None => None,
     };
-    if !setup_update {
-        return Ok((target, None));
-    }
+    // Every run reports the installed release with its state. A run that left it out would
+    // clear the deployment's installed release when it reported a failed update, and a
+    // later `alien deploy` could no longer tell that an installed deployment needs a setup
+    // update rather than a runtime run.
     let installed = match current_release_id {
         Some(release_id) => Some(load(release_id.to_string()).await?),
         None => None,
     };
-    let target = target.or_else(|| installed.clone());
+    let target = if setup_update {
+        target.or_else(|| installed.clone())
+    } else {
+        target
+    };
     Ok((target, installed))
 }
 
@@ -5285,16 +5290,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_runs_load_only_the_desired_release() {
+    async fn runtime_runs_keep_the_installed_release_and_target_only_the_desired_one() {
         let (target, current, loaded) =
             run_releases(Some("rel_new"), Some("rel_installed"), false).await;
         assert_eq!(target.as_deref(), Some("rel_new"));
-        assert_eq!(current, None);
-        assert_eq!(loaded, ["rel_new"]);
+        assert_eq!(current.as_deref(), Some("rel_installed"));
+        assert_eq!(loaded, ["rel_new", "rel_installed"]);
 
+        // No desired release: a runtime run has no target, but still reports what is installed.
         let (target, current, loaded) = run_releases(None, Some("rel_installed"), false).await;
-        assert_eq!((target, current), (None, None));
-        assert!(loaded.is_empty());
+        assert_eq!((target, current.as_deref()), (None, Some("rel_installed")));
+        assert_eq!(loaded, ["rel_installed"]);
     }
 
     fn compute(mode: &str, machines: u32) -> ComputeSettings {
