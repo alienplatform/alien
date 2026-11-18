@@ -289,13 +289,13 @@ mod tests {
 
     #[test]
     fn a_stored_ledger_over_the_cap_is_refused() {
-        let ledger = full_root();
-        let mut text = ledger.to_json();
-        text.insert_str(
-            text.len() - 1,
-            &format!(",\"pad\":\"{}\"", "x".repeat(MAX_LEDGER_BYTES)),
-        );
+        // Every field is valid; only the prefix makes it too big.
+        let prefix = "p".repeat(MAX_LEDGER_BYTES);
+        let mut ledger = full_root();
+        ledger.prefix = prefix.clone();
+        let text = ledger.to_json();
         assert!(text.len() > MAX_LEDGER_BYTES);
-        assert!(Ledger::parse(text.as_bytes(), &"p".repeat(40)).is_err());
+        let error = Ledger::parse(text.as_bytes(), &prefix).unwrap_err();
+        assert!(format!("{error}").contains("bytes"), "{error}");
     }
 }
