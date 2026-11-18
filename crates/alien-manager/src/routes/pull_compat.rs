@@ -467,7 +467,7 @@ pub(crate) fn refusal_message(refused: &[&Feature]) -> String {
         .unwrap_or_else(|| NEXT_RELEASE.to_string());
     let names: Vec<&str> = refused.iter().map(|feature| feature.name).collect();
     format!(
-        "This release uses {}; the deployment's Operator must be {newest} or newer. Update the Operator, then deploy the release again. The deployment keeps running its current release.",
+        "This deployment needs {}; the deployment's Operator must be {newest} or newer. Update the Operator, then deploy the release again. The deployment keeps running its current release.",
         names.join(", ")
     )
 }
@@ -929,7 +929,7 @@ mod tests {
     #[test]
     fn the_message_names_the_features_and_the_newest_version() {
         let message = refusal_message(&[&STORAGE_NOTIFICATIONS, &REDIS]);
-        assert!(message.contains("storage notifications, Redis resources"));
+        assert!(message.contains("This deployment needs storage notifications, Redis resources"));
         assert!(message.contains("must be 3.3.59 or newer"));
         assert!(message.contains("keeps running its current release"));
     }
