@@ -137,6 +137,25 @@ fn add_controller(root: &Path) {
     std::fs::write(&manifest, text).unwrap();
 }
 
+// The build runs the controller binary to read its controllers, so it builds that binary for
+// this machine even when the workspace's default target is another.
+#[test]
+fn build_runs_the_controller_built_for_this_machine_whatever_the_default_target() {
+    let example = example("postgres-backup-retention");
+    add_controller(example.path());
+    let host = alien_core::BinaryTarget::current_os().to_string();
+
+    succeeds(
+        command(
+            example.path(),
+            &["extensions", "build", "--target", host.as_str()],
+        )
+        .env("CARGO_BUILD_TARGET", "wasm32-unknown-unknown")
+        .output()
+        .unwrap(),
+    );
+}
+
 fn zip_entry(zip: &[u8], name: &str) -> Vec<u8> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
     let mut bytes = Vec::new();

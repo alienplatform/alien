@@ -417,17 +417,19 @@ pub(crate) fn controller_bin(controller: &Member) -> Result<Option<&str>> {
     }
 }
 
-/// Builds the controller binary for this machine, as `cargo build` does, and returns it: what
-/// `--controllers` runs.
+/// Builds the controller binary for this machine and returns it: what `--controllers` runs. The
+/// build names this machine's target, since a workspace's `build.target` or `CARGO_BUILD_TARGET`
+/// would otherwise build a binary this machine cannot run.
 pub(crate) fn build_host_controller(
     workspace: &ExtensionWorkspace,
     controller: &Member,
     bin: &str,
 ) -> Result<PathBuf> {
+    let host = host_target(&workspace.root)?;
     let output = Command::new("cargo")
         .args(["build", "--message-format", "json", "--package"])
         .arg(&controller.name)
-        .args(["--bin", bin])
+        .args(["--bin", bin, "--target", &host])
         .current_dir(&workspace.root)
         .stderr(std::process::Stdio::inherit())
         .output()
@@ -451,6 +453,38 @@ pub(crate) fn build_host_controller(
         .ok_or_else(|| {
             AlienError::new(ErrorData::ExtensionBuildFailed {
                 message: format!("cargo built the controller and reported no binary named {bin}"),
+            })
+        })
+}
+
+/// This machine's target triple, from the toolchain the workspace builds with.
+fn host_target(workspace_root: &Path) -> Result<String> {
+    let output = Command::new("rustc")
+        .arg("-vV")
+        .current_dir(workspace_root)
+        .output()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "could not run 'rustc -vV' to find this machine's target".to_string(),
+        })?;
+    if !output.status.success() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "'rustc -vV' failed in '{}' ({}): {}",
+                workspace_root.display(),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        }));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .map(str::to_string)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!("'rustc -vV' named no host target: {}", stdout.trim()),
             })
         })
 }
