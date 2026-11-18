@@ -48,6 +48,11 @@ struct OperatorTransport {
     observed_from: Option<tokio::sync::Mutex<DeploymentState>>,
     /// Whether a compare-and-set checkpoint found newer state.
     superseded: AtomicBool,
+    /// Set for an apply: the target this loop is working on. The sync loop can accept
+    /// a newer target while a step runs; the loop's own state still holds the old one
+    /// and would write it back over the newer one, so a newer stored target replaces
+    /// the loop's before it checkpoints.
+    applying_target: Option<tokio::sync::Mutex<Option<alien_core::ReleaseInfo>>>,
 }
 
 #[async_trait]
@@ -89,6 +94,7 @@ impl DeploymentLoopTransport for OperatorTransport {
                 .runtime_metadata
                 .as_ref()
                 .map(|metadata| &metadata.deployer_secrets);
+        let mut merged_state = None;
         // Persist state to local DB after each step
         match &self.observed_from {
             Some(observed_from) => {
@@ -104,11 +110,46 @@ impl DeploymentLoopTransport for OperatorTransport {
                 }
                 *observed_from = state.clone();
             }
-            None => self
-                .db
-                .set_deployment_state(state)
-                .await
-                .map_err(|e| e.into_generic())?,
+            None => {
+                let newer = match &self.applying_target {
+                    Some(applying) => {
+                        let mut applying = applying.lock().await;
+                        let accepted = previous
+                            .as_ref()
+                            .and_then(|previous| previous.target_release.as_ref())
+                            .filter(|stored| {
+                                state.target_release == *applying
+                                    && applying.as_ref() != Some(*stored)
+                            })
+                            .cloned();
+                        if accepted.is_some() {
+                            applying.clone_from(&accepted);
+                        }
+                        accepted
+                    }
+                    None => None,
+                };
+                match newer {
+                    Some(newer) => {
+                        let mut merged = state.clone();
+                        info!(
+                            release_id = ?newer.release_id,
+                            "A newer target arrived while the deployment was applying; continuing with it"
+                        );
+                        super::sync::accept_target_release(&mut merged, newer);
+                        self.db
+                            .set_deployment_state(&merged)
+                            .await
+                            .map_err(|e| e.into_generic())?;
+                        merged_state = Some(merged);
+                    }
+                    None => self
+                        .db
+                        .set_deployment_state(state)
+                        .await
+                        .map_err(|e| e.into_generic())?,
+                }
+            }
         }
 
         if !heartbeats.is_empty() {
@@ -157,7 +198,7 @@ impl DeploymentLoopTransport for OperatorTransport {
         };
 
         Ok(StepReconcileResult {
-            state: None,
+            state: merged_state,
             config: enriched_config,
         })
     }
@@ -531,6 +572,8 @@ pub(crate) async fn run_deployment_continuously(
         suggested_delay_ms: AtomicU64::new(0),
         observed_from: refresh.then(|| tokio::sync::Mutex::new(current.clone())),
         superseded: AtomicBool::new(false),
+        applying_target: (operation == LoopOperation::Deploy)
+            .then(|| tokio::sync::Mutex::new(current.target_release.clone())),
     };
 
     if refresh {
@@ -769,6 +812,7 @@ async fn refresh_installed(state: &OperatorState) -> Result<Duration> {
         suggested_delay_ms: AtomicU64::new(0),
         observed_from: Some(tokio::sync::Mutex::new(current.clone())),
         superseded: AtomicBool::new(false),
+        applying_target: None,
     };
     let policy = RunnerPolicy {
         max_steps: 100,
@@ -1508,6 +1552,96 @@ mod tests {
         assert!(has_authorization(&no_record));
     }
 
+    /// The sync loop accepts release B while the loop is still applying release A. The
+    /// loop's own state holds A and must not write it back over B: the first failure of
+    /// A would then be retried automatically instead of B being prepared.
+    #[tokio::test]
+    async fn an_apply_checkpoint_never_overwrites_a_target_accepted_meanwhile() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), encryption_key)
+                .await
+                .unwrap(),
+        );
+        let release = |id: &str| alien_core::ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("apply".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
+        };
+        let state = |status, target: &str| DeploymentState {
+            platform: Platform::Test,
+            status,
+            current_release: Some(release("rel_installed")),
+            target_release: Some(release(target)),
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                pending_prepared_release_id: Some("rel_a".to_string()),
+                ..Default::default()
+            }),
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let updating = state(DeploymentStatus::Updating, "rel_a");
+        db.set_deployment_state(&updating).await.unwrap();
+        let transport = OperatorTransport {
+            db: Arc::clone(&db),
+            operator_config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(encryption_key)
+                .build(),
+            platform: Platform::Test,
+            suggested_delay_ms: AtomicU64::new(0),
+            observed_from: None,
+            superseded: AtomicBool::new(false),
+            applying_target: Some(tokio::sync::Mutex::new(updating.target_release.clone())),
+        };
+        let config = test_deployment_config();
+
+        // Nothing newer: the checkpoint is written as is and hands nothing back.
+        let step = transport
+            .reconcile_step("dep", &updating, &config, false, None, vec![], vec![])
+            .await
+            .unwrap();
+        assert!(step.state.is_none());
+
+        // The sync loop accepts B while the update is Updating (status is kept).
+        let mut accepted = updating.clone();
+        accepted.target_release = Some(release("rel_b"));
+        db.set_deployment_state(&accepted).await.unwrap();
+
+        // A step of A ends in failure and checkpoints with A as its target.
+        let failed = state(DeploymentStatus::UpdateFailed, "rel_a");
+        let step = transport
+            .reconcile_step("dep", &failed, &config, false, None, vec![], vec![])
+            .await
+            .unwrap();
+        let handed_back = step.state.expect("the newer target replaces the loop's");
+        for stored in [
+            db.get_deployment_state().await.unwrap().unwrap(),
+            handed_back,
+        ] {
+            assert_eq!(
+                stored.target_release.unwrap().release_id.as_deref(),
+                Some("rel_b")
+            );
+            // B is prepared from the start, not A retried.
+            assert_eq!(stored.status, DeploymentStatus::UpdatePending);
+            assert!(!stored.retry_requested);
+            assert!(stored
+                .runtime_metadata
+                .unwrap()
+                .pending_prepared_release_id
+                .is_none());
+        }
+    }
+
     /// A maintenance refresh is an observation. If the sync loop accepted newer
     /// work while it ran (the claim may already be complete), its checkpoint must
     /// not overwrite that target.
@@ -1553,6 +1687,7 @@ mod tests {
             suggested_delay_ms: AtomicU64::new(0),
             observed_from: Some(tokio::sync::Mutex::new(loaded.clone())),
             superseded: AtomicBool::new(false),
+            applying_target: None,
         };
         let config = test_deployment_config();
 

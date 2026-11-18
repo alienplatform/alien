@@ -1352,7 +1352,7 @@ fn refreshes_installed_release(
             == release.release_id.as_deref()
 }
 
-fn accept_target_release(
+pub(super) fn accept_target_release(
     deployment_state: &mut alien_core::DeploymentState,
     release: alien_core::ReleaseInfo,
 ) {
