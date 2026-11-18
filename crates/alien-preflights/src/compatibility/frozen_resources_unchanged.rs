@@ -67,11 +67,48 @@ fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resou
                 old_group.profile = new_group.profile.clone();
             }
         }
+        if recorded_profile_is_stale(platform, old_group, new_group) {
+            old_group.profile = new_group.profile.clone();
+        }
         if runtime_disk_change(platform, old_group, new_group) {
             old_group.profile = new_group.profile.clone();
         }
     }
     normalized == *new_cluster
+}
+
+/// Whether the old group recorded a profile that does not belong to its own machine, and
+/// the new group carries the machine's profile. First setup of an imported Azure install
+/// used to record the machine it chose with the profile of the registration default, so
+/// those installs hold a profile their machine does not have. The machine is unchanged;
+/// only the profile is brought in line with it.
+fn recorded_profile_is_stale(platform: Platform, old: &CapacityGroup, new: &CapacityGroup) -> bool {
+    old.instance_type.is_some()
+        && old.instance_type == new.instance_type
+        && old.profile.is_some()
+        && old.profile != new.profile
+        && validated_machine_profile(platform, new)
+        && profile_is_the_machines(platform, new)
+}
+
+/// Whether the group's profile is the one its machine has in the catalog, derived afresh.
+fn profile_is_the_machines(platform: Platform, group: &CapacityGroup) -> bool {
+    let mut fresh = group.clone();
+    fresh.profile = None;
+    let selection = ComputePoolSelection::Autoscale {
+        min: group.min_size,
+        max: group.max_size,
+        machine: group.instance_type.clone(),
+        failure_domains: None,
+        data_disk_gib: group.data_disk_gib_range.as_ref().map(|_| {
+            group
+                .data_disk_size_gib()
+                .map_or(0, |size_gib| u32::try_from(size_gib).unwrap_or(u32::MAX))
+        }),
+    };
+    crate::mutations::compute_cluster::materialize_selected_group(&mut fresh, platform, &selection)
+        .is_ok()
+        && fresh.profile == group.profile
 }
 
 /// Whether the profiles differ only in disk sizes that the platform applies
@@ -1485,6 +1522,41 @@ mod tests {
                 .unwrap()
                 .success
         );
+    }
+
+    /// First setup used to record the chosen machine with the registration default's profile.
+    /// The next release brings the profile in line with the recorded machine, without setup.
+    #[tokio::test]
+    async fn recorded_profile_of_another_machine_is_adopted_for_the_same_machine() {
+        let platform = Platform::Azure;
+        let profile_of = |machine: &str| {
+            alien_core::instance_catalog::find_instance_type(platform, machine)
+                .map(|spec| spec.to_machine_profile())
+        };
+        let mut old = compute_cluster(2);
+        old.capacity_groups[0].nested_virtualization = None;
+        old.capacity_groups[0].instance_type = Some("Standard_D2s_v5".into());
+        old.capacity_groups[0].profile = profile_of("Standard_B2s");
+        let mut new = old.clone();
+        new.capacity_groups[0].profile = profile_of("Standard_D2s_v5");
+        assert_ne!(
+            old.capacity_groups[0].profile,
+            new.capacity_groups[0].profile
+        );
+        let check = FrozenResourcesUnchangedCheck { platform };
+        let result = check
+            .check(&compute_stack(old.clone()), &compute_stack(new.clone()))
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.errors);
+
+        // A profile that is not the machine's own is still a modification.
+        new.capacity_groups[0].profile = profile_of("Standard_B4ms");
+        let result = check
+            .check(&compute_stack(old), &compute_stack(new))
+            .await
+            .unwrap();
+        assert!(!result.success);
     }
 
     #[tokio::test]

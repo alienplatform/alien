@@ -340,7 +340,7 @@ impl PreflightRunner {
 
     /// The stack with each not-yet-created pool's capacity group on the machine `chosen` names.
     #[cfg(feature = "runtime-checks")]
-    fn with_chosen_machines(
+    pub fn with_chosen_machines(
         stack: &Stack,
         stack_state: &StackState,
         chosen: &DeploymentConfig,
@@ -357,10 +357,10 @@ impl PreflightRunner {
                 let already_created = stack_state.resources.values().any(|state| {
                     crate::mutations::compute_cluster::group_was_created(state, &group.group_id)
                 });
-                let Some(machine) = settings
+                let Some((selection, machine)) = settings
                     .pools
                     .get(&group.group_id)
-                    .and_then(|selection| selection.machine())
+                    .and_then(|selection| Some((selection, selection.machine()?)))
                 else {
                     continue;
                 };
@@ -373,7 +373,23 @@ impl PreflightRunner {
                     to = %machine,
                     "Automatic machine selection moved a pool that has no machines yet"
                 );
-                group.instance_type = Some(machine.to_string());
+                // The whole group follows the machine, profile included, as the next
+                // deployment derives it: a group with only the machine changed would
+                // differ from that derivation and read as a modified frozen resource.
+                let mut moved = group.clone();
+                if let Err(error) = crate::mutations::compute_cluster::materialize_selected_group(
+                    &mut moved,
+                    stack_state.platform,
+                    selection,
+                ) {
+                    tracing::warn!(
+                        pool = %group.group_id,
+                        error = %error,
+                        "Automatic machine selection could not be recorded for the pool"
+                    );
+                    continue;
+                }
+                *group = moved;
                 changed = true;
             }
         }
@@ -1109,6 +1125,63 @@ mod setup_update_authorization_tests {
             text.contains("no Azure credentials for reading quota"),
             "{text}"
         );
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_selection_records_the_profile_of_the_chosen_machine() {
+        use alien_core::{CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings};
+        let default =
+            alien_core::instance_catalog::find_instance_type(Platform::Azure, "Standard_B2s")
+                .unwrap()
+                .to_machine_profile();
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("Standard_B2s".to_string()),
+                profile: Some(default),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+                data_disk_gib_range: None,
+            })
+            .build();
+        let stack = Stack::new("azure-pool".into())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .build();
+        let mut chosen = deployment_config();
+        chosen.stack_settings.compute = Some(ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: Some("Standard_D2s_v5".to_string()),
+                    failure_domains: None,
+                    data_disk_gib: None,
+                },
+            )]
+            .into(),
+            containers: Default::default(),
+        });
+        let updated = PreflightRunner::with_chosen_machines(
+            &stack,
+            &StackState::new(Platform::Azure),
+            &chosen,
+        )
+        .expect("the pool moves");
+        let group = updated
+            .resources
+            .values()
+            .find_map(|entry| entry.config.downcast_ref::<ComputeCluster>())
+            .map(|cluster| cluster.capacity_groups[0].clone())
+            .unwrap();
+        let catalog =
+            alien_core::instance_catalog::find_instance_type(Platform::Azure, "Standard_D2s_v5")
+                .unwrap()
+                .to_machine_profile();
+        assert_eq!(group.instance_type.as_deref(), Some("Standard_D2s_v5"));
+        assert_eq!(group.profile, Some(catalog));
     }
 
     #[cfg(feature = "runtime-checks")]

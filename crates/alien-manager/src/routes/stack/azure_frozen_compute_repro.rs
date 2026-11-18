@@ -3,17 +3,21 @@
 //! same release (new), for the comprehensive-typescript container app on Azure.
 
 use super::*;
-use alien_core::{
-    Container, ContainerCode, PermissionProfile, ResourceSpec, Storage, Vault,
-};
+use alien_core::{Container, ContainerCode, PermissionProfile, ResourceSpec, Storage, Vault};
 
 fn source_stack() -> Stack {
     let container = Container::new("test-alien-ts-container".to_string())
         .code(ContainerCode::Image {
             image: "example.com/web:latest".to_string(),
         })
-        .cpu(ResourceSpec { min: "0.5".into(), desired: "0.5".into() })
-        .memory(ResourceSpec { min: "512Mi".into(), desired: "512Mi".into() })
+        .cpu(ResourceSpec {
+            min: "0.5".into(),
+            desired: "0.5".into(),
+        })
+        .memory(ResourceSpec {
+            min: "512Mi".into(),
+            desired: "512Mi".into(),
+        })
         .port(3000)
         .public_endpoint(alien_core::PublicEndpoint {
             name: "http".into(),
@@ -27,8 +31,14 @@ fn source_stack() -> Stack {
     Stack::new("test-alien-ts-stack".to_string())
         .permission("execution", PermissionProfile::new())
         .add(container, ResourceLifecycle::Live)
-        .add(Storage::new("test-alien-storage".to_string()).build(), ResourceLifecycle::Frozen)
-        .add(Vault::new("test-vault".to_string()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Storage::new("test-alien-storage".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Vault::new("test-vault".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build()
 }
 
@@ -63,7 +73,11 @@ fn json_diff(path: &str, a: &serde_json::Value, b: &serde_json::Value, out: &mut
     }
 }
 
-async fn run_case(label: &str, old_settings: &StackSettings, new_settings: &StackSettings) -> Vec<String> {
+async fn run_case(
+    label: &str,
+    old_settings: &StackSettings,
+    new_settings: &StackSettings,
+) -> Vec<String> {
     let source = source_stack();
     let req = PrepareSetupStack {
         platform: Platform::Azure,
@@ -78,7 +92,11 @@ async fn run_case(label: &str, old_settings: &StackSettings, new_settings: &Stac
         .unwrap_or_else(|e| panic!("registration stack: {}", e.message));
     let runner = alien_preflights::runner::PreflightRunner::new();
     let new = runner
-        .apply_mutations(source, &StackState::new(Platform::Azure), &deploy_config(new_settings))
+        .apply_mutations(
+            source,
+            &StackState::new(Platform::Azure),
+            &deploy_config(new_settings),
+        )
         .await
         .unwrap_or_else(|e| panic!("deployment stack: {e:?}"));
     let old_compute = serde_json::to_value(&old.resources["compute"].config).unwrap();
@@ -89,7 +107,11 @@ async fn run_case(label: &str, old_settings: &StackSettings, new_settings: &Stac
         .run_compatibility_checks(&old, &new, &deploy_config(new_settings), Platform::Azure)
         .await
         .unwrap();
-    let errors: Vec<String> = summary.results.iter().flat_map(|r| r.errors.clone()).collect();
+    let errors: Vec<String> = summary
+        .results
+        .iter()
+        .flat_map(|r| r.errors.clone())
+        .collect();
     println!("CASE {label}\nDIFF {diff:#?}\nCOMPAT {errors:#?}");
     errors
 }
@@ -124,8 +146,16 @@ async fn compute_cluster_registered_for_azure_matches_the_deployment_plan() {
     for (label, old, new) in [
         ("default/default", default.clone(), default.clone()),
         ("default/D4s_v5", default.clone(), fixed("Standard_D4s_v5")),
-        ("D4s_v5/D4s_v5", fixed("Standard_D4s_v5"), fixed("Standard_D4s_v5")),
-        ("B2s/D2s_v5", fixed("Standard_B2s"), fixed("Standard_D2s_v5")),
+        (
+            "D4s_v5/D4s_v5",
+            fixed("Standard_D4s_v5"),
+            fixed("Standard_D4s_v5"),
+        ),
+        (
+            "B2s/D2s_v5",
+            fixed("Standard_B2s"),
+            fixed("Standard_D2s_v5"),
+        ),
         ("default/B2s", default.clone(), fixed("Standard_B2s")),
     ] {
         if !run_case(label, &old, &new).await.is_empty() {
@@ -166,9 +196,16 @@ async fn quota_chosen_machine_against_the_registered_default() {
     let runner = alien_preflights::runner::PreflightRunner::new();
     let mut failures = Vec::new();
     for skip in 0..10 {
-        let room = SkipSeries { skip, seen: Default::default() };
-        let chosen = alien_preflights::mutations::ComputeClusterMutation
-            .choose_pool_machines(source.clone(), &StackState::new(Platform::Azure), &deploy_config(&default), &room);
+        let room = SkipSeries {
+            skip,
+            seen: Default::default(),
+        };
+        let chosen = alien_preflights::mutations::ComputeClusterMutation.choose_pool_machines(
+            source.clone(),
+            &StackState::new(Platform::Azure),
+            &deploy_config(&default),
+            &room,
+        );
         let chosen = match chosen {
             Ok(c) => c,
             Err(e) => {
@@ -176,8 +213,16 @@ async fn quota_chosen_machine_against_the_registered_default() {
                 continue;
             }
         };
-        println!("SKIP {skip}: pools {:?}", chosen.stack_settings.compute.as_ref().map(|c| &c.pools));
-        let errors = run_case(&format!("auto skip {skip}"), &default, &chosen.stack_settings).await;
+        println!(
+            "SKIP {skip}: pools {:?}",
+            chosen.stack_settings.compute.as_ref().map(|c| &c.pools)
+        );
+        let errors = run_case(
+            &format!("auto skip {skip}"),
+            &default,
+            &chosen.stack_settings,
+        )
+        .await;
         if !errors.is_empty() {
             failures.push((skip, errors));
         }
@@ -189,7 +234,7 @@ async fn quota_chosen_machine_against_the_registered_default() {
 /// First-setup machine selection writes only the machine into the registered stack
 /// (`PreflightRunner::with_chosen_machines`); the next deployment derives the profile from it.
 #[tokio::test]
-async fn first_setup_machine_selection_leaves_the_old_profile_in_the_prepared_stack() {
+async fn first_setup_machine_selection_records_the_profile_of_the_chosen_machine() {
     let default = StackSettings {
         deployment_model: alien_core::DeploymentModel::Pull,
         ..Default::default()
@@ -202,13 +247,9 @@ async fn first_setup_machine_selection_leaves_the_old_profile_in_the_prepared_st
         imported_quota_activation: false,
         imported_management_identity: false,
     };
-    let mut old = prepare_setup_stack(source_stack(), &req, &default).await.unwrap();
-    // what with_chosen_machines does for a pool the quota moved to Standard_D2s_v5
-    {
-        let entry = old.resources.get_mut("compute").unwrap();
-        let cluster = entry.config.downcast_mut::<alien_core::ComputeCluster>().unwrap();
-        cluster.capacity_groups[0].instance_type = Some("Standard_D2s_v5".to_string());
-    }
+    let registered = prepare_setup_stack(source_stack(), &req, &default)
+        .await
+        .unwrap();
     let chosen = with_pool(alien_core::ComputePoolSelection::Autoscale {
         min: 1,
         max: 2,
@@ -216,9 +257,20 @@ async fn first_setup_machine_selection_leaves_the_old_profile_in_the_prepared_st
         failure_domains: None,
         data_disk_gib: None,
     });
+    // what first setup does for a pool the quota moved to Standard_D2s_v5
+    let old = alien_preflights::runner::PreflightRunner::with_chosen_machines(
+        &registered,
+        &StackState::new(Platform::Azure),
+        &deploy_config(&chosen),
+    )
+    .expect("the machine differs from the registered default");
     let runner = alien_preflights::runner::PreflightRunner::new();
     let new = runner
-        .apply_mutations(source_stack(), &StackState::new(Platform::Azure), &deploy_config(&chosen))
+        .apply_mutations(
+            source_stack(),
+            &StackState::new(Platform::Azure),
+            &deploy_config(&chosen),
+        )
         .await
         .unwrap();
     let mut diff = Vec::new();
@@ -232,7 +284,11 @@ async fn first_setup_machine_selection_leaves_the_old_profile_in_the_prepared_st
         .run_compatibility_checks(&old, &new, &deploy_config(&chosen), Platform::Azure)
         .await
         .unwrap();
-    let errors: Vec<String> = summary.results.iter().flat_map(|r| r.errors.clone()).collect();
+    let errors: Vec<String> = summary
+        .results
+        .iter()
+        .flat_map(|r| r.errors.clone())
+        .collect();
     println!("DIFF {diff:#?}\nCOMPAT {errors:#?}");
     assert!(errors.is_empty(), "{errors:#?}");
 }
