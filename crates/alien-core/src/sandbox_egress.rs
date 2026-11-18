@@ -220,6 +220,30 @@ pub fn aws_sandbox_agent_environment(
     environment
 }
 
+/// Why AWS cannot give this sandbox persistent storage, if it cannot.
+///
+/// Behind a session connector the store is opened to the connector (an S3 gateway endpoint and
+/// a rule to S3), and only the agent's in-guest redirect keeps commands' sockets off it. The
+/// agent installs that redirect when its environment carries the `none` or `internet` policy;
+/// a sandbox without it (no `imageUser`, a privileged supervisor, or a domain list) would open
+/// the store's network path to its commands, so it is refused at plan time.
+pub fn aws_persistent_storage_refusal(stack: &Stack, sandbox: &Sandbox) -> Option<String> {
+    sandbox.persistent_storage.as_ref()?;
+    if !sandbox_needs_connector(stack, sandbox) {
+        return None;
+    }
+    let environment = aws_sandbox_agent_environment(stack, sandbox);
+    match environment.get("ALIEN_SANDBOX_EGRESS").map(String::as_str) {
+        Some("\"none\"") | Some("\"internet\"") => None,
+        _ => Some(format!(
+            "sandbox '{}' declares persistent storage on AWS, which needs the agent to keep \
+             commands off the store's network path: declare `imageUser` (the image command \
+             contract), no privileged supervisor, and egress `none` or `internet`",
+            sandbox.id
+        )),
+    }
+}
+
 /// The agent variable that declares persistent storage and holds the image command until the
 /// key is restored. Absent unless declared, so other sandboxes' images are unchanged.
 pub const ENV_PERSISTENT_STORAGE: &str = "ALIEN_SANDBOX_PERSISTENT_STORAGE";
@@ -481,6 +505,58 @@ mod tests {
                 sandbox_egress_network(&stack).expect("a created or brought VPC is attachable");
             assert_eq!((found.id, found.vpc), ("first", expected));
         }
+    }
+
+    /// Persistent storage behind a connector needs the agent's in-guest redirect, which only
+    /// the image command contract with an unprivileged supervisor installs under `none`.
+    #[test]
+    fn aws_persistent_storage_needs_the_agents_redirect_under_none() {
+        let sandbox = |image_user: Option<u32>, privileged: bool, storage: bool| {
+            let mut sandbox = Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "s3://acme/agents/bundle.zip".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            sandbox.image_user = image_user;
+            if privileged {
+                sandbox.privileged_supervisor =
+                    Some(crate::SandboxPrivilegedSupervisor { command_uid: 1001 });
+            }
+            if storage {
+                sandbox.persistent_storage = Some(crate::SandboxPersistentStorage {
+                    path: "/workspace".to_string(),
+                    exclude: vec![],
+                    max_size: None,
+                    encryption_key: None,
+                });
+            }
+            sandbox
+        };
+        let stack = Stack::new("acme".to_string()).build();
+        assert_eq!(
+            aws_persistent_storage_refusal(&stack, &sandbox(Some(1001), false, true)),
+            None
+        );
+        assert_eq!(
+            aws_persistent_storage_refusal(&stack, &sandbox(None, false, false)),
+            None,
+            "nothing to refuse without persistent storage"
+        );
+        let reason = aws_persistent_storage_refusal(&stack, &sandbox(None, false, true))
+            .expect("no imageUser: no redirect, refused");
+        assert!(reason.contains("imageUser"), "{reason}");
+        // A privileged supervisor runs without a session connector (its egress is enforced in
+        // the guest), so setup opens nothing to S3 for it and there is nothing to refuse here.
+        assert_eq!(
+            aws_persistent_storage_refusal(&stack, &sandbox(Some(0), true, true)),
+            None
+        );
     }
 
     #[test]

@@ -148,14 +148,25 @@ mod tests {
     async fn a_grant_the_azure_setup_would_refuse_fails_at_build_and_says_what_to_change() {
         let keyed_provision = PermissionProfile::new().resource("box", ["sandbox/provision"]);
         let found = errors(keyed_provision, false).await;
-        assert!(found.iter().any(|e| e.contains("Grant it under \"*\"")), "{found:?}");
+        assert!(
+            found.iter().any(|e| e.contains("Grant it under \"*\"")),
+            "{found:?}"
+        );
 
         let published = PermissionProfile::new().resource("box", ["sandbox/execute"]);
         let found = errors(published, true).await;
-        assert!(found.iter().any(|e| e.contains("remove remoteAccess")), "{found:?}");
+        assert!(
+            found.iter().any(|e| e.contains("remove remoteAccess")),
+            "{found:?}"
+        );
 
         let not_a_sandbox_set = PermissionProfile::new().resource("box", ["storage/data-read"]);
         let found = errors(not_a_sandbox_set, false).await;
-        assert!(found.iter().any(|e| e.contains("only sandbox/* permission sets")), "{found:?}");
+        assert!(
+            found
+                .iter()
+                .any(|e| e.contains("only sandbox/* permission sets")),
+            "{found:?}"
+        );
     }
 }

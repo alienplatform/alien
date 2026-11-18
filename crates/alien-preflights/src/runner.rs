@@ -340,12 +340,7 @@ impl PreflightRunner {
             return Ok((None, results));
         };
         Ok((
-            Self::with_chosen_machines(
-                prepared,
-                stack_state,
-                &chosen,
-                release_stack,
-            )?,
+            Self::with_chosen_machines(prepared, stack_state, &chosen, release_stack)?,
             results,
         ))
     }
