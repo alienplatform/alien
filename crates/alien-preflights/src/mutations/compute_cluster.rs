@@ -1420,15 +1420,10 @@ fn build_categorized_capacity_groups(
     }
 }
 
-/// Build a capacity group for a specific group_id.
-fn build_capacity_group_for_id(
-    group_id: &str,
-    containers: &[&Container],
-    platform: Platform,
-    needs_nested_virt: bool,
-    config: &DeploymentConfig,
-) -> Result<CapacityGroup> {
-    let mut requirements = if containers.is_empty() {
+/// What a pool's containers ask of one machine; a pool without containers asks for the
+/// small default every generated pool starts from.
+fn workload_requirements(containers: &[&Container]) -> Result<WorkloadRequirements> {
+    Ok(if containers.is_empty() {
         WorkloadRequirements {
             total_cpu_at_desired: 1.0,
             total_memory_bytes_at_desired: 2 * 1024 * 1024 * 1024,
@@ -1443,7 +1438,61 @@ fn build_capacity_group_for_id(
         }
     } else {
         aggregate_workload_requirements(containers)?
-    };
+    })
+}
+
+/// Record `selection`'s machine on a group the way the next deployment derives it: the
+/// portable profile comes from the pool's workloads (not from whatever machine the group
+/// carried before), then the machine supplies the hardware. Used at first setup, when the
+/// group still holds the registration default machine, which may be larger or smaller than
+/// the one chosen. For a GENERATED cluster only: a declared cluster's group keeps its own
+/// declared requirements and scale bounds (`materialize_selected_group`).
+pub(crate) fn materialize_selected_group_for_workloads(
+    group: &mut CapacityGroup,
+    platform: Platform,
+    selection: &ComputePoolSelection,
+    stack: &Stack,
+    cluster_id: &str,
+) -> Result<()> {
+    let containers: Vec<&Container> = stack
+        .resources
+        .values()
+        .filter_map(|entry| entry.config.downcast_ref::<Container>())
+        .filter(|container| container.cluster.as_deref() == Some(cluster_id))
+        .filter(|container| match container.pool.as_deref() {
+            Some(pool) => pool == group.group_id,
+            None => needed_capacity_group(container) == group.group_id,
+        })
+        .collect();
+    let requirements = workload_requirements(&containers)?;
+    group.instance_type = None;
+    group.profile = Some(MachineProfile {
+        cpu: requirements.max_cpu_per_container.to_string(),
+        memory_bytes: requirements.max_memory_per_container,
+        ephemeral_storage_bytes: requirements.max_ephemeral_storage_bytes,
+        architecture: requirements.architecture,
+        gpu: requirements.gpu.clone(),
+        data_disk: None,
+    });
+    // A generated pool's counts are bounded as the planner bounds them, not by the
+    // registration-time counts (those are only the recommendation).
+    let scale = generated_pool_scale_policy(
+        default_min_machines(&requirements),
+        default_max_machines(&requirements),
+        Some(selection.max_size()),
+    );
+    materialize_selection_within(group, platform, selection, &scale)
+}
+
+/// Build a capacity group for a specific group_id.
+fn build_capacity_group_for_id(
+    group_id: &str,
+    containers: &[&Container],
+    platform: Platform,
+    needs_nested_virt: bool,
+    config: &DeploymentConfig,
+) -> Result<CapacityGroup> {
+    let mut requirements = workload_requirements(containers)?;
     requirements.nested_virt = needs_nested_virt;
     let mut group = CapacityGroup {
         group_id: group_id.to_string(),

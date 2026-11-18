@@ -399,8 +399,9 @@ fn take_first_setup_selection(
 
 /// The imported state registers each cluster with the machines the stack was prepared with, and
 /// the next step refuses state that differs from the stack it plans from. A pick therefore also
-/// goes into the registered cluster, for the groups that have no machines yet.
-fn carry_selection_into_imported_state(stack_state: &mut StackState, selected: &Stack) {
+/// goes into the registered cluster, for the groups that have no machines yet: the whole
+/// group (machine, profile, counts), as the pick wrote it.
+pub fn carry_selection_into_imported_state(stack_state: &mut StackState, selected: &Stack) {
     use alien_core::ComputeCluster;
     for (id, entry) in &selected.resources {
         let Some(chosen) = entry.config.downcast_ref::<ComputeCluster>() else {
@@ -424,7 +425,7 @@ fn carry_selection_into_imported_state(stack_state: &mut StackState, selected: &
                 .iter()
                 .find(|pick| pick.group_id == group.group_id)
             {
-                group.instance_type = pick.instance_type.clone();
+                *group = pick.clone();
             }
         }
     }
@@ -2656,14 +2657,21 @@ mod tests {
     #[test]
     fn a_pick_goes_into_the_registered_cluster_so_the_next_step_accepts_the_state() {
         use alien_core::{CapacityGroup, ComputeCluster};
-        let cluster = |machine: &str| {
+        let cluster = |machine: &str, memory: u64, min: u32, max: u32| {
             ComputeCluster::new("compute".to_string())
                 .capacity_group(CapacityGroup {
                     group_id: "general".to_string(),
                     instance_type: Some(machine.to_string()),
-                    profile: None,
-                    min_size: 1,
-                    max_size: 1,
+                    profile: Some(alien_core::MachineProfile {
+                        cpu: "2.0".to_string(),
+                        memory_bytes: memory,
+                        ephemeral_storage_bytes: 20 << 30,
+                        architecture: None,
+                        gpu: None,
+                        data_disk: None,
+                    }),
+                    min_size: min,
+                    max_size: max,
                     scale_policy: None,
                     nested_virtualization: None,
                     data_disk_gib_range: None,
@@ -2672,7 +2680,7 @@ mod tests {
         };
         let mut registered = alien_core::StackResourceState::new_pending(
             "compute-cluster".to_string(),
-            alien_core::Resource::new(cluster("Standard_D8s_v5")),
+            alien_core::Resource::new(cluster("Standard_D8s_v5", 32 << 30, 1, 1)),
             Some(ResourceLifecycle::Frozen),
             Vec::new(),
         );
@@ -2682,15 +2690,18 @@ mod tests {
             .resources
             .insert("compute".to_string(), registered);
         let selected = Stack::new("azure".to_string())
-            .add(cluster("Standard_D8s_v6"), ResourceLifecycle::Frozen)
+            .add(
+                cluster("Standard_D2s_v6", 8 << 30, 2, 5),
+                ResourceLifecycle::Frozen,
+            )
             .build();
 
         carry_selection_into_imported_state(&mut stack_state, &selected);
 
-        // What continue_imported compares: the registered config equals the picked one.
+        // What continue_imported compares: the registered config equals the picked one: machine, profile and counts.
         assert_eq!(
             stack_state.resources["compute"].config,
-            alien_core::Resource::new(cluster("Standard_D8s_v6"))
+            alien_core::Resource::new(cluster("Standard_D2s_v6", 8 << 30, 2, 5))
         );
     }
 
