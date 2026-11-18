@@ -311,6 +311,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
                 // Forwarded to the trait as written, signature included.
                 if method.sig.ident == "dependents_may_update"
                     || method.sig.ident == "updates_during_dependency_change"
+                    || method.sig.ident == "sync_membership"
                     || method.sig.ident == "needs_update_holds_dependent_creation"
                 {
                     dependency_change_methods.push(method.clone());

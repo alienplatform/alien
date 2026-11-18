@@ -677,16 +677,8 @@ impl SingleControllerExecutor {
     }
 
     /// Gets the current status of the controller.
-    /// Runs `f` with the controller context the next step would see, for
-    /// checks that are not steps (for example `needs_update`).
-    pub fn with_context<T>(&self, f: impl FnOnce(&ResourceControllerContext<'_>) -> T) -> T {
-        let desired_config = self
-            .desired_stack
-            .resources
-            .get(&self.resource_id)
-            .map(|entry| entry.config.clone())
-            .expect("the resource is in the desired stack");
-        let deployment_config = DeploymentConfig::builder()
+    fn context_deployment_config(&self) -> DeploymentConfig {
+        DeploymentConfig::builder()
             .stack_settings(self.stack_settings.clone())
             .maybe_release_statements(self.release_statements.clone())
             .maybe_signed_config(self.signed_config.clone())
@@ -708,7 +700,45 @@ impl SingleControllerExecutor {
             .deletion_policy(self.deletion_policy)
             .manager_url("https://test-manager.alien.dev".to_string())
             .deployment_token("test-deployment-token".to_string())
-            .build();
+            .build()
+    }
+
+    /// Runs the controller's [`ResourceController::sync_membership`] with the context the
+    /// next step would see. It cannot change the controller.
+    pub async fn sync_membership(&self) -> Result<()> {
+        let desired_config = self
+            .desired_stack
+            .resources
+            .get(&self.resource_id)
+            .map(|entry| entry.config.clone())
+            .expect("the resource is in the desired stack");
+        let deployment_config = self.context_deployment_config();
+        let context = ResourceControllerContext {
+            desired_config: &desired_config,
+            platform: self.platform,
+            client_config: self.client_config.clone(),
+            state: &self.stack_state,
+            resource_prefix: &self.resource_prefix,
+            registry: &self.registry,
+            desired_stack: &self.desired_stack,
+            service_provider: &self.service_provider,
+            deployment_config: &deployment_config,
+            initial_setup_authority: self.initial_setup_authority,
+            heartbeat_collector: HeartbeatCollector::default(),
+        };
+        self.controller.sync_membership(&context).await
+    }
+
+    /// Runs `f` with the controller context the next step would see, for
+    /// checks that are not steps (for example `needs_update`).
+    pub fn with_context<T>(&self, f: impl FnOnce(&ResourceControllerContext<'_>) -> T) -> T {
+        let desired_config = self
+            .desired_stack
+            .resources
+            .get(&self.resource_id)
+            .map(|entry| entry.config.clone())
+            .expect("the resource is in the desired stack");
+        let deployment_config = self.context_deployment_config();
         let context = ResourceControllerContext {
             desired_config: &desired_config,
             platform: self.platform,

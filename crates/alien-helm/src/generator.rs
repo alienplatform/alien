@@ -4410,6 +4410,12 @@ sandbox:
   # Network probe image (repository[:tag][@digest]). Empty uses the pinned default; an air-gapped
   # install sets it to the copy in its registry mirror.
   cniProbeImage: ""
+  # Lets the Operator read the cluster DNS Service (`kube-system/kube-dns`) through a one-object Role
+  # in `kube-system`, so the sandbox gateway resolves names through it. That matters on a cluster whose
+  # resolver is a node-local cache at a link-local address (AKS LocalDNS). `auto` renders the Role
+  # except on Google Kubernetes Engine, where a managed `kube-system` can refuse it; `true` and `false`
+  # force it. With no Role the gateway keeps the cluster's resolver and still deploys.
+  readClusterDNS: auto
   # The nameserver address(es) pods get in /etc/resolv.conf (the kubelet's clusterDNS). Required
   # when a sandbox uses `allow` egress: the sandbox policy admits UDP and TCP port 53 to exactly
   # these addresses and nothing else on private ranges. Find it with:
@@ -4945,6 +4951,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "tolerations": { "type": "array" },
             "warmPoolSize": { "type": "integer", "minimum": 0 },
             "cniProbeImage": { "type": "string" },
+            "readClusterDNS": { "enum": ["auto", true, false] },
             "clusterDNS": {
                 "type": "array",
                 "items": { "type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}$" }

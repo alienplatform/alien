@@ -51,6 +51,7 @@ pub struct SqliteDeploymentStore {
 /// `source` chain, as `$.code`, `$.source.code`, `$.source.source.code`, and so on.
 const ERROR_WAITS_FOR_SETUP: &str = "EXISTS (SELECT 1 FROM json_tree(COALESCE(error, '{}')) WHERE key = 'code' AND value = 'DEPLOYMENT_SETUP_REQUIRED' AND replace(fullkey, '.source', '') = '$.code')";
 const UNREGISTERED_SETUP_RESERVATION: &str = "status = 'pending' AND current_release_id IS NULL AND json_extract(COALESCE(setup_metadata, '{}'), '$.setupReservation.releaseId') IS NOT NULL";
+const UPDATE_FAILED_STATUS: &str = "update-failed";
 
 impl SqliteDeploymentStore {
     pub(crate) const WORK_STATUSES: [&'static str; 9] = [
@@ -403,14 +404,26 @@ impl SqliteDeploymentStore {
                             && statuses.iter().any(|status| status == Self::RUNNING_STATUS))
                 })
                 .collect();
+            let membership_only = Self::membership_only_request(statuses, mode);
             let requested_failed: Vec<&str> = statuses
                 .iter()
                 .map(String::as_str)
                 .filter(|status| Self::FAILED_STATUSES.contains(status))
+                // A failed update asked for next to Running is only for the machine-list
+                // refresh: it never takes the deployment's retry, delete or update.
+                .filter(|status| !(membership_only && *status == UPDATE_FAILED_STATUS))
                 .collect();
 
             let mut condition = Cond::any();
             let mut has_status = false;
+            if membership_only {
+                has_status = true;
+                condition = condition.add(
+                    Cond::all()
+                        .add(Expr::col(Deployments::Status).eq(UPDATE_FAILED_STATUS))
+                        .add(Expr::col(Deployments::RetryRequested).eq(0)),
+                );
+            }
             if !requested_active.is_empty() {
                 has_status = true;
                 condition = condition.add(Expr::col(Deployments::Status).is_in(requested_active));
@@ -436,16 +449,31 @@ impl SqliteDeploymentStore {
         }
     }
 
+    /// The heartbeat shape: a failed update requested together with Running. It matches only a
+    /// failed update with no retry waiting.
+    /// Only an acquire with no mode asks for it: a setup run or teardown asks for the same
+    /// statuses and must keep its own rules.
+    fn membership_only_request(statuses: &[String], mode: Option<DeploymentAcquireMode>) -> bool {
+        mode.is_none()
+            && statuses.iter().any(|status| status == UPDATE_FAILED_STATUS)
+            && statuses.iter().any(|status| status == Self::RUNNING_STATUS)
+    }
+
     fn acquire_status_matches(
         status: &str,
         failed_claimable: bool,
         statuses: Option<&Vec<String>>,
+        mode: Option<DeploymentAcquireMode>,
     ) -> bool {
         let failed_is_retryable = Self::FAILED_STATUSES.contains(&status) && failed_claimable;
 
         let Some(statuses) = statuses else {
             return Self::WORK_STATUSES.contains(&status) || failed_is_retryable;
         };
+
+        if status == UPDATE_FAILED_STATUS && Self::membership_only_request(statuses, mode) {
+            return !failed_claimable;
+        }
 
         let explicitly_active = statuses.iter().any(|requested| {
             requested == status
@@ -1936,6 +1964,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                     &status,
                     failed_claimable,
                     explicit_status_filter,
+                    filter.acquire_mode,
                 ) {
                     DeploymentAcquireUnavailableReason::StatusMismatch
                 } else if filter.excluded_deployment_ids.contains(&deployment_id)

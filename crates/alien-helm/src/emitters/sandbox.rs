@@ -150,6 +150,46 @@ roleRef:
   name: {{ $name }}
 "#;
 
+/// The Operator reads the cluster DNS Service address (`kube-system/kube-dns`) so the sandbox
+/// gateway can resolve names through it. One named object, read only. Without this grant (or
+/// when `sandbox.readClusterDNS` turns it off) the gateway keeps the cluster's default resolver.
+const KUBE_DNS_DISCOVERY_RBAC_TEMPLATE: &str = "sandbox-kube-dns-discovery-rbac.yaml";
+const KUBE_DNS_DISCOVERY_RBAC: &str = r#"{{- /* The Role lives in `kube-system`, shared by every install on the cluster, so the name carries a hash of the full release namespace and name. `sandbox.readClusterDNS` is `auto` (the default: rendered, except on Google Kubernetes Engine, where a managed `kube-system` can refuse the grant and the gateway keeps the cluster resolver), `true` or `false`. */ -}}
+{{- $read := toString (dig "readClusterDNS" "auto" (default dict .Values.sandbox)) -}}
+{{- if or (eq $read "true") (and (eq $read "auto") (not (contains "-gke" .Capabilities.KubeVersion.GitVersion))) }}
+{{- $suffix := printf "kube-dns-%s" (printf "%s/%s/%s" .Release.Namespace .Release.Name (include "deployment.fullname" .) | sha256sum | trunc 8) -}}
+{{- $name := printf "%s-%s" (include "deployment.fullname" . | trunc (int (sub 62 (len $suffix))) | trimSuffix "-") $suffix -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: kube-system
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["kube-dns"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: kube-system
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.managerServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+{{- end }}
+"#;
+
 #[derive(Debug, Default)]
 pub struct SandboxEmitter;
 
@@ -203,6 +243,10 @@ impl HelmEmitter for SandboxEmitter {
         fragment.extra_templates.insert(
             "sandbox-cni-probe.yaml".to_string(),
             super::sandbox_cni::template(true),
+        );
+        fragment.extra_templates.insert(
+            KUBE_DNS_DISCOVERY_RBAC_TEMPLATE.to_string(),
+            KUBE_DNS_DISCOVERY_RBAC.to_string(),
         );
         // Only a root-boot image needs a namespace that admits Pod Security `baseline`, and only
         // then does the install check for one. A non-root sandbox renders exactly what it did.
