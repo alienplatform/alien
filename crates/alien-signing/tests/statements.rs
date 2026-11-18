@@ -512,6 +512,33 @@ fn signer_lists_with_bad_keys_or_rules_are_refused() {
 }
 
 #[test]
+fn a_signer_list_with_an_expiry_from_an_older_cli_is_refused_with_how_to_recover() {
+    let keys = keys();
+    let base = trust(&keys, &[genesis(&keys)]);
+    let expiring = statement_until(
+        "signer-list/v1",
+        PROJECT,
+        None,
+        2,
+        1,
+        Some(now() + Duration::days(30)),
+        version_2_body(&keys),
+    )
+    .sign_with("alice-laptop", &keys.admin)
+    .unwrap();
+    let refused = base
+        .clone()
+        .extend_chain(&[expiring])
+        .expect_err("a list with an expiry is refused");
+    assert_eq!(refused.code, "SIGNING_SIGNER_LIST_REFUSED");
+    assert!(
+        refused.message.contains("alien devices init"),
+        "the refusal says how to recover: {}",
+        refused.message
+    );
+}
+
+#[test]
 fn a_removed_device_can_no_longer_sign() {
     let keys = keys();
     let mut trust = trust(&keys, &[genesis(&keys), version_2(&keys)]);
