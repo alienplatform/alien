@@ -994,24 +994,43 @@ impl AzurePermissionsHelper {
         else {
             return None;
         };
-        const MARK: &str = "existing role assignment is '";
+        // Azure's text, seen live: `The role assignment already exists. The ID of the existing
+        // role assignment is 62afc2c04b505f948cbbb16c9711c901.` (hex without dashes, no quotes,
+        // a closing period). A quoted or dashed form is read the same way.
+        const MARK: &str = "existing role assignment is ";
         let start = message.find(MARK)? + MARK.len();
-        let id = message[start..].split('\'').next()?.trim();
-        if id.is_empty() {
+        let token = message[start..]
+            .split_whitespace()
+            .next()?
+            .trim_matches(|c: char| c == '\'' || c == '"' || c == '.');
+        if token.is_empty() {
             return None;
         }
-        Some(if id.starts_with('/') {
-            id.to_string()
+        if token.starts_with('/') {
+            return Some(token.to_string());
+        }
+        let hex: String = token.chars().filter(|c| *c != '-').collect();
+        let name = if hex.len() == 32 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            format!(
+                "{}-{}-{}-{}-{}",
+                &hex[0..8],
+                &hex[8..12],
+                &hex[12..16],
+                &hex[16..20],
+                &hex[20..32]
+            )
         } else {
-            Self::role_assignment_resource_id(scope, id)
-        })
+            token.to_string()
+        };
+        Some(Self::role_assignment_resource_id(scope, &name))
     }
 
     fn same_assignment(existing_id: &str, wanted_name: &str) -> bool {
+        let plain = |text: &str| text.replace('-', "").to_ascii_lowercase();
         existing_id
             .rsplit('/')
             .next()
-            .is_some_and(|name| name.eq_ignore_ascii_case(wanted_name))
+            .is_some_and(|name| plain(name) == plain(wanted_name))
     }
 
     fn is_existing_role_assignment_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
@@ -2055,6 +2074,28 @@ mod tests {
             assignment_id,
             "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.Authorization/roleAssignments/assignment-123"
         );
+    }
+
+    /// Azure's real "already exists" text names the existing assignment as dash-less hex with no
+    /// quotes; it is read as that assignment, in the scope the write was made at.
+    #[test]
+    fn the_existing_assignment_is_read_from_azures_real_conflict_text() {
+        let error = AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+            resource_type: "role assignment".to_string(),
+            resource_name: "x".to_string(),
+            message: "The role assignment already exists. The ID of the existing role assignment is 62afc2c04b505f948cbbb16c9711c901.".to_string(),
+        });
+        let id = AzurePermissionsHelper::existing_assignment_id(&error, "/subscriptions/s/resourceGroups/rg")
+            .expect("the id is read");
+        assert_eq!(
+            id,
+            "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Authorization/roleAssignments/62afc2c0-4b50-5f94-8cbb-b16c9711c901"
+        );
+        assert!(AzurePermissionsHelper::same_assignment(
+            &id,
+            "62AFC2C0-4b50-5f94-8cbb-b16c9711c901"
+        ));
+        assert!(!AzurePermissionsHelper::same_assignment(&id, "other"));
     }
 
     /// A changed grant list lands a different role on an assignment id that already holds one.

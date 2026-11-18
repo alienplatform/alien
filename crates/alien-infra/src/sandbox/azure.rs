@@ -4270,7 +4270,8 @@ mod direct_setup_tests {
                             resource_type: "role assignment".to_string(),
                             resource_name: id.clone(),
                             message: format!(
-                                "The role assignment already exists. The ID of the existing role assignment is '{other}'."
+                                "The role assignment already exists. The ID of the existing role assignment is {}.",
+                                other.rsplit('/').next().unwrap_or(other).replace('-', "")
                             ),
                         },
                     ));
