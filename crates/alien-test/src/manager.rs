@@ -598,7 +598,11 @@ impl TestManager {
                                 sandbox_repository_prefix: None,
                                 legacy_repository_prefixes: Vec::new(),
                                 legacy_sandbox_repository_prefixes: Vec::new(),
-                                repository_prefix: BindingValue::Value("alien-e2e".to_string()),
+                                repository_prefix: BindingValue::Value(
+                                    e2e.aws_repository_prefix
+                                        .clone()
+                                        .unwrap_or_else(|| "alien-e2e".to_string()),
+                                ),
                                 pull_role_arn: Some(BindingValue::Value(pull_role.clone())),
                                 push_role_arn: Some(BindingValue::Value(push_role.clone())),
                             }));
