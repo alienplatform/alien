@@ -47,39 +47,48 @@ impl CfEmitter for AwsNetworkEmitter {
         let prefix = required_logical_id(ctx)?;
         let network_import = |fields: Vec<(&str, CfExpression)>, created: bool| {
             let sandbox_network = has_sandboxes(ctx).then(|| {
-                CfExpression::object([
-                    (
-                        "sandboxSubnetIds",
-                        if created {
-                            created_sandbox_subnet_values(prefix, "SandboxSubnet", None)
-                        } else {
-                            CfExpression::ref_("SandboxSubnetIds")
-                        },
-                    ),
-                    (
-                        "gatewaySubnetIds",
-                        if created {
-                            created_sandbox_subnet_values(prefix, "SandboxGatewaySubnet", None)
-                        } else {
-                            CfExpression::ref_("SandboxGatewaySubnetIds")
-                        },
-                    ),
-                    ("sandboxCidrs", CfExpression::list([])),
-                    (
-                        "gatewayCidrs",
-                        if created {
-                            created_sandbox_subnet_values(
-                                prefix,
-                                "SandboxGatewaySubnet",
-                                Some("CidrBlock"),
-                            )
-                        } else {
-                            CfExpression::ref_("SandboxGatewaySubnetCidrs")
-                        },
-                    ),
-                    ("workloadCidrs", CfExpression::list([])),
-                    ("vpcCidrs", CfExpression::list([])),
-                ])
+                CfExpression::object(
+                    [
+                        (
+                            "sandboxSubnetIds",
+                            if created {
+                                created_sandbox_subnet_values(prefix, "SandboxSubnet", None)
+                            } else {
+                                CfExpression::ref_("SandboxSubnetIds")
+                            },
+                        ),
+                        (
+                            "gatewaySubnetIds",
+                            if created {
+                                created_sandbox_subnet_values(prefix, "SandboxGatewaySubnet", None)
+                            } else {
+                                CfExpression::ref_("SandboxGatewaySubnetIds")
+                            },
+                        ),
+                        ("sandboxCidrs", CfExpression::list([])),
+                        (
+                            "gatewayCidrs",
+                            if created {
+                                created_sandbox_subnet_values(
+                                    prefix,
+                                    "SandboxGatewaySubnet",
+                                    Some("CidrBlock"),
+                                )
+                            } else {
+                                CfExpression::ref_("SandboxGatewaySubnetCidrs")
+                            },
+                        ),
+                        ("workloadCidrs", CfExpression::list([])),
+                        ("vpcCidrs", CfExpression::list([])),
+                    ]
+                    .into_iter()
+                    .chain((created && has_store_paths(ctx)).then(|| {
+                        (
+                            "persistentStoreEndpointId",
+                            CfExpression::ref_(persistent_store_endpoint_id(prefix)),
+                        )
+                    })),
+                )
             });
             CfExpression::object(
                 fields
@@ -446,7 +455,7 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         .insert("Tags".to_string(), tags(ctx));
     resources.push(security_group);
 
-    if has_sandboxes(ctx) {
+    if has_sandboxes(ctx) || has_store_paths(ctx) {
         // Connector subnets have only local VPC routes. The internal NLB has dedicated
         // gateway subnets; gateway tasks share the private compute subnets and NAT.
         for (kind, offset) in [("Sandbox", 6), ("SandboxGateway", 9)] {
@@ -513,6 +522,9 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
                 resources.push(association);
             }
         }
+        if let Some(endpoint) = persistent_store_endpoint(ctx, prefix, &vpc_id)? {
+            resources.push(endpoint);
+        }
     }
 
     resources.extend(super::flow_logs::resources(
@@ -569,7 +581,10 @@ pub(crate) fn created_sandbox_subnet_values(
 
 /// BYO setup supplies exact subnet CIDRs for the Frozen connector group; runtime
 /// cross-checks them against EC2 before publishing internet sandbox bindings.
-pub(crate) fn gateway_egress_rules(ctx: &EmitContext<'_>) -> Result<CfExpression> {
+pub(crate) fn gateway_egress_rules(
+    ctx: &EmitContext<'_>,
+    extra: Option<CfExpression>,
+) -> Result<CfExpression> {
     let network =
         alien_core::sandbox_egress::sandbox_egress_network(ctx.stack).map_err(|error| {
             AlienError::new(ErrorData::OperationNotSupported {
@@ -589,15 +604,19 @@ pub(crate) fn gateway_egress_rules(ctx: &EmitContext<'_>) -> Result<CfExpression
             ),
         ])
     };
-    let supplied = CfExpression::list([
-        rule(select(0, CfExpression::ref_("SandboxGatewaySubnetCidrs"))),
-        rule(select(1, CfExpression::ref_("SandboxGatewaySubnetCidrs"))),
-        CfExpression::if_(
-            "SandboxGatewayHasThirdSubnet",
-            rule(select(2, CfExpression::ref_("SandboxGatewaySubnetCidrs"))),
-            CfExpression::no_value(),
-        ),
-    ]);
+    let supplied = CfExpression::list(
+        [
+            rule(select(0, CfExpression::ref_("SandboxGatewaySubnetCidrs"))),
+            rule(select(1, CfExpression::ref_("SandboxGatewaySubnetCidrs"))),
+            CfExpression::if_(
+                "SandboxGatewayHasThirdSubnet",
+                rule(select(2, CfExpression::ref_("SandboxGatewaySubnetCidrs"))),
+                CfExpression::no_value(),
+            ),
+        ]
+        .into_iter()
+        .chain(extra.clone()),
+    );
     if matches!(
         network.vpc,
         alien_core::sandbox_egress::SandboxEgressVpc::BroughtByCustomer
@@ -609,24 +628,28 @@ pub(crate) fn gateway_egress_rules(ctx: &EmitContext<'_>) -> Result<CfExpression
             message: format!("network '{}' has no generated name", network.id),
         })
     })?;
-    let created = CfExpression::list([
-        rule(CfExpression::get_att(
-            format!("{prefix}SandboxGatewaySubnet1"),
-            "CidrBlock",
-        )),
-        rule(CfExpression::get_att(
-            format!("{prefix}SandboxGatewaySubnet2"),
-            "CidrBlock",
-        )),
-        CfExpression::if_(
-            "NetworkCreateUseAz3",
+    let created = CfExpression::list(
+        [
             rule(CfExpression::get_att(
-                format!("{prefix}SandboxGatewaySubnet3"),
+                format!("{prefix}SandboxGatewaySubnet1"),
                 "CidrBlock",
             )),
-            CfExpression::no_value(),
-        ),
-    ]);
+            rule(CfExpression::get_att(
+                format!("{prefix}SandboxGatewaySubnet2"),
+                "CidrBlock",
+            )),
+            CfExpression::if_(
+                "NetworkCreateUseAz3",
+                rule(CfExpression::get_att(
+                    format!("{prefix}SandboxGatewaySubnet3"),
+                    "CidrBlock",
+                )),
+                CfExpression::no_value(),
+            ),
+        ]
+        .into_iter()
+        .chain(extra),
+    );
     Ok(CfExpression::if_(
         CONDITION_NETWORK_MODE_CREATE,
         created,
@@ -636,6 +659,95 @@ pub(crate) fn gateway_egress_rules(ctx: &EmitContext<'_>) -> Result<CfExpression
 
 pub(crate) fn needs_gateway(ctx: &EmitContext<'_>) -> bool {
     alien_core::sandbox_egress::has_sandbox_gateway(ctx.stack)
+}
+
+/// Logical id of the S3 gateway endpoint for sandboxes' persistent stores.
+fn persistent_store_endpoint_id(prefix: &str) -> String {
+    format!("{prefix}SandboxStoreEndpoint")
+}
+
+/// Whether this network carries the path from sandbox connectors to their persistent stores.
+fn has_store_paths(ctx: &EmitContext<'_>) -> bool {
+    !ctx.targets_kubernetes
+        && is_first_network(ctx)
+        && !alien_core::sandbox_egress::aws_sandboxes_with_store_path(ctx.stack).is_empty()
+}
+
+/// The S3 gateway endpoint on the dedicated sandbox route table, emitted when a sandbox declares
+/// persistent storage. One per stack (AWS allows one S3 gateway endpoint per route table); its
+/// policy admits object reads and writes on the stack's persistent stores and nothing else, so
+/// the other connectors on that table, whose security groups have no rule to S3, gain nothing,
+/// and nothing on the table reaches any other bucket.
+fn persistent_store_endpoint(
+    ctx: &EmitContext<'_>,
+    prefix: &str,
+    vpc_id: &str,
+) -> Result<Option<CfResource>> {
+    if !has_store_paths(ctx) {
+        return Ok(None);
+    }
+    let objects = alien_core::sandbox_egress::aws_sandboxes_with_store_path(ctx.stack)
+        .into_iter()
+        .map(|id| {
+            let image_id = ctx.name_for(id).ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!("sandbox '{id}' has no generated name"),
+                })
+            })?;
+            Ok(CfExpression::join(
+                "",
+                CfExpression::list([
+                    CfExpression::get_att(super::sandbox::persistent_store_id(image_id), "Arn"),
+                    CfExpression::from("/*"),
+                ]),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut endpoint = CfResource::new(
+        persistent_store_endpoint_id(prefix),
+        "AWS::EC2::VPCEndpoint".to_string(),
+    );
+    let properties = &mut endpoint.properties;
+    properties.insert("VpcId".to_string(), CfExpression::ref_(vpc_id));
+    properties.insert(
+        "ServiceName".to_string(),
+        CfExpression::sub("com.amazonaws.${AWS::Region}.s3"),
+    );
+    properties.insert("VpcEndpointType".to_string(), CfExpression::from("Gateway"));
+    properties.insert(
+        "RouteTableIds".to_string(),
+        CfExpression::list([CfExpression::ref_(format!("{prefix}SandboxRouteTable"))]),
+    );
+    properties.insert(
+        "PolicyDocument".to_string(),
+        CfExpression::object([
+            ("Version", CfExpression::from("2012-10-17")),
+            (
+                "Statement",
+                CfExpression::list([CfExpression::object([
+                    ("Sid", CfExpression::from("SandboxPersistentStores")),
+                    ("Effect", CfExpression::from("Allow")),
+                    ("Principal", CfExpression::from("*")),
+                    (
+                        "Action",
+                        CfExpression::list([
+                            CfExpression::from("s3:GetObject"),
+                            CfExpression::from("s3:PutObject"),
+                        ]),
+                    ),
+                    ("Resource", CfExpression::list(objects)),
+                ])]),
+            ),
+        ]),
+    );
+    Ok(Some(endpoint))
+}
+
+fn is_first_network(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack
+        .resources()
+        .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
+        .is_some_and(|(id, _)| id == ctx.resource_id)
 }
 
 fn has_sandboxes(ctx: &EmitContext<'_>) -> bool {

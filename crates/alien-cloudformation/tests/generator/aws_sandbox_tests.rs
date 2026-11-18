@@ -2575,3 +2575,101 @@ fn the_registration_hands_the_controller_the_persistent_store() {
     let emitted = emitted_import_data(&template, "agents");
     assert!(emitted.get("persistentStorage").is_none(), "{emitted:#}");
 }
+
+/// The store path under egress `none`: the connector moves to the dedicated sandbox subnets, one
+/// S3 gateway endpoint goes on their route table with a policy naming only the persistent store's
+/// objects, the connector's security group gains HTTPS to the region's S3 prefix list (mapped in
+/// the template), and rules refuse an unmapped region or a network the template does not create.
+#[test]
+fn persistent_storage_opens_only_the_store_path_to_the_connector() {
+    let (stack, settings) = persistent_storage_stack();
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "sandbox persistent storage network",
+    );
+    let resources = serde_json::to_value(&template.resources).expect("json");
+    let endpoints: Vec<(&String, &Value)> = resources
+        .as_object()
+        .expect("resources")
+        .iter()
+        .filter(|(_, resource)| resource["Type"] == "AWS::EC2::VPCEndpoint")
+        .collect();
+    assert_eq!(endpoints.len(), 1, "{endpoints:#?}");
+    let (endpoint_id, endpoint) = endpoints[0];
+    let network = endpoint_id
+        .strip_suffix("SandboxStoreEndpoint")
+        .expect("named for the network");
+    let properties = &endpoint["Properties"];
+    assert_eq!(properties["VpcEndpointType"], "Gateway");
+    assert_eq!(
+        properties["RouteTableIds"],
+        serde_json::json!([{ "Ref": format!("{network}SandboxRouteTable") }])
+    );
+    assert_eq!(endpoint["Condition"], "NetworkModeCreate");
+    let statements = properties["PolicyDocument"]["Statement"]
+        .as_array()
+        .expect("statements");
+    assert_eq!(statements.len(), 1);
+    assert_eq!(
+        statements[0]["Action"],
+        serde_json::json!(["s3:GetObject", "s3:PutObject"])
+    );
+    assert_eq!(
+        statements[0]["Resource"],
+        serde_json::json!([{ "Fn::Join": ["", [
+            { "Fn::GetAtt": ["AgentsPersistentStore", "Arn"] }, "/*"
+        ]] }])
+    );
+    assert!(
+        resources[format!("{network}SandboxRouteTable")].is_object(),
+        "the dedicated route table exists under none when a store needs it"
+    );
+
+    let connector = &resources["AgentsEgressConnector"]["Properties"]["Configuration"]
+        ["VpcEgressConfiguration"];
+    // Under create-new; use-existing is refused by the template's rule (asserted below).
+    assert_eq!(connector["SubnetIds"]["Fn::If"][0], "NetworkModeCreate");
+    let subnets = connector["SubnetIds"]["Fn::If"][1].to_string();
+    assert!(
+        subnets.contains(&format!("{network}SandboxSubnet1")),
+        "the connector sits in the dedicated subnets: {subnets}"
+    );
+    assert!(!subnets.contains("PrivateSubnet"), "{subnets}");
+
+    let egress = resources["AgentsEgressSecurityGroup"]["Properties"]["SecurityGroupEgress"]
+        .as_array()
+        .expect("egress rules")
+        .clone();
+    assert_eq!(egress.len(), 2, "{egress:#?}");
+    assert_eq!(egress[1]["IpProtocol"], "tcp");
+    assert_eq!(egress[1]["FromPort"], 443);
+    assert_eq!(egress[1]["ToPort"], 443);
+    assert_eq!(
+        egress[1]["DestinationPrefixListId"],
+        serde_json::json!({ "Fn::FindInMap": [
+            "SandboxS3PrefixLists", { "Ref": "AWS::Region" }, "PrefixListId"
+        ] })
+    );
+    assert!(egress[1].get("CidrIp").is_none());
+
+    let mapping = &template.mappings["SandboxS3PrefixLists"];
+    assert_eq!(
+        mapping.len(),
+        alien_core::sandbox_storage_network::S3_PREFIX_LISTS.len()
+    );
+    assert_eq!(
+        serde_json::to_value(&mapping["us-east-2"]).expect("json"),
+        serde_json::json!({ "PrefixListId": "pl-7ba54012" })
+    );
+    let rule = serde_json::to_value(&template.rules["SandboxPersistentStoreNetwork"]).unwrap();
+    let rule = rule.to_string();
+    assert!(
+        rule.contains("us-east-2") && rule.contains("AWS::Region"),
+        "{rule}"
+    );
+    assert!(rule.contains("create-new"), "{rule}");
+}
