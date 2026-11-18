@@ -8,7 +8,7 @@
 //!
 //! # Layout
 //!
-//! Under `sandbox-storage/<sandbox id>/<key>/` in the linked Storage:
+//! Under `<key>/` in the store setup creates for the sandbox's persistent storage:
 //!
 //! - `packs/<seq>-<sha256>.tar`: a tar of 64 KiB content-addressed chunks, each member named by
 //!   the SHA-256 of its bytes.
@@ -22,7 +22,7 @@
 //!
 //! # One writer per key
 //!
-//! A writer remembers HEAD's version (`ETag`) and moves HEAD only if it is unchanged. A new
+//! A writer remembers HEAD's version (`ETag`, or the GCS generation) and moves HEAD only if it is unchanged. A new
 //! sandbox for a key takes over by rewriting HEAD with its own writer id, after which every
 //! commit of the previous sandbox is refused and its state becomes `stopped`. Nothing waits on
 //! a lock.
@@ -35,6 +35,7 @@ mod manifest;
 mod pack;
 mod pull;
 mod read;
+mod rights;
 mod store;
 
 pub use commit::{CommitOutcome, Committer, FileSource, TreeEntry, TreeEntryKind};
@@ -48,4 +49,7 @@ pub use manifest::{ChunkLocation, Entry, EntryKind, Manifest, MANIFEST_VERSION};
 pub use pack::{chunk_hash, PackBuilder, CHUNK_SIZE};
 pub use pull::{seed, AckOutcome, Pending, PendingObject, PullChannel, PullOutcome, Puller, Spool};
 pub use read::{read_file, read_head, read_manifest, restore, takeover, Takeover, TreeSink};
-pub use store::{create, MemoryStore, ObjectStore, Precondition, PutOutcome, StoredObject};
+pub use rights::{S3PostPolicy, StorageGrant};
+pub use store::{
+    create, MemoryStore, ObjectStore, ObjectVersion, Precondition, PutOutcome, StoredObject,
+};

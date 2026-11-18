@@ -174,8 +174,8 @@ pub struct SandboxEgressSigningKey {
     pub key: String,
 }
 
-/// Persistent storage as the binding needs it: where the directory is in the sandbox and where
-/// its keys live in the linked Storage.
+/// Persistent storage as the binding needs it: where the directory is in the sandbox and the
+/// store setup created for it, which holds every key under `<key>/`.
 ///
 /// Absent on every sandbox that does not declare persistent storage, so its binding serializes
 /// exactly as before.
@@ -184,16 +184,56 @@ pub struct SandboxEgressSigningKey {
 pub struct SandboxPersistentStorageBinding {
     /// Absolute directory inside the sandbox.
     pub path: String,
-    /// The linked Storage's bucket (AWS) or host directory (Local).
-    pub bucket: BindingValue<String>,
-    /// Object prefix every key lives under: `sandbox-storage/<sandbox resource id>`.
-    pub prefix: String,
+    /// Where the store is.
+    pub store: PersistentStoreLocator,
     /// Paths relative to `path` the agent never replicates.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
     /// Largest replicated tree in bytes; a commit above it is refused whole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_size_bytes: Option<u64>,
+}
+
+/// The store setup created for a sandbox's persistent storage. Every key lives under
+/// `<prefix><key>/` (Local: `<dir>/<key>/`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PersistentStoreLocator {
+    /// An S3 bucket.
+    #[serde(rename_all = "camelCase")]
+    Aws {
+        /// Bucket name.
+        bucket: BindingValue<String>,
+        /// Object prefix in front of every key; empty for a bucket of its own.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        prefix: String,
+    },
+    /// An Azure Storage container (hierarchical namespace, so a SAS can be scoped to a key).
+    #[serde(rename_all = "camelCase")]
+    Azure {
+        /// Storage account name.
+        account: BindingValue<String>,
+        /// Container name.
+        container: BindingValue<String>,
+        /// Path prefix in front of every key.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        prefix: String,
+    },
+    /// A Cloud Storage bucket.
+    #[serde(rename_all = "camelCase")]
+    Gcp {
+        /// Bucket name.
+        bucket: BindingValue<String>,
+        /// Object prefix in front of every key.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        prefix: String,
+    },
+    /// A host directory (Local platform).
+    #[serde(rename_all = "camelCase")]
+    Local {
+        /// Directory holding one subdirectory per key.
+        dir: BindingValue<String>,
+    },
 }
 
 /// AWS sandbox binding configuration.

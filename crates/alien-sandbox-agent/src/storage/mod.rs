@@ -6,7 +6,9 @@
 //! following anything a command placed there, and freeze the guest for the instant a commit
 //! copies changed files to staging.
 
+pub mod attach;
 pub mod freeze;
+pub mod push;
 pub mod tree;
 
 use std::os::fd::OwnedFd;
@@ -103,6 +105,48 @@ impl Replicator {
                 || staging.contains(&entry.path)
         });
         Ok((walk, staging))
+    }
+
+    /// Whether the directory differs from what HEAD names, by a walk without freezing.
+    pub fn dirty(&self) -> std::io::Result<bool> {
+        let walk = tree::walk(&self.root, &self.exclude)?;
+        let Some(head) = self.committer.head() else {
+            return Ok(true);
+        };
+        if walk.len() != head.entries.len() {
+            return Ok(true);
+        }
+        Ok(walk.iter().any(|item| {
+            let Some(old) = head.entry(&item.path) else {
+                return true;
+            };
+            let same_kind = match (&item.kind, &old.kind) {
+                (TreeEntryKind::Dir, alien_sandbox_storage::EntryKind::Dir) => true,
+                (
+                    TreeEntryKind::File { size, change_token },
+                    alien_sandbox_storage::EntryKind::File {
+                        size: old_size,
+                        change_token: old_token,
+                        ..
+                    },
+                ) => size == old_size && change_token == old_token,
+                (
+                    TreeEntryKind::Symlink { target },
+                    alien_sandbox_storage::EntryKind::Symlink { target: old_target },
+                ) => target == old_target,
+                (
+                    TreeEntryKind::HardLink { .. },
+                    alien_sandbox_storage::EntryKind::HardLink { .. },
+                ) => true,
+                // A hard-link group may be listed under another first name; let the commit decide.
+                _ => false,
+            };
+            !same_kind
+                || item.mode != old.mode
+                || item.uid != old.uid
+                || item.gid != old.gid
+                || (item.mtime_ns != old.mtime_ns && !matches!(item.kind, TreeEntryKind::Dir))
+        }))
     }
 
     /// Stages and publishes one commit.

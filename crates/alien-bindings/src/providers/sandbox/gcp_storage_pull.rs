@@ -173,8 +173,8 @@ mod tests {
     use alien_sandbox_agent::exec::ExecIdentity;
     use alien_sandbox_agent::server::{router, AgentAuthorization, AgentState};
     use alien_sandbox_storage::{
-        read_head, restore, seed, takeover, Committer, Entry, FileSource, MemoryStore, PullOutcome,
-        Puller, Spool, TreeEntry, TreeEntryKind, TreeSink,
+        read_head, restore, seed, takeover, Committer, Entry, FileSource, MemoryStore,
+        ObjectVersion, PullOutcome, Puller, Spool, TreeEntry, TreeEntryKind, TreeSink,
     };
     use ed25519_compact::{KeyPair, Seed};
 
@@ -188,10 +188,10 @@ mod tests {
         _root: tempfile::TempDir,
     }
 
-    async fn agent(head_etag: &str) -> Agent {
+    async fn agent(head_version: &ObjectVersion) -> Agent {
         let root = tempfile::TempDir::new().unwrap();
         let keys = KeyPair::from_seed(Seed::new([9u8; 32]));
-        let spool = Arc::new(Spool::new(root.path().join("spool"), head_etag).unwrap());
+        let spool = Arc::new(Spool::new(root.path().join("spool"), head_version.clone()).unwrap());
         let state = Arc::new(AgentState {
             image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
             #[cfg(target_os = "linux")]
@@ -218,6 +218,8 @@ mod tests {
             interactive: Default::default(),
             agent_binary: std::path::PathBuf::from("/bin/false"),
             storage_spool: Default::default(),
+            #[cfg(target_os = "linux")]
+            storage: None,
         });
         state.storage_spool.set(Arc::clone(&spool)).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -335,7 +337,7 @@ mod tests {
     async fn a_commit_crosses_execute_in_pages_under_the_reply_limit() {
         let store = MemoryStore::new();
         let start = takeover(&store, "sandbox-1").await.unwrap();
-        let first = agent(&start.head_etag).await;
+        let first = agent(&start.head_version).await;
         let content: Vec<u8> = (0..3_000_000u32).map(|i| (i % 241) as u8).collect();
         let walk = vec![TreeEntry {
             path: "data.bin".to_string(),
@@ -348,7 +350,7 @@ mod tests {
             gid: 1000,
             mtime_ns: 1,
         }];
-        Committer::new("sandbox-1", start.head_etag.clone(), None, None)
+        Committer::new("sandbox-1", start.head_version.clone(), None, None)
             .commit(first.spool.as_ref(), "k", walk, &mut Bytes(content.clone()))
             .await
             .unwrap();
@@ -356,7 +358,7 @@ mod tests {
         let envelopes = Arc::new(std::sync::Mutex::new(Vec::new()));
         let provider = through_execute(&first, Arc::clone(&envelopes));
         let channel = provider.storage_channel("sb-1").unwrap();
-        let mut puller = Puller::new("sandbox-1", start.head_etag, GCP_STORAGE_PAGE_BYTES);
+        let mut puller = Puller::new("sandbox-1", start.head_version, GCP_STORAGE_PAGE_BYTES);
         let outcome = puller.pull(&channel, &store, "k").await.unwrap();
         assert!(
             matches!(outcome, PullOutcome::Published { .. }),
@@ -372,7 +374,7 @@ mod tests {
         assert_eq!(first.spool.pending(), None, "the ack reached the agent");
 
         let next = takeover(&store, "sandbox-2").await.unwrap();
-        let second = agent(&next.head_etag).await;
+        let second = agent(&next.head_version).await;
         let provider = through_execute(&second, Arc::new(std::sync::Mutex::new(Vec::new())));
         let channel = provider.storage_channel("sb-2").unwrap();
         let (head, _) = read_head(&store).await.unwrap().unwrap();

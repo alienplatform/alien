@@ -662,7 +662,7 @@ pub enum SandboxCapability {
     SupervisorPidNamespace,
     /// A command runs under a different identity than the process supervising it
     SupervisorIsolation,
-    /// A directory replicated to a linked Storage under a caller-chosen key
+    /// A directory replicated to its own store under a caller-chosen key
     PersistentStorage,
 }
 
@@ -698,24 +698,20 @@ pub struct SandboxPrivilegedSupervisor {
     pub command_uid: u32,
 }
 
-/// Where persistent storage lives under the linked Storage, in front of `<sandbox id>/<key>/`.
-pub const PERSISTENT_STORAGE_PREFIX: &str = "sandbox-storage";
-
 /// A directory inside the sandbox whose contents belong to a caller-chosen key, not to the
 /// sandbox.
 ///
-/// Alien's agent replicates the directory to the linked Storage within seconds of a write and
-/// restores it into a new sandbox for the same key before the image command starts. The data
-/// lives under `sandbox-storage/<sandbox id>/<key>/` in that Storage, so its encryption key,
-/// uninstall policy and retention are the Storage's.
+/// Alien's agent replicates the directory to a store of its own, which setup creates only for
+/// a sandbox that declares persistent storage (on AWS a private bucket with public access
+/// blocked; the gateway endpoint policy is limited to it), and restores it into a new sandbox
+/// for the same key before the image command starts. Every key lives under `<key>/` in that
+/// store. Uninstall follows the deployment's data policy, as for a Storage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxPersistentStorage {
     /// Absolute directory inside the sandbox (e.g. `/workspace`).
     pub path: String,
-    /// The Storage resource the directory is replicated to.
-    pub storage: ResourceRef,
     /// Paths relative to `path` kept local and never replicated (e.g. `tmp/`, `.cache/`).
     /// A trailing `/` names a directory.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -724,6 +720,9 @@ pub struct SandboxPersistentStorage {
     /// written in part, and the sandbox's storage state says so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_size: Option<String>,
+    /// Key in the same stack used to encrypt the store. Immutable after creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption_key: Option<ResourceRef>,
 }
 
 impl SandboxPersistentStorage {
@@ -792,7 +791,7 @@ pub struct Sandbox {
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_ports: Vec<u16>,
-    /// A directory replicated to a linked Storage under a caller-chosen key. A sandbox that
+    /// A directory replicated to its own store under a caller-chosen key. A sandbox that
     /// declares it is created with a `storageKey`, and one that does not refuses one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persistent_storage: Option<SandboxPersistentStorage>,
@@ -1488,7 +1487,7 @@ impl SandboxPersistentStorage {
             return Err(invalid(
                 "path",
                 path,
-                "must be an absolute directory such as /workspace, with no trailing slash and                  no '.', '..' or empty component",
+                "must be an absolute directory such as /workspace, with no trailing slash and no '.', '..' or empty component",
             ));
         }
         if let Some(reserved) = PERSISTENT_STORAGE_RESERVED_PATHS
@@ -1501,22 +1500,21 @@ impl SandboxPersistentStorage {
                 &format!("{reserved} belongs to the system or to Alien's agent; choose a directory of the workload's own"),
             ));
         }
-        if self.storage.resource_type != super::Storage::RESOURCE_TYPE {
-            return Err(invalid(
-                "storage",
-                &self.storage.id,
-                &format!(
-                    "must link a Storage resource, not a {}",
-                    self.storage.resource_type
-                ),
-            ));
+        if let Some(key) = &self.encryption_key {
+            if key.resource_type != super::Key::RESOURCE_TYPE {
+                return Err(invalid(
+                    "encryptionKey",
+                    &key.id,
+                    &format!("must reference a Key, not a {}", key.resource_type),
+                ));
+            }
         }
         for pattern in &self.exclude {
             if !is_clean_relative_path(pattern) {
                 return Err(invalid(
                     "exclude",
                     pattern,
-                    "must be a path relative to the storage directory, with no leading '/' and                      no '.', '..' or empty component",
+                    "must be a path relative to the storage directory, with no leading '/' and no '.', '..' or empty component",
                 ));
             }
         }
@@ -1525,7 +1523,7 @@ impl SandboxPersistentStorage {
                 return Err(invalid(
                     "maxSize",
                     max_size,
-                    "must be a whole number of bytes, optionally with a unit k, M, G, T, Ki, Mi,                      Gi or Ti",
+                    "must be a whole number of bytes, optionally with a unit k, M, G, T, Ki, Mi, Gi or Ti",
                 ));
             }
         }
@@ -1660,10 +1658,10 @@ impl ResourceDefinition for Sandbox {
     }
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {
-        // The agent's rights are minted against the linked Storage, so it must exist first.
+        // The store persistent storage creates is encrypted with this key, so it must exist first.
         self.persistent_storage
             .iter()
-            .map(|storage| storage.storage.clone())
+            .filter_map(|storage| storage.encryption_key.clone())
             .collect()
     }
 
@@ -1683,6 +1681,22 @@ impl ResourceDefinition for Sandbox {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
                 resource_id: self.id.clone(),
                 reason: "the 'id' field is immutable".to_string(),
+            }));
+        }
+        let key = |sandbox: &Sandbox| {
+            sandbox
+                .persistent_storage
+                .as_ref()
+                .and_then(|storage| storage.encryption_key.clone())
+        };
+        if self.persistent_storage.is_some()
+            && new_sandbox.persistent_storage.is_some()
+            && key(self) != key(new_sandbox)
+        {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason: "'persistentStorage.encryptionKey' is immutable once the store exists"
+                    .to_string(),
             }));
         }
 
@@ -2590,9 +2604,9 @@ mod tests {
     fn workspace() -> SandboxPersistentStorage {
         SandboxPersistentStorage {
             path: "/workspace".to_string(),
-            storage: ResourceRef::new(crate::Storage::RESOURCE_TYPE, "workspaces"),
             exclude: vec!["tmp/".to_string(), ".cache".to_string()],
             max_size: Some("8Gi".to_string()),
+            encryption_key: None,
         }
     }
 
@@ -2621,17 +2635,30 @@ mod tests {
     }
 
     #[test]
-    fn persistent_storage_depends_on_its_storage_only_when_declared() {
+    fn persistent_storage_depends_only_on_its_encryption_key() {
         assert!(sandbox_with(SandboxEgress::None, vec![])
             .get_dependencies()
             .is_empty());
-        assert_eq!(
-            with_storage(workspace()).get_dependencies(),
-            vec![ResourceRef::new(
-                crate::Storage::RESOURCE_TYPE,
-                "workspaces"
-            )]
-        );
+        assert!(with_storage(workspace()).get_dependencies().is_empty());
+        let key = ResourceRef::new(crate::Key::RESOURCE_TYPE, "workspace-key");
+        let mut storage = workspace();
+        storage.encryption_key = Some(key.clone());
+        assert_eq!(with_storage(storage).get_dependencies(), vec![key.clone()]);
+
+        let mut wrong = workspace();
+        wrong.encryption_key = Some(ResourceRef::new(crate::Storage::RESOURCE_TYPE, "x"));
+        assert!(with_storage(wrong)
+            .validate_for_platform(Platform::Aws)
+            .is_err());
+
+        let mut keyed = workspace();
+        keyed.encryption_key = Some(key);
+        with_storage(workspace())
+            .validate_update(&with_storage(keyed))
+            .expect_err("the key of an existing store is immutable");
+        sandbox_with(SandboxEgress::None, vec![])
+            .validate_update(&with_storage(workspace()))
+            .expect("declaring persistent storage later is an update");
     }
 
     #[test]
@@ -2666,13 +2693,7 @@ mod tests {
     }
 
     #[test]
-    fn persistent_storage_checks_its_link_excludes_and_size() {
-        let mut storage = workspace();
-        storage.storage = ResourceRef::new(Sandbox::RESOURCE_TYPE, "other");
-        assert!(with_storage(storage)
-            .validate_for_platform(Platform::Aws)
-            .is_err());
-
+    fn persistent_storage_checks_its_excludes_and_size() {
         for pattern in ["/tmp", "../x", "a//b", "", "./x"] {
             let mut storage = workspace();
             storage.exclude = vec![pattern.to_string()];
@@ -2710,7 +2731,6 @@ mod tests {
             declared["persistentStorage"],
             serde_json::json!({
                 "path": "/workspace",
-                "storage": { "type": "storage", "id": "workspaces" },
                 "exclude": ["tmp/", ".cache"],
                 "maxSize": "8Gi",
             })

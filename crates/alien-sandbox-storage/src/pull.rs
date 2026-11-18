@@ -33,7 +33,7 @@ use crate::error::{ErrorData, Result};
 use crate::layout::{Head, ObjectName, HEAD_OBJECT};
 use crate::manifest::Manifest;
 use crate::pack::chunk_hash;
-use crate::store::{ObjectStore, Precondition, PutOutcome, StoredObject};
+use crate::store::{ObjectStore, ObjectVersion, Precondition, PutOutcome, StoredObject};
 
 /// What the agent has committed and the binding has not yet published.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,7 +97,7 @@ fn spool_io(operation: &str, object: &str, error: std::io::Error) -> AlienError<
 #[derive(Debug)]
 struct SpoolState {
     /// HEAD's version as the agent's committer sees it.
-    head_etag: String,
+    head_version: ObjectVersion,
     /// HEAD written by the last unpublished commit.
     head: Option<Vec<u8>>,
     /// Advances on every write; a pending object and HEAD carry the value when written.
@@ -123,9 +123,9 @@ pub struct Spool {
 
 impl Spool {
     /// A spool in `dir` (created if missing, emptied of anything a previous agent left) whose
-    /// HEAD is at `head_etag`, the version the binding's takeover wrote. The committer that writes
+    /// HEAD is at `head_version`, the version the binding's takeover wrote. The committer that writes
     /// here is created with the same version.
-    pub fn new(dir: impl Into<PathBuf>, head_etag: impl Into<String>) -> Result<Self> {
+    pub fn new(dir: impl Into<PathBuf>, head_version: ObjectVersion) -> Result<Self> {
         let dir = dir.into();
         let display = dir.display().to_string();
         if dir.exists() {
@@ -135,7 +135,7 @@ impl Spool {
         Ok(Self {
             dir,
             state: Mutex::new(SpoolState {
-                head_etag: head_etag.into(),
+                head_version,
                 head: None,
                 tick: 0,
                 generation: 0,
@@ -314,14 +314,14 @@ impl ObjectStore for Spool {
             let state = self.state();
             return Ok(state.head.as_ref().map(|bytes| StoredObject {
                 bytes: bytes.clone(),
-                etag: state.head_etag.clone(),
+                version: state.head_version.clone(),
             }));
         }
         spooled_name(object)?;
         match fs::read(self.path(object)) {
             Ok(bytes) => Ok(Some(StoredObject {
                 bytes,
-                etag: String::new(),
+                version: ObjectVersion::default(),
             })),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(spool_io("get", object, e)),
@@ -348,17 +348,16 @@ impl ObjectStore for Spool {
     ) -> Result<PutOutcome> {
         if object == HEAD_OBJECT {
             let mut state = self.state();
-            let matches =
-                matches!(&precondition, Precondition::Matches(etag) if *etag == state.head_etag);
+            let matches = matches!(&precondition, Precondition::Matches(version) if *version == state.head_version);
             if state.superseded || !matches {
                 return Ok(PutOutcome::Conflict);
             }
             state.tick += 1;
             state.generation = state.tick;
-            state.head_etag = format!("spool-{}", state.tick);
+            state.head_version = ObjectVersion::etag(format!("spool-{}", state.tick));
             state.head = Some(bytes);
             return Ok(PutOutcome::Written {
-                etag: state.head_etag.clone(),
+                version: state.head_version.clone(),
             });
         }
         spooled_name(object)?;
@@ -373,7 +372,7 @@ impl ObjectStore for Spool {
         let tick = state.tick;
         state.pending.insert(object.to_string(), tick);
         Ok(PutOutcome::Written {
-            etag: String::new(),
+            version: ObjectVersion::default(),
         })
     }
 
@@ -450,18 +449,18 @@ pub enum PullOutcome {
 #[derive(Debug)]
 pub struct Puller {
     writer: String,
-    head_etag: String,
+    head_version: ObjectVersion,
     page: u64,
     superseded: bool,
 }
 
 impl Puller {
-    /// A puller for the sandbox `writer`, which took the key over at `head_etag`. `page` is the
+    /// A puller for the sandbox `writer`, which took the key over at `head_version`. `page` is the
     /// most raw bytes one read may return over the channel.
-    pub fn new(writer: impl Into<String>, head_etag: impl Into<String>, page: u64) -> Self {
+    pub fn new(writer: impl Into<String>, head_version: ObjectVersion, page: u64) -> Self {
         Self {
             writer: writer.into(),
-            head_etag: head_etag.into(),
+            head_version,
             page: page.max(1),
             superseded: false,
         }
@@ -532,12 +531,12 @@ impl Puller {
             .put_if(
                 HEAD_OBJECT,
                 pending.head.into_bytes(),
-                Precondition::Matches(self.head_etag.clone()),
+                Precondition::Matches(self.head_version.clone()),
             )
             .await?
         {
-            PutOutcome::Written { etag } => {
-                self.head_etag = etag;
+            PutOutcome::Written { version } => {
+                self.head_version = version;
                 channel
                     .ack(pending.generation, AckOutcome::Published)
                     .await?;

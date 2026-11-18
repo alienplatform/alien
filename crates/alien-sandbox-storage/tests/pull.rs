@@ -6,8 +6,8 @@ use std::io::Read;
 
 use alien_sandbox_storage::{
     read_head, read_manifest, restore, seed, takeover, AckOutcome, CommitOutcome, Committer, Entry,
-    ErrorData, FileSource, MemoryStore, ObjectStore, Pending, PullChannel, PullOutcome, Puller,
-    Result, Spool, TreeEntry, TreeEntryKind, TreeSink, CHUNK_SIZE,
+    ErrorData, FileSource, MemoryStore, ObjectStore, ObjectVersion, Pending, PullChannel,
+    PullOutcome, Puller, Result, Spool, TreeEntry, TreeEntryKind, TreeSink, CHUNK_SIZE,
 };
 use async_trait::async_trait;
 
@@ -129,12 +129,12 @@ struct Sandbox {
 async fn sandbox(store: &MemoryStore, writer: &str) -> Sandbox {
     let start = takeover(store, writer).await.unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let spool = Spool::new(dir.path().join("spool"), start.head_etag.clone()).unwrap();
+    let spool = Spool::new(dir.path().join("spool"), start.head_version.clone()).unwrap();
     Sandbox {
         _dir: dir,
         spool,
-        committer: Committer::new(writer, start.head_etag.clone(), start.manifest, None),
-        puller: Puller::new(writer, start.head_etag, PAGE),
+        committer: Committer::new(writer, start.head_version.clone(), start.manifest, None),
+        puller: Puller::new(writer, start.head_version, PAGE),
     }
 }
 
@@ -309,7 +309,7 @@ async fn a_head_naming_another_writer_is_refused() {
     let store = MemoryStore::new();
     let mut sandbox = sandbox(&store, "sandbox-1").await;
     sandbox.commit(&sample()).await.unwrap();
-    let mut puller = Puller::new("sandbox-9", "whatever", PAGE);
+    let mut puller = Puller::new("sandbox-9", ObjectVersion::etag("whatever"), PAGE);
     let error = puller
         .pull(&sandbox.spool, &store, "engine-42")
         .await
@@ -333,7 +333,7 @@ async fn a_restore_seeded_into_the_spool_matches_the_store() {
     // The binding takes the key over for a new sandbox and seeds its spool.
     let start = takeover(&store, "sandbox-2").await.unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let spool = Spool::new(dir.path().join("spool"), start.head_etag.clone()).unwrap();
+    let spool = Spool::new(dir.path().join("spool"), start.head_version.clone()).unwrap();
     let (head, _) = read_head(&store).await.unwrap().unwrap();
     let manifest = seed(&spool, &store, head.commit.as_ref().unwrap(), PAGE)
         .await
@@ -349,8 +349,13 @@ async fn a_restore_seeded_into_the_spool_matches_the_store() {
     assert!(spool.list("").await.unwrap().is_empty());
 
     // The new sandbox continues from the restored manifest without re-sending unchanged data.
-    let mut committer = Committer::new("sandbox-2", start.head_etag.clone(), Some(manifest), None);
-    let mut puller = Puller::new("sandbox-2", start.head_etag, PAGE);
+    let mut committer = Committer::new(
+        "sandbox-2",
+        start.head_version.clone(),
+        Some(manifest),
+        None,
+    );
+    let mut puller = Puller::new("sandbox-2", start.head_version, PAGE);
     let more = edited.clone().file("added", b"new".to_vec(), 3);
     let mut source = &more;
     committer
@@ -372,7 +377,7 @@ async fn a_restore_seeded_into_the_spool_matches_the_store() {
 #[tokio::test]
 async fn the_spool_holds_only_packs_and_manifests() {
     let dir = tempfile::tempdir().unwrap();
-    let spool = Spool::new(dir.path().join("spool"), "v1").unwrap();
+    let spool = Spool::new(dir.path().join("spool"), ObjectVersion::etag("v1")).unwrap();
     for name in [
         "../escape",
         "packs/../../x",

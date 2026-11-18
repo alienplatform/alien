@@ -187,7 +187,7 @@ async fn a_tree_round_trips_exactly() {
     let store = MemoryStore::new();
     let start = takeover(&store, "sandbox-1").await.unwrap();
     assert!(start.manifest.is_none(), "a new key restores nothing");
-    let mut writer = Committer::new("sandbox-1", start.head_etag, None, None);
+    let mut writer = Committer::new("sandbox-1", start.head_version, None, None);
     let tree = sample();
     let (outcome, _) = commit(&store, &mut writer, &tree).await;
     assert!(matches!(outcome.unwrap(), CommitOutcome::Committed { .. }));
@@ -254,7 +254,7 @@ async fn a_tree_round_trips_exactly() {
 async fn an_unchanged_tree_writes_nothing_and_an_edit_uploads_only_its_chunk() {
     let store = MemoryStore::new();
     let start = takeover(&store, "sandbox-1").await.unwrap();
-    let mut writer = Committer::new("sandbox-1", start.head_etag, None, None);
+    let mut writer = Committer::new("sandbox-1", start.head_version, None, None);
     let tree = sample();
     commit(&store, &mut writer, &tree).await.0.unwrap();
     let objects = store.names();
@@ -289,7 +289,7 @@ async fn an_unchanged_tree_writes_nothing_and_an_edit_uploads_only_its_chunk() {
 async fn a_superseded_writer_is_refused_and_stops() {
     let store = MemoryStore::new();
     let first = takeover(&store, "sandbox-1").await.unwrap();
-    let mut old = Committer::new("sandbox-1", first.head_etag, None, None);
+    let mut old = Committer::new("sandbox-1", first.head_version, None, None);
     let tree = sample();
     commit(&store, &mut old, &tree).await.0.unwrap();
 
@@ -298,7 +298,7 @@ async fn a_superseded_writer_is_refused_and_stops() {
         second.manifest.as_ref().map(|m| m.entries.len()),
         Some(tree.entries.len())
     );
-    let mut new = Committer::new("sandbox-2", second.head_etag, second.manifest, None);
+    let mut new = Committer::new("sandbox-2", second.head_version, second.manifest, None);
 
     let changed = tree.clone().file("dup-a", b"stale".to_vec(), 9);
     let refused = commit(&store, &mut old, &changed).await.0.unwrap_err();
@@ -331,7 +331,12 @@ async fn a_superseded_writer_is_refused_and_stops() {
 async fn max_size_refuses_a_commit_whole() {
     let store = MemoryStore::new();
     let start = takeover(&store, "sandbox-1").await.unwrap();
-    let mut writer = Committer::new("sandbox-1", start.head_etag, None, Some(CHUNK_SIZE as u64));
+    let mut writer = Committer::new(
+        "sandbox-1",
+        start.head_version,
+        None,
+        Some(CHUNK_SIZE as u64),
+    );
     let before = store.names();
     let refused = commit(&store, &mut writer, &sample()).await.0.unwrap_err();
     assert_eq!(refused.code, "SANDBOX_STORAGE_MAX_SIZE_EXCEEDED");
@@ -349,7 +354,7 @@ async fn max_size_refuses_a_commit_whole() {
 async fn collection_keeps_what_head_reads_and_drops_the_rest() {
     let store = MemoryStore::new();
     let start = takeover(&store, "sandbox-1").await.unwrap();
-    let mut writer = Committer::new("sandbox-1", start.head_etag, None, None);
+    let mut writer = Committer::new("sandbox-1", start.head_version, None, None);
     let tree = sample();
     commit(&store, &mut writer, &tree).await.0.unwrap();
     // Replace every file so the first pack is no longer read by HEAD.
@@ -386,7 +391,7 @@ async fn collection_keeps_what_head_reads_and_drops_the_rest() {
 async fn a_damaged_pack_fails_the_restore() {
     let store = MemoryStore::new();
     let start = takeover(&store, "sandbox-1").await.unwrap();
-    let mut writer = Committer::new("sandbox-1", start.head_etag, None, None);
+    let mut writer = Committer::new("sandbox-1", start.head_version, None, None);
     commit(&store, &mut writer, &sample()).await.0.unwrap();
     let pack = store
         .names()
@@ -446,17 +451,19 @@ async fn snapshot(store: &MemoryStore) -> BTreeMap<String, Vec<u8>> {
 async fn a_stale_writer_racing_the_new_owner_never_changes_the_owners_tree() {
     let store = MemoryStore::new();
     let first = takeover(&store, "sandbox-1").await.unwrap();
-    let mut stale = Committer::new("sandbox-1", first.head_etag, None, None);
+    let mut stale = Committer::new("sandbox-1", first.head_version, None, None);
     commit(&store, &mut stale, &sample()).await.0.unwrap();
 
     // The owner takes over and commits seq 2 while the stale writer still believes it is at 1.
     let second = takeover(&store, "sandbox-2").await.unwrap();
-    let mut owner = Committer::new("sandbox-2", second.head_etag, second.manifest, None);
+    let mut owner = Committer::new("sandbox-2", second.head_version, second.manifest, None);
     let owners = sample()
         .file("db.sqlite", pattern(2 * CHUNK_SIZE, 77), 20)
         .file("notes.md", b"owner".to_vec(), 20);
-    let CommitOutcome::Committed { commit: owner_commit, .. } =
-        commit(&store, &mut owner, &owners).await.0.unwrap()
+    let CommitOutcome::Committed {
+        commit: owner_commit,
+        ..
+    } = commit(&store, &mut owner, &owners).await.0.unwrap()
     else {
         panic!("the owner's tree changed")
     };
@@ -490,7 +497,10 @@ async fn a_published_object_cannot_be_created_again() {
         .await
         .unwrap_err();
     assert_eq!(error.code, "SANDBOX_STORAGE_STORE_FAILED");
-    assert_eq!(store.get("manifests/x.json").await.unwrap().unwrap().bytes, b"one");
+    assert_eq!(
+        store.get("manifests/x.json").await.unwrap().unwrap().bytes,
+        b"one"
+    );
 }
 
 /// A manifest replaced behind the store's back (raw access, damage) is refused by its hash in
@@ -499,7 +509,7 @@ async fn a_published_object_cannot_be_created_again() {
 async fn a_replaced_manifest_is_refused_by_heads_hash() {
     let store = MemoryStore::new();
     let start = takeover(&store, "sandbox-1").await.unwrap();
-    let mut writer = Committer::new("sandbox-1", start.head_etag, None, None);
+    let mut writer = Committer::new("sandbox-1", start.head_version, None, None);
     commit(&store, &mut writer, &sample()).await.0.unwrap();
     let (head, _) = read_head(&store).await.unwrap().unwrap();
     let object = head.commit.as_ref().unwrap().manifest();
@@ -535,7 +545,7 @@ impl ObjectStore for OverwritingStore {
         if precondition == alien_sandbox_storage::Precondition::Absent && object != "HEAD" {
             self.0.overwrite(object, bytes);
             return Ok(alien_sandbox_storage::PutOutcome::Written {
-                etag: "overwritten".to_string(),
+                version: alien_sandbox_storage::ObjectVersion::etag("overwritten"),
             });
         }
         self.0.put_if(object, bytes, precondition).await
@@ -554,18 +564,24 @@ impl ObjectStore for OverwritingStore {
 async fn a_stale_writer_cannot_change_the_owners_tree_even_when_uploads_overwrite() {
     let store = OverwritingStore(MemoryStore::new());
     let first = takeover(&store, "sandbox-1").await.unwrap();
-    let mut stale = Committer::new("sandbox-1", first.head_etag, None, None);
+    let mut stale = Committer::new("sandbox-1", first.head_version, None, None);
     let tree = sample();
-    let mut source = Source { tree: &tree, opened: vec![] };
+    let mut source = Source {
+        tree: &tree,
+        opened: vec![],
+    };
     stale
         .commit(&store, "engine-42", tree.entries.clone(), &mut source)
         .await
         .unwrap();
 
     let second = takeover(&store, "sandbox-2").await.unwrap();
-    let mut owner = Committer::new("sandbox-2", second.head_etag, second.manifest, None);
+    let mut owner = Committer::new("sandbox-2", second.head_version, second.manifest, None);
     let owners = sample().file("notes.md", b"owner".to_vec(), 20);
-    let mut source = Source { tree: &owners, opened: vec![] };
+    let mut source = Source {
+        tree: &owners,
+        opened: vec![],
+    };
     owner
         .commit(&store, "engine-42", owners.entries.clone(), &mut source)
         .await
@@ -573,7 +589,10 @@ async fn a_stale_writer_cannot_change_the_owners_tree_even_when_uploads_overwrit
     let published = snapshot(&store.0).await;
 
     let stales = sample().file("notes.md", b"stale".to_vec(), 30);
-    let mut source = Source { tree: &stales, opened: vec![] };
+    let mut source = Source {
+        tree: &stales,
+        opened: vec![],
+    };
     let refused = stale
         .commit(&store, "engine-42", stales.entries.clone(), &mut source)
         .await
@@ -584,5 +603,28 @@ async fn a_stale_writer_cannot_change_the_owners_tree_even_when_uploads_overwrit
     for (name, bytes) in &published {
         assert_eq!(after.get(name), Some(bytes), "{name} changed");
     }
-    assert_eq!(read_file(&store, "engine-42", "notes.md").await.unwrap(), b"owner");
+    assert_eq!(
+        read_file(&store, "engine-42", "notes.md").await.unwrap(),
+        b"owner"
+    );
+}
+
+/// A conditional put compares the whole version a read returned. An adapter that keeps only the
+/// `ETag` (GCS checks the generation) loses HEAD's precondition, so the memory store refuses it.
+#[tokio::test]
+async fn a_precondition_must_carry_the_whole_version_it_read() {
+    let store = MemoryStore::new();
+    let claim = takeover(&store, "sandbox-1").await.unwrap();
+    let etag_only = alien_sandbox_storage::ObjectVersion::etag(claim.head_version.etag.clone());
+    assert_eq!(
+        store
+            .put_if(
+                "HEAD",
+                b"{}".to_vec(),
+                alien_sandbox_storage::Precondition::Matches(etag_only)
+            )
+            .await
+            .unwrap(),
+        alien_sandbox_storage::PutOutcome::Conflict
+    );
 }

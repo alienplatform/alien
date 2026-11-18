@@ -106,6 +106,9 @@ pub struct AgentState {
     /// Where persistent storage commits wait for the binding to pull them; set once the key's
     /// tree is restored, and only on a platform whose binding pulls.
     pub storage_spool: std::sync::OnceLock<Arc<alien_sandbox_storage::Spool>>,
+    /// Persistent storage, when the sandbox declares it.
+    #[cfg(target_os = "linux")]
+    pub storage: Option<Arc<crate::storage::attach::PersistentStorage>>,
 }
 
 impl AgentAuthorization {
@@ -361,6 +364,9 @@ pub fn router(state: Arc<AgentState>) -> Router {
         .route("/v1/storage/ack", post(storage_ack))
         .route("/v1/storage/seed", post(storage_seed))
         .route("/v1/interactive", post(interactive_start))
+        .route("/v1/storage", get(storage_status).put(storage_attach))
+        .route("/v1/storage/sync", post(storage_sync))
+        .route("/v1/storage/grant", axum::routing::put(storage_renew))
         // A request for one declared port of the code in the sandbox. Authorized by a preview
         // capability for that port, never by the Execute one.
         .route("/v1/preview/{port}", axum::routing::any(preview))
@@ -1532,12 +1538,134 @@ async fn authorize(
     required: SandboxOperationClass,
 ) -> std::result::Result<(), ApiError> {
     authorize_control(state, peer, headers, required).await?;
+    // Nothing runs in the sandbox before the key's tree is in place: a command would see an
+    // empty directory, and what it wrote would be cleared by the restore.
+    if state.image_process.restore_pending()? {
+        return Err(ApiError {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: "persistent storage is not restored yet".to_string(),
+        });
+    }
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
         egress.wait_ready().await?;
     }
     state.start_image_once()?;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn declared_storage(
+    state: &AgentState,
+) -> std::result::Result<&Arc<crate::storage::attach::PersistentStorage>, ApiError> {
+    state.storage.as_ref().ok_or_else(|| ApiError {
+        status: StatusCode::NOT_FOUND,
+        message: "this sandbox declares no persistent storage".to_string(),
+    })
+}
+
+/// Restores the key's tree (claimed by the binding), opens the image gate and starts
+/// replicating. Once per boot.
+async fn storage_attach(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    #[cfg(target_os = "linux")]
+    {
+        let storage = declared_storage(&state)?;
+        let request = serde_json::from_value(body).map_err(|error| {
+            AlienError::new(ErrorData::RequestInvalid {
+                reason: format!("not a persistent storage attach: {error}"),
+            })
+        })?;
+        let status = storage
+            .attach(request, &state.image_process, state.exec_identity)
+            .await?;
+        Ok(Json(
+            serde_json::to_value(status).expect("status serializes"),
+        ))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = body;
+        Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "persistent storage needs Linux".to_string(),
+        })
+    }
+}
+
+/// Replication state.
+async fn storage_status(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    #[cfg(target_os = "linux")]
+    {
+        let status = declared_storage(&state)?.status();
+        Ok(Json(
+            serde_json::to_value(status).expect("status serializes"),
+        ))
+    }
+    #[cfg(not(target_os = "linux"))]
+    Err(ApiError {
+        status: StatusCode::NOT_FOUND,
+        message: "persistent storage needs Linux".to_string(),
+    })
+}
+
+/// Commits everything written so far; returns once it is durable.
+async fn storage_sync(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    #[cfg(target_os = "linux")]
+    {
+        let status = declared_storage(&state)?.sync().await?;
+        Ok(Json(
+            serde_json::to_value(status).expect("status serializes"),
+        ))
+    }
+    #[cfg(not(target_os = "linux"))]
+    Err(ApiError {
+        status: StatusCode::NOT_FOUND,
+        message: "persistent storage needs Linux".to_string(),
+    })
+}
+
+/// Replaces the storage grant before it expires.
+async fn storage_renew(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> std::result::Result<StatusCode, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    #[cfg(target_os = "linux")]
+    {
+        let request = serde_json::from_value(body).map_err(|error| {
+            AlienError::new(ErrorData::RequestInvalid {
+                reason: format!("not a storage grant: {error}"),
+            })
+        })?;
+        declared_storage(&state)?.renew(request).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = body;
+        Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "persistent storage needs Linux".to_string(),
+        })
+    }
 }
 
 async fn authorize_control(
