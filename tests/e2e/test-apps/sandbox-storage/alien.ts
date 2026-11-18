@@ -20,7 +20,10 @@ const agents = new alien.Sandbox("agents")
 // no such group, so a storage account stands in as the ordinary resource that makes setup create one.
 const uploads = new alien.Storage("uploads").build()
 
+// The execution identity creates the sandboxes, so setup gives it the store grants. The test
+// calls with its own principal holding exactly the roles setup gave this identity.
 export default new alien.Stack("sandbox-storage")
+  .permissions({ profiles: { execution: { agents: ["sandbox/execute"] } } })
   .add(uploads, "frozen")
   .add(agents, "frozen")
   .build()
