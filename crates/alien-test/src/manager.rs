@@ -62,6 +62,18 @@ impl CredentialResolver for LocalAzureTargetCredentialResolver {
         })
     }
 
+    /// Local test path: the target service principal stands in for the Remote
+    /// Bindings identity, so remote Storage gets the same config `resolve` gives.
+    async fn resolve_remote_storage_source(
+        &self,
+        deployment: &DeploymentRecord,
+        _resource_id: &str,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        Ok(RemoteStorageCredentialSource::Direct(
+            self.resolve(deployment).await?,
+        ))
+    }
+
     async fn resolve_management_config(
         &self,
         _platform: Platform,
@@ -901,6 +913,45 @@ mod tests {
                 .contains("Remote Bindings identity state is required"),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn local_azure_target_resolver_serves_remote_storage() {
+        let resolver = super::LocalAzureTargetCredentialResolver {
+            target: crate::config::AzureConfig {
+                subscription_id: "sub".into(),
+                tenant_id: "tenant".into(),
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                region: "eastus".into(),
+                principal_id: None,
+                oidc_issuer: None,
+                oidc_subject: None,
+            },
+            management_config: None,
+        };
+        let deployment: alien_manager::traits::DeploymentRecord =
+            serde_json::from_value(serde_json::json!({
+                "id": "dp",
+                "name": "dp",
+                "deploymentGroupId": "group",
+                "platform": "azure",
+                "deploymentProtocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                "status": "running",
+                "retryRequested": false,
+                "createdAt": "2026-01-01T00:00:00Z",
+            }))
+            .expect("minimal deployment record");
+        let source = resolver
+            .resolve_remote_storage_source(&deployment, "storage")
+            .await
+            .expect("local resolver serves remote Storage");
+        match source {
+            alien_manager::traits::RemoteStorageCredentialSource::Direct(
+                alien_core::ClientConfig::Azure(config),
+            ) => assert_eq!(config.subscription_id, "sub"),
+            _ => panic!("expected direct Azure credentials"),
+        }
     }
 
     #[tokio::test]
