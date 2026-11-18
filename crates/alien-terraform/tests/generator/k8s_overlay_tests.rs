@@ -3100,3 +3100,121 @@ fn the_installed_chart_bindings_follow_the_resource_gates() {
         "a gated bucket needs its count index: {helm}"
     );
 }
+
+/// A real plan, with mocked providers, of a gated chart-bound resource: the installed release's
+/// values carry the `infrastructure` entry (and the extra store's binding) only while the gate
+/// is on. The registration provider cannot be installed here, so it is the stand-in the
+/// verified-setup tests use, and its `helm_values` (which render `infrastructure: null`) are a
+/// fixed string.
+#[test]
+fn the_installed_release_values_carry_a_gated_binding_only_while_the_gate_is_on() {
+    let stack = chart_bound_stack("chart-helm-plan", KubernetesClusterProvider::Eks, true);
+    let registry = TfRegistry::built_in();
+    let module = generate_terraform_module(
+        &stack,
+        TerraformTarget::Eks,
+        TerraformOptions {
+            setup_identity: None,
+            pins: alien_core::SetupPins::compiled_in(),
+            display_name: None,
+            registry: &registry,
+            stack_settings: StackSettings::default(),
+            registration: Some(TerraformRegistration {
+                provider_name: "terraform".to_string(),
+                provider_source: "registry.example.com/acme/app".to_string(),
+                provider_version: "1.0.0".to_string(),
+                resource_type: "data".to_string(),
+                release_id: Some("rel-test".to_string()),
+                setup_target: "kubernetes".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                destroy_guard: false,
+            }),
+            helm_install: Some(TerraformHelmInstall {
+                chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+                release_name: "acme-operator".to_string(),
+            }),
+            supported_aws_regions: Vec::new(),
+        },
+    )
+    .expect("module should render");
+    let mut files = super::verified_setup_tests::stand_in_files(&module);
+    let helm = files.get("helm.tf").expect("helm.tf").clone();
+    assert!(helm.contains("terraform_data.this.helm_values"), "{helm}");
+    files.insert(
+        "helm.tf".to_string(),
+        helm.replace(
+            "terraform_data.this.helm_values",
+            "\"infrastructure: null\\n\"",
+        ),
+    );
+    let required = hcl::parse(files.get("variables.tf").expect("variables.tf"))
+        .expect("variables.tf parses")
+        .blocks()
+        .filter(|block| block.identifier() == "variable")
+        .filter(|block| !block.body().attributes().any(|a| a.key() == "default"))
+        .filter_map(|block| block.labels().first().map(|l| l.as_str().to_string()))
+        .filter(|name| {
+            ![
+                "input_extra_store",
+                "management_url",
+                "eks_cluster_name",
+                "kubernetes_cluster_mode",
+                "helm_install_enabled",
+            ]
+            .contains(&name.as_str())
+        })
+        .map(|name| format!("{name} = \"xx\""))
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    files.insert(
+        "gate.tftest.hcl".to_string(),
+        format!(
+            r#"mock_provider "aws" {{
+  mock_data "aws_availability_zones" {{
+    defaults = {{ names = ["us-east-1a", "us-east-1b", "us-east-1c"] }}
+  }}
+  mock_data "aws_eks_cluster" {{
+    defaults = {{ identity = [{{ oidc = [{{ issuer = "https://oidc.eks.example.com/id/ABC" }}] }}] }}
+  }}
+}}
+mock_provider "tls" {{
+  mock_data "tls_certificate" {{
+    defaults = {{ certificates = [{{ sha1_fingerprint = "0000000000000000000000000000000000000000" }}] }}
+  }}
+}}
+mock_provider "helm" {{}}
+variables {{
+  {required}
+  management_url = "https://manager.example.com"
+  eks_cluster_name = "c"
+  kubernetes_cluster_mode = "existing"
+  helm_install_enabled = true
+  resource_prefix = "acme"
+}}
+run "gate_off" {{
+  command = plan
+  variables {{
+    input_extra_store = false
+  }}
+  assert {{
+    condition = length(helm_release.runtime[0].values) == 2 && join(",", sort(keys(yamldecode(helm_release.runtime[0].values[1]).infrastructure))) == "data"
+    error_message = "gate off: the release carries the data store's binding and not the extra store's"
+  }}
+}}
+run "gate_on" {{
+  command = plan
+  variables {{
+    input_extra_store = true
+  }}
+  assert {{
+    condition = join(",", sort(keys(yamldecode(helm_release.runtime[0].values[1]).infrastructure))) == "data,extra"
+    error_message = "gate on: both stores are bound in the release"
+  }}
+}}
+"#
+        ),
+    );
+    super::helpers::test_utils::terraform_test(&files)
+        .assert_ok("EKS chart-bound gated plan, mocked providers");
+}
