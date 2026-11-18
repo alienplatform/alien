@@ -75,6 +75,8 @@ pub struct AzureSandbox {
     /// Where creates go on a protected install: the install's verifier, through the manager,
     /// because the caller's own role cannot create sandboxes.
     create_route: Option<std::sync::Arc<dyn SandboxCreateRoute>>,
+    /// The declared persistent storage, which makes `storageKey` required on create.
+    persistent_storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
 }
 
 /// Creates a sandbox for a caller whose own identity may not: the request carries only the
@@ -118,6 +120,7 @@ impl AzureSandbox {
             memory,
             disk,
             create_route: None,
+            persistent_storage: None,
         }
     }
 
@@ -185,6 +188,15 @@ impl AzureSandbox {
     /// Declares the wall-clock ceiling every sandbox is created under.
     pub fn with_max_lifetime(mut self, seconds: Option<u32>) -> Self {
         self.max_lifetime_seconds = seconds;
+        self
+    }
+
+    /// Supplies the persistent storage the declaration carries.
+    pub fn with_persistent_storage(
+        mut self,
+        storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
+    ) -> Self {
+        self.persistent_storage = storage;
         self
     }
 
@@ -444,11 +456,18 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn create(&self, mut request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        super::storage_key::resolve_storage_key(
-            None,
+        let storage_key = super::storage_key::resolve_storage_key(
+            self.persistent_storage.as_ref(),
             request.storage_key.as_deref(),
             "sandbox.create",
         )?;
+        if storage_key.is_some() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.create".to_string(),
+                reason: "this binding cannot attach persistent storage to an Azure sandbox yet"
+                    .to_string(),
+            }));
+        }
         let policy = self.requested_policy(request.egress.as_ref())?;
         checked_sandbox_env(CREATE, &request.env)?;
         if self.agent
@@ -637,7 +656,7 @@ impl Sandbox for AzureSandbox {
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
         super::storage_key::resolve_storage_key(
-            None,
+            self.persistent_storage.as_ref(),
             request.storage_key.as_deref(),
             "sandbox.getOrCreate",
         )?;

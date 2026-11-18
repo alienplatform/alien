@@ -877,6 +877,13 @@ mod tests {
                         max_lifetime_seconds: Some(3600),
                         idle_pause_seconds,
                     })
+                    // Declared for the same reason: its key must travel under the binding's name.
+                    .persistent_storage(alien_core::SandboxPersistentStorage {
+                        path: "/workspace".to_string(),
+                        exclude: Vec::new(),
+                        max_size: None,
+                        encryption_key: None,
+                    })
                     .build(),
                 ResourceLifecycle::Frozen,
             )
@@ -951,6 +958,16 @@ mod tests {
             cpu: Some(BindingValue::Value("1000m".to_string())),
             memory: Some(BindingValue::Value("2048Mi".to_string())),
             disk: Some(BindingValue::Value("20480Mi".to_string())),
+            persistent_storage: Some(alien_core::bindings::SandboxPersistentStorageBinding {
+                path: "/workspace".to_string(),
+                store: alien_core::bindings::PersistentStoreLocator::Azure {
+                    account: BindingValue::Value("acmeagents1a2b3c4d".to_string()),
+                    container: BindingValue::Value("keys".to_string()),
+                    prefix: String::new(),
+                },
+                exclude: Vec::new(),
+                max_size_bytes: None,
+            }),
         };
         let keys = serde_json::to_value(&binding).expect("the binding serializes");
 
