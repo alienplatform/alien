@@ -488,6 +488,7 @@ impl Sandbox for AzureSandbox {
         capabilities.interactive_commands = self.agent;
         capabilities.supervisor_isolation = self.agent;
         capabilities.preview = self.agent && !self.preview_ports.is_empty();
+        capabilities.persistent_storage = self.agent && self.persistent_grants.is_some();
         capabilities
     }
 
