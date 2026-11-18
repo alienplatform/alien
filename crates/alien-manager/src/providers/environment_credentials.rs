@@ -1,4 +1,4 @@
-use crate::traits::credential_resolver::CredentialResolver;
+use crate::traits::credential_resolver::{CredentialResolver, RemoteStorageCredentialSource};
 use crate::traits::deployment_store::DeploymentRecord;
 use alien_core::{ClientConfig, Platform};
 use alien_error::{AlienError, Context, GenericError};
@@ -108,6 +108,70 @@ impl CredentialResolver for EnvironmentCredentialResolver {
         // then hand off to the stack's RemoteStackManagement identity.
         self.resolve_from_env(deployment, std::env::vars().collect())
             .await
+    }
+
+    async fn resolve_remote_storage_source(
+        &self,
+        deployment: &DeploymentRecord,
+        _resource_id: &str,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        // Azure's remote data access belongs to the setup-owned Remote Bindings
+        // identity. The default (`resolve`) would mint the Remote Stack
+        // Management identity's token, which holds no data-plane grants.
+        if deployment.platform != Platform::Azure {
+            return Ok(RemoteStorageCredentialSource::Direct(
+                self.resolve(deployment).await?,
+            ));
+        }
+        self.azure_remote_bindings_source(deployment, std::env::vars().collect())
+            .await
+    }
+}
+
+impl EnvironmentCredentialResolver {
+    pub(crate) async fn azure_remote_bindings_source(
+        &self,
+        deployment: &DeploymentRecord,
+        env: HashMap<String, String>,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        let outputs = deployment
+            .stack_state
+            .as_ref()
+            .and_then(|state| {
+                state.resources.values().find(|resource| {
+                    resource.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref()
+                })
+            })
+            .and_then(|state| state.outputs.as_ref())
+            .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteBindingsOutputs>())
+            .ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: format!(
+                        "Remote Bindings identity state is required for deployment {}; rerun setup",
+                        deployment.id
+                    ),
+                })
+            })?;
+        let base = ClientConfig::from_env(deployment.platform, &env)
+            .await
+            .map_err(|error| error.into_generic())?;
+        let resolved = alien_infra::RemoteAccessResolver::new(env)
+            .resolve_remote_bindings(
+                base,
+                outputs,
+                deployment.environment_info.as_ref(),
+                None,
+                None,
+            )
+            .await
+            .context(crate::error::ErrorData::CredentialMaterializationFailed {
+                platform: deployment.platform,
+                purpose: "resolve Remote Bindings identity".to_string(),
+            })
+            .map_err(|error| {
+                super::credential_errors::classify_credential_error(error.into_generic())
+            })?;
+        Ok(RemoteStorageCredentialSource::Direct(resolved))
     }
 }
 
@@ -309,5 +373,56 @@ pub(super) mod tests {
             } if client_id == "target-uami-client"
                 && federated_token_file == "/tmp/federated-token"
         ));
+    }
+
+    #[tokio::test]
+    async fn azure_remote_bindings_use_the_access_identity_not_the_management_identity() {
+        let mut deployment = azure_deployment("running");
+        let bindings = alien_core::RemoteBindings::new("remote-bindings".to_string()).build();
+        let state = StackResourceState::new_pending(
+            alien_core::RemoteBindings::RESOURCE_TYPE.to_string(),
+            Resource::new(bindings),
+            None,
+            Vec::new(),
+        )
+        .with_updates(|state| {
+            state.status = ResourceStatus::Running;
+            state.outputs = Some(ResourceOutputs::new(alien_core::RemoteBindingsOutputs {
+                resource_id: "access-uami-resource-id".to_string(),
+                access_configuration: serde_json::json!({
+                    "uamiClientId": "access-uami-client",
+                    "tenantId": "target-tenant"
+                })
+                .to_string(),
+            }));
+        });
+        deployment
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert("remote-bindings".to_string(), state);
+
+        let RemoteStorageCredentialSource::Direct(config) = EnvironmentCredentialResolver::new()
+            .azure_remote_bindings_source(&deployment, azure_env())
+            .await
+            .expect("remote bindings credentials should resolve");
+        assert!(matches!(
+            &config.azure_config().unwrap().credentials,
+            AzureCredentials::WorkloadIdentity { client_id, .. } if client_id == "access-uami-client"
+        ));
+
+        // Without the Remote Bindings identity there is no fallback to the
+        // management identity.
+        deployment
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .remove("remote-bindings");
+        assert!(EnvironmentCredentialResolver::new()
+            .azure_remote_bindings_source(&deployment, azure_env())
+            .await
+            .is_err());
     }
 }
