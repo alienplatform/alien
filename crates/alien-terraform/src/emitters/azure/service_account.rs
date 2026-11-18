@@ -24,7 +24,7 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         downcast, emit_role_definition_and_assignments, permission_context, required_label,
-        resource_prefix_template, tags,
+        resource_prefix_template, tags, with_build_scopes,
     },
     expr,
 };
@@ -57,7 +57,7 @@ impl TfEmitter for AzureServiceAccountEmitter {
 
         let principal_id_expr =
             expr::traversal(["azurerm_user_assigned_identity", label, "principal_id"]);
-        let context = permission_context(label);
+        let context = with_build_scopes(permission_context(label), ctx)?;
         let mut seen_predefined_assignments = HashSet::new();
 
         for (role_index, permission_set) in service_account.stack_permission_sets.iter().enumerate()

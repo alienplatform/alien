@@ -464,6 +464,8 @@ fn enumeration_context() -> PermissionContext {
         .with_service_account_name("service-account".to_string())
         .with_principal_id("00000000-0000-0000-0000-000000000000".to_string())
         .with_region("region".to_string())
+        .with_build_identity_id("/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/resource-group/providers/Microsoft.ManagedIdentity/userAssignedIdentities/build")
+        .with_build_environment_id("/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/resource-group/providers/Microsoft.App/managedEnvironments/environment")
 }
 
 /// The conditions to assign management's role-assignment role with, one per role assignment.
@@ -705,6 +707,55 @@ mod tests {
             .iter()
             .all(|role| role.holder != AzureRuntimeRoleHolder::Management));
         assert!(roles.management_predefined_role_ids.is_empty());
+    }
+
+    /// `build/execute` names the Build's environment and identity, which only the Build's own
+    /// controller knows. A stack holding a Build, with the set granted by name and stack-wide,
+    /// still plans its runtime roles and its setup digest.
+    #[test]
+    fn a_build_execute_grant_plans_and_digests_without_the_build_controller() {
+        for grants in [
+            &[("builder", &["build/execute"][..])][..],
+            &[("*", &["build/execute"][..])][..],
+        ] {
+            let mut stack = Stack::new("app".to_string())
+                .add(
+                    alien_core::Build::new("builder".to_string())
+                        .permissions("execution".to_string())
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            stack
+                .permissions
+                .profiles
+                .insert("execution".to_string(), profile(grants));
+            let roles = azure_runtime_roles(&stack).expect("build/execute plans");
+            assert!(
+                roles
+                    .custom_roles
+                    .iter()
+                    .any(|role| role.permission_set_id == "build/execute"),
+                "{grants:?}"
+            );
+            azure_setup_update_digest(&stack).expect("digest of a stack with a Build");
+            // Every role setup owns is assignable at a resource group, never at a resource: the
+            // join and assign grants are assigned on one resource, but Azure refuses a role
+            // assignable at one. The digest does not depend on where a shared environment is.
+            for role in roles
+                .custom_roles
+                .iter()
+                .filter(|role| role.permission_set_id == "build/execute")
+            {
+                for scope in &role.role_definition.assignable_scopes {
+                    assert_eq!(
+                        crate::resource_group_scope_of(scope).as_deref(),
+                        Some(scope.as_str()),
+                        "{scope}"
+                    );
+                }
+            }
+        }
     }
 
     /// A worker's command sender and storage-trigger receiver are built-ins the worker controller

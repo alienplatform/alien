@@ -78,6 +78,8 @@ const AZURE_RBAC_WAIT_POLL_SECS: u64 = 10;
 // setup can drive this state quickly, so keep the Stay guard comfortably above
 // the number of reconciles that can happen inside the deadline.
 const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 100_000;
+// An hour of polls at the RBAC poll interval for the environment a Build joins.
+const AZURE_ENVIRONMENT_WAIT_MAX_ATTEMPTS: u32 = 360;
 
 fn current_unix_timestamp_secs() -> u64 {
     SystemTime::now()
@@ -101,6 +103,32 @@ fn wait_delay(deadline_epoch_secs: u64) -> Option<Duration> {
         Some(Duration::from_secs(
             remaining.min(AZURE_RBAC_WAIT_POLL_SECS),
         ))
+    }
+}
+
+/// When Azure refuses a role write, say which right setup lacks and where, so the person who
+/// runs setup knows what to grant. A shared Container Apps environment's group is the case that
+/// needs rights outside the stack's group.
+fn role_write_denied(
+    error: AlienError<CloudClientErrorData>,
+    resource_id: &str,
+    operation: String,
+    action: &str,
+    context: ErrorData,
+) -> AlienError<ErrorData> {
+    if matches!(
+        error.error,
+        Some(CloudClientErrorData::RemoteAccessDenied { .. })
+    ) {
+        error
+            .context(ErrorData::ManagementPermissionMissing {
+                resource_id: resource_id.to_string(),
+                operation,
+                action: action.to_string(),
+            })
+            .context(context)
+    } else {
+        error.context(context)
     }
 }
 
@@ -307,6 +335,22 @@ impl AzureServiceAccountController {
             "Creating Azure role definitions for stack-level permission sets"
         );
 
+        // A Build's join grant names the environment, which another resource creates. Wait for
+        // it: the role assignment would otherwise fail until the environment exists.
+        if crate::infra_requirements::azure_utils::build_environment_pending(
+            ctx.desired_stack,
+            ctx.state,
+        ) {
+            info!(
+                config_id = %config.id,
+                "Waiting for the Container Apps environment a Build joins"
+            );
+            return Ok(HandlerAction::Stay {
+                max_times: Some(AZURE_ENVIRONMENT_WAIT_MAX_ATTEMPTS),
+                suggested_delay: Some(Duration::from_secs(AZURE_RBAC_WAIT_POLL_SECS)),
+            });
+        }
+
         let grant_plan = self.generate_stack_grant_plan(config, ctx)?;
 
         let resource_group_name =
@@ -327,7 +371,17 @@ impl AzureServiceAccountController {
                 get_azure_custom_role_name(ctx.resource_prefix, &config.id),
                 azure_custom_role_segment(&custom_role.key)
             );
-            let role_def = custom_role.role_definition.clone();
+            let mut role_def = custom_role.role_definition.clone();
+            // Also assignable in the group of a shared Container Apps environment, where the
+            // Build's join grant is assigned; the role is written in the stack's group.
+            role_def.assignable_scopes =
+                alien_permissions::generators::role_definition_assignable_scopes(
+                    &role_def.assignable_scopes,
+                    &format!(
+                        "/subscriptions/{}/resourceGroups/{}",
+                        azure_cfg.subscription_id, resource_group_name
+                    ),
+                );
             let scope = role_definition_scope_for_assignable_scopes(
                 &role_def.assignable_scopes,
                 &azure_cfg.subscription_id,
@@ -369,9 +423,23 @@ impl AzureServiceAccountController {
                         &role_definition,
                     )
                     .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to create custom role definition '{}'", role_name),
-                        resource_id: Some(config_id.clone()),
+                    .map_err(|error| {
+                        role_write_denied(
+                            error,
+                            &config_id,
+                            format!(
+                                "write role definition '{role_name}' (assignable at {})",
+                                role_def.assignable_scopes.join(", ")
+                            ),
+                            "Microsoft.Authorization/roleDefinitions/write",
+                            ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to create custom role definition '{}'",
+                                    role_name
+                                ),
+                                resource_id: Some(config_id.clone()),
+                            },
+                        )
                     })?;
 
                 let role_id = created_role.id.ok_or_else(|| {
@@ -488,6 +556,7 @@ impl AzureServiceAccountController {
                     )
                     .to_string();
 
+                    let scope_for_message = binding.scope.clone();
                     let role_assignment = RoleAssignment {
                         id: None,
                         name: None,
@@ -522,12 +591,23 @@ impl AzureServiceAccountController {
                             &role_assignment,
                         )
                         .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to assign role to managed identity '{}'",
-                                principal_id
-                            ),
-                            resource_id: Some(config_id.clone()),
+                        .map_err(|error| {
+                            role_write_denied(
+                                error,
+                                &config_id,
+                                format!(
+                                    "assign a role to managed identity '{principal_id}' at '{}'",
+                                    scope_for_message
+                                ),
+                                "Microsoft.Authorization/roleAssignments/write",
+                                ErrorData::CloudPlatformError {
+                                    message: format!(
+                                        "Failed to assign role to managed identity '{}'",
+                                        principal_id
+                                    ),
+                                    resource_id: Some(config_id.clone()),
+                                },
+                            )
                         })?;
 
                     info!(
@@ -1063,6 +1143,15 @@ impl AzureServiceAccountController {
             .with_managing_subscription_id(azure_config.subscription_id.clone())
             .with_managing_resource_group(resource_group);
 
+        let permission_context = crate::infra_requirements::azure_utils::with_build_scopes(
+            permission_context,
+            ctx.desired_stack,
+            ctx.state,
+            ctx.resource_prefix,
+            &azure_config.subscription_id,
+            &crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?,
+        );
+
         let mut all_custom_roles = Vec::new();
         let mut all_bindings = Vec::new();
 
@@ -1211,5 +1300,104 @@ mod stack_grant_tests {
             .map(|s| s.id.clone())
             .collect();
         assert_eq!(kept, vec![storage.id.clone()]);
+    }
+}
+
+#[cfg(test)]
+mod build_grant_tests {
+    use super::*;
+    use crate::core::{MockPlatformServiceProvider, PlatformServiceProvider, ResourceRegistry};
+    use alien_azure_clients::{AzureClientConfig, AzureClientConfigExt};
+    use alien_core::{
+        AzureContainerAppsEnvironment, AzureResourceGroup, AzureResourceGroupOutputs, Build,
+        ClientConfig, DeploymentConfig, Resource, ResourceLifecycle, ResourceOutputs, Stack,
+        StackResourceState, StackSettings, StackState,
+    };
+    use std::sync::Arc;
+
+    /// The service account's own call site: a stack-wide build/execute grant, rendered from the
+    /// stack's Build and the environment the stack creates.
+    #[test]
+    fn the_service_account_renders_the_stack_wide_build_grant() {
+        let set = alien_permissions::get_permission_set("build/execute")
+            .unwrap()
+            .clone();
+        let account = ServiceAccount::new("execution-sa".to_string())
+            .stack_permission_set(set)
+            .build();
+        let stack = Stack::new("app".to_string())
+            .add(
+                Build::new("builder".to_string())
+                    .permissions("execution".to_string())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                AzureContainerAppsEnvironment::new("default-container-env".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut state = StackState::new(Platform::Azure);
+        let mut group = StackResourceState::new_pending(
+            AzureResourceGroup::RESOURCE_TYPE.to_string(),
+            Resource::new(AzureResourceGroup::new("default-resource-group".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        group.outputs = Some(ResourceOutputs::new(AzureResourceGroupOutputs {
+            name: "rg".to_string(),
+            resource_id: "/subscriptions/sub/resourceGroups/rg".to_string(),
+            location: "eastus".to_string(),
+        }));
+        state
+            .resources
+            .insert("default-resource-group".to_string(), group);
+
+        let deployment_config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let provider: Arc<dyn PlatformServiceProvider> =
+            Arc::new(MockPlatformServiceProvider::new());
+        let registry = Arc::new(ResourceRegistry::default());
+        let desired = Resource::new(account.clone());
+        let azure = AzureClientConfig::mock();
+        let subscription = azure.subscription_id.clone();
+        let ctx = ResourceControllerContext {
+            desired_config: &desired,
+            platform: Platform::Azure,
+            client_config: ClientConfig::Azure(Box::new(azure)),
+            state: &state,
+            resource_prefix: "pre",
+            registry: &registry,
+            desired_stack: &stack,
+            service_provider: &provider,
+            deployment_config: &deployment_config,
+            initial_setup_authority: Default::default(),
+            heartbeat_collector: Default::default(),
+        };
+
+        // Before the environment exists the controller waits instead of rendering.
+        assert!(crate::infra_requirements::azure_utils::build_environment_pending(&stack, &state));
+
+        let plan = AzureServiceAccountController::default()
+            .generate_stack_grant_plan(&account, &ctx)
+            .expect("the grant renders from the stack's Build");
+        let group = format!("/subscriptions/{subscription}/resourceGroups/rg");
+        let mut scopes: Vec<String> = plan.bindings.into_iter().map(|b| b.scope).collect();
+        scopes.sort();
+        let mut want = vec![
+            group.clone(),
+            format!("{group}/providers/Microsoft.App/managedEnvironments/pre-default-container-env"),
+            format!("{group}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/pre-execution-sa"),
+        ];
+        want.sort();
+        assert_eq!(scopes, want);
     }
 }

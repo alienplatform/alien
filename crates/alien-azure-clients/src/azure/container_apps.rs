@@ -184,6 +184,21 @@ pub trait ContainerAppsApi: Send + Sync + std::fmt::Debug {
         job_execution_name: &str,
     ) -> Result<OperationResult<()>>;
 
+    /// Reads one execution of a job.
+    async fn get_job_execution(
+        &self,
+        resource_group_name: &str,
+        job_name: &str,
+        job_execution_name: &str,
+    ) -> Result<JobExecution>;
+
+    /// Lists the executions of a job.
+    async fn list_job_executions(
+        &self,
+        resource_group_name: &str,
+        job_name: &str,
+    ) -> Result<Vec<JobExecution>>;
+
     // -------------------------------------------------------------------------
     // DAPR Components API
     // -------------------------------------------------------------------------
@@ -247,6 +262,53 @@ impl AzureContainerAppsClient {
             ),
             token_cache,
         }
+    }
+
+    /// GET a management-plane path and parse the JSON body.
+    async fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        operation: &str,
+        resource_name: &str,
+    ) -> Result<T> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let url = self.base.build_url(
+            path,
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
+        );
+        let req = AzureRequestBuilder::new(Method::GET, url.clone())
+            .content_length("")
+            .build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let resp = self
+            .base
+            .execute_request(signed, operation, resource_name)
+            .await?;
+        let body = resp
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure {operation}: failed to read response body for {resource_name}"
+                ),
+                url: url.clone(),
+                http_status: 200,
+                http_response_text: None,
+                http_request_text: None,
+            })?;
+        serde_json::from_str(&body)
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!("Azure {operation}: JSON parse error for {resource_name}"),
+                url,
+                http_status: 200,
+                http_response_text: Some(body.clone()),
+                http_request_text: None,
+            })
     }
 }
 
@@ -1033,6 +1095,43 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         self.base
             .execute_request_with_long_running_support(signed, "StartJob", job_name)
             .await
+    }
+
+    async fn get_job_execution(
+        &self,
+        resource_group_name: &str,
+        job_name: &str,
+        job_execution_name: &str,
+    ) -> Result<JobExecution> {
+        let path = format!(
+            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/jobs/{}/executions/{}",
+            &self.token_cache.config().subscription_id,
+            resource_group_name,
+            job_name,
+            job_execution_name
+        );
+        self.get_json(&path, "GetJobExecution", job_execution_name)
+            .await
+    }
+
+    async fn list_job_executions(
+        &self,
+        resource_group_name: &str,
+        job_name: &str,
+    ) -> Result<Vec<JobExecution>> {
+        #[derive(Deserialize)]
+        struct Page {
+            #[serde(default)]
+            value: Vec<JobExecution>,
+        }
+        let path = format!(
+            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/jobs/{}/executions",
+            &self.token_cache.config().subscription_id,
+            resource_group_name,
+            job_name
+        );
+        let page: Page = self.get_json(&path, "ListJobExecutions", job_name).await?;
+        Ok(page.value)
     }
 
     /// Stop a Container Apps Job Execution

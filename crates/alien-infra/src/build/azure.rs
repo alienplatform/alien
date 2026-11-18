@@ -374,22 +374,20 @@ impl AzureBuildController {
             permission_context =
                 permission_context.with_deployment_name(deployment_name.to_string());
         }
+        // Creating a build's job needs the right to join this one environment and to assign
+        // this one identity; build/execute grants each on that single resource.
+        if let Some(environment_id) = self.managed_environment_id.as_ref() {
+            permission_context = permission_context.with_build_environment_id(environment_id);
+        }
+        if let Some(identity_id) = self.managed_identity_id.as_ref() {
+            permission_context = permission_context.with_build_identity_id(identity_id);
+        }
 
-        // Build Azure resource scope for the Container Apps environment (build execution environment)
-        // Use the environment's own resource group, which may differ from the stack's RG
-        // when the environment is externally provisioned.
-        let environment_id = self.get_managed_environment_id(ctx)?;
-        let environment_name = environment_id.split('/').last().unwrap();
-        let env_resource_group =
-            crate::infra_requirements::azure_utils::get_container_apps_environment_resource_group(
-                ctx.state,
-            )?;
-        let resource_scope = Scope::Resource {
-            resource_group_name: env_resource_group,
-            resource_provider: "Microsoft.App".to_string(),
-            parent_resource_path: None,
-            resource_type: "managedEnvironments".to_string(),
-            resource_name: environment_name.to_string(),
+        // The grant lands on the stack's resource group, where the per-run jobs are created. The
+        // custom role must be assignable there, so the role definition scope follows that group,
+        // not the group of an externally provisioned Container Apps environment.
+        let resource_scope = Scope::ResourceGroup {
+            resource_group_name: self.resource_group_name.as_ref().unwrap().clone(),
         };
 
         AzurePermissionsHelper::apply_resource_scoped_permissions(
@@ -527,6 +525,142 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    #[rstest]
+    #[case::named_for_the_build("basic-build")]
+    #[case::stack_wide("*")]
+    #[tokio::test]
+    async fn test_build_grants_land_on_the_resource_group_not_a_job(#[case] profile_key: &str) {
+        use alien_azure_clients::authorization::MockAuthorizationApi;
+        use alien_core::permissions::{PermissionProfile, PermissionSetReference};
+        use std::sync::Mutex;
+
+        let build = basic_build();
+        let mut profile = PermissionProfile::new();
+        profile.0.insert(
+            profile_key.to_string(),
+            vec![
+                PermissionSetReference::from_name("build/execute"),
+                PermissionSetReference::from_name("build/provision"),
+            ],
+        );
+
+        let ids = Arc::new(Mutex::new(Vec::<String>::new()));
+        let recorded = ids.clone();
+        let role_scopes = Arc::new(Mutex::new(Vec::<(Vec<String>, Vec<String>)>::new()));
+        let recorded_role_scopes = role_scopes.clone();
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        mock_provider
+            .expect_get_azure_authorization_client()
+            .returning(move |_| {
+                let recorded = recorded.clone();
+                let recorded_role_scopes = recorded_role_scopes.clone();
+                let mut authorization = MockAuthorizationApi::new();
+                authorization
+                    .expect_get_role_definition()
+                    .returning(|_, id| {
+                        Err(alien_error::AlienError::new(
+                            alien_client_core::ErrorData::RemoteResourceNotFound {
+                                resource_type: "Role definition".to_string(),
+                                resource_name: id,
+                            },
+                        ))
+                    });
+                authorization
+                    .expect_create_or_update_role_definition()
+                    .returning(move |_, _, definition| {
+                        if let Some(properties) = &definition.properties {
+                            let actions = properties
+                                .permissions
+                                .iter()
+                                .flat_map(|p| p.actions.clone())
+                                .collect();
+                            recorded_role_scopes
+                                .lock()
+                                .unwrap()
+                                .push((actions, properties.assignable_scopes.clone()));
+                        }
+                        Ok(definition.clone())
+                    });
+                // Azure answers ResourceNotFound for a scope that does not exist: no job
+                // is ever created under the Build's own name.
+                authorization
+                    .expect_create_or_update_role_assignment_by_id()
+                    .returning(move |id, assignment| {
+                        if id.contains("/providers/Microsoft.App/jobs/") {
+                            return Err(alien_error::AlienError::new(
+                                alien_client_core::ErrorData::RemoteResourceNotFound {
+                                    resource_type: "Microsoft.App/jobs".to_string(),
+                                    resource_name: id,
+                                },
+                            ));
+                        }
+                        recorded.lock().unwrap().push(id);
+                        Ok(assignment.clone())
+                    });
+                Ok(Arc::new(authorization))
+            });
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(build)
+            .controller(AzureBuildController::default())
+            .platform(Platform::Azure)
+            .service_provider(Arc::new(mock_provider))
+            .permission_profile("default-profile", profile)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        let ids = ids.lock().unwrap();
+        // Each assignment id is `<scope>/providers/Microsoft.Authorization/roleAssignments/<id>`.
+        let scopes: std::collections::BTreeSet<String> = ids
+            .iter()
+            .map(|id| {
+                id.split_once("/providers/Microsoft.Authorization/roleAssignments/")
+                    .unwrap_or_else(|| panic!("not a role assignment id: {id}"))
+                    .0
+                    .to_string()
+            })
+            .collect();
+        let group =
+            "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/default-resource-group";
+        let environment = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/mock-rg/providers/Microsoft.App/managedEnvironments/default-container-env";
+        assert_eq!(scopes.len(), 3, "{profile_key}: {scopes:?}");
+        // Exact scope strings: the group, the one environment, the one identity. A job scope
+        // (`.../providers/Microsoft.App/jobs/<build>`) is none of them.
+        assert!(scopes.contains(group), "{scopes:?}");
+        assert!(scopes.contains(environment), "{scopes:?}");
+        let identity = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/default-profile-sa";
+        assert!(scopes.contains(identity), "{scopes:?}");
+        assert!(scopes.iter().all(|s| !s.contains("/jobs/")), "{scopes:?}");
+        // The environment here is in another group than the stack's. Roles are written in the
+        // stack's group; only the join role is also assignable in the environment's group, so
+        // nothing lets a holder create or change a job there, and the assignment itself is on
+        // the environment resource (asserted above).
+        let shared_group =
+            "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/mock-rg";
+        let role_scopes = role_scopes.lock().unwrap();
+        assert!(!role_scopes.is_empty());
+        for (actions, assignable) in role_scopes.iter() {
+            assert!(
+                assignable.iter().any(|s| s.eq_ignore_ascii_case(group)),
+                "{actions:?} is written in the stack's group: {assignable:?}"
+            );
+            let joins = actions
+                .iter()
+                .any(|a| a == "Microsoft.App/managedEnvironments/join/action");
+            let in_shared = assignable
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(shared_group));
+            assert_eq!(in_shared, joins, "{actions:?} assignable at {assignable:?}");
+            assert!(
+                assignable.iter().all(|s| s.matches('/').count() <= 4),
+                "a role is never assignable at a resource: {assignable:?}"
+            );
+        }
     }
 
     #[rstest]

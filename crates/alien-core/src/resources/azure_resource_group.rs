@@ -19,6 +19,33 @@ pub struct AzureResourceGroup {
 }
 
 impl AzureResourceGroup {
+    /// Generates the full, prefixed Azure resource group name (pure function).
+    pub fn generated_name(resource_prefix: &str, id: &str) -> String {
+        // Azure resource group names must be 1-90 characters, case insensitive
+        // Format: {prefix}-{id} with length constraints and character restrictions
+        let clean_prefix = resource_prefix
+            .chars()
+            .filter(|c| {
+                c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.' || *c == '(' || *c == ')'
+            })
+            .collect::<String>();
+        let clean_id = id
+            .chars()
+            .filter(|c| {
+                c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.' || *c == '(' || *c == ')'
+            })
+            .collect::<String>();
+
+        let combined = format!("{}-{}", clean_prefix, clean_id);
+
+        // Truncate to 90 characters if necessary (Azure limit)
+        if combined.len() > 90 {
+            combined[..90].to_string()
+        } else {
+            combined
+        }
+    }
+
     /// The resource type identifier for Azure Resource Groups
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("azure_resource_group");
 
