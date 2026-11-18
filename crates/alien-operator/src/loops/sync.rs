@@ -517,6 +517,28 @@ async fn sync_with_manager(
     if let (Some((manager_url, audience)), Some(target)) = (&identity, durable_target.as_mut()) {
         sanitize_identity_config(&mut target.config, manager_url, audience)?;
     }
+    // Domain metadata is live platform data: a certificate issued during an
+    // operation reaches the Operator here, apart from the target (which keeps
+    // the claim's immutable inputs). Only this field is merged, into the
+    // stored target, so a replay keeps it, and into the stored config the
+    // running deployment reads. A protected Operator takes no metadata from a
+    // manager, and the manager sends none for it.
+    if !state.config.is_protected() {
+        if let Some(live) = sync_response.domain_metadata.as_ref() {
+            if let Some(target) = durable_target.as_mut() {
+                if target.config.domain_metadata.as_ref() != Some(live) {
+                    target.config.domain_metadata = Some(live.clone());
+                }
+            }
+            if let Some(mut config) = state.db.get_deployment_config().await? {
+                if config.domain_metadata.as_ref() != Some(live) {
+                    config.domain_metadata = Some(live.clone());
+                    state.db.set_deployment_config(&config).await?;
+                    info!("Updated the deployment's domain metadata from the manager");
+                }
+            }
+        }
+    }
     // A claim and its target are one durable receipt. Persist them in one
     // SQLite value before changing deployment state/config so a crash can
     // resume the exact immutable target rather than asking for "latest".
@@ -1121,6 +1143,7 @@ pub(crate) async fn accept_target(
 /// record covers: the release and the whole configuration are equal as
 /// serialized values. Only fields the manager regenerates on every sync are
 /// left out:
+/// - `domainMetadata`: live platform data the manager updates between claims;
 /// - `deploymentToken`: the Operator's own bearer token, taken from the sync
 ///   request's header;
 /// - `environmentVariables.createdAt`: the snapshot's creation timestamp (its
@@ -1144,6 +1167,9 @@ fn same_target(
         let mut config = serde_json::to_value(config).ok()?;
         let object = config.as_object_mut()?;
         object.remove("deploymentToken");
+        // Live platform data (a certificate issued mid-operation), not part of
+        // what was approved.
+        object.remove("domainMetadata");
         if let Some(snapshot) = object
             .get_mut("environmentVariables")
             .and_then(|value| value.as_object_mut())
@@ -4117,6 +4143,173 @@ mod tests {
     /// Consume a sync request left by earlier steps, if any.
     async fn drain_sync_request(state: &OperatorState) {
         let _ = tokio::time::timeout(std::time::Duration::ZERO, state.db.wait_for_sync()).await;
+    }
+
+    /// A certificate the platform issues while an operation runs reaches the
+    /// Operator on the sync that carries the in-progress claim: only the
+    /// domain metadata of the stored configuration (and of the stored target,
+    /// which later syncs replay) changes. The claim, the target's release and
+    /// the status stay, and nothing else in the configuration moves.
+    #[tokio::test]
+    async fn live_domain_metadata_reaches_an_operation_in_progress() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        type Response = Arc<Mutex<Value>>;
+        async fn serve(State(response): State<Response>) -> Json<Value> {
+            Json(response.lock().unwrap().clone())
+        }
+
+        let vault_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_VAULT_DATA_DIR", vault_dir.path());
+        let response: Response = Arc::new(Mutex::new(json!({})));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/sync", post(serve))
+            .with_state(response.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_live_domain").await.unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(directory)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        let url = format!("http://{address}");
+        let release = ReleaseInfo {
+            release_id: Some("rel_install".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            stack: Stack::new("live-domain".to_string())
+                .add(
+                    alien_core::Storage::new("files".to_string()).build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .build(),
+            signed: None,
+            signer_lists: Vec::new(),
+        };
+        let metadata = |status: alien_core::CertificateStatus| {
+            let issued = status == alien_core::CertificateStatus::Issued;
+            alien_core::DomainMetadata {
+                base_domain: "example.test".to_string(),
+                public_subdomain: "k8f2j3".to_string(),
+                hosted_zone_id: "zone".to_string(),
+                resources: std::collections::HashMap::from([(
+                    "api".to_string(),
+                    alien_core::ResourceDomainInfo {
+                        fqdn: "api.k8f2j3.example.test".to_string(),
+                        certificate_id: "cert_1".to_string(),
+                        certificate_status: status,
+                        dns_status: alien_core::DnsRecordStatus::Pending,
+                        dns_error: None,
+                        certificate_chain: issued.then(|| "CHAIN".to_string()),
+                        private_key: issued.then(|| "KEY".to_string()),
+                        issued_at: issued.then(|| "2026-01-01T00:00:00Z".to_string()),
+                        endpoints: Default::default(),
+                        aliases: Vec::new(),
+                    },
+                )]),
+            }
+        };
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![alien_core::EnvironmentVariable {
+                    name: "MODE".to_string(),
+                    value: "claimed".to_string(),
+                    var_type: alien_core::EnvironmentVariableType::Plain,
+                    target_resources: None,
+                }],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .domain_metadata(metadata(alien_core::CertificateStatus::Pending))
+            .build();
+        let claim = json!({ "operationId": "duop_install", "attemptId": "att_1" });
+
+        // The claim arrives with the certificate still pending.
+        *response.lock().unwrap() = json!({
+            "executionClaim": claim,
+            "target": { "releaseInfo": release, "config": config },
+            "domainMetadata": metadata(alien_core::CertificateStatus::Pending),
+        });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let state_before = state.db.get_deployment_state().await.unwrap().unwrap();
+        let config_before = state.db.get_deployment_config().await.unwrap().unwrap();
+        let execution_before = state.db.get_sync_execution().await.unwrap().unwrap();
+        assert_eq!(
+            config_before.domain_metadata,
+            Some(metadata(alien_core::CertificateStatus::Pending))
+        );
+
+        // The certificate is issued while the claim is in progress: the sync
+        // carries the claim and the metadata, and no target.
+        *response.lock().unwrap() = json!({
+            "executionClaim": claim,
+            "domainMetadata": metadata(alien_core::CertificateStatus::Issued),
+        });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+
+        let issued = metadata(alien_core::CertificateStatus::Issued);
+        let config_after = state.db.get_deployment_config().await.unwrap().unwrap();
+        assert_eq!(config_after.domain_metadata, Some(issued.clone()));
+        let mut expected = config_before.clone();
+        expected.domain_metadata = Some(issued.clone());
+        assert_eq!(
+            serde_json::to_value(&config_after).unwrap(),
+            serde_json::to_value(&expected).unwrap(),
+            "only the domain metadata of the configuration changes"
+        );
+        let state_after = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(state_after.status, state_before.status);
+        assert_eq!(
+            serde_json::to_value(&state_after.target_release).unwrap(),
+            serde_json::to_value(&state_before.target_release).unwrap()
+        );
+        let execution_after = state.db.get_sync_execution().await.unwrap().unwrap();
+        assert_eq!(execution_after.claim, execution_before.claim);
+        let stored_target = execution_after.target.expect("the target stays stored");
+        assert_eq!(stored_target.config.domain_metadata, Some(issued.clone()));
+        let mut stored_expected = execution_before.target.unwrap().config;
+        stored_expected.domain_metadata = Some(issued.clone());
+        assert_eq!(
+            serde_json::to_value(&stored_target.config).unwrap(),
+            serde_json::to_value(&stored_expected).unwrap(),
+            "only the domain metadata of the stored target changes"
+        );
+
+        // A later sync with the claim and nothing else replays the stored
+        // target; the metadata stays.
+        *response.lock().unwrap() = json!({ "executionClaim": claim });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let replayed = state.db.get_deployment_config().await.unwrap().unwrap();
+        assert_eq!(replayed.domain_metadata, Some(issued));
+
+        server.abort();
+        std::env::remove_var("TEST_VAULT_DATA_DIR");
     }
 
     /// A manager that issues no execution claims (the OSS SQLite manager) sends

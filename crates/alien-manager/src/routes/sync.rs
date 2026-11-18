@@ -255,6 +255,11 @@ pub struct AgentSyncResponse {
     /// Operator applies new developer values without a new release.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signed_config: Option<alien_core::SignedStatement>,
+    /// The deployment's current domain metadata, on every sync, apart from
+    /// the target: a certificate issued while an operation runs reaches the
+    /// Operator without a new claim. Older Operators ignore the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_metadata: Option<alien_core::DomainMetadata>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -2469,6 +2474,58 @@ pub(in crate::routes) mod tests {
             DeploymentStatus::Running,
         );
         assert!(state.error.is_none());
+    }
+
+    /// The deployment's current domain metadata goes out on every sync, apart
+    /// from the target, so a certificate issued while an operation runs reaches
+    /// the Operator without a new claim. A deployment with none sends no field.
+    #[tokio::test]
+    async fn the_sync_response_carries_the_deployments_current_domain_metadata() {
+        let metadata = alien_core::DomainMetadata {
+            base_domain: "example.test".to_string(),
+            public_subdomain: "k8f2j3".to_string(),
+            hosted_zone_id: "zone".to_string(),
+            resources: HashMap::from([(
+                "api".to_string(),
+                alien_core::ResourceDomainInfo {
+                    fqdn: "api.k8f2j3.example.test".to_string(),
+                    certificate_id: "cert_1".to_string(),
+                    certificate_status: alien_core::CertificateStatus::Issued,
+                    dns_status: alien_core::DnsRecordStatus::Active,
+                    dns_error: None,
+                    certificate_chain: Some("CHAIN".to_string()),
+                    private_key: Some("KEY".to_string()),
+                    issued_at: Some("2026-01-01T00:00:00Z".to_string()),
+                    endpoints: HashMap::new(),
+                    aliases: Vec::new(),
+                },
+            )]),
+        };
+        let mut record = deployment_record_with_state("running", None);
+        record.deployment_config = Some(
+            DeploymentConfig::builder()
+                .stack_settings(Default::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .domain_metadata(metadata.clone())
+                .build(),
+        );
+        let (response, _) = sync_operator_without_claim(record).await;
+        assert_eq!(
+            response.get("domainMetadata"),
+            Some(&serde_json::to_value(&metadata).unwrap()),
+            "{response}"
+        );
+        assert!(response.get("target").is_none(), "{response}");
+
+        let (response, _) =
+            sync_operator_without_claim(deployment_record_with_state("running", None)).await;
+        assert!(response.get("domainMetadata").is_none(), "{response}");
     }
 
     const TOKEN_ENROLLMENT_ADMIN: &str = "ax_admin_for_enrollment";
@@ -5755,6 +5812,7 @@ async fn acknowledge_completed_claim(
         target_dynamic_containers: None,
         target_operator_image: None,
         signed_config: None,
+        domain_metadata: None,
     }))
 }
 
@@ -6558,6 +6616,16 @@ async fn agent_sync(
             reconciled_operator_image,
         ),
         signed_config,
+        // Not part of the claimed operation, and not signed: a protected
+        // Operator takes none from the manager (see `protect_config`).
+        domain_metadata: if is_protected(&deployment) {
+            None
+        } else {
+            deployment
+                .deployment_config
+                .as_ref()
+                .and_then(|config| config.domain_metadata.clone())
+        },
     })
     .into_response()
 }

@@ -169,6 +169,7 @@ fn sync(target: TargetDeployment) -> SyncResponse {
         target_operations_bundle_set: None,
         target_dynamic_containers: None,
         target_operator_image: None,
+        domain_metadata: None,
     }
 }
 
