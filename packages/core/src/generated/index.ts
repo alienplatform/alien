@@ -491,6 +491,7 @@ export type { SandboxHeartbeatData } from "./zod/sandbox-heartbeat-data-schema.j
 export type { SandboxHeartbeatStatus } from "./zod/sandbox-heartbeat-status-schema.js";
 export type { SandboxLifecyclePolicy } from "./zod/sandbox-lifecycle-policy-schema.js";
 export type { SandboxLimits } from "./zod/sandbox-limits-schema.js";
+export type { SandboxMount } from "./zod/sandbox-mount-schema.js";
 export type { SandboxOutputs } from "./zod/sandbox-outputs-schema.js";
 export type { SandboxPrivilegedSupervisor } from "./zod/sandbox-privileged-supervisor-schema.js";
 export type { Sandbox } from "./zod/sandbox-schema.js";
@@ -1059,6 +1060,7 @@ export { SandboxHeartbeatDataSchema } from "./zod/sandbox-heartbeat-data-schema.
 export { SandboxHeartbeatStatusSchema } from "./zod/sandbox-heartbeat-status-schema.js";
 export { SandboxLifecyclePolicySchema } from "./zod/sandbox-lifecycle-policy-schema.js";
 export { SandboxLimitsSchema } from "./zod/sandbox-limits-schema.js";
+export { SandboxMountSchema } from "./zod/sandbox-mount-schema.js";
 export { SandboxOutputsSchema } from "./zod/sandbox-outputs-schema.js";
 export { SandboxPrivilegedSupervisorSchema } from "./zod/sandbox-privileged-supervisor-schema.js";
 export { SandboxSchema } from "./zod/sandbox-schema.js";

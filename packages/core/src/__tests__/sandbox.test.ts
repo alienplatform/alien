@@ -58,6 +58,21 @@ describe("Sandbox", () => {
     expect(r.config.previewPorts).toEqual([8080, 9090])
   })
 
+  it("carries declared mounts and omits them when none are declared", () => {
+    const mounts = [
+      { type: "s3files", path: "/workspace" },
+      { type: "tmpfs", path: "/workspace/tmp", size: "8Gi" },
+    ] as const
+    const r = complete().mounts([...mounts]).build()
+    expect(r.config.mounts).toEqual(mounts)
+    expect(complete().build().config).not.toHaveProperty("mounts")
+  })
+
+  it("refuses a mount type it does not know", () => {
+    const sandbox = complete().mounts([{ type: "nfs", path: "/x" } as never])
+    expect(() => sandbox.build()).toThrow()
+  })
+
   // The schema refuses unknown fields, so writing to the builder's private state cannot smuggle
   // one into the built config.
   it("strips an unknown field at build time", () => {

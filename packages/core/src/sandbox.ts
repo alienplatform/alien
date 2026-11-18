@@ -6,6 +6,7 @@ import {
   type SandboxEgress,
   type SandboxLifecyclePolicy,
   type SandboxLimits,
+  type SandboxMount,
   SandboxSchema,
 } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
@@ -19,6 +20,7 @@ export type {
   SandboxEgress,
   SandboxLifecyclePolicy,
   SandboxLimits,
+  SandboxMount,
   SandboxOutputs,
   SandboxPrivilegedSupervisor,
 } from "./generated/index.js"
@@ -109,6 +111,26 @@ export class Sandbox extends ResourceBuilder {
    */
   public previewPorts(ports: number[]): this {
     this._config.previewPorts = ports
+    return this
+  }
+
+  /**
+   * Declares filesystems Alien's agent attaches before the image command starts.
+   *
+   * `s3files` attaches an Amazon S3 Files access point; the caller supplies its file system,
+   * access point, region and short-lived credentials for each mount path when it creates a
+   * sandbox. `tmpfs` is a memory-backed directory with a hard size cap. List a parent before a
+   * mount inside it. Available on AWS only; other platforms refuse the declaration when the
+   * stack is planned.
+   *
+   * @example
+   * new Sandbox("agent").mounts([
+   *   { type: "s3files", path: "/workspace" },
+   *   { type: "tmpfs", path: "/workspace/tmp", size: "8Gi" },
+   * ])
+   */
+  public mounts(mounts: SandboxMount[]): this {
+    this._config.mounts = mounts
     return this
   }
 
