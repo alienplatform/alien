@@ -7,6 +7,7 @@
 //! copies changed files to staging.
 
 pub mod freeze;
+pub mod push;
 pub mod tree;
 
 use std::os::fd::OwnedFd;
