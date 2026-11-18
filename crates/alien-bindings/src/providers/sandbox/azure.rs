@@ -549,9 +549,10 @@ impl Sandbox for AzureSandbox {
             );
         }
         if let Some(guest) = self.guest_egress()? {
-            request
-                .env
-                .insert(alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS.to_string(), guest);
+            request.env.insert(
+                alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS.to_string(),
+                guest,
+            );
         }
 
         let mut labels = BTreeMap::new();
