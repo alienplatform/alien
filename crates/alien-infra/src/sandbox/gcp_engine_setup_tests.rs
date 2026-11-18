@@ -983,3 +983,352 @@ mod differential {
         }
     }
 }
+
+/// A direct setup of a sandbox that declares persistent storage creates the bucket and object
+/// access the package would, since a Live sandbox's plan refuses it and nothing else makes them.
+mod persistent_storage {
+    use super::*;
+    use crate::sandbox::gcp_engine_setup::{
+        persistent_storage_bucket_name, STORAGE_OBJECT_ROLE, STORAGE_OWNER_LABEL,
+    };
+    use alien_gcp_clients::gcs::{Bucket, MockGcsApi};
+
+    #[derive(Default)]
+    struct Store {
+        created: Vec<(String, Bucket)>,
+        /// The bucket already there before this run, by its owner label value.
+        existing_label: Option<String>,
+        policy: Option<IamPolicy>,
+    }
+
+    fn storage(encrypted: bool) -> alien_core::SandboxPersistentStorage {
+        alien_core::SandboxPersistentStorage {
+            path: "/workspace".to_string(),
+            exclude: vec![],
+            max_size: Some("8Gi".to_string()),
+            encryption_key: encrypted
+                .then(|| alien_core::ResourceRef::new(alien_core::Key::RESOURCE_TYPE, "store-key")),
+        }
+    }
+
+    fn gcs(store: &Arc<Mutex<Store>>) -> MockGcsApi {
+        let mut gcs = MockGcsApi::new();
+        let s = store.clone();
+        gcs.expect_create_bucket().returning(move |name, bucket| {
+            let mut store = s.lock().unwrap();
+            if store.existing_label.is_some() {
+                return Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceConflict {
+                        message: "exists".to_string(),
+                        resource_type: "Bucket".to_string(),
+                        resource_name: name,
+                    },
+                ));
+            }
+            store.created.push((name, bucket.clone()));
+            Ok(bucket)
+        });
+        let s = store.clone();
+        gcs.expect_get_bucket().returning(move |_| {
+            let label = s.lock().unwrap().existing_label.clone().unwrap_or_default();
+            Ok(Bucket {
+                labels: Some([(STORAGE_OWNER_LABEL.to_string(), label)].into()),
+                ..Default::default()
+            })
+        });
+        let s = store.clone();
+        gcs.expect_get_bucket_iam_policy()
+            .returning(move |_| Ok(s.lock().unwrap().policy.clone().unwrap_or_default()));
+        let s = store.clone();
+        gcs.expect_set_bucket_iam_policy()
+            .returning(move |_, policy| {
+                s.lock().unwrap().policy = Some(policy.clone());
+                Ok(policy)
+            });
+        // No delete_bucket expectation: the bucket holds the keys' data and is never deleted.
+        gcs
+    }
+
+    async fn executor(
+        calls: &Arc<Mutex<Calls>>,
+        gcs: Option<MockGcsApi>,
+        setup_run: bool,
+        encrypted: bool,
+    ) -> SingleControllerExecutor {
+        let (iam, platform) = clients(calls);
+        let iam = Arc::new(iam);
+        let platform = Arc::new(platform);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_gcp_agent_platform_client()
+            .returning(move |_| Ok(platform.clone()));
+        if let Some(gcs) = gcs {
+            let gcs = Arc::new(gcs);
+            provider
+                .expect_get_gcp_gcs_client()
+                .returning(move |_| Ok(gcs.clone()));
+        }
+        let mut sandbox = sandbox(vec![8080], alien_core::SandboxEgress::None);
+        sandbox.persistent_storage = Some(storage(encrypted));
+        SingleControllerExecutor::builder()
+            .resource(sandbox)
+            .resource_prefix("test")
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(GcpAgentPlatformTemplateController::default())
+            .platform(Platform::Gcp)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .setup_run(setup_run)
+            .with_dependency(
+                GcpAgentPlatformEngine::new(GcpAgentPlatformEngine::id_for_sandbox("box")).build(),
+                GcpAgentPlatformEngineController::mock_ready("eng"),
+            )
+            .with_dependency(
+                ServiceAccount::new("workload-sa".to_string()).build(),
+                GcpServiceAccountController {
+                    service_account_email: Some(WORKLOAD.to_string()),
+                    ..Default::default()
+                },
+            )
+            .permission_profile(
+                "workload",
+                PermissionProfile::new().global(["sandbox/execute"]),
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_direct_setup_creates_the_bucket_gives_the_workload_access_and_keeps_the_bucket() {
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let store = Arc::new(Mutex::new(Store::default()));
+        let mut executor = executor(&calls, Some(gcs(&store)), true, false).await;
+        executor.run_until_terminal().await.expect("create runs");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let name = persistent_storage_bucket_name("test", "box");
+        assert_eq!(name, "test-box-storage");
+        {
+            let store = store.lock().unwrap();
+            let [(created, bucket)] = store.created.as_slice() else {
+                panic!("one bucket is created: {:?}", store.created);
+            };
+            assert_eq!(created, &name);
+            let iam = bucket
+                .iam_configuration
+                .as_ref()
+                .expect("iam configuration");
+            assert!(iam.uniform_bucket_level_access.as_ref().unwrap().enabled);
+            assert_eq!(iam.public_access_prevention.as_deref(), Some("enforced"));
+            let label = &bucket.labels.as_ref().unwrap()[STORAGE_OWNER_LABEL];
+            assert_eq!(label.len(), 32, "a label value holds a digest: {label}");
+            assert_eq!(
+                members(store.policy.as_ref().unwrap(), STORAGE_OBJECT_ROLE),
+                vec![format!("serviceAccount:{WORKLOAD}")]
+            );
+        }
+        let controller = executor
+            .internal_state::<GcpAgentPlatformTemplateController>()
+            .unwrap();
+        assert_eq!(
+            controller.persistent_storage_bucket.as_deref(),
+            Some(name.as_str()),
+            "the binding is handed the bucket"
+        );
+
+        executor.delete().expect("delete is accepted");
+        executor.run_until_terminal().await.expect("delete runs");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        let store = store.lock().unwrap();
+        assert!(
+            members(store.policy.as_ref().unwrap(), STORAGE_OBJECT_ROLE).is_empty(),
+            "object access is revoked: {:?}",
+            store.policy
+        );
+    }
+
+    #[tokio::test]
+    async fn a_retry_adopts_the_bucket_an_earlier_attempt_of_this_setup_made() {
+        // The first attempt's label, read from what it wrote.
+        let first = Arc::new(Mutex::new(Store::default()));
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let mut executor1 = executor(&calls, Some(gcs(&first)), true, false).await;
+        executor1.run_until_terminal().await.expect("create runs");
+        let label = first.lock().unwrap().created[0].1.labels.as_ref().unwrap()
+            [STORAGE_OWNER_LABEL]
+            .clone();
+
+        let store = Arc::new(Mutex::new(Store {
+            existing_label: Some(label),
+            ..Default::default()
+        }));
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let mut executor = executor(&calls, Some(gcs(&store)), true, false).await;
+        executor.run_until_terminal().await.expect("create runs");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            members(
+                store.lock().unwrap().policy.as_ref().unwrap(),
+                STORAGE_OBJECT_ROLE
+            ),
+            vec![format!("serviceAccount:{WORKLOAD}")]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bucket_this_setup_did_not_make_is_refused() {
+        let store = Arc::new(Mutex::new(Store {
+            existing_label: Some("someone-else".to_string()),
+            ..Default::default()
+        }));
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let mut executor = executor(&calls, Some(gcs(&store)), true, false).await;
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("a planted bucket is refused");
+        assert!(format!("{error:?}").contains("did not create"), "{error:?}");
+        assert!(
+            store.lock().unwrap().policy.is_none(),
+            "no access is given on a bucket someone else made"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_direct_setup_refuses_an_encrypted_store() {
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let mut executor = executor(&calls, Some(MockGcsApi::new()), true, true).await;
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("an encryption key needs the package");
+        assert!(
+            format!("{error:?}").contains("Terraform setup package"),
+            "{error:?}"
+        );
+    }
+
+    /// The package and a direct setup name the same bucket and give the same identities the same
+    /// object role on it.
+    #[tokio::test]
+    async fn direct_setup_places_the_bucket_the_package_renders() {
+        use alien_core::import::EmitContext;
+        use alien_core::{Stack, StackSettings};
+        use alien_terraform::emitters::gcp::GcpAgentPlatformSandboxEmitter;
+        use alien_terraform::TfEmitter;
+        use hcl::structure::Structure;
+
+        let mut declared = sandbox(vec![8080], alien_core::SandboxEgress::None);
+        declared.persistent_storage = Some(storage(false));
+        let stack = Stack::new("acme".to_string())
+            .add(
+                GcpAgentPlatformEngine::new(GcpAgentPlatformEngine::id_for_sandbox("box")).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(declared, ResourceLifecycle::Frozen)
+            .permission(
+                "workload",
+                PermissionProfile::new().global(["sandbox/execute"]),
+            )
+            .build();
+        let names: indexmap::IndexMap<String, String> = [
+            ("box", "box"),
+            (
+                &*GcpAgentPlatformEngine::id_for_sandbox("box"),
+                "box_engine",
+            ),
+            ("workload-sa", "workload_sa"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let settings = StackSettings::default();
+        let ctx = EmitContext {
+            stack: &stack,
+            resource: stack.resources.get("box").unwrap(),
+            resource_id: "box",
+            platform: Platform::Gcp,
+            targets_kubernetes: false,
+            stack_settings: &settings,
+            names: &names,
+            pins: &alien_core::SetupPins::default(),
+        };
+        let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
+        let attribute = |block: &hcl::structure::Block, key: &str| {
+            block.body.iter().find_map(|s| match s {
+                Structure::Attribute(a) if a.key.as_str() == key => Some(a.expr.to_string()),
+                _ => None,
+            })
+        };
+        let of_kind = |kind: &str| -> Vec<&hcl::structure::Block> {
+            fragment
+                .resource_blocks
+                .iter()
+                .filter(|b| b.labels.first().map(|l| l.as_str()) == Some(kind))
+                .collect()
+        };
+        let [bucket] = of_kind("google_storage_bucket")[..] else {
+            panic!("the package renders one bucket");
+        };
+        let rendered_name = attribute(bucket, "name").unwrap();
+        let mut package: Vec<(String, String)> = of_kind("google_storage_bucket_iam_member")
+            .into_iter()
+            .map(|b| {
+                let member = attribute(b, "member").unwrap();
+                assert!(
+                    member.contains("google_service_account.workload_sa."),
+                    "the package grants an identity this test does not know: {member}"
+                );
+                (
+                    "workload".to_string(),
+                    attribute(b, "role").unwrap().trim_matches('"').to_string(),
+                )
+            })
+            .collect();
+        package.sort();
+        assert!(!package.is_empty(), "the comparison is empty");
+
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let store = Arc::new(Mutex::new(Store::default()));
+        let mut executor = executor(&calls, Some(gcs(&store)), true, false).await;
+        executor.run_until_terminal().await.expect("create runs");
+        let store = store.lock().unwrap();
+        // The package's name is `${prefix}-box-storage`; direct setup's prefix is "test".
+        assert!(rendered_name.ends_with("-box-storage\""), "{rendered_name}");
+        assert_eq!(store.created[0].0, "test-box-storage");
+        let mut direct: Vec<(String, String)> = store
+            .policy
+            .as_ref()
+            .unwrap()
+            .bindings
+            .iter()
+            .flat_map(|b| {
+                b.members.iter().map(move |m| {
+                    assert_eq!(m, &format!("serviceAccount:{WORKLOAD}"));
+                    ("workload".to_string(), b.role.clone())
+                })
+            })
+            .collect();
+        direct.sort();
+        assert_eq!(direct, package);
+    }
+
+    /// A run that is not a direct setup (the package made the install) never touches storage:
+    /// the provider has no Cloud Storage client to give.
+    #[tokio::test]
+    async fn a_package_install_makes_no_bucket() {
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let mut executor = executor(&calls, None, false, false).await;
+        // Without the package's import data the controller waits for setup; it never creates.
+        let _ = executor.run_until_terminal().await;
+        let controller = executor
+            .internal_state::<GcpAgentPlatformTemplateController>()
+            .unwrap();
+        assert!(controller.persistent_storage_bucket.is_none());
+        assert_eq!(controller.engine_setup.storage_bucket, None);
+    }
+}

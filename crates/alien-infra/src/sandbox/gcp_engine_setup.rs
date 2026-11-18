@@ -1,6 +1,7 @@
 //! What a direct setup run places around a sandbox's reasoning engine, matching what the setup
-//! package places: the preview signing identity, the three grants on the engine, and the signing
-//! permission for the workload identities that execute in the sandbox.
+//! package places: the preview signing identity, the three grants on the engine, the signing
+//! permission for the workload identities that execute in the sandbox, and the persistent storage
+//! bucket with object access for those identities.
 //!
 //! The package and this module are two implementations of one setup. Each item here has the same
 //! role, scope and member as its package twin (see `alien_core::sandbox_setup_parity`); an item
@@ -50,6 +51,212 @@ pub(crate) struct EngineSetupRecord {
     /// Members (`serviceAccount:<email>`) this controller let sign as the preview signer.
     #[serde(default)]
     pub sign_members: Vec<String>,
+    /// The persistent storage bucket this controller created or took over by its owner label.
+    /// Kept on teardown, like the package's retained bucket: it holds the keys' data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_bucket: Option<String>,
+    /// Members this controller gave object access on that bucket.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub storage_members: Vec<String>,
+}
+
+/// The role the package grants each execute owner on the persistent storage bucket.
+pub(crate) const STORAGE_OBJECT_ROLE: &str = "roles/storage.objectUser";
+
+/// The bucket label a direct setup run marks its persistent storage bucket with: a label value
+/// cannot hold the owner text, so it holds a digest of it.
+pub(crate) const STORAGE_OWNER_LABEL: &str = "alien-setup-owner";
+
+/// The persistent storage bucket's name, as the package names it.
+pub(crate) fn persistent_storage_bucket_name(resource_prefix: &str, sandbox_id: &str) -> String {
+    format!("{resource_prefix}-{sandbox_id}-storage")
+}
+
+fn storage_owner_label_value(owner: &str) -> String {
+    let digest = Sha256::digest(owner.as_bytes());
+    digest.iter().take(16).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Creates the persistent storage bucket and gives each identity that executes in the sandbox
+/// object access, as the package does, and returns the bucket. `None` when the sandbox declares
+/// no persistent storage. A declared encryption key is refused: only the package grants the
+/// storage service its use of the key.
+pub(crate) async fn set_up_persistent_store(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+    record: &mut EngineSetupRecord,
+) -> Result<Option<String>> {
+    let Some(storage) = &sandbox.persistent_storage else {
+        return Ok(None);
+    };
+    if storage.encryption_key.is_some() {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "sandbox '{}' encrypts its persistent storage with a key, which a direct setup \
+                 run cannot grant the storage service; install from the Terraform setup package",
+                sandbox.id
+            ),
+            resource_id: Some(sandbox.id.clone()),
+        }));
+    }
+    let gcp_config = ctx.get_gcp_config()?;
+    let gcs = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+    let name = persistent_storage_bucket_name(ctx.resource_prefix, &sandbox.id);
+    if record.storage_bucket.as_deref() != Some(name.as_str()) {
+        let owner = storage_owner_label_value(&crate::setup_owner::owner_value(
+            ctx.resource_prefix,
+            &sandbox.id,
+            ctx.setup_owner_deployment_id()?,
+        ));
+        let bucket = alien_gcp_clients::gcs::Bucket {
+            location: Some(gcp_config.region.clone()),
+            storage_class: Some("STANDARD".to_string()),
+            iam_configuration: Some(alien_gcp_clients::gcs::IamConfiguration {
+                uniform_bucket_level_access: Some(
+                    alien_gcp_clients::gcs::UniformBucketLevelAccess {
+                        enabled: true,
+                        locked_time: None,
+                    },
+                ),
+                public_access_prevention: Some("enforced".to_string()),
+            }),
+            labels: Some([(STORAGE_OWNER_LABEL.to_string(), owner.clone())].into()),
+            ..Default::default()
+        };
+        match gcs.create_bucket(name.clone(), bucket).await {
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                // Taken over only when it carries this deployment's label, which proves an
+                // earlier attempt of this setup made it.
+                let existing =
+                    gcs.get_bucket(name.clone())
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!("Failed to read the existing bucket {name}"),
+                            resource_id: Some(sandbox.id.clone()),
+                        })?;
+                let ours = existing
+                    .labels
+                    .as_ref()
+                    .and_then(|labels| labels.get(STORAGE_OWNER_LABEL))
+                    .is_some_and(|value| *value == owner);
+                if !ours {
+                    return Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "bucket {name} already exists and this deployment did not create \
+                             it, so setup will not keep persistent storage in it. Delete or \
+                             rename it, or install from the Terraform setup package."
+                        ),
+                        resource_id: Some(sandbox.id.clone()),
+                    }));
+                }
+            }
+            Err(error) => {
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create the persistent storage bucket {name}"),
+                    resource_id: Some(sandbox.id.clone()),
+                });
+            }
+        }
+        record.storage_bucket = Some(name.clone());
+    }
+
+    let wanted: Vec<String> = execute_owner_emails(ctx, &sandbox.id)?
+        .into_iter()
+        .map(|owner| format!("serviceAccount:{owner}"))
+        .collect();
+    let dropped: Vec<String> = record
+        .storage_members
+        .iter()
+        .filter(|member| !wanted.contains(member))
+        .cloned()
+        .collect();
+    let added: Vec<&String> = wanted
+        .iter()
+        .filter(|member| !record.storage_members.contains(member))
+        .collect();
+    if !added.is_empty() || !dropped.is_empty() {
+        let mut policy = gcs.get_bucket_iam_policy(name.clone()).await.context(
+            ErrorData::CloudPlatformError {
+                message: format!("Failed to read the IAM policy of bucket {name}"),
+                resource_id: Some(sandbox.id.clone()),
+            },
+        )?;
+        // Old and new stay recorded until the write lands, so a failure part-way still lets
+        // teardown remove what may have been bound.
+        let mut remembered = record.storage_members.clone();
+        for member in &wanted {
+            if !remembered.contains(member) {
+                remembered.push(member.clone());
+            }
+        }
+        record.storage_members = remembered;
+        let mut changed = false;
+        for member in &wanted {
+            changed |= bind_member(&mut policy, STORAGE_OBJECT_ROLE, member);
+        }
+        for member in &dropped {
+            changed |= unbind_member(&mut policy, STORAGE_OBJECT_ROLE, member);
+        }
+        if changed {
+            gcs.set_bucket_iam_policy(name.clone(), policy)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to give the sandbox's workloads access to {name}"),
+                    resource_id: Some(sandbox.id.clone()),
+                })?;
+        }
+    }
+    record.storage_members = wanted;
+    Ok(Some(name))
+}
+
+/// Revokes the object access [`set_up_persistent_store`] recorded. The bucket stays: it holds
+/// the keys' data, and the package keeps it on uninstall too.
+async fn tear_down_persistent_store(
+    ctx: &ResourceControllerContext<'_>,
+    record: &EngineSetupRecord,
+) -> Result<()> {
+    let (Some(name), false) = (&record.storage_bucket, record.storage_members.is_empty()) else {
+        return Ok(());
+    };
+    let gcp_config = ctx.get_gcp_config()?;
+    let gcs = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+    let mut policy = match gcs.get_bucket_iam_policy(name.clone()).await {
+        Ok(policy) => policy,
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(error).context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read the IAM policy of bucket {name}"),
+                resource_id: None,
+            })
+        }
+    };
+    let mut changed = false;
+    for member in &record.storage_members {
+        changed |= unbind_member(&mut policy, STORAGE_OBJECT_ROLE, member);
+    }
+    if changed {
+        gcs.set_bucket_iam_policy(name.clone(), policy)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to remove object access on bucket {name}"),
+                resource_id: None,
+            })?;
+    }
+    Ok(())
 }
 
 /// Text in the signer's description that only this deployment's setup writes; it is how a
@@ -419,6 +626,7 @@ pub(crate) async fn tear_down_engine_access(
     record: &EngineSetupRecord,
 ) -> Result<()> {
     let gcp_config = ctx.get_gcp_config()?;
+    tear_down_persistent_store(ctx, record).await?;
     if !record.engine_grants.is_empty() {
         let platform = ctx
             .service_provider

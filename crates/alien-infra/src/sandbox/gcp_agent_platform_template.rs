@@ -365,6 +365,18 @@ impl GcpAgentPlatformTemplateController {
         self.preview_ports = config.preview_ports.clone();
         self.egress = Some(config.egress.clone());
         self.default_policy = config.default_policy.clone();
+        // A direct setup run has no package to create the persistent storage bucket.
+        if ctx.is_direct_setup_run() {
+            if let Some(bucket) = crate::sandbox::gcp_engine_setup::set_up_persistent_store(
+                ctx,
+                config,
+                &mut self.engine_setup,
+            )
+            .await?
+            {
+                self.persistent_storage_bucket = Some(bucket);
+            }
+        }
         self.persistent_storage =
             gcp_persistent_storage(config, self.persistent_storage_bucket.as_deref())?;
 
@@ -660,6 +672,17 @@ impl GcpAgentPlatformTemplateController {
         self.egress = Some(config.egress.clone());
         self.default_policy = config.default_policy.clone();
         self.preview_ports = config.preview_ports.clone();
+        if ctx.is_direct_setup_run() {
+            if let Some(bucket) = crate::sandbox::gcp_engine_setup::set_up_persistent_store(
+                ctx,
+                config,
+                &mut self.engine_setup,
+            )
+            .await?
+            {
+                self.persistent_storage_bucket = Some(bucket);
+            }
+        }
         self.persistent_storage =
             gcp_persistent_storage(config, self.persistent_storage_bucket.as_deref())?;
         let previous = ctx.previous_resource_config::<Sandbox>()?;
@@ -1885,6 +1908,8 @@ mod tests {
                 ..Default::default()
             })
             .platform(Platform::Gcp)
+            // A package install: its import data carries the bucket.
+            .setup_run(false)
             .service_provider(provider_with(happy_client()))
             .with_test_dependencies()
             .with_dependency(
@@ -1921,8 +1946,22 @@ mod tests {
     async fn persistent_storage_without_the_setup_bucket_waits_for_setup() {
         let mut m = MockAgentPlatformApi::new();
         m.expect_create_template().never();
-        let mut executor =
-            build_executor(with_persistent_storage(None), provider_with(Arc::new(m))).await;
+        // Not a direct setup run, which would create the bucket itself.
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(with_persistent_storage(None))
+            .controller(GcpAgentPlatformTemplateController::default())
+            .platform(Platform::Gcp)
+            .setup_run(false)
+            .service_provider(provider_with(Arc::new(m)))
+            .with_test_dependencies()
+            .with_dependency(
+                GcpAgentPlatformEngine::new(GcpAgentPlatformEngine::id_for_sandbox("agent-sbx"))
+                    .build(),
+                GcpAgentPlatformEngineController::mock_ready("eng"),
+            )
+            .build()
+            .await
+            .expect("executor builds");
         let error = executor
             .run_until_terminal()
             .await
