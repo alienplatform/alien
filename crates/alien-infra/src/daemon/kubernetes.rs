@@ -1306,6 +1306,11 @@ impl KubernetesDaemonController {
             volumes: (!security.volumes.is_empty()).then_some(security.volumes),
             containers: vec![container],
             restart_policy: Some("Always".to_string()),
+            // Kubernetes would otherwise inject `<SERVICE>_SERVICE_HOST`, `<SERVICE>_PORT_<n>_TCP*`
+            // and similar variables for every Service in the namespace. A workload sets its own
+            // variables explicitly, which Kubernetes does not overwrite; Alien's bindings carry each
+            // address, so the extra variables only add names a workload can collide with.
+            enable_service_links: Some(false),
             image_pull_secrets,
             // Honor the configured stop grace period during pod shutdown
             // (K8s default is 30s when unset).
@@ -1715,6 +1720,31 @@ mod tests {
             pod_template_checksum_annotation(&daemonset.spec.expect("spec").template),
             Some(plan.checksum)
         );
+    }
+
+    /// Service-link variables of the namespace's Services must not reach the daemon.
+    #[tokio::test]
+    async fn daemonset_pod_does_not_get_service_link_variables() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let pod = manifest_test_controller()
+            .build_daemonset(
+                &config,
+                "agent",
+                "test-ns",
+                Some("agent-sa"),
+                None,
+                None,
+                &harness.ctx(),
+            )
+            .await
+            .expect("daemonset manifest")
+            .spec
+            .expect("spec")
+            .template
+            .spec
+            .expect("pod spec");
+        assert_eq!(pod.enable_service_links, Some(false));
     }
 
     #[tokio::test]
