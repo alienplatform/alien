@@ -87,6 +87,9 @@ impl TfEmitter for AwsNetworkEmitter {
         if has_sandboxes(ctx) {
             fragment.extend(network_validation(ctx, label)?);
         }
+        if matches!(network.settings, NetworkSettings::Create { .. }) {
+            emit_store_path(ctx, label, &mut fragment)?;
+        }
         Ok(fragment)
     }
 
@@ -101,7 +104,14 @@ impl TfEmitter for AwsNetworkEmitter {
                 ("gatewayCidrs", if needs_gateway(ctx) { expr::raw(format!("data.aws_subnet.{label}_sandbox_gateway[*].cidr_block")) } else { Expression::from(Vec::<Expression>::new()) }),
                 ("workloadCidrs", if needs_gateway(ctx) { expr::raw(format!("data.aws_subnet.{label}_private[*].cidr_block")) } else { Expression::from(Vec::<Expression>::new()) }),
                 ("vpcCidrs", expr::raw(format!("[for association in data.aws_vpc.{label}_sandbox_vpc.cidr_block_associations : association.cidr_block]"))),
-            ])
+            ]
+            .into_iter()
+            .chain(has_store_paths(ctx).then(|| {
+                (
+                    "persistentStoreEndpointId",
+                    expr::raw(format!("one(aws_vpc_endpoint.{label}_sandbox_store[*].id)")),
+                )
+            })))
         } else {
             Expression::Null
         };
@@ -592,7 +602,7 @@ fn create_topology(
             tags(ctx, "network"),
         ));
 
-    if has_sandboxes(ctx) {
+    if has_sandboxes(ctx) || has_store_paths(ctx) {
         let one = || {
             attr(
                 "count",
@@ -697,6 +707,114 @@ pub(crate) fn gateway_subnet_ids(ctx: &EmitContext<'_>) -> Result<Expression> {
         alien_core::sandbox_egress::SandboxEgressVpc::Created => expr::raw(format!("var.network_mode == \"create-new\" ? aws_subnet.{label}_sandbox_gateway[*].id : var.sandbox_gateway_subnet_ids")),
         alien_core::sandbox_egress::SandboxEgressVpc::BroughtByCustomer => expr::raw("var.sandbox_gateway_subnet_ids"),
     })
+}
+
+/// Whether this network carries the path from sandbox connectors to their persistent stores.
+pub(crate) fn has_store_paths(ctx: &EmitContext<'_>) -> bool {
+    !ctx.targets_kubernetes
+        && ctx
+            .stack
+            .resources()
+            .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
+            .is_some_and(|(id, _)| id == ctx.resource_id)
+        && !alien_core::sandbox_egress::aws_sandboxes_with_store_path(ctx.stack).is_empty()
+}
+
+/// As the CloudFormation emitter: one S3 gateway endpoint on the dedicated sandbox route table,
+/// its policy admitting object reads and writes on the stack's persistent stores alone, and a
+/// guard refusing a network this module does not create (the endpoint needs its route table).
+fn emit_store_path(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragment) -> Result<()> {
+    if !has_store_paths(ctx) {
+        return Ok(());
+    }
+    let objects = alien_core::sandbox_egress::aws_sandboxes_with_store_path(ctx.stack)
+        .into_iter()
+        .map(|id| {
+            let sandbox = ctx.name_for(id).ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!("sandbox '{id}' has no generated name"),
+                })
+            })?;
+            Ok(expr::template(format!(
+                "${{aws_s3_bucket.{}.arn}}/*",
+                super::sandbox::persistent_store_label(sandbox)
+            )))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // The connector rule's destination. Read by name, so it resolves in any network mode.
+    fragment.data_blocks.push(crate::block::data_block(
+        "aws_prefix_list",
+        &format!("{label}_s3"),
+        [attr(
+            "name",
+            expr::template("com.amazonaws.${data.aws_region.current.region}.s3"),
+        )],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "terraform_data",
+        &format!("{label}_sandbox_store_guard"),
+        [nested_block(
+            "lifecycle",
+            vec![nested_block(
+                "precondition",
+                vec![
+                    attr("condition", expr::raw("var.network_mode == \"create-new\"")),
+                    attr(
+                        "error_message",
+                        Expression::from(
+                            "Sandbox persistent storage needs the network this module creates: \
+                             its sandbox subnets reach the store through an S3 gateway endpoint \
+                             on their route table. Set network_mode to create-new.",
+                        ),
+                    ),
+                ],
+            )],
+        )],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "aws_vpc_endpoint",
+        &format!("{label}_sandbox_store"),
+        [
+            attr(
+                "count",
+                expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
+            ),
+            attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
+            attr(
+                "service_name",
+                expr::template("com.amazonaws.${data.aws_region.current.region}.s3"),
+            ),
+            attr("vpc_endpoint_type", Expression::from("Gateway")),
+            attr(
+                "route_table_ids",
+                expr::raw(format!("[aws_route_table.{label}_sandbox[0].id]")),
+            ),
+            attr(
+                "policy",
+                super::helpers::jsonencode(expr::object([
+                    ("Version", Expression::from("2012-10-17")),
+                    (
+                        "Statement",
+                        Expression::Array(vec![expr::object([
+                            ("Sid", Expression::from("SandboxPersistentStores")),
+                            ("Effect", Expression::from("Allow")),
+                            ("Principal", Expression::from("*")),
+                            (
+                                "Action",
+                                Expression::Array(vec![
+                                    Expression::from("s3:GetObject"),
+                                    Expression::from("s3:PutObject"),
+                                ]),
+                            ),
+                            ("Resource", Expression::Array(objects)),
+                        ])]),
+                    ),
+                ])),
+            ),
+            attr("tags", tags(ctx, "network")),
+        ],
+    ));
+    Ok(())
 }
 
 fn has_sandboxes(ctx: &EmitContext<'_>) -> bool {
@@ -852,6 +970,9 @@ fn network_validation(ctx: &EmitContext<'_>, label: &str) -> Result<TfFragment> 
         // aws_route_table omits endpoint, propagated, and some service-ENI routes,
         // and does not expose route state. Ask EC2 to filter the original tables so
         // those routes cannot disappear from the validation view.
+        // The store endpoint is on the sandbox route table by design; the controller's route
+        // check admits that endpoint alone there (it is recorded in the registration).
+        let store_paths = has_store_paths(ctx);
         for (suffix, filter, value) in [
             ("endpoint", "route.gateway-id", "vpce-*"),
             ("propagated", "route.origin", "EnableVgwRoutePropagation"),
@@ -873,8 +994,13 @@ fn network_validation(ctx: &EmitContext<'_>, label: &str) -> Result<TfFragment> 
                     ),
                 ],
             ));
+            let sandbox_tables = if store_paths && suffix == "endpoint" {
+                String::new()
+            } else {
+                format!("data.aws_route_table.{label}_sandbox[*].id, ")
+            };
             conditions.push((
-                format!("length(setintersection(toset(data.aws_route_tables.{name}.ids), toset(concat(data.aws_route_table.{label}_sandbox[*].id, data.aws_route_table.{label}_sandbox_gateway[*].id, data.aws_route_table.{label}_private[*].id)))) == 0"),
+                format!("length(setintersection(toset(data.aws_route_tables.{name}.ids), toset(concat({sandbox_tables}data.aws_route_table.{label}_sandbox_gateway[*].id, data.aws_route_table.{label}_private[*].id)))) == 0"),
                 "Sandbox, gateway, and workload subnets must not have VPC endpoint, propagated, network-interface, or blackhole routes.",
             ));
         }

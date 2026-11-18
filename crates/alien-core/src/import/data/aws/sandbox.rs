@@ -60,7 +60,7 @@ pub struct AwsSandboxImportData {
     /// The store setup created for a sandbox that declares persistent storage, as the binding
     /// carries it. Absent for every other sandbox, so their import data is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<serde_json::Value>))]
     #[cfg_attr(feature = "jsonschema", schemars(with = "Option<serde_json::Value>"))]
     pub persistent_storage: Option<crate::bindings::SandboxPersistentStorageBinding>,
 }
