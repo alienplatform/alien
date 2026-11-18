@@ -83,15 +83,31 @@ async fn a_mint_is_audited_without_key_material() {
 
     let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
     assert_eq!(log.matches("setup_key_minted").count(), 3, "{log}");
-    for needle in ["dep-1", "setup-import", "ax_setup_two", &second.id, &imported.id] {
+    for needle in [
+        "dep-1",
+        "setup-import",
+        "ax_setup_two",
+        &second.id,
+        &imported.id,
+    ] {
         assert!(log.contains(needle), "missing {needle}: {log}");
     }
     // The second Operator mint names the one it revoked; the import mint
     // revokes none of the Operator's.
-    let line = |id: &str| log.lines().find(|l| l.contains(&format!("token_id={id}"))).unwrap();
+    let line = |id: &str| {
+        log.lines()
+            .find(|l| l.contains(&format!("token_id={id}")))
+            .unwrap()
+    };
     assert!(line(&second.id).contains(&first.id), "{log}");
     assert!(!line(&imported.id).contains(&second.id), "{log}");
-    for secret in [raw_one, raw_two, "RAWSECRETTHREE", &hash(raw_one), &hash(raw_two)] {
+    for secret in [
+        raw_one,
+        raw_two,
+        "RAWSECRETTHREE",
+        &hash(raw_one),
+        &hash(raw_two),
+    ] {
         assert!(!log.contains(secret), "key material in the log");
     }
 }

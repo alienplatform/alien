@@ -1374,7 +1374,7 @@ async fn retry_deployment(
         return ErrorData::forbidden("Cannot retry deployment").into_response();
     }
 
-    if !retry_accepted(&deployment) {
+    if !state.deployment_store.decides_retry_acceptance() && !retry_accepted(&deployment) {
         return ErrorData::bad_request(format!(
             "Deployment '{}' is in status '{}' and cannot be retried",
             deployment.id, deployment.status
@@ -2290,7 +2290,19 @@ mod tests {
         store_receives_retry: bool,
         store_result: Result<(), AlienError>,
     ) -> (StatusCode, serde_json::Value) {
+        retry_route_response_for_store(deployment, store_receives_retry, store_result, false).await
+    }
+
+    async fn retry_route_response_for_store(
+        deployment: DeploymentRecord,
+        store_receives_retry: bool,
+        store_result: Result<(), AlienError>,
+        store_decides: bool,
+    ) -> (StatusCode, serde_json::Value) {
         let mut deployment_store = MockDeploymentStore::new();
+        deployment_store
+            .expect_decides_retry_acceptance()
+            .return_const(store_decides);
         deployment_store
             .expect_get_deployment()
             .times(1)
@@ -2308,6 +2320,41 @@ mod tests {
             .body(Body::empty())
             .expect("request should build");
         send_with_transport(deployment_store, request, true).await
+    }
+
+    #[tokio::test]
+    async fn retry_goes_to_a_store_that_decides_even_when_the_record_is_running() {
+        let deployment = DeploymentRecord {
+            status: "running".to_string(),
+            ..deployment_record()
+        };
+        let (status, json) = retry_route_response_for_store(deployment, true, Ok(()), true).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["success"], true);
+    }
+
+    #[tokio::test]
+    async fn retry_returns_the_refusal_of_a_store_that_decides() {
+        let deployment = DeploymentRecord {
+            status: "running".to_string(),
+            ..deployment_record()
+        };
+        let refusal = ErrorData::bad_request("Nothing is paused on this deployment").into_generic();
+        let (status, json) =
+            retry_route_response_for_store(deployment, true, Err(refusal), true).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        assert_eq!(json["message"], "Nothing is paused on this deployment");
+        assert!(json.get("success").is_none(), "{json}");
+    }
+
+    #[tokio::test]
+    async fn retry_keeps_the_local_rule_for_a_store_that_does_not_decide() {
+        let deployment = DeploymentRecord {
+            status: "running".to_string(),
+            ..deployment_record()
+        };
+        let (status, _) = retry_route_response_for_store(deployment, false, Ok(()), false).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
