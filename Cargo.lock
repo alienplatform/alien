@@ -1478,15 +1478,18 @@ dependencies = [
 name = "alien-sandbox-storage"
 version = "3.3.68"
 dependencies = [
+ "alien-azure-clients",
  "alien-error",
  "async-trait",
  "chrono",
  "hex",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tar",
  "tokio",
+ "url",
  "uuid",
  "workspace-hack",
 ]

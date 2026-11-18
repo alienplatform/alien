@@ -455,8 +455,10 @@ async fn a_stale_writer_racing_the_new_owner_never_changes_the_owners_tree() {
     let owners = sample()
         .file("db.sqlite", pattern(2 * CHUNK_SIZE, 77), 20)
         .file("notes.md", b"owner".to_vec(), 20);
-    let CommitOutcome::Committed { commit: owner_commit, .. } =
-        commit(&store, &mut owner, &owners).await.0.unwrap()
+    let CommitOutcome::Committed {
+        commit: owner_commit,
+        ..
+    } = commit(&store, &mut owner, &owners).await.0.unwrap()
     else {
         panic!("the owner's tree changed")
     };
@@ -490,7 +492,10 @@ async fn a_published_object_cannot_be_created_again() {
         .await
         .unwrap_err();
     assert_eq!(error.code, "SANDBOX_STORAGE_STORE_FAILED");
-    assert_eq!(store.get("manifests/x.json").await.unwrap().unwrap().bytes, b"one");
+    assert_eq!(
+        store.get("manifests/x.json").await.unwrap().unwrap().bytes,
+        b"one"
+    );
 }
 
 /// A manifest replaced behind the store's back (raw access, damage) is refused by its hash in
@@ -556,7 +561,10 @@ async fn a_stale_writer_cannot_change_the_owners_tree_even_when_uploads_overwrit
     let first = takeover(&store, "sandbox-1").await.unwrap();
     let mut stale = Committer::new("sandbox-1", first.head_etag, None, None);
     let tree = sample();
-    let mut source = Source { tree: &tree, opened: vec![] };
+    let mut source = Source {
+        tree: &tree,
+        opened: vec![],
+    };
     stale
         .commit(&store, "engine-42", tree.entries.clone(), &mut source)
         .await
@@ -565,7 +573,10 @@ async fn a_stale_writer_cannot_change_the_owners_tree_even_when_uploads_overwrit
     let second = takeover(&store, "sandbox-2").await.unwrap();
     let mut owner = Committer::new("sandbox-2", second.head_etag, second.manifest, None);
     let owners = sample().file("notes.md", b"owner".to_vec(), 20);
-    let mut source = Source { tree: &owners, opened: vec![] };
+    let mut source = Source {
+        tree: &owners,
+        opened: vec![],
+    };
     owner
         .commit(&store, "engine-42", owners.entries.clone(), &mut source)
         .await
@@ -573,7 +584,10 @@ async fn a_stale_writer_cannot_change_the_owners_tree_even_when_uploads_overwrit
     let published = snapshot(&store.0).await;
 
     let stales = sample().file("notes.md", b"stale".to_vec(), 30);
-    let mut source = Source { tree: &stales, opened: vec![] };
+    let mut source = Source {
+        tree: &stales,
+        opened: vec![],
+    };
     let refused = stale
         .commit(&store, "engine-42", stales.entries.clone(), &mut source)
         .await
@@ -584,5 +598,8 @@ async fn a_stale_writer_cannot_change_the_owners_tree_even_when_uploads_overwrit
     for (name, bytes) in &published {
         assert_eq!(after.get(name), Some(bytes), "{name} changed");
     }
-    assert_eq!(read_file(&store, "engine-42", "notes.md").await.unwrap(), b"owner");
+    assert_eq!(
+        read_file(&store, "engine-42", "notes.md").await.unwrap(),
+        b"owner"
+    );
 }

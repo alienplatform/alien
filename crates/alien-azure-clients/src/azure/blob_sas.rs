@@ -233,7 +233,8 @@ pub fn directory_sas(
             "'{directory}' may contain only letters, digits, '.', '_', '-' and '/'"
         )));
     }
-    if expiry <= start {
+    // The SAS carries whole seconds, so every comparison is on what it will say.
+    if expiry.timestamp() <= start.timestamp() {
         return Err(invalid("the SAS expires before it starts".to_string()));
     }
     let key_expiry = DateTime::parse_from_rfc3339(&key.signed_expiry)
@@ -241,7 +242,7 @@ pub fn directory_sas(
         .context(ErrorData::DataLoadError {
             message: "the user delegation key's expiry is not a timestamp".to_string(),
         })?;
-    if expiry > key_expiry {
+    if expiry.timestamp() > key_expiry.timestamp() {
         return Err(invalid(
             "the SAS would outlive the user delegation key that signs it".to_string(),
         ));
@@ -407,6 +408,15 @@ mod tests {
     fn refuses_a_sas_that_outlives_its_key_or_ends_before_it_starts() {
         assert!(directory_sas(&key(), "a", "c", "d", RACW, at(10, 55), at(12, 1)).is_err());
         assert!(directory_sas(&key(), "a", "c", "d", RACW, at(11, 0), at(11, 0)).is_err());
+    }
+
+    /// A key requested for `expiry` comes back with `expiry` in whole seconds; a SAS for the
+    /// same instant, nanoseconds and all, says the same second and is accepted.
+    #[test]
+    fn compares_expiry_in_the_whole_seconds_the_sas_carries() {
+        let expiry = at(12, 0) + chrono::Duration::nanoseconds(400_000_000);
+        let sas = directory_sas(&key(), "a", "c", "d", RACW, at(10, 55), expiry).unwrap();
+        assert_eq!(param(&sas, "se"), "2026-11-18T12:00:00Z");
     }
 
     #[test]

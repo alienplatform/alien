@@ -27,6 +27,8 @@
 //! commit of the previous sandbox is refused and its state becomes `stopped`. Nothing waits on
 //! a lock.
 
+#[cfg(feature = "azure-blob")]
+mod azure_blob;
 mod commit;
 mod error;
 mod gc;
@@ -36,6 +38,8 @@ mod pack;
 mod read;
 mod store;
 
+#[cfg(feature = "azure-blob")]
+pub use azure_blob::AzureBlobStore;
 pub use commit::{CommitOutcome, Committer, FileSource, TreeEntry, TreeEntryKind};
 pub use error::{ErrorData, Result};
 pub use gc::{collect_garbage, GcReport};
