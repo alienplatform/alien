@@ -34,17 +34,36 @@ pub async fn prepare_for_target(stack: Stack, target: TerraformTarget) -> Stack 
 /// [`prepare_for_target`] for a stack deployed with `settings`, which some mutations read (a
 /// protected stack gets its verifier).
 pub async fn prepare_for_target_with(
+    stack: Stack,
+    target: TerraformTarget,
+    settings: StackSettings,
+) -> Stack {
+    prepare(stack, target, settings, true).await
+}
+
+/// [`prepare_for_target`] without the template preflights, for tests that check the rendered
+/// module of a stack the release refuses to plan (an Azure internet sandbox while its gateway
+/// image predates the admin protocol). Only the render is under test there; the refusal itself
+/// is covered in alien-preflights.
+pub async fn prepare_for_target_unchecked(stack: Stack, target: TerraformTarget) -> Stack {
+    prepare(stack, target, StackSettings::default(), false).await
+}
+
+async fn prepare(
     mut stack: Stack,
     target: TerraformTarget,
     settings: StackSettings,
+    template_preflights: bool,
 ) -> Stack {
     let platform = target.deployment_platform();
     alien_core::remove_off_platform_gated_resources(&mut stack, platform, None);
     let runner = PreflightRunner::new();
-    runner
-        .run_template_preflights(&stack, platform)
-        .await
-        .expect("template preflights pass");
+    if template_preflights {
+        runner
+            .run_template_preflights(&stack, platform)
+            .await
+            .expect("template preflights pass");
+    }
     let config = DeploymentConfig::builder()
         .deployment_name(stack.id().to_string())
         .stack_settings(settings)
