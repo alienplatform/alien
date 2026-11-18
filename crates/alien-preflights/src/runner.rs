@@ -375,16 +375,17 @@ impl PreflightRunner {
                     to = %machine,
                     "Automatic machine selection moved a pool that has no machines yet"
                 );
-                // The whole group follows the machine, profile included, as the next
-                // deployment derives it: a group with only the machine changed would
+                // The whole group follows the machine, profile included, derived from the
+                // pool's workloads as the next deployment derives it: a group with only the machine changed would
                 // differ from that derivation and read as a modified frozen resource.
                 let mut moved = group.clone();
                 // A failure is an error, not a skip: keeping the old group would leave the
                 // pool on the default machine that quota just refused.
-                crate::mutations::compute_cluster::materialize_selected_group(
+                crate::mutations::compute_cluster::materialize_selected_group_for_workloads(
                     &mut moved,
                     stack_state.platform,
                     selection,
+                    stack,
                 )
                 .context(ErrorData::StackMutationFailed {
                     mutation_name: "FirstSetupMachineSelection".to_string(),
@@ -1190,6 +1191,131 @@ mod setup_update_authorization_tests {
         assert_eq!(group.profile, Some(catalog));
     }
 
+    /// A stack with one "general" pool on `default_machine` (profile as the catalog has it)
+    /// and a container that needs `memory` and `ephemeral` storage.
+    #[cfg(feature = "runtime-checks")]
+    fn pool_with_workload(default_machine: &str, memory: &str, ephemeral: Option<&str>) -> Stack {
+        use alien_core::{CapacityGroup, ComputeCluster, Container, ContainerCode, ResourceSpec};
+        let default =
+            alien_core::instance_catalog::find_instance_type(Platform::Azure, default_machine)
+                .unwrap()
+                .to_machine_profile();
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some(default_machine.to_string()),
+                profile: Some(default),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+                data_disk_gib_range: None,
+            })
+            .build();
+        let mut container = Container::new("web".to_string())
+            .code(ContainerCode::Image {
+                image: "example.com/web:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "2".into(),
+                desired: "2".into(),
+            })
+            .memory(ResourceSpec {
+                min: memory.into(),
+                desired: memory.into(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        container.ephemeral_storage = ephemeral.map(str::to_string);
+        Stack::new("azure-pool".into())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .add(container, ResourceLifecycle::Live)
+            .build()
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    fn choose_fixed(machine: &str) -> DeploymentConfig {
+        use alien_core::{ComputePoolSelection, ComputeSettings};
+        let mut chosen = deployment_config();
+        chosen.stack_settings.compute = Some(ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: Some(machine.to_string()),
+                    failure_domains: None,
+                    data_disk_gib: None,
+                },
+            )]
+            .into(),
+            containers: Default::default(),
+        });
+        chosen
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    fn general_group(stack: &Stack) -> alien_core::CapacityGroup {
+        stack
+            .resources
+            .values()
+            .find_map(|entry| entry.config.downcast_ref::<alien_core::ComputeCluster>())
+            .map(|cluster| cluster.capacity_groups[0].clone())
+            .unwrap()
+    }
+
+    /// Quota can pick a machine smaller than the registration default. The workload (2 CPUs,
+    /// 6 GiB) fits it; the default's 16 GiB profile must not be taken as the requirement.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_selection_may_pick_a_machine_smaller_than_the_default() {
+        let stack = pool_with_workload("Standard_D4s_v5", "6Gi", None);
+        let updated = PreflightRunner::with_chosen_machines(
+            &stack,
+            &StackState::new(Platform::Azure),
+            &choose_fixed("Standard_F4s_v2"),
+        )
+        .unwrap()
+        .expect("the pool moves");
+        let group = general_group(&updated);
+        let catalog =
+            alien_core::instance_catalog::find_instance_type(Platform::Azure, "Standard_F4s_v2")
+                .unwrap()
+                .to_machine_profile();
+        assert_eq!(group.instance_type.as_deref(), Some("Standard_F4s_v2"));
+        assert_eq!(group.profile, Some(catalog));
+    }
+
+    /// The disk the workload asks for beyond the catalog's is kept, as the planner keeps it.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_selection_keeps_the_workloads_ephemeral_storage() {
+        let stack = pool_with_workload("Standard_D4s_v5", "6Gi", Some("50Gi"));
+        let updated = PreflightRunner::with_chosen_machines(
+            &stack,
+            &StackState::new(Platform::Azure),
+            &choose_fixed("Standard_F4s_v2"),
+        )
+        .unwrap()
+        .expect("the pool moves");
+        let profile = general_group(&updated).profile.unwrap();
+        assert_eq!(profile.ephemeral_storage_bytes, 50 * 1024 * 1024 * 1024);
+        assert_eq!(profile.memory_bytes, 8 * 1024 * 1024 * 1024);
+    }
+
+    /// A machine the workload does not fit is still refused.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_selection_refuses_a_machine_the_workload_does_not_fit() {
+        let stack = pool_with_workload("Standard_D4s_v5", "12Gi", None);
+        let error = PreflightRunner::with_chosen_machines(
+            &stack,
+            &StackState::new(Platform::Azure),
+            &choose_fixed("Standard_F4s_v2"),
+        )
+        .expect_err("12 GiB does not fit an 8 GiB machine");
+        assert!(format!("{error:?}").contains("Standard_F4s_v2"));
+    }
+
     #[cfg(feature = "runtime-checks")]
     #[test]
     fn first_setup_selection_that_cannot_be_recorded_fails_naming_the_pool_and_machine() {
@@ -1305,9 +1431,11 @@ mod setup_update_authorization_tests {
             ]
         );
         // Nothing to move once the pick matches the stack.
-        assert!(PreflightRunner::with_chosen_machines(&updated, &state, &chosen)
-            .unwrap()
-            .is_none());
+        assert!(
+            PreflightRunner::with_chosen_machines(&updated, &state, &chosen)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[cfg(feature = "runtime-checks")]

@@ -81,34 +81,31 @@ fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resou
 /// the new group carries the machine's profile. First setup of an imported Azure install
 /// used to record the machine it chose with the profile of the registration default, so
 /// those installs hold a profile their machine does not have. The machine is unchanged;
-/// only the profile is brought in line with it.
+/// only the profile is brought in line with it. Azure only: elsewhere no install holds such
+/// a record, and the excuse would quietly adopt a later correction of the catalog.
 fn recorded_profile_is_stale(platform: Platform, old: &CapacityGroup, new: &CapacityGroup) -> bool {
-    old.instance_type.is_some()
+    platform == Platform::Azure
+        && old.instance_type.is_some()
         && old.instance_type == new.instance_type
         && old.profile.is_some()
         && old.profile != new.profile
-        && validated_machine_profile(platform, new)
         && profile_is_the_machines(platform, new)
 }
 
-/// Whether the group's profile is the one its machine has in the catalog, derived afresh.
+/// Whether the group's profile is what the planner derives for its machine: the catalog
+/// profile, with the disk the workloads asked for (the larger of the catalog's and the
+/// request, which the group's own ephemeral storage records) and the group's data disk.
 fn profile_is_the_machines(platform: Platform, group: &CapacityGroup) -> bool {
-    let mut fresh = group.clone();
-    fresh.profile = None;
-    let selection = ComputePoolSelection::Autoscale {
-        min: group.min_size,
-        max: group.max_size,
-        machine: group.instance_type.clone(),
-        failure_domains: None,
-        data_disk_gib: group.data_disk_gib_range.as_ref().map(|_| {
-            group
-                .data_disk_size_gib()
-                .map_or(0, |size_gib| u32::try_from(size_gib).unwrap_or(u32::MAX))
-        }),
+    let (Some(machine), Some(profile)) = (group.instance_type.as_deref(), group.profile.as_ref())
+    else {
+        return false;
     };
-    crate::mutations::compute_cluster::materialize_selected_group(&mut fresh, platform, &selection)
-        .is_ok()
-        && fresh.profile == group.profile
+    let Some(spec) = alien_core::instance_catalog::find_instance_type(platform, machine) else {
+        return false;
+    };
+    let mut derived = spec.to_machine_profile_for_storage(profile.ephemeral_storage_bytes);
+    derived.data_disk = profile.data_disk.clone();
+    derived == *profile
 }
 
 /// Whether the profiles differ only in disk sizes that the platform applies
@@ -1557,6 +1554,104 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
+    }
+
+    fn stale_pair(platform: Platform, machine: &str) -> (ComputeCluster, ComputeCluster) {
+        let profile_of = |machine: &str| {
+            find_instance_type(platform, machine).map(|spec| spec.to_machine_profile())
+        };
+        let mut old = compute_cluster(2);
+        old.capacity_groups[0].nested_virtualization = None;
+        old.capacity_groups[0].instance_type = Some(machine.into());
+        old.capacity_groups[0].profile = profile_of("Standard_B2s");
+        let mut new = old.clone();
+        new.capacity_groups[0].profile = profile_of(machine);
+        (old, new)
+    }
+
+    async fn frozen_ok(platform: Platform, old: ComputeCluster, new: ComputeCluster) -> bool {
+        FrozenResourcesUnchangedCheck { platform }
+            .check(&compute_stack(old), &compute_stack(new))
+            .await
+            .unwrap()
+            .success
+    }
+
+    #[tokio::test]
+    async fn stale_profile_excuse_keeps_the_workloads_larger_disk() {
+        let (mut old, mut new) = stale_pair(Platform::Azure, "Standard_D2s_v5");
+        // The planner records the larger of the catalog's disk and the workload's request.
+        old.capacity_groups[0]
+            .profile
+            .as_mut()
+            .unwrap()
+            .ephemeral_storage_bytes = 50 * GIB;
+        new.capacity_groups[0]
+            .profile
+            .as_mut()
+            .unwrap()
+            .ephemeral_storage_bytes = 50 * GIB;
+        assert!(frozen_ok(Platform::Azure, old.clone(), new.clone()).await);
+        // A disk smaller than the catalog's is not something the planner records.
+        new.capacity_groups[0]
+            .profile
+            .as_mut()
+            .unwrap()
+            .ephemeral_storage_bytes = GIB;
+        assert!(!frozen_ok(Platform::Azure, old, new).await);
+    }
+
+    #[tokio::test]
+    async fn stale_profile_excuse_refuses_a_machine_not_in_the_catalog() {
+        let (mut old, mut new) = stale_pair(Platform::Azure, "Standard_D2s_v5");
+        old.capacity_groups[0].instance_type = Some("Standard_Nope".into());
+        new.capacity_groups[0].instance_type = Some("Standard_Nope".into());
+        assert!(!frozen_ok(Platform::Azure, old, new).await);
+    }
+
+    #[tokio::test]
+    async fn stale_profile_excuse_refuses_a_profile_of_a_different_machine() {
+        // The new group names D2s_v5 but carries the profile of D4s_v5.
+        let (old, mut new) = stale_pair(Platform::Azure, "Standard_D2s_v5");
+        new.capacity_groups[0].profile =
+            find_instance_type(Platform::Azure, "Standard_D4s_v5").map(|s| s.to_machine_profile());
+        assert!(!frozen_ok(Platform::Azure, old, new).await);
+    }
+
+    #[tokio::test]
+    async fn stale_profile_excuse_with_a_fixed_scale_policy() {
+        let (mut old, mut new) = stale_pair(Platform::Azure, "Standard_D2s_v5");
+        for cluster in [&mut old, &mut new] {
+            cluster.capacity_groups[0].scale_policy =
+                Some(CapacityGroupScalePolicy::from_selected_bounds(2, 2));
+        }
+        assert!(frozen_ok(Platform::Azure, old.clone(), new.clone()).await);
+        // Fixed or not, a profile that is not the machine's stays a modification.
+        new.capacity_groups[0]
+            .profile
+            .as_mut()
+            .unwrap()
+            .memory_bytes += 1;
+        assert!(!frozen_ok(Platform::Azure, old, new).await);
+    }
+
+    #[tokio::test]
+    async fn stale_profile_excuse_is_azure_only() {
+        let profile_of = |platform, machine: &str| {
+            find_instance_type(platform, machine).map(|spec| spec.to_machine_profile())
+        };
+        for (platform, other, machine) in [
+            (Platform::Aws, "m7i.large", "m7i.xlarge"),
+            (Platform::Gcp, "e2-medium", "n2-standard-4"),
+        ] {
+            let mut old = compute_cluster(2);
+            old.capacity_groups[0].nested_virtualization = None;
+            old.capacity_groups[0].instance_type = Some(machine.into());
+            old.capacity_groups[0].profile = profile_of(platform, other);
+            let mut new = old.clone();
+            new.capacity_groups[0].profile = profile_of(platform, machine);
+            assert!(!frozen_ok(platform, old, new).await, "{platform}");
+        }
     }
 
     #[tokio::test]

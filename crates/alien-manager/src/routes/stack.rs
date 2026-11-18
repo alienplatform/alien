@@ -3406,4 +3406,4 @@ mod imported_cluster_namespace_tests {
 mod registration_parity_tests;
 
 #[cfg(test)]
-mod azure_frozen_compute_repro;
+mod azure_first_setup_compute;
