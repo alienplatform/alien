@@ -138,6 +138,10 @@ pub fn remote_binding_undeliverable_reason(entry: &ResourceEntry) -> Option<&'st
         return Some("a remotely published sandbox cannot declare privilegedSupervisor; the raw grant can start retained image versions with a different command identity or egress policy; use an ordinary workload binding");
     }
 
+    if sandbox.persistent_storage.is_some() {
+        return Some("a remotely published sandbox cannot declare persistentStorage; the agent's storage rights are minted by the in-deployment binding, which a holder of the remote grant bypasses; use an ordinary workload binding");
+    }
+
     if sandbox.default_policy.is_some() {
         return Some("a remotely published sandbox cannot carry defaultPolicy; use an ordinary workload binding that supports gateway policies");
     }

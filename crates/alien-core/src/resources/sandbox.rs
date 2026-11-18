@@ -369,6 +369,12 @@ pub struct SandboxCapabilities {
     /// image USER is root gets the split; a non-root image still runs as one user. Separate from `supervisorPidNamespace`, which is about
     /// visibility rather than identity — a backend can have one without the other.
     pub supervisor_isolation: bool,
+    /// A directory can be declared as persistent storage: the agent replicates it to a linked
+    /// Storage under a caller-chosen key and restores it into a new sandbox for the same key.
+    ///
+    /// Defaults to false when absent, so a capability set written before it still reads.
+    #[serde(default)]
+    pub persistent_storage: bool,
 }
 
 impl SandboxCapabilities {
@@ -407,6 +413,9 @@ impl SandboxCapabilities {
                 // The agent runs as uid 0 and `setuid`s the command to uid 60000, so the command
                 // runs under a different identity than the process supervising it.
                 supervisor_isolation: true,
+                // The agent replicates the directory to the linked bucket through the stack's S3
+                // gateway endpoint, with presigned rights for one key only.
+                persistent_storage: true,
             }),
             Platform::Azure => Ok(Self::azure()),
             Platform::Gcp => Ok(Self::gcp_agent_platform()),
@@ -454,6 +463,8 @@ impl SandboxCapabilities {
                 // its supervisor's. A non-root image keeps the single pinned uid and has no
                 // split; this row describes what the backend offers, the declaration selects it.
                 supervisor_isolation: true,
+                // Not built yet for the sandbox pod; refused at plan time rather than ignored.
+                persistent_storage: false,
             }),
             Platform::Local => Ok(Self {
                 files: true,
@@ -479,6 +490,8 @@ impl SandboxCapabilities {
                 // `docker exec` runs the command as the workload uid — a different identity by
                 // construction.
                 supervisor_isolation: true,
+                // A host directory per key, bind-mounted at the declared path.
+                persistent_storage: true,
             }),
             Platform::Machines | Platform::Test => {
                 Err(AlienError::new(ErrorData::SandboxPlatformUnsupported {
@@ -529,6 +542,8 @@ impl SandboxCapabilities {
             // No Alien process runs the command at all — the platform's own data plane does,
             // so there is no separate supervisor identity to speak of.
             supervisor_isolation: false,
+            // The replication transport for Azure sandboxes is not built yet.
+            persistent_storage: false,
         }
     }
 
@@ -578,6 +593,8 @@ impl SandboxCapabilities {
             // No separate supervisor identity: the command is not run under a different identity
             // than the process supervising it.
             supervisor_isolation: false,
+            // The replication transport for Agent Platform sandboxes is not built yet.
+            persistent_storage: false,
         }
     }
 
@@ -598,6 +615,7 @@ impl SandboxCapabilities {
             SandboxCapability::SandboxLifetime => self.sandbox_lifetime,
             SandboxCapability::SupervisorPidNamespace => self.supervisor_pid_namespace,
             SandboxCapability::SupervisorIsolation => self.supervisor_isolation,
+            SandboxCapability::PersistentStorage => self.persistent_storage,
         };
 
         if available {
@@ -644,6 +662,8 @@ pub enum SandboxCapability {
     SupervisorPidNamespace,
     /// A command runs under a different identity than the process supervising it
     SupervisorIsolation,
+    /// A directory replicated to a linked Storage under a caller-chosen key
+    PersistentStorage,
 }
 
 impl SandboxCapability {
@@ -664,6 +684,7 @@ impl SandboxCapability {
             Self::SandboxLifetime => "sandboxLifetime",
             Self::SupervisorPidNamespace => "supervisorPidNamespace",
             Self::SupervisorIsolation => "supervisorIsolation",
+            Self::PersistentStorage => "persistentStorage",
         }
     }
 }
@@ -675,6 +696,41 @@ impl SandboxCapability {
 pub struct SandboxPrivilegedSupervisor {
     /// Nonzero numeric uid and primary gid for every command, including the image entrypoint.
     pub command_uid: u32,
+}
+
+/// Where persistent storage lives under the linked Storage, in front of `<sandbox id>/<key>/`.
+pub const PERSISTENT_STORAGE_PREFIX: &str = "sandbox-storage";
+
+/// A directory inside the sandbox whose contents belong to a caller-chosen key, not to the
+/// sandbox.
+///
+/// Alien's agent replicates the directory to the linked Storage within seconds of a write and
+/// restores it into a new sandbox for the same key before the image command starts. The data
+/// lives under `sandbox-storage/<sandbox id>/<key>/` in that Storage, so its encryption key,
+/// uninstall policy and retention are the Storage's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxPersistentStorage {
+    /// Absolute directory inside the sandbox (e.g. `/workspace`).
+    pub path: String,
+    /// The Storage resource the directory is replicated to.
+    pub storage: ResourceRef,
+    /// Paths relative to `path` kept local and never replicated (e.g. `tmp/`, `.cache/`).
+    /// A trailing `/` names a directory.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    /// Largest replicated tree (e.g. `"8Gi"`). A commit above it is refused whole, never
+    /// written in part, and the sandbox's storage state says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_size: Option<String>,
+}
+
+impl SandboxPersistentStorage {
+    /// `maxSize` in bytes, or `None` when undeclared.
+    pub fn max_size_bytes(&self) -> Option<u128> {
+        self.max_size.as_deref().and_then(parse_byte_quantity)
+    }
 }
 
 /// An isolated environment for running untrusted code, created at runtime.
@@ -736,6 +792,10 @@ pub struct Sandbox {
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_ports: Vec<u16>,
+    /// A directory replicated to a linked Storage under a caller-chosen key. A sandbox that
+    /// declares it is created with a `storageKey`, and one that does not refuses one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistent_storage: Option<SandboxPersistentStorage>,
 }
 
 /// Whether the artifact being rendered restricts which network modes it accepts.
@@ -1306,6 +1366,11 @@ impl Sandbox {
             capabilities.require(SandboxCapability::SandboxLifetime, platform)?;
         }
 
+        if let Some(storage) = &self.persistent_storage {
+            capabilities.require(SandboxCapability::PersistentStorage, platform)?;
+            storage.validate(&self.id)?;
+        }
+
         Ok(())
     }
 }
@@ -1355,6 +1420,117 @@ fn validate_quantity(resource_id: &str, field: &str, value: &str) -> Result<()> 
     }
 
     Ok(())
+}
+
+/// A whole-number byte quantity such as `8Gi`, `500M` or `1048576`, or `None` when it is not one.
+fn parse_byte_quantity(value: &str) -> Option<u128> {
+    let digits_end = value
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(value.len());
+    let (number, suffix) = value.split_at(digits_end);
+    let unit: u128 = match suffix {
+        "" => 1,
+        "k" => 1_000,
+        "M" => 1_000_000,
+        "G" => 1_000_000_000,
+        "T" => 1_000_000_000_000,
+        "Ki" => 1 << 10,
+        "Mi" => 1 << 20,
+        "Gi" => 1 << 30,
+        "Ti" => 1 << 40,
+        _ => return None,
+    };
+    let number: u128 = number.parse().ok()?;
+    (number > 0).then(|| number.checked_mul(unit)).flatten()
+}
+
+/// Directories the agent or the kernel own; persistent storage at or under one would replicate
+/// or overwrite something that is not the workload's.
+const PERSISTENT_STORAGE_RESERVED_PATHS: &[&str] = &[
+    "/opt/alien",
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/tmp",
+    "/etc",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+    "/usr",
+    "/boot",
+];
+
+/// A path relative to the storage root with no `.`, `..` or empty component.
+fn is_clean_relative_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && path
+            .trim_end_matches('/')
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+impl SandboxPersistentStorage {
+    fn validate(&self, resource_id: &str) -> Result<()> {
+        let invalid = |field: &str, value: &str, reason: &str| {
+            AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: resource_id.to_string(),
+                field: format!("persistentStorage.{field}"),
+                value: value.to_string(),
+                reason: reason.to_string(),
+            })
+        };
+        let path = self.path.as_str();
+        let relative = path.strip_prefix('/').unwrap_or("");
+        if !path.starts_with('/') || path.ends_with('/') || !is_clean_relative_path(relative) {
+            return Err(invalid(
+                "path",
+                path,
+                "must be an absolute directory such as /workspace, with no trailing slash and                  no '.', '..' or empty component",
+            ));
+        }
+        if let Some(reserved) = PERSISTENT_STORAGE_RESERVED_PATHS
+            .iter()
+            .find(|reserved| path == **reserved || path.starts_with(&format!("{reserved}/")))
+        {
+            return Err(invalid(
+                "path",
+                path,
+                &format!("{reserved} belongs to the system or to Alien's agent; choose a directory of the workload's own"),
+            ));
+        }
+        if self.storage.resource_type != super::Storage::RESOURCE_TYPE {
+            return Err(invalid(
+                "storage",
+                &self.storage.id,
+                &format!(
+                    "must link a Storage resource, not a {}",
+                    self.storage.resource_type
+                ),
+            ));
+        }
+        for pattern in &self.exclude {
+            if !is_clean_relative_path(pattern) {
+                return Err(invalid(
+                    "exclude",
+                    pattern,
+                    "must be a path relative to the storage directory, with no leading '/' and                      no '.', '..' or empty component",
+                ));
+            }
+        }
+        if let Some(max_size) = &self.max_size {
+            if parse_byte_quantity(max_size).is_none() {
+                return Err(invalid(
+                    "maxSize",
+                    max_size,
+                    "must be a whole number of bytes, optionally with a unit k, M, G, T, Ki, Mi,                      Gi or Ti",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Splits a quantity into its number and unit suffix.
@@ -1484,7 +1660,11 @@ impl ResourceDefinition for Sandbox {
     }
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {
-        Vec::new()
+        // The agent's rights are minted against the linked Storage, so it must exist first.
+        self.persistent_storage
+            .iter()
+            .map(|storage| storage.storage.clone())
+            .collect()
     }
 
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()> {
@@ -2399,6 +2579,144 @@ mod tests {
         root(SandboxEgress::Internet)
             .validate_for_platform(Platform::Local)
             .expect_err("Local still refuses a root image");
+    }
+
+    fn with_storage(storage: SandboxPersistentStorage) -> Sandbox {
+        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
+        sandbox.persistent_storage = Some(storage);
+        sandbox
+    }
+
+    fn workspace() -> SandboxPersistentStorage {
+        SandboxPersistentStorage {
+            path: "/workspace".to_string(),
+            storage: ResourceRef::new(crate::Storage::RESOURCE_TYPE, "workspaces"),
+            exclude: vec!["tmp/".to_string(), ".cache".to_string()],
+            max_size: Some("8Gi".to_string()),
+        }
+    }
+
+    /// AWS and Local carry persistent storage; every other platform refuses it at plan time
+    /// with the capability named, rather than accepting a directory that is never replicated.
+    #[test]
+    fn persistent_storage_is_refused_where_no_transport_exists() {
+        let sandbox = with_storage(workspace());
+        sandbox
+            .validate_for_platform(Platform::Aws)
+            .expect("AWS replicates through the S3 gateway endpoint");
+        sandbox
+            .validate_for_platform(Platform::Local)
+            .expect("Local keeps a host directory per key");
+        for platform in [Platform::Azure, Platform::Gcp, Platform::Kubernetes] {
+            let error = sandbox
+                .validate_for_platform(platform)
+                .expect_err("no transport on this platform yet");
+            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED", "{platform}");
+            assert!(
+                error.message.contains("persistentStorage"),
+                "{platform}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn persistent_storage_depends_on_its_storage_only_when_declared() {
+        assert!(sandbox_with(SandboxEgress::None, vec![])
+            .get_dependencies()
+            .is_empty());
+        assert_eq!(
+            with_storage(workspace()).get_dependencies(),
+            vec![ResourceRef::new(
+                crate::Storage::RESOURCE_TYPE,
+                "workspaces"
+            )]
+        );
+    }
+
+    #[test]
+    fn persistent_storage_refuses_paths_that_are_not_the_workloads() {
+        for path in [
+            "workspace",
+            "/",
+            "/workspace/",
+            "/a//b",
+            "/a/../b",
+            "/a/./b",
+            "/opt/alien",
+            "/opt/alien/x",
+            "/proc",
+            "/tmp/w",
+            "/etc",
+        ] {
+            let mut storage = workspace();
+            storage.path = path.to_string();
+            let error = with_storage(storage)
+                .validate_for_platform(Platform::Aws)
+                .expect_err(path);
+            assert_eq!(error.code, "SANDBOX_LIMIT_INVALID", "{path}");
+        }
+        for path in ["/workspace", "/home/user/work", "/opt/work", "/data"] {
+            let mut storage = workspace();
+            storage.path = path.to_string();
+            with_storage(storage)
+                .validate_for_platform(Platform::Aws)
+                .expect(path);
+        }
+    }
+
+    #[test]
+    fn persistent_storage_checks_its_link_excludes_and_size() {
+        let mut storage = workspace();
+        storage.storage = ResourceRef::new(Sandbox::RESOURCE_TYPE, "other");
+        assert!(with_storage(storage)
+            .validate_for_platform(Platform::Aws)
+            .is_err());
+
+        for pattern in ["/tmp", "../x", "a//b", "", "./x"] {
+            let mut storage = workspace();
+            storage.exclude = vec![pattern.to_string()];
+            assert!(
+                with_storage(storage)
+                    .validate_for_platform(Platform::Aws)
+                    .is_err(),
+                "{pattern:?}"
+            );
+        }
+
+        for size in ["0", "1.5Gi", "8gb", "500m", "-1", ""] {
+            let mut storage = workspace();
+            storage.max_size = Some(size.to_string());
+            assert!(
+                with_storage(storage)
+                    .validate_for_platform(Platform::Aws)
+                    .is_err(),
+                "{size:?}"
+            );
+        }
+        assert_eq!(workspace().max_size_bytes(), Some(8 << 30));
+    }
+
+    /// An old manager parses releases with `deny_unknown_fields`, so it refuses a sandbox that
+    /// declares persistent storage instead of running it without replication; a sandbox that
+    /// declares none serializes exactly as before.
+    #[test]
+    fn persistent_storage_serializes_only_when_declared() {
+        let plain = serde_json::to_value(sandbox_with(SandboxEgress::None, vec![])).unwrap();
+        assert!(plain.get("persistentStorage").is_none());
+
+        let declared = serde_json::to_value(with_storage(workspace())).unwrap();
+        assert_eq!(
+            declared["persistentStorage"],
+            serde_json::json!({
+                "path": "/workspace",
+                "storage": { "type": "storage", "id": "workspaces" },
+                "exclude": ["tmp/", ".cache"],
+                "maxSize": "8Gi",
+            })
+        );
+        let parsed: Sandbox = serde_json::from_value(declared).unwrap();
+        assert_eq!(parsed.persistent_storage, Some(workspace()));
     }
 
     #[test]

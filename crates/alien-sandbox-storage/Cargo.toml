@@ -1,0 +1,22 @@
+[package]
+name = "alien-sandbox-storage"
+version.workspace = true
+edition = "2021"
+description = "Cloud-neutral layout, commit, restore and garbage collection for sandbox persistent storage"
+license-file.workspace = true
+
+[dependencies]
+alien-error = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+hex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serde_json = { workspace = true }

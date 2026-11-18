@@ -160,6 +160,7 @@ use utoipa::OpenApi;
     EgressPolicy,
     SandboxLifecyclePolicy,
     SandboxPrivilegedSupervisor,
+    SandboxPersistentStorage,
     SandboxCapabilities,
     SandboxCapability,
     Email,

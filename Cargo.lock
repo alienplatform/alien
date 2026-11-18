@@ -1474,6 +1474,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-sandbox-storage"
+version = "3.3.68"
+dependencies = [
+ "alien-error",
+ "async-trait",
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tokio",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "alien-sdk"
 version = "3.3.68"
 dependencies = [
