@@ -33,7 +33,6 @@ async fn replicator(
         tree::open_root(root).expect("open root"),
         exclude.iter().map(|s| s.to_string()).collect(),
         staging.to_path_buf(),
-        None,
         Committer::new("writer-a", claim.head_version, claim.manifest, None),
     )
 }
@@ -466,7 +465,6 @@ async fn the_agent_commits_and_restores_through_an_s3_grant() {
         tree::open_root(source.path()).expect("open"),
         vec![],
         staging.path().to_path_buf(),
-        None,
         Committer::new("sandbox-1", claim.head_version, claim.manifest, None),
     );
     let CommitOutcome::Committed { commit, .. } = writer.commit(&agent).await.expect("commit")
@@ -521,7 +519,6 @@ async fn attach_restores_then_sync_publishes() {
         tree::open_root(source.path()).expect("open"),
         vec![],
         staging.path().to_path_buf(),
-        None,
         Committer::new("sandbox-1", claim.head_version, None, None),
     );
     first
