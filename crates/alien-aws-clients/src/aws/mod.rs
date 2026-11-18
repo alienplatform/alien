@@ -533,56 +533,41 @@ async fn load_imds_session_credentials(endpoint: Option<&str>) -> Result<AwsCred
         })?;
 
     let token_url = format!("{endpoint}/latest/api/token");
-    let token = client
-        .put(&token_url)
-        .timeout(AWS_IMDS_DISCOVERY_TIMEOUT)
-        .header("X-aws-ec2-metadata-token-ttl-seconds", "21600")
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::InvalidClientConfig {
-            message: "Failed to request AWS IMDSv2 token".to_string(),
-            errors: None,
-        })?
-        .error_for_status()
-        .into_alien_error()
-        .context(ErrorData::InvalidClientConfig {
-            message: "AWS IMDSv2 token request failed".to_string(),
-            errors: None,
-        })?
-        .text()
-        .await
-        .into_alien_error()
-        .context(ErrorData::InvalidClientConfig {
-            message: "Failed to read AWS IMDSv2 token".to_string(),
-            errors: None,
-        })?;
+    let token = imds_response(
+        client
+            .put(&token_url)
+            .timeout(AWS_IMDS_DISCOVERY_TIMEOUT)
+            .header("X-aws-ec2-metadata-token-ttl-seconds", "21600"),
+        "AWS IMDSv2 token",
+        true,
+    )
+    .await?
+    .text()
+    .await
+    .into_alien_error()
+    .context(ErrorData::InvalidClientConfig {
+        message: "Failed to read AWS IMDSv2 token".to_string(),
+        errors: None,
+    })?;
 
+    // A 404 on the role list means no role is attached: a real misconfiguration.
     let role_url = format!("{endpoint}/latest/meta-data/iam/security-credentials/");
-    let role_name = client
-        .get(&role_url)
-        .timeout(AWS_IMDS_DISCOVERY_TIMEOUT)
-        .header("X-aws-ec2-metadata-token", &token)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::InvalidClientConfig {
-            message: "Failed to request AWS IMDS role name".to_string(),
-            errors: None,
-        })?
-        .error_for_status()
-        .into_alien_error()
-        .context(ErrorData::InvalidClientConfig {
-            message: "AWS IMDS role name request failed".to_string(),
-            errors: None,
-        })?
-        .text()
-        .await
-        .into_alien_error()
-        .context(ErrorData::InvalidClientConfig {
-            message: "Failed to read AWS IMDS role name".to_string(),
-            errors: None,
-        })?;
+    let role_name = imds_response(
+        client
+            .get(&role_url)
+            .timeout(AWS_IMDS_DISCOVERY_TIMEOUT)
+            .header("X-aws-ec2-metadata-token", &token),
+        "AWS IMDS role name",
+        false,
+    )
+    .await?
+    .text()
+    .await
+    .into_alien_error()
+    .context(ErrorData::InvalidClientConfig {
+        message: "Failed to read AWS IMDS role name".to_string(),
+        errors: None,
+    })?;
 
     let role_name = role_name
         .lines()
@@ -596,30 +581,22 @@ async fn load_imds_session_credentials(endpoint: Option<&str>) -> Result<AwsCred
         })?;
 
     let credentials_url = format!("{role_url}{role_name}");
-    let credentials: AwsImdsCredentials = client
-        .get(&credentials_url)
-        .timeout(AWS_IMDS_CREDENTIALS_TIMEOUT)
-        .header("X-aws-ec2-metadata-token", &token)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::InvalidClientConfig {
-            message: "Failed to request AWS IMDS credentials".to_string(),
-            errors: None,
-        })?
-        .error_for_status()
-        .into_alien_error()
-        .context(ErrorData::InvalidClientConfig {
-            message: "AWS IMDS credentials request failed".to_string(),
-            errors: None,
-        })?
-        .json()
-        .await
-        .into_alien_error()
-        .context(ErrorData::InvalidClientConfig {
-            message: "Failed to parse AWS IMDS credentials".to_string(),
-            errors: None,
-        })?;
+    let credentials: AwsImdsCredentials = imds_response(
+        client
+            .get(&credentials_url)
+            .timeout(AWS_IMDS_CREDENTIALS_TIMEOUT)
+            .header("X-aws-ec2-metadata-token", &token),
+        "AWS IMDS credentials",
+        true,
+    )
+    .await?
+    .json()
+    .await
+    .into_alien_error()
+    .context(ErrorData::InvalidClientConfig {
+        message: "Failed to parse AWS IMDS credentials".to_string(),
+        errors: None,
+    })?;
 
     Ok(AwsCredentials::SessionCredentials {
         access_key_id: credentials.access_key_id,
@@ -627,6 +604,43 @@ async fn load_imds_session_credentials(endpoint: Option<&str>) -> Result<AwsCred
         session_token: credentials.token,
         expires_at: credentials.expiration,
     })
+}
+
+/// Send an IMDS request and classify a failure by whether asking again can help.
+///
+/// A transport error, 5xx or 429 is transient. A 404 is transient only when
+/// `not_found_is_transient` is set: right after a container starts, the host's metadata proxy may
+/// not know it yet and answers 404 until it does. Anything else (403, other 4xx) stays a
+/// configuration error.
+async fn imds_response(
+    request: reqwest::RequestBuilder,
+    what: &str,
+    not_found_is_transient: bool,
+) -> Result<reqwest::Response> {
+    let response = request
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: format!("Failed to request {what}"),
+        })?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let transient = status.is_server_error()
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || (not_found_is_transient && status == reqwest::StatusCode::NOT_FOUND);
+    if transient {
+        Err(AlienError::new(ErrorData::RemoteServiceUnavailable {
+            message: format!("{what} request failed with HTTP {status}"),
+        }))
+    } else {
+        Err(AlienError::new(ErrorData::InvalidClientConfig {
+            message: format!("{what} request failed with HTTP {status}"),
+            errors: None,
+        }))
+    }
 }
 
 /// Fetch credentials from a container credentials endpoint.
@@ -1194,6 +1208,83 @@ mod tests {
             }
         });
         (format!("http://{addr}"), seen)
+    }
+
+    /// Answers every request with the given status line and an empty body.
+    async fn start_imds_with_status(status_line: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = [0u8; 2048];
+                let _ = stream.read(&mut buffer).await;
+                let response = format!("HTTP/1.1 {status_line}\r\ncontent-length: 0\r\n\r\n");
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn imds_token_failures_that_can_clear_up_are_retryable() {
+        for status_line in [
+            "404 Not Found",
+            "429 Too Many Requests",
+            "500 Internal Server Error",
+            "503 Service Unavailable",
+        ] {
+            let endpoint = start_imds_with_status(status_line).await;
+            let error = load_imds_session_credentials(Some(&endpoint))
+                .await
+                .unwrap_err();
+            assert!(error.retryable, "{status_line} should be retryable: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn imds_connection_error_is_retryable() {
+        // Bind then drop, so the port refuses connections.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+
+        let error = load_imds_session_credentials(Some(&endpoint))
+            .await
+            .unwrap_err();
+        assert!(error.retryable, "{error}");
+    }
+
+    #[tokio::test]
+    async fn imds_forbidden_token_is_not_retryable() {
+        let endpoint = start_imds_with_status("403 Forbidden").await;
+        let error = load_imds_session_credentials(Some(&endpoint))
+            .await
+            .unwrap_err();
+        assert!(!error.retryable, "{error}");
+    }
+
+    #[tokio::test]
+    async fn imds_missing_role_is_not_retryable() {
+        // Token succeeds, role list is 404: no role attached.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = [0u8; 2048];
+                let n = stream.read(&mut buffer).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..n]).to_string();
+                let response = if request.starts_with("PUT /latest/api/token ") {
+                    "HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\ntoken".to_string()
+                } else {
+                    "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n".to_string()
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        let error = load_imds_session_credentials(Some(&format!("http://{addr}")))
+            .await
+            .unwrap_err();
+        assert!(!error.retryable, "{error}");
     }
 
     async fn start_mock_imds() -> String {
