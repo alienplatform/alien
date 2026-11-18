@@ -103,8 +103,14 @@ pub struct AwsSandbox {
     max_lifetime_seconds: Option<u32>,
     /// The declared persistent storage, which makes `storageKey` required on create.
     persistent_storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
+    /// Claims keys and mints the agent's grants in the declaration's own bucket.
+    persistent_grants: Option<Arc<super::persistent_store::s3::S3Grants>>,
     agent: reqwest::Client,
 }
+
+/// How long a grant handed to the agent lasts, at most; the binding's credentials may end it
+/// sooner. Lambda ends a MicroVM after eight hours.
+const STORAGE_GRANT_TTL: std::time::Duration = std::time::Duration::from_secs(8 * 3600);
 
 impl AwsSandbox {
     /// Supplies the declaration carried by the resolved binding.
@@ -129,6 +135,76 @@ impl AwsSandbox {
     ) -> Self {
         self.persistent_storage = storage;
         self
+    }
+
+    /// Supplies the persistent store's grant signer (the declaration's own bucket).
+    pub fn with_persistent_grants(
+        mut self,
+        grants: Option<Arc<super::persistent_store::s3::S3Grants>>,
+    ) -> Self {
+        self.persistent_grants = grants;
+        self
+    }
+
+    /// Claims `key` for the new MicroVM, then hands its agent the claimed commit and a grant to
+    /// read it and write the key. The claim comes first, so a sandbox still running for the key
+    /// can no longer publish over the tree this one restores.
+    async fn attach_storage(&self, microvm_id: &str, key: &str) -> Result<()> {
+        let unreachable = |reason: String| {
+            AlienError::new(ErrorData::SandboxUnreachable {
+                operation: "sandbox.create".to_string(),
+                reason,
+            })
+        };
+        let grants = self.persistent_grants.as_ref().ok_or_else(|| {
+            unreachable("the binding has no persistent store to attach".to_string())
+        })?;
+        let store = grants
+            .key_store(key)
+            .map_err(|e| unreachable(format!("storage key '{key}': {e}")))?;
+        let claim = alien_sandbox_storage::takeover(&store, microvm_id)
+            .await
+            .map_err(|e| unreachable(format!("could not claim storage key '{key}': {e}")))?;
+        let commit = match alien_sandbox_storage::read_head(&store)
+            .await
+            .map_err(|e| unreachable(format!("could not read storage key '{key}': {e}")))?
+        {
+            Some((head, _)) => head.commit,
+            None => None,
+        };
+        let mut reads = Vec::new();
+        if let (Some(commit), Some(manifest)) = (&commit, &claim.manifest) {
+            reads.push(commit.manifest());
+            reads.extend(manifest.packs().into_iter().map(|pack| pack.pack()));
+        }
+        let grant = grants
+            .grant(key, &reads, STORAGE_GRANT_TTL)
+            .await
+            .map_err(|e| unreachable(format!("could not sign the storage grant: {e}")))?;
+        let body = serde_json::json!({
+            "key": key,
+            "writer": microvm_id,
+            "headVersion": claim.head_version,
+            "commit": commit,
+            "grant": grant,
+        });
+        let response = self
+            .authorized_request(microvm_id, reqwest::Method::PUT, "/v1/storage")
+            .await?
+            .json(&body)
+            .timeout(SANDBOX_READY_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| unreachable(format!("could not attach persistent storage: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(unreachable(format!(
+                "the agent refused persistent storage ({status}): {}",
+                text.chars().take(500).collect::<String>()
+            )));
+        }
+        Ok(())
     }
 
     pub fn with_default_policy(mut self, policy: Option<alien_core::EgressPolicy>) -> Self {
@@ -368,6 +444,7 @@ impl AwsSandbox {
             idle_pause_seconds,
             max_lifetime_seconds,
             persistent_storage: None,
+            persistent_grants: None,
             agent: reqwest::Client::new(),
         }
     }
@@ -833,11 +910,10 @@ impl Sandbox for AwsSandbox {
             request.storage_key.as_deref(),
             "sandbox.create",
         )?;
-        if storage_key.is_some() {
+        if storage_key.is_some() && self.persistent_grants.is_none() {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: "sandbox.create".to_string(),
-                reason: "this binding cannot attach persistent storage to a MicroVM yet"
-                    .to_string(),
+                reason: "the binding names no persistent store for this sandbox".to_string(),
             }));
         }
         let max_lifetime_seconds = self.lifetime_seconds(request.timeout_ms, "sandbox.create")?;
@@ -894,7 +970,11 @@ impl Sandbox for AwsSandbox {
                 self.install_egress(&microvm_id, delivery).await?;
             }
             self.wait_until_servable("sandbox.create", &microvm_id)
-                .await
+                .await?;
+            if let Some(key) = &storage_key {
+                self.attach_storage(&microvm_id, key).await?;
+            }
+            Ok(())
         }
         .await;
         if let Err(mut error) = ready {

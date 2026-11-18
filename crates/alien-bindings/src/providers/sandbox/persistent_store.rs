@@ -200,6 +200,17 @@ pub mod s3 {
         hex::encode(hmac(&key, policy_b64.as_bytes()))
     }
 
+    impl std::fmt::Debug for S3Grants {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Never the credentials.
+            f.debug_struct("S3Grants")
+                .field("bucket", &self.bucket)
+                .field("region", &self.region)
+                .field("prefix", &self.prefix)
+                .finish_non_exhaustive()
+        }
+    }
+
     impl S3Grants {
         /// Grants for `bucket` (keys under `prefix`), signed with `credentials`.
         pub fn new(
