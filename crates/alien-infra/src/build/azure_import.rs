@@ -33,6 +33,10 @@ impl ResourceImporter for AzureBuildImporter {
             build_env_vars: Some(data.build_env_vars),
             managed_identity_id: None,
             resource_prefix: None,
+            // The setup that created the stack owns this Build's role assignments and removes
+            // them; the controller has none to delete.
+            role_assignment_ids: Vec::new(),
+            role_assignments_planned: true,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
