@@ -124,12 +124,10 @@ on:
           - gcp-target-1
           - gcp-target-2
           - gcp-target-3
-      azure_target:
-        description: "Azure target subscription"
-        type: choice
-        default: azure-target-1
-        options:
-          - azure-target-1
+      azure_build_grant_stack_wide:
+        description: "Azure push: run the Build under a stack-wide build grant instead of the named one"
+        type: boolean
+        default: false
   # Nightly, and only when main changed since the last green run. These tests create real
   # cloud resources and take long, so pull requests do not run them; a pull request opts in
   # with the `run-e2e` label.
@@ -1116,10 +1114,23 @@ jobs:
           ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
           ALIEN_OVERRIDE_TYPESCRIPT_WORKER_BASE: ${{ needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.typescript_base_image || '' }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
+          ALIEN_E2E_BUILD_GRANT: ${{ inputs.azure_build_grant_stack_wide && 'stack-wide' || '' }}
         run: |
           set -a && source .env.test && set +a
           export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}"
           depot cargo nextest run -p alien-test --test push ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
+
+      - name: Assert teardown left no custom roles or role assignments (Azure)
+        if: success() && matrix.needs_oidc
+        run: |
+          set -u
+          set -a && source .env.test && set +a
+          az login --service-principal \
+            -u "$AZURE_TARGET_CLIENT_ID" -p "$AZURE_TARGET_CLIENT_SECRET" --tenant "$AZURE_TARGET_TENANT_ID" \
+            --output none
+          az account set --subscription "$AZURE_TARGET_SUBSCRIPTION_ID"
+          ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}" \
+            ./scripts/assert-azure-e2e-no-leftovers.sh
 
   # ── E2E CloudFormation distribution matrix ─────────────────────────
 
