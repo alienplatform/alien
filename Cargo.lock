@@ -359,6 +359,8 @@ dependencies = [
  "futures",
  "hex",
  "hickory-resolver",
+ "hmac 0.12.1",
+ "http 1.5.0",
  "httpmock",
  "k8s-openapi",
  "object_store",
