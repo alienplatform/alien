@@ -5014,7 +5014,9 @@ pub(crate) mod tests {
     /// running update fails.
     #[tokio::test]
     async fn release_posted_mid_update_is_delivered_to_the_operator_as_its_target() {
-        use crate::traits::deployment_store::{CreateDeploymentGroupParams, CreateDeploymentParams};
+        use crate::traits::deployment_store::{
+            CreateDeploymentGroupParams, CreateDeploymentParams,
+        };
         use crate::traits::DeploymentStore;
 
         let temp = tempfile::tempdir().expect("test directory");

@@ -4641,11 +4641,19 @@ async fn a_new_release_becomes_the_target_of_a_deployment_that_is_already_updati
             .unwrap();
         match status_after_new_release(status) {
             Some(after) => {
-                assert_eq!(record.desired_release_id.as_deref(), Some("rel_b"), "{status}");
+                assert_eq!(
+                    record.desired_release_id.as_deref(),
+                    Some("rel_b"),
+                    "{status}"
+                );
                 assert_eq!(record.status, after, "{status}");
             }
             None => {
-                assert_eq!(record.desired_release_id.as_deref(), Some("rel_a"), "{status}");
+                assert_eq!(
+                    record.desired_release_id.as_deref(),
+                    Some("rel_a"),
+                    "{status}"
+                );
                 assert_eq!(record.status, status);
             }
         }
