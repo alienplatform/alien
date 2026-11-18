@@ -28,6 +28,10 @@ pub const ENV_PERSISTENT_STORAGE: &str = "ALIEN_SANDBOX_PERSISTENT_STORAGE";
 /// is committed within about two of these plus the upload.
 const TICK: Duration = Duration::from_secs(1);
 
+/// How long an SQLite database may keep HEAD's copy (it changed during every copy, with no
+/// freezer to stop it) before the status says `behind`; the same bound as a pulled commit.
+const DATABASE_BEHIND_AFTER: Duration = Duration::from_secs(10);
+
 /// The declaration as the agent receives it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -322,10 +326,26 @@ impl PersistentStorage {
         match live.replicator.commit(live.store.as_ref()).await {
             Ok(outcome) => {
                 let head = live.replicator.head().map(|m| m.seq);
+                let waiting = live
+                    .replicator
+                    .deferred_for()
+                    .filter(|waited| *waited >= DATABASE_BEHIND_AFTER);
                 Ok(self.update(|s| {
-                    s.state = ReplicationState::Replicating;
+                    match waiting {
+                        Some(waited) => {
+                            s.state = ReplicationState::Behind;
+                            s.last_error = Some(format!(
+                                "an SQLite database changed during every copy for {}s; the \
+                                 store keeps its last consistent copy until a quiet moment",
+                                waited.as_secs()
+                            ));
+                        }
+                        None => {
+                            s.state = ReplicationState::Replicating;
+                            s.last_error = None;
+                        }
+                    }
                     s.last_synced_at = Some(Utc::now());
-                    s.last_error = None;
                     s.head = head;
                     if let CommitOutcome::Committed { commit, .. } = outcome {
                         tracing::debug!(seq = commit.seq, "persistent storage committed");

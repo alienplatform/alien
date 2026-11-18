@@ -10,11 +10,14 @@ pub mod attach;
 pub mod freeze;
 mod http;
 pub mod push;
+mod sqlite;
 pub mod tree;
 
 use std::collections::HashSet;
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use alien_sandbox_storage::{
     CommitOutcome, Committer, ErrorData as StorageError, Manifest, ObjectStore,
@@ -43,6 +46,8 @@ pub struct Replicator {
     staging: PathBuf,
     freezer: Option<Freezer>,
     committer: Committer,
+    /// Since when an SQLite database has kept HEAD's copy because it changed during every copy.
+    deferred_since: Mutex<Option<Instant>>,
 }
 
 impl Replicator {
@@ -62,6 +67,28 @@ impl Replicator {
             staging,
             freezer,
             committer,
+            deferred_since: Mutex::new(None),
+        }
+    }
+
+    /// How long an SQLite database has been left at HEAD's copy because it changed during every
+    /// copy (only without a freezer); `None` when the last commit took every database.
+    pub fn deferred_for(&self) -> Option<Duration> {
+        self.deferred_since
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map(|since| since.elapsed())
+    }
+
+    fn note_deferred(&self, deferred: bool) {
+        let mut since = self
+            .deferred_since
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        match (deferred, *since) {
+            (true, None) => *since = Some(Instant::now()),
+            (false, _) => *since = None,
+            (true, Some(_)) => {}
         }
     }
 
@@ -79,8 +106,9 @@ impl Replicator {
     ///
     /// Where the platform has a freezer, one walk and its copies run with the guest frozen, so
     /// the commit is the state of one instant. Without one (gVisor has no freezer controller),
-    /// each file is copied as it was when read, and files that name git objects are taken
-    /// first: see [`Replicator::stage_unfrozen`].
+    /// each file is copied as it was when read, files that name git objects are taken first,
+    /// and an SQLite database is copied together with its journal: see
+    /// [`Replicator::stage_unfrozen`].
     pub fn stage(&self) -> StorageResult<(Vec<TreeEntry>, Staging)> {
         self.stage_with(&mut |_| {})
     }
@@ -98,8 +126,9 @@ impl Replicator {
             .map_err(|e| io_error("freeze the guest", e))?;
         let walk = tree::walk(&self.root, &self.exclude).map_err(|e| io_error("walk", e))?;
         let mut changed = HashSet::new();
-        self.copy_changed(&walk, &mut staging, &mut changed)?;
+        self.copy_changed(&walk, &mut staging, &mut changed, &HashSet::new())?;
         frozen.thaw().map_err(|e| io_error("thaw the guest", e))?;
+        self.note_deferred(false);
         Ok((drop_vanished(walk, &changed, &staging), staging))
     }
 
@@ -110,6 +139,9 @@ impl Replicator {
     /// when the second walk listed the objects. Git writes an object before anything names it
     /// and never rewrites one, so the order holds for any number of repositories in the
     /// directory. A ref that appears only in the second walk is left for the next commit.
+    ///
+    /// Each SQLite database is copied with its `-wal` or `-journal` and kept only if the
+    /// database did not change across the copies (see [`sqlite`]).
     fn stage_unfrozen(
         &self,
         mut staging: Staging,
@@ -121,14 +153,24 @@ impl Replicator {
         };
         let refs: Vec<TreeEntry> = first.iter().filter(|e| names_objects(e)).cloned().collect();
         let mut changed = HashSet::new();
-        self.copy_changed(&refs, &mut staging, &mut changed)?;
+        self.copy_changed(&refs, &mut staging, &mut changed, &HashSet::new())?;
         between(Phase::RefsCopied);
 
         let second = tree::walk(&self.root, &self.exclude).map_err(|e| io_error("walk", e))?;
         let mut entries: Vec<TreeEntry> =
             second.into_iter().filter(|e| !names_objects(e)).collect();
         between(Phase::SecondWalk);
-        self.copy_changed(&entries, &mut staging, &mut changed)?;
+        let groups = sqlite::stage(
+            &self.root,
+            &self.exclude,
+            &mut entries,
+            self.committer.head(),
+            &mut staging,
+            between,
+        )
+        .map_err(|e| io_error("copy a database to staging", e))?;
+        self.copy_changed(&entries, &mut staging, &mut changed, &groups.handled)?;
+        self.note_deferred(groups.deferred > 0);
 
         // A ref kept from the first walk keeps its directories, even if they went in between.
         let mut paths: HashSet<String> = entries.iter().map(|e| e.path.clone()).collect();
@@ -152,8 +194,12 @@ impl Replicator {
         walk: &[TreeEntry],
         staging: &mut Staging,
         changed: &mut HashSet<String>,
+        skip: &HashSet<String>,
     ) -> StorageResult<()> {
         for entry in tree::changed_files(walk, self.committer.head()) {
+            if skip.contains(&entry.path) {
+                continue;
+            }
             changed.insert(entry.path.clone());
             staging
                 .copy(&self.root, &entry.path)
@@ -224,6 +270,8 @@ enum Phase {
     RefsCopied,
     /// The second walk is listed; its files are not copied yet.
     SecondWalk,
+    /// A database is copied; its sidecars are not yet.
+    DatabaseCopied,
 }
 
 /// A changed file that vanished between the walk and its copy is not in this commit; the next
