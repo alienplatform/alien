@@ -522,7 +522,14 @@ fn parse_list(project: &str, opened: &Opened, authorizing_version: u64) -> Resul
         return Err(list_refused(version, "a signer list names no install"));
     }
     if opened.not_after.is_some() {
-        return Err(list_refused(version, "a signer list has no expiry"));
+        // Lists published by CLIs before 3.3.69 carried an expiry. They can't be
+        // read now, so say how to start over instead of just naming the field.
+        return Err(list_refused(
+            version,
+            "it has an expiry date, so an Alien CLI older than 3.3.69 published it. \
+             Signer lists no longer expire. Run `alien devices init` to start signing \
+             again, then re-run the protected setup with the new fingerprint",
+        ));
     }
     if version == 0 {
         return Err(list_refused(version, "versions start at 1"));
