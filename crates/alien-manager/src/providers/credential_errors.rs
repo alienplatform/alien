@@ -112,6 +112,34 @@ mod tests {
                     .into_generic(),
                 true,
             ),
+            // The metadata proxy answering 404/5xx/429 or being unreachable right after the
+            // manager starts: the IMDS loader's wrapper must not make the failure permanent.
+            (
+                Platform::Aws,
+                AlienError::new(alien_aws_clients::ErrorData::RemoteServiceUnavailable {
+                    message: "AWS IMDSv2 token request failed with HTTP 404 Not Found".to_string(),
+                })
+                .into_generic(),
+                true,
+            ),
+            (
+                Platform::Aws,
+                AlienError::new(alien_aws_clients::ErrorData::HttpRequestFailed {
+                    message: "Failed to request AWS IMDSv2 token".to_string(),
+                })
+                .into_generic(),
+                true,
+            ),
+            // A real metadata misconfiguration (for example HTTP 403) stays permanent.
+            (
+                Platform::Aws,
+                AlienError::new(alien_aws_clients::ErrorData::InvalidClientConfig {
+                    message: "AWS IMDSv2 token request failed with HTTP 403 Forbidden".to_string(),
+                    errors: None,
+                })
+                .into_generic(),
+                false,
+            ),
         ];
         for (platform, source, retryable) in cases {
             let wrapped = source

@@ -617,13 +617,14 @@ async fn imds_response(
     what: &str,
     not_found_is_transient: bool,
 ) -> Result<reqwest::Response> {
-    let response = request
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: format!("Failed to request {what}"),
-        })?;
+    let response =
+        request
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: format!("Failed to request {what}"),
+            })?;
     let status = response.status();
     if status.is_success() {
         return Ok(response);
@@ -1237,7 +1238,10 @@ mod tests {
             let error = load_imds_session_credentials(Some(&endpoint))
                 .await
                 .unwrap_err();
-            assert!(error.retryable, "{status_line} should be retryable: {error}");
+            assert!(
+                error.retryable,
+                "{status_line} should be retryable: {error}"
+            );
         }
     }
 
