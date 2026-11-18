@@ -1250,7 +1250,11 @@ impl KubernetesContainerController {
  });
             }
 
-            self.not_ready.clear();
+            // A ready read ends the not-ready bound only when no ready pod restarted since the
+            // last check: a crash-looping pod is ready for a few seconds in each cycle.
+            if self.not_ready.is_active() && self.restart_free(ctx).await {
+                self.not_ready.clear();
+            }
             if self.recovering && !workload_fully_ready(&workload) {
                 // Old pods serving is not recovery: the new version has not finished rolling out.
                 self.zero_ready_observed = false;

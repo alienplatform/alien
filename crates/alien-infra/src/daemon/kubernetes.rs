@@ -557,14 +557,18 @@ impl KubernetesDaemonController {
             });
             return self
                 .not_ready
-                .outcome(error, self.recovering, chrono::Utc::now().timestamp())
+                .outcome(error, self.recovering, crate::kubernetes_workload_heartbeat::not_ready_now_unix())
                 .map(|delay| HandlerAction::Stay {
                     max_times: None,
                     suggested_delay: Some(delay),
                 });
         }
 
-        self.not_ready.clear();
+        // A ready read ends the not-ready bound only when no ready pod restarted since the last
+        // check: a crash-looping pod is ready for a few seconds in each cycle.
+        if self.not_ready.is_active() && self.restart_free(ctx).await {
+            self.not_ready.clear();
+        }
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Daemon>()?;
         if let (Some(daemon_set_name), Some(namespace)) = (&self.daemon_set_name, &self.namespace) {
@@ -2998,6 +3002,14 @@ mod tests {
 
     /// Points the context at the mock API server and answers pod and event lists with nothing.
     fn point_daemon_ctx(ctx: &mut ResourceControllerContext<'_>, server: &httpmock::MockServer) {
+        point_daemon_ctx_with_pods(ctx, server, true);
+    }
+
+    fn point_daemon_ctx_with_pods(
+        ctx: &mut ResourceControllerContext<'_>,
+        server: &httpmock::MockServer,
+        empty_pods: bool,
+    ) {
         let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
             panic!("Kubernetes config")
         };
@@ -3006,6 +3018,9 @@ mod tests {
         };
         *server_url = server.base_url();
         for (path, kind) in [("pods", "PodList"), ("events", "EventList")] {
+            if path == "pods" && !empty_pods {
+                continue;
+            }
             server.mock(|when, then| {
                 when.method(httpmock::Method::GET)
                     .path(format!("/api/v1/namespaces/test-ns/{path}"));
@@ -3088,6 +3103,102 @@ mod tests {
             controller.not_ready,
             crate::kubernetes_workload_heartbeat::NotReadyObservations::default(),
             "a ready check clears the bound"
+        );
+    }
+
+    fn ready_pod_body(restarts: i32) -> serde_json::Value {
+        serde_json::json!({"apiVersion":"v1","kind":"PodList","metadata":{},"items":[{
+            "metadata":{"name":"agent-x"},
+            "status":{"conditions":[{"type":"Ready","status":"True"}],
+                "containerStatuses":[{"name":"c","image":"i","imageID":"","ready":true,
+                    "restartCount":restarts,"state":{"running":{}}}]}
+        }]})
+    }
+
+    /// A crash-looping pod is ready for a few seconds in each cycle. A ready read that follows a
+    /// restart does not end the not-ready bound, so the refresh reaches RefreshFailed; a ready
+    /// read with no restart (a node that joined) does end it.
+    #[tokio::test]
+    async fn a_pod_alternating_not_ready_and_ready_with_a_restart_fails_its_refresh() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        point_daemon_ctx_with_pods(&mut ctx, &server, false);
+        let mut controller = manifest_test_controller();
+        let labels = controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+        controller.state = KubernetesDaemonState::Ready;
+        let now = chrono::Utc::now().timestamp();
+        controller
+            .ready_hold
+            .observe_ready([("agent-x".to_string(), 0)].into(), now);
+        let pods_path = "/api/v1/namespaces/test-ns/pods";
+        let ds_path = "/apis/apps/v1/namespaces/test-ns/daemonsets/agent";
+        let mut failed = None;
+        for cycle in 1..=100 {
+            for (ready, restarts) in [(9, cycle - 1), (10, cycle)] {
+                let mut pods = server.mock(|when, then| {
+                    when.method(httpmock::Method::GET).path(pods_path);
+                    then.status(200).json_body(ready_pod_body(restarts));
+                });
+                let mut ds = server.mock(|when, then| {
+                    when.method(httpmock::Method::GET).path(ds_path);
+                    then.status(200)
+                        .json_body(daemonset_status_body(&labels, ready));
+                });
+                let step = controller.step(&ctx).await;
+                if let Err(error) = step {
+                    failed = Some((cycle, error));
+                }
+                pods.delete();
+                ds.delete();
+                if failed.is_some() {
+                    break;
+                }
+            }
+            if failed.is_some() {
+                break;
+            }
+        }
+        let (cycle, error) = failed.expect("the crash loop fails the refresh");
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
+        assert!(!error.retryable);
+        assert!(cycle > 3, "not before the bound: cycle {cycle}");
+    }
+
+    /// A ready read right after a restart of a ready pod keeps the bound's original start.
+    #[tokio::test]
+    async fn a_ready_read_after_a_restart_keeps_the_not_ready_bound() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        point_daemon_ctx_with_pods(&mut ctx, &server, false);
+        let mut controller = manifest_test_controller();
+        let labels = controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+        controller.state = KubernetesDaemonState::Ready;
+        let now = chrono::Utc::now().timestamp();
+        controller
+            .ready_hold
+            .observe_ready([("agent-x".to_string(), 1)].into(), now);
+        controller.not_ready =
+            crate::kubernetes_workload_heartbeat::NotReadyObservations::since(now - 30);
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200)
+                .json_body(daemonset_status_body(&labels, 10));
+        });
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/api/v1/namespaces/test-ns/pods");
+            then.status(200).json_body(ready_pod_body(2));
+        });
+        controller.step(&ctx).await.expect("ready");
+        assert_eq!(
+            controller.not_ready,
+            crate::kubernetes_workload_heartbeat::NotReadyObservations::since(now - 30),
+            "a ready read after a restart keeps the original start"
         );
     }
 

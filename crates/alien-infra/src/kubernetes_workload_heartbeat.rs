@@ -56,6 +56,11 @@ impl NotReadyObservations {
         *self = Self::default();
     }
 
+    /// Whether a not-ready bound is running.
+    pub(crate) fn is_active(&self) -> bool {
+        self.since_unix.is_some()
+    }
+
     /// A workload that has been not ready since `since_unix` (tests).
     #[cfg(test)]
     pub(crate) fn since(since_unix: i64) -> Self {
