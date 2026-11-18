@@ -228,6 +228,390 @@
         "httpStatusCode": 500
       },
       "lifecycle": "live"
+    },
+    "container-failed-ready": {
+      "type": "container",
+      "_internal": {
+        "workloadName": "web",
+        "isStateful": false,
+        "namespace": "test-ns",
+        "serviceName": "web",
+        "servicePort": null,
+        "networkPolicyName": null,
+        "containerId": "web",
+        "zeroReadyObserved": false,
+        "recoveryChecks": 0,
+        "lastRecoveryCheckUnix": null,
+        "publicEndpoint": {
+          "serviceName": null,
+          "ingressName": null,
+          "gatewayName": null,
+          "httpRouteName": null,
+          "gkeHealthCheckPolicyName": null,
+          "azureHealthCheckPolicyName": null,
+          "managedTlsSecretName": null,
+          "managedAcmCertificateArn": null,
+          "managedAcmImportToken": null,
+          "managedAcmRegion": null,
+          "publicUrl": null,
+          "loadBalancerEndpoint": null,
+          "publishedCertificateId": null,
+          "publishedCertificateIssuedAt": null
+        },
+        "envSecret": null,
+        "updateGeneration": null,
+        "state": "refreshFailed",
+        "internalStayCount": null,
+        "type": "KubernetesContainerController",
+        "_controllerStateVersion": 1
+      },
+      "status": "refresh-failed",
+      "config": {
+        "id": "container-failed-ready",
+        "links": [],
+        "ports": [],
+        "code": {
+          "type": "image",
+          "image": "registry.example.com/web:1"
+        },
+        "cpu": {
+          "min": "100m",
+          "desired": "500m"
+        },
+        "memory": {
+          "min": "128Mi",
+          "desired": "512Mi"
+        },
+        "stateful": false,
+        "environment": {},
+        "permissions": "default",
+        "commandsEnabled": false,
+        "type": "container"
+      },
+      "error": {
+        "code": "RESOURCE_DRIFT",
+        "message": "Resource 'refresh-failed' has drifted from expected configuration: Deployment 'web' has 0 ready replicas out of 2 observed",
+        "context": {
+          "resource_id": "refresh-failed",
+          "message": "Deployment 'web' has 0 ready replicas out of 2 observed"
+        },
+        "retryable": false,
+        "internal": false,
+        "httpStatusCode": 500
+      },
+      "lifecycle": "live",
+      "lastFailedState": {
+        "workloadName": "web",
+        "isStateful": false,
+        "namespace": "test-ns",
+        "serviceName": "web",
+        "servicePort": null,
+        "networkPolicyName": null,
+        "containerId": "web",
+        "zeroReadyObserved": false,
+        "recoveryChecks": 0,
+        "lastRecoveryCheckUnix": null,
+        "publicEndpoint": {
+          "serviceName": null,
+          "ingressName": null,
+          "gatewayName": null,
+          "httpRouteName": null,
+          "gkeHealthCheckPolicyName": null,
+          "azureHealthCheckPolicyName": null,
+          "managedTlsSecretName": null,
+          "managedAcmCertificateArn": null,
+          "managedAcmImportToken": null,
+          "managedAcmRegion": null,
+          "publicUrl": null,
+          "loadBalancerEndpoint": null,
+          "publishedCertificateId": null,
+          "publishedCertificateIssuedAt": null
+        },
+        "envSecret": null,
+        "updateGeneration": null,
+        "state": "ready",
+        "internalStayCount": null,
+        "type": "KubernetesContainerController",
+        "_controllerStateVersion": 1
+      }
+    },
+    "container-failed-refresh": {
+      "type": "container",
+      "_internal": {
+        "workloadName": "web",
+        "isStateful": false,
+        "namespace": "test-ns",
+        "serviceName": "web",
+        "servicePort": null,
+        "networkPolicyName": null,
+        "containerId": "web",
+        "zeroReadyObserved": false,
+        "recoveryChecks": 0,
+        "lastRecoveryCheckUnix": null,
+        "publicEndpoint": {
+          "serviceName": null,
+          "ingressName": null,
+          "gatewayName": null,
+          "httpRouteName": null,
+          "gkeHealthCheckPolicyName": null,
+          "azureHealthCheckPolicyName": null,
+          "managedTlsSecretName": null,
+          "managedAcmCertificateArn": null,
+          "managedAcmImportToken": null,
+          "managedAcmRegion": null,
+          "publicUrl": null,
+          "loadBalancerEndpoint": null,
+          "publishedCertificateId": null,
+          "publishedCertificateIssuedAt": null
+        },
+        "envSecret": null,
+        "updateGeneration": null,
+        "state": "refreshFailed",
+        "internalStayCount": null,
+        "type": "KubernetesContainerController",
+        "_controllerStateVersion": 1
+      },
+      "status": "refresh-failed",
+      "config": {
+        "id": "container-failed-refresh",
+        "links": [],
+        "ports": [],
+        "code": {
+          "type": "image",
+          "image": "registry.example.com/web:1"
+        },
+        "cpu": {
+          "min": "100m",
+          "desired": "500m"
+        },
+        "memory": {
+          "min": "128Mi",
+          "desired": "512Mi"
+        },
+        "stateful": false,
+        "environment": {},
+        "permissions": "default",
+        "commandsEnabled": false,
+        "type": "container"
+      },
+      "error": {
+        "code": "RESOURCE_DRIFT",
+        "message": "Resource 'refresh-failed' has drifted from expected configuration: Deployment 'web' has 0 ready replicas out of 2 observed",
+        "context": {
+          "resource_id": "refresh-failed",
+          "message": "Deployment 'web' has 0 ready replicas out of 2 observed"
+        },
+        "retryable": false,
+        "internal": false,
+        "httpStatusCode": 500
+      },
+      "lifecycle": "live",
+      "lastFailedState": {
+        "workloadName": "web",
+        "isStateful": false,
+        "namespace": "test-ns",
+        "serviceName": "web",
+        "servicePort": null,
+        "networkPolicyName": null,
+        "containerId": "web",
+        "zeroReadyObserved": false,
+        "recoveryChecks": 0,
+        "lastRecoveryCheckUnix": null,
+        "publicEndpoint": {
+          "serviceName": null,
+          "ingressName": null,
+          "gatewayName": null,
+          "httpRouteName": null,
+          "gkeHealthCheckPolicyName": null,
+          "azureHealthCheckPolicyName": null,
+          "managedTlsSecretName": null,
+          "managedAcmCertificateArn": null,
+          "managedAcmImportToken": null,
+          "managedAcmRegion": null,
+          "publicUrl": null,
+          "loadBalancerEndpoint": null,
+          "publishedCertificateId": null,
+          "publishedCertificateIssuedAt": null
+        },
+        "envSecret": null,
+        "updateGeneration": null,
+        "state": "refreshFailed",
+        "internalStayCount": null,
+        "type": "KubernetesContainerController",
+        "_controllerStateVersion": 1
+      }
+    },
+    "daemon-failed-ready": {
+      "type": "daemon",
+      "_internal": {
+        "daemonSetName": "agent",
+        "namespace": "test-ns",
+        "envSecret": null,
+        "publicEndpoint": {
+          "serviceName": null,
+          "ingressName": null,
+          "gatewayName": null,
+          "httpRouteName": null,
+          "gkeHealthCheckPolicyName": null,
+          "azureHealthCheckPolicyName": null,
+          "managedTlsSecretName": null,
+          "managedAcmCertificateArn": null,
+          "managedAcmImportToken": null,
+          "managedAcmRegion": null,
+          "publicUrl": null,
+          "loadBalancerEndpoint": null,
+          "publishedCertificateId": null,
+          "publishedCertificateIssuedAt": null
+        },
+        "state": "refreshFailed",
+        "internalStayCount": null,
+        "type": "KubernetesDaemonController",
+        "_controllerStateVersion": 1
+      },
+      "status": "refresh-failed",
+      "config": {
+        "id": "daemon-failed-ready",
+        "links": [],
+        "permissions": "default",
+        "code": {
+          "type": "image",
+          "image": "registry.example.com/agent:1"
+        },
+        "cpu": {
+          "min": "0.1",
+          "desired": "0.1"
+        },
+        "memory": {
+          "min": "128Mi",
+          "desired": "128Mi"
+        },
+        "environment": {},
+        "commandsEnabled": false,
+        "type": "daemon"
+      },
+      "error": {
+        "code": "RESOURCE_DRIFT",
+        "message": "Resource 'daemon-refresh-failed' has drifted from expected configuration: Daemon daemonset is not fully ready",
+        "context": {
+          "resource_id": "daemon-refresh-failed",
+          "message": "Daemon daemonset is not fully ready"
+        },
+        "retryable": false,
+        "internal": false,
+        "httpStatusCode": 500
+      },
+      "lifecycle": "live",
+      "lastFailedState": {
+        "daemonSetName": "agent",
+        "namespace": "test-ns",
+        "envSecret": null,
+        "publicEndpoint": {
+          "serviceName": null,
+          "ingressName": null,
+          "gatewayName": null,
+          "httpRouteName": null,
+          "gkeHealthCheckPolicyName": null,
+          "azureHealthCheckPolicyName": null,
+          "managedTlsSecretName": null,
+          "managedAcmCertificateArn": null,
+          "managedAcmImportToken": null,
+          "managedAcmRegion": null,
+          "publicUrl": null,
+          "loadBalancerEndpoint": null,
+          "publishedCertificateId": null,
+          "publishedCertificateIssuedAt": null
+        },
+        "state": "ready",
+        "internalStayCount": null,
+        "type": "KubernetesDaemonController",
+        "_controllerStateVersion": 1
+      }
+    },
+    "daemon-failed-refresh": {
+      "type": "daemon",
+      "_internal": {
+        "daemonSetName": "agent",
+        "namespace": "test-ns",
+        "envSecret": null,
+        "publicEndpoint": {
+          "serviceName": null,
+          "ingressName": null,
+          "gatewayName": null,
+          "httpRouteName": null,
+          "gkeHealthCheckPolicyName": null,
+          "azureHealthCheckPolicyName": null,
+          "managedTlsSecretName": null,
+          "managedAcmCertificateArn": null,
+          "managedAcmImportToken": null,
+          "managedAcmRegion": null,
+          "publicUrl": null,
+          "loadBalancerEndpoint": null,
+          "publishedCertificateId": null,
+          "publishedCertificateIssuedAt": null
+        },
+        "state": "refreshFailed",
+        "internalStayCount": null,
+        "type": "KubernetesDaemonController",
+        "_controllerStateVersion": 1
+      },
+      "status": "refresh-failed",
+      "config": {
+        "id": "daemon-failed-refresh",
+        "links": [],
+        "permissions": "default",
+        "code": {
+          "type": "image",
+          "image": "registry.example.com/agent:1"
+        },
+        "cpu": {
+          "min": "0.1",
+          "desired": "0.1"
+        },
+        "memory": {
+          "min": "128Mi",
+          "desired": "128Mi"
+        },
+        "environment": {},
+        "commandsEnabled": false,
+        "type": "daemon"
+      },
+      "error": {
+        "code": "RESOURCE_DRIFT",
+        "message": "Resource 'daemon-refresh-failed' has drifted from expected configuration: Daemon daemonset is not fully ready",
+        "context": {
+          "resource_id": "daemon-refresh-failed",
+          "message": "Daemon daemonset is not fully ready"
+        },
+        "retryable": false,
+        "internal": false,
+        "httpStatusCode": 500
+      },
+      "lifecycle": "live",
+      "lastFailedState": {
+        "daemonSetName": "agent",
+        "namespace": "test-ns",
+        "envSecret": null,
+        "publicEndpoint": {
+          "serviceName": null,
+          "ingressName": null,
+          "gatewayName": null,
+          "httpRouteName": null,
+          "gkeHealthCheckPolicyName": null,
+          "azureHealthCheckPolicyName": null,
+          "managedTlsSecretName": null,
+          "managedAcmCertificateArn": null,
+          "managedAcmImportToken": null,
+          "managedAcmRegion": null,
+          "publicUrl": null,
+          "loadBalancerEndpoint": null,
+          "publishedCertificateId": null,
+          "publishedCertificateIssuedAt": null
+        },
+        "state": "refreshFailed",
+        "internalStayCount": null,
+        "type": "KubernetesDaemonController",
+        "_controllerStateVersion": 1
+      }
     }
   },
   "resourcePrefix": "test"

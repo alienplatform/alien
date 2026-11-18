@@ -47,6 +47,8 @@ struct FakeApi {
     /// A workload path whose next update finds the object changed since the controller read it,
     /// as when the workload controller writes its status in between.
     changed_before_next_update: Option<String>,
+    /// Workload paths whose pods crash-loop: no replica is ready until the workload is updated.
+    crash_looping: BTreeSet<String>,
 }
 
 fn status(code: u16, reason: &str, name: &str) -> Value {
@@ -100,6 +102,12 @@ impl FakeApi {
                 )
             }
             Method::GET => match self.objects.get(path) {
+                Some(object) if self.crash_looping.contains(path) => {
+                    let mut object = object.clone();
+                    object["status"]["readyReplicas"] = 0.into();
+                    object["status"]["availableReplicas"] = 0.into();
+                    (200, object)
+                }
                 Some(object) => (200, object.clone()),
                 None => (404, status(404, "NotFound", &name)),
             },
@@ -149,6 +157,8 @@ impl FakeApi {
                 object["metadata"]["resourceVersion"] = (stored_version + 1).to_string().into();
                 if is_workload(path) {
                     object = rolled_out(object, generation + 1);
+                    // The new pod spec replaces the crash-looping pods.
+                    self.crash_looping.remove(path);
                 }
                 self.objects.insert(path.to_string(), object.clone());
                 (200, object)
@@ -650,4 +660,140 @@ async fn a_changed_release_updates_a_container_that_failed_readiness() {
         objects[&deployment_path("platform")]["spec"]["template"]["spec"]["containers"][0]["image"],
         "registry.example.com/platform:2"
     );
+}
+
+/// Installs release 1, makes the workload of `failed` crash-loop, and steps the executor until the
+/// Container's own Ready step fails its retries and the record is RefreshFailed: the record the
+/// executor writes, with its `lastFailedState`.
+async fn crash_loop_until_refresh_failed(
+    failed: &str,
+) -> (String, Arc<Mutex<FakeApi>>, StackState, usize) {
+    let (url, api) = start_fake_api().await;
+    let config = deployment_config();
+    let mut statuses = BTreeMap::new();
+    let installed = stack("1");
+    let install = StackExecutor::builder(&installed, client_config(&url))
+        .deployment_config(&config)
+        .running_resource_policy(RunningResourcePolicy::All)
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("install executor");
+    let (mut state, mut step) = run_steps(
+        &install,
+        &api,
+        StackState::with_resource_prefix(Platform::Kubernetes, "test".to_string()),
+        0,
+        &mut statuses,
+    )
+    .await;
+    api.lock()
+        .unwrap()
+        .crash_looping
+        .insert(deployment_path(failed));
+
+    let observe = StackExecutor::builder(&installed, client_config(&url))
+        .deployment_config(&config)
+        .running_resource_policy(RunningResourcePolicy::All)
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("observing executor");
+    let limit = step + 200;
+    while state.resources[failed].status != ResourceStatus::RefreshFailed {
+        assert!(
+            step < limit,
+            "the crash-looping container never fails its check"
+        );
+        api.lock().unwrap().step = step;
+        state = observe.step(state).await.expect("executor step").next_state;
+        step += 1;
+    }
+    assert!(
+        state.resources[failed].last_failed_state.is_some(),
+        "the executor saves the controller that failed"
+    );
+    (url, api, state, step)
+}
+
+/// A retry of a Container whose real Ready step failed applies the pod spec again: the executor
+/// saves the Ready-state controller as `lastFailedState`, and resuming it would run the same check
+/// against the same crash-looping pods.
+#[tokio::test]
+async fn a_retry_of_a_crash_looping_container_applies_the_spec_again() {
+    use crate::container::kubernetes::{KubernetesContainerController, KubernetesContainerState};
+    use crate::core::state_utils::{StackResourceStateExt, StackStateExt};
+
+    let (url, api, mut state, first_step) = crash_loop_until_refresh_failed("platform").await;
+    assert!(state
+        .retry_failed()
+        .unwrap()
+        .contains(&"platform".to_string()));
+    let resumed = state.resources["platform"]
+        .get_internal_controller()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        resumed
+            .as_any()
+            .downcast_ref::<KubernetesContainerController>()
+            .unwrap()
+            .state,
+        KubernetesContainerState::UpdateStart
+    );
+
+    let config = deployment_config();
+    let observe = StackExecutor::builder(&stack("1"), client_config(&url))
+        .deployment_config(&config)
+        .running_resource_policy(RunningResourcePolicy::All)
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("executor");
+    for step in first_step..first_step + 60 {
+        api.lock().unwrap().step = step;
+        state = observe.step(state).await.expect("executor step").next_state;
+        if state.resources["platform"].status == ResourceStatus::Running {
+            break;
+        }
+    }
+    assert_eq!(state.resources["platform"].status, ResourceStatus::Running);
+    assert!(api
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .any(|call| call.step >= first_step
+            && call.method == Method::PUT
+            && call.path == deployment_path("platform")));
+}
+
+/// An unchanged release over the same record goes through `resume_unchanged_failed_resources` and
+/// applies the pod spec again.
+#[tokio::test]
+async fn an_unchanged_release_heals_a_crash_looping_container() {
+    let (url, api, state, first_step) = crash_loop_until_refresh_failed("platform").await;
+    let config = deployment_config();
+    let update = StackExecutor::builder(&stack("1"), client_config(&url))
+        .deployment_config(&config)
+        .resume_unchanged_failed_resources(true)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("update executor");
+    let mut state = state;
+    for step in first_step..first_step + 60 {
+        api.lock().unwrap().step = step;
+        state = update.step(state).await.expect("executor step").next_state;
+        if state.resources["platform"].status == ResourceStatus::Running {
+            break;
+        }
+    }
+    assert_eq!(state.resources["platform"].status, ResourceStatus::Running);
+    assert!(api
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .any(|call| call.step >= first_step
+            && call.method == Method::PUT
+            && call.path == deployment_path("platform")));
 }

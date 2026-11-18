@@ -488,6 +488,13 @@ impl KubernetesDaemonController {
                 });
             }
         }
+        if live.is_none() {
+            let config = ctx.desired_resource_config::<Daemon>()?;
+            return Err(AlienError::new(ErrorData::ResourceDrift {
+                resource_id: config.id.clone(),
+                message: "Daemon daemonset is missing".to_string(),
+            }));
+        }
         if !live.as_ref().is_some_and(daemonset_is_ready) {
             let config = ctx.desired_resource_config::<Daemon>()?;
             // Not ready (or still rolling) is a health observation, not drift: it is retried, and
@@ -1113,15 +1120,15 @@ impl KubernetesDaemonController {
     }
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    fn reapplies_after_failed_refresh(&self) -> bool {
+        true
+    }
+
     /// Secret-typed env vars never enter the resource config on Kubernetes
     /// (they're projected via secretKeyRef), so config diffing alone cannot
     /// see secret rotations. Schedule an update when the snapshot-derived
     /// env-secret checksum drifts from the one applied last; the update
     /// re-reconciles the Secret and rolls pods via the checksum annotation.
-    fn reapplies_after_failed_refresh(&self) -> bool {
-        true
-    }
-
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let Some(daemon_set_name) = self.daemon_set_name.as_ref() else {
             return Ok(false);
@@ -2829,6 +2836,38 @@ mod tests {
             .await
             .expect("recovers on the next refresh");
         assert_eq!(controller.get_status(), ResourceStatus::Running);
+    }
+
+    /// A DaemonSet that is gone is drift, not a health observation: re-checking never brings it
+    /// back, so the error is not retryable and says the object is missing.
+    #[tokio::test]
+    async fn a_deleted_daemonset_is_drift() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes config")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual config")
+        };
+        *server_url = server.base_url();
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(404).json_body(serde_json::json!({
+                "kind":"Status","apiVersion":"v1","status":"Failure",
+                "reason":"NotFound","code":404,"message":"agent: NotFound",
+                "details":{"name":"agent"}
+            }));
+        });
+        let mut controller = manifest_test_controller();
+        controller.state = KubernetesDaemonState::Ready;
+        let error = controller.step(&ctx).await.expect_err("missing");
+        assert_eq!(error.code, "RESOURCE_DRIFT");
+        assert!(!error.retryable);
+        assert!(error.message.contains("missing"), "{}", error.message);
     }
 
     /// A roll that stalls (a node has no room for the new pod) ends with the counts and the

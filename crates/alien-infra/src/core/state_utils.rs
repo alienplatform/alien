@@ -227,6 +227,8 @@ impl StackResourceStateExt for StackResourceState {
             return Ok(false);
         }
 
+        let failed_status = self.status;
+
         // Use the stored last failed state to resume from where the failure occurred
         match self.take_last_failed_controller() {
             Ok(Some(mut last_failed_state)) => {
@@ -235,6 +237,14 @@ impl StackResourceStateExt for StackResourceState {
                     "Resuming resource from last failed state"
                 );
                 last_failed_state.reset_stay_count();
+                // A refresh failure of a workload that failed its readiness check resumes at
+                // the check that failed, which gives the same answer until its pods are
+                // applied again. Apply the current spec instead.
+                if failed_status == ResourceStatus::RefreshFailed
+                    && last_failed_state.reapplies_after_failed_refresh()
+                {
+                    last_failed_state.transition_to_update()?;
+                }
                 let next_status = last_failed_state.get_status();
                 let next_outputs = last_failed_state.get_outputs();
                 self.set_internal_controller(Some(last_failed_state))?;
@@ -1205,6 +1215,17 @@ mod tests {
             ResourceStatus::UpdateFailed
         );
 
+        // Records as the executor writes them: the failed controller is saved as `lastFailedState`,
+        // in the Ready state (the check that failed) or the RefreshFailed state.
+        for id in [
+            "container-failed-ready",
+            "container-failed-refresh",
+            "daemon-failed-ready",
+            "daemon-failed-refresh",
+        ] {
+            assert!(state.resources[id].last_failed_state.is_some(), "'{id}'");
+        }
+
         for (id, record) in &mut state.resources {
             assert!(record.retry_failed().unwrap(), "'{id}' is retried");
             assert_eq!(record.status, ResourceStatus::Updating, "'{id}'");
@@ -1212,4 +1233,3 @@ mod tests {
         }
     }
 }
-
