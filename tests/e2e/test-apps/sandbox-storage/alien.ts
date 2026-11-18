@@ -14,7 +14,7 @@ const agents = new alien.Sandbox("agents")
     src: "./sandbox",
     toolchain: { type: "docker", dockerfile: "Dockerfile" },
   })
-  .egress({ mode: "none" })
+  .egress("none")
   .lifecycle({ maxLifetimeSeconds: 1800 })
   .persistentStorage(storage)
   .build()
