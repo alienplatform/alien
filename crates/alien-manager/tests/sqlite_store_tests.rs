@@ -1146,6 +1146,73 @@ async fn heartbeat_acquires_a_failed_update_only_when_it_asks_for_running_too() 
     }
 }
 
+/// The standalone deployment loop asks for its active statuses plus every retryable failed
+/// status (no Running). A failed update with a retry waiting is acquired by it with the retry
+/// still requested; one with no retry waiting is not acquired by it.
+#[tokio::test]
+async fn deployment_loop_acquires_a_failed_update_only_for_its_retry() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "loop-retry", Platform::Aws).await;
+    let loop_filter = DeploymentFilter {
+        statuses: Some(
+            [
+                "pending",
+                "initial-setup",
+                "provisioning",
+                "waiting-for-machines",
+                "waiting-for-secrets",
+                "update-pending",
+                "updating",
+                "delete-pending",
+                "deleting",
+                "preflights-failed",
+                "initial-setup-failed",
+                "provisioning-failed",
+                "refresh-failed",
+                "update-failed",
+                "delete-failed",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        ),
+        deployment_ids: Some(vec![dep.id.clone()]),
+        ..Default::default()
+    };
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET status = 'update-failed', retry_requested = 0 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+    assert!(store
+        .acquire(&test_subject(), "loop-session", &loop_filter, 1)
+        .await
+        .unwrap()
+        .is_empty());
+
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET retry_requested = 1 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+    let acquired = store
+        .acquire(&test_subject(), "loop-session", &loop_filter, 1)
+        .await
+        .unwrap();
+    assert_eq!(acquired.len(), 1, "the loop must take a waiting retry");
+    assert!(acquired[0].deployment.retry_requested);
+}
+
 /// The heartbeat takes a failed update only for the machine-list refresh. A deployment with a
 /// retry waiting is left alone (the heartbeat never runs a step of the retry), the retry stays
 /// requested, and the work loop's own failed-update acquisition still takes it.

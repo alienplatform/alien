@@ -1007,8 +1007,7 @@ impl DeploymentLoop {
         // A failed update that only refreshes the machines its cluster admits. Whatever goes
         // wrong before that refresh is logged and the lease released: nothing here may replace
         // the update's own error or write a checkpoint.
-        let membership_only = options.require_heartbeats_enabled
-            && status == DeploymentStatus::UpdateFailed
+        let membership_only = status == DeploymentStatus::UpdateFailed
             && alien_deployment::membership_tick_wanted(&recorded_state);
         if let Some(next_status) = alien_deployment::destroy_without_runtime(&recorded_state) {
             info!(
@@ -1472,7 +1471,7 @@ impl DeploymentLoop {
         // nothing, so neither would refresh the machines the cluster admits. That is
         // all this tick does: it writes nothing to the deployment, and a request to
         // retry is never read here (such a deployment takes the normal step below).
-        if options.require_heartbeats_enabled && alien_deployment::membership_tick_wanted(&state) {
+        if alien_deployment::membership_tick_wanted(&state) {
             let tick = alien_deployment::run_membership_tick(
                 &state,
                 &config,
@@ -3747,6 +3746,15 @@ mod tests {
                 runner: &DeploymentLoop,
                 change: impl FnOnce(&mut DeploymentRecord),
             ) {
+                self.process_with_options(runner, change, None).await;
+            }
+
+            async fn process_with_options(
+                &self,
+                runner: &DeploymentLoop,
+                change: impl FnOnce(&mut DeploymentRecord),
+                options: Option<ProcessOptions>,
+            ) {
                 let acquired = self
                     .manager
                     .deployment_store
@@ -3774,12 +3782,15 @@ mod tests {
                         item.deployment,
                         item.execution_claim,
                         "test-session",
-                        ProcessOptions {
-                            max_steps: 1,
-                            require_heartbeats_enabled: matches!(
-                                self.record().await.status.as_str(),
-                                "running" | "refresh-failed" | "update-failed"
-                            ),
+                        match options {
+                            Some(options) => options,
+                            None => ProcessOptions {
+                                max_steps: 1,
+                                require_heartbeats_enabled: matches!(
+                                    self.record().await.status.as_str(),
+                                    "running" | "refresh-failed" | "update-failed"
+                                ),
+                            },
                         },
                     )
                     .await;
@@ -3939,6 +3950,46 @@ mod tests {
                     "{platform:?}: only acquire and release may write"
                 );
             }
+        }
+
+        /// The deployment loop can be handed a failed update with no retry waiting (a control
+        /// plane gives any runtime acquire that claim). It does the same machine-list refresh
+        /// as the heartbeat: credentials missing means nothing is written, and the update's
+        /// own error stays.
+        #[tokio::test]
+        async fn the_deployment_loop_refreshes_a_failed_update_and_writes_nothing() {
+            let fixture = Fixture::new(DeploymentStatus::UpdateFailed, transient_error()).await;
+            let original = serde_json::to_value(AlienError::new(GenericError {
+                message: "the update failed".to_string(),
+            }))
+            .unwrap();
+            fixture
+                .db
+                .execute(&format!(
+                    "UPDATE deployments SET error = '{}'",
+                    original.to_string().replace('\'', "''")
+                ))
+                .await
+                .unwrap();
+            let before = fixture.record().await;
+            let writes = fixture.writes().await;
+
+            fixture
+                .process_with_options(
+                    &fixture.runner(),
+                    |_| {},
+                    Some(ProcessOptions::deployment_tick()),
+                )
+                .await;
+
+            let after = fixture.record().await;
+            assert_eq!(after.status, "update-failed");
+            assert_eq!(after.error, Some(original));
+            assert_eq!(after.updated_at, before.updated_at);
+            assert!(
+                fixture.writes().await - writes <= 2,
+                "only acquire and release may write"
+            );
         }
 
         fn config_naming_slots(
