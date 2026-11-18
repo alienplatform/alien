@@ -214,6 +214,56 @@ impl AwsSandbox {
         Ok(())
     }
 
+    /// Mints a fresh grant for `key` and hands it to the agent of `sandbox_id`, replacing the
+    /// one it holds. The restore is done by then, so it carries no reads.
+    async fn renew_grant(&self, sandbox_id: &str, key: &str, operation: &str) -> Result<()> {
+        let failed = |reason: String| {
+            AlienError::new(ErrorData::SandboxUnreachable {
+                operation: operation.to_string(),
+                reason,
+            })
+        };
+        let grants = self
+            .persistent_grants
+            .as_ref()
+            .ok_or_else(|| failed("the binding has no persistent store to renew".to_string()))?;
+        let grant = grants
+            .grant(key, &[], STORAGE_GRANT_TTL)
+            .await
+            .map_err(|e| failed(format!("could not sign the storage grant: {e}")))?;
+        let response = self
+            .authorized_request(sandbox_id, reqwest::Method::PUT, "/v1/storage/grant")
+            .await?
+            .json(&serde_json::json!({ "grant": grant }))
+            .timeout(SANDBOX_READY_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| failed(format!("could not renew the storage grant: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(failed(format!(
+                "the agent refused the renewed grant ({status}): {}",
+                text.chars().take(500).collect::<String>()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Renews the grant behind `status` when it is past half its life or denied. Returns
+    /// whether it renewed.
+    async fn refresh_grant(
+        &self,
+        sandbox_id: &str,
+        status: &SandboxStorageStatus,
+        operation: &str,
+    ) -> Result<bool> {
+        super::persistent_store::refresh_if_past_half(status, |key| async move {
+            self.renew_grant(sandbox_id, &key, operation).await
+        })
+        .await
+    }
+
     fn key_store(&self, key: &str, operation: &str) -> Result<super::persistent_store::KeyStore> {
         let grants = self.persistent_grants.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::OperationNotSupported {
@@ -1121,7 +1171,19 @@ impl Sandbox for AwsSandbox {
     }
 
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
-        self.fetch(sandbox_id, "sandbox.get").await
+        let instance = self.fetch(sandbox_id, "sandbox.get").await?;
+        // A caller that keeps reaching its sandbox keeps the grant fresh. Best effort: `get`
+        // reports the sandbox whether or not its agent answers.
+        if self.persistent_storage.is_some()
+            && instance
+                .as_ref()
+                .is_some_and(|i| i.state == SandboxState::Running)
+        {
+            if let Err(error) = self.storage_status(sandbox_id).await {
+                warn!(sandbox = sandbox_id, %error, "could not check the persistent storage grant");
+            }
+        }
+        Ok(instance)
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
@@ -1376,14 +1438,17 @@ impl Sandbox for AwsSandbox {
         if self.persistent_storage.is_none() {
             return Ok(None);
         }
-        self.agent_storage(
-            sandbox_id,
-            reqwest::Method::GET,
-            "/v1/storage",
-            "sandbox.persistentStorage",
-        )
-        .await
-        .map(Some)
+        let operation = "sandbox.persistentStorage";
+        let status = self
+            .agent_storage(sandbox_id, reqwest::Method::GET, "/v1/storage", operation)
+            .await?;
+        if self.refresh_grant(sandbox_id, &status, operation).await? {
+            return self
+                .agent_storage(sandbox_id, reqwest::Method::GET, "/v1/storage", operation)
+                .await
+                .map(Some);
+        }
+        Ok(Some(status))
     }
 
     async fn sync_storage(&self, sandbox_id: &str) -> Result<SandboxStorageStatus> {
@@ -1393,11 +1458,18 @@ impl Sandbox for AwsSandbox {
                 reason: "this sandbox declares no persistent storage".to_string(),
             }));
         }
+        let operation = "sandbox.sync";
+        // The agent refuses a sync on an expired grant, so the grant is checked (and renewed
+        // when past half its life or denied) before the sync, not after.
+        let status = self
+            .agent_storage(sandbox_id, reqwest::Method::GET, "/v1/storage", operation)
+            .await?;
+        self.refresh_grant(sandbox_id, &status, operation).await?;
         self.agent_storage(
             sandbox_id,
             reqwest::Method::POST,
             "/v1/storage/sync",
-            "sandbox.sync",
+            operation,
         )
         .await
     }
