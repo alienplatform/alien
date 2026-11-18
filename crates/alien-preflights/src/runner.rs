@@ -12,6 +12,24 @@ pub struct PreflightRunner {
     registry: PreflightRegistry,
 }
 
+/// A capacity group as the release declares it.
+#[cfg(feature = "runtime-checks")]
+fn declared_group(
+    release_stack: &Stack,
+    cluster_id: &str,
+    group_id: &str,
+) -> Option<alien_core::CapacityGroup> {
+    release_stack
+        .resources
+        .get(cluster_id)?
+        .config
+        .downcast_ref::<alien_core::ComputeCluster>()?
+        .capacity_groups
+        .iter()
+        .find(|group| group.group_id == group_id)
+        .cloned()
+}
+
 impl PreflightRunner {
     /// Create a new preflight runner with the default registry
     pub fn new() -> Self {
@@ -326,7 +344,7 @@ impl PreflightRunner {
                 prepared,
                 stack_state,
                 &chosen,
-                &Self::declared_cluster_ids(release_stack),
+                release_stack,
             )?,
             results,
         ))
@@ -361,20 +379,23 @@ impl PreflightRunner {
     }
 
     /// The stack with each not-yet-created pool's capacity group on the machine `chosen` names.
-    /// `declared_clusters` are the clusters the release declares: their groups follow the
-    /// declaration as the planner reads it; the groups of a generated cluster are derived
-    /// from its workloads.
+    /// `release_stack` is the stack as the release declares it, before registration filled
+    /// in profiles: a declared cluster's groups follow the declared requirements and scale
+    /// bounds as the planner reads them (`stack` holds the default machine's hardware there,
+    /// which would read as the minimum); the groups of a generated cluster are derived from
+    /// its workloads.
     #[cfg(feature = "runtime-checks")]
     pub fn with_chosen_machines(
         stack: &Stack,
         stack_state: &StackState,
         chosen: &DeploymentConfig,
-        declared_clusters: &std::collections::HashSet<String>,
+        release_stack: &Stack,
     ) -> Result<Option<Stack>> {
         use alien_core::ComputeCluster;
         let Some(settings) = chosen.stack_settings.compute.as_ref() else {
             return Ok(None);
         };
+        let declared_clusters = Self::declared_cluster_ids(release_stack);
         let mut updated = stack.clone();
         let mut changed = false;
         for (cluster_id, entry) in updated.resources.iter_mut() {
@@ -405,7 +426,15 @@ impl PreflightRunner {
                 // The whole group follows the machine, profile included, derived from the
                 // pool's workloads as the next deployment derives it: a group with only the machine changed would
                 // differ from that derivation and read as a modified frozen resource.
-                let mut moved = group.clone();
+                // A declared group starts from the release's own declaration: the prepared
+                // one carries the registration default's hardware in place of the declared
+                // profile and counts.
+                let mut moved = if declared {
+                    declared_group(release_stack, cluster_id, &group.group_id)
+                        .unwrap_or_else(|| group.clone())
+                } else {
+                    group.clone()
+                };
                 // A failure is an error, not a skip: keeping the old group would leave the
                 // pool on the default machine that quota just refused.
                 let materialized = if declared {
@@ -1210,7 +1239,7 @@ mod setup_update_authorization_tests {
             &stack,
             &StackState::new(Platform::Azure),
             &chosen,
-            &Default::default(),
+            &no_release_stack(),
         )
         .unwrap()
         .expect("the pool moves");
@@ -1226,6 +1255,11 @@ mod setup_update_authorization_tests {
                 .to_machine_profile();
         assert_eq!(group.instance_type.as_deref(), Some("Standard_D2s_v5"));
         assert_eq!(group.profile, Some(catalog));
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    fn no_release_stack() -> Stack {
+        Stack::new("none".into()).build()
     }
 
     /// A stack with one "general" pool on `default_machine` (profile as the catalog has it)
@@ -1311,7 +1345,7 @@ mod setup_update_authorization_tests {
             &stack,
             &StackState::new(Platform::Azure),
             &choose_fixed("Standard_F4s_v2"),
-            &Default::default(),
+            &no_release_stack(),
         )
         .unwrap()
         .expect("the pool moves");
@@ -1333,7 +1367,7 @@ mod setup_update_authorization_tests {
             &stack,
             &StackState::new(Platform::Azure),
             &choose_fixed("Standard_F4s_v2"),
-            &Default::default(),
+            &no_release_stack(),
         )
         .unwrap()
         .expect("the pool moves");
@@ -1368,7 +1402,7 @@ mod setup_update_authorization_tests {
             &stack,
             &StackState::new(Platform::Azure),
             &chosen,
-            &Default::default(),
+            &no_release_stack(),
         )
         .unwrap()
         .expect("the pool moves");
@@ -1394,7 +1428,7 @@ mod setup_update_authorization_tests {
             &stack,
             &StackState::new(Platform::Azure),
             &choose_fixed("Standard_F4s_v2"),
-            &Default::default(),
+            &no_release_stack(),
         )
         .unwrap()
         .expect("the pool moves");
@@ -1406,11 +1440,9 @@ mod setup_update_authorization_tests {
         );
     }
 
-    /// A declared cluster's group keeps its own declared requirements (here 100Gi of disk),
-    /// not what its containers ask for.
+    /// A release stack declaring one "general" pool with the given requirements and no machine.
     #[cfg(feature = "runtime-checks")]
-    #[test]
-    fn first_setup_selection_follows_a_declared_groups_own_requirements() {
+    fn declared_release(memory_gib: u64, disk_gib: u64) -> Stack {
         use alien_core::MachineProfile;
         let mut stack = pool_with_workload("Standard_D4s_v5", "1Gi", Some("5Gi"));
         let cluster = stack
@@ -1423,18 +1455,48 @@ mod setup_update_authorization_tests {
         cluster.capacity_groups[0].instance_type = None;
         cluster.capacity_groups[0].profile = Some(MachineProfile {
             cpu: "2".to_string(),
-            memory_bytes: 4 * 1024 * 1024 * 1024,
-            ephemeral_storage_bytes: 100 * 1024 * 1024 * 1024,
+            memory_bytes: memory_gib * 1024 * 1024 * 1024,
+            ephemeral_storage_bytes: disk_gib * 1024 * 1024 * 1024,
             architecture: None,
             gpu: None,
             data_disk: None,
         });
-        let declared: std::collections::HashSet<String> = ["compute".to_string()].into();
+        stack
+    }
+
+    /// What registration prepares from `release`: no Azure credentials, so every declared
+    /// group carries the default machine's hardware.
+    #[cfg(feature = "runtime-checks")]
+    fn registered_from(release: &Stack, default_machine: &str) -> Stack {
+        let mut prepared = release.clone();
+        let default =
+            alien_core::instance_catalog::find_instance_type(Platform::Azure, default_machine)
+                .unwrap()
+                .to_machine_profile();
+        let cluster = prepared
+            .resources
+            .get_mut("compute")
+            .unwrap()
+            .config
+            .downcast_mut::<alien_core::ComputeCluster>()
+            .unwrap();
+        cluster.capacity_groups[0].instance_type = Some(default_machine.to_string());
+        cluster.capacity_groups[0].profile = Some(default);
+        prepared
+    }
+
+    /// A declared cluster's group keeps its own declared requirements (here 100Gi of disk),
+    /// not what its containers ask for.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_selection_follows_a_declared_groups_own_requirements() {
+        let release = declared_release(4, 100);
+        let registered = registered_from(&release, "Standard_D4s_v5");
         let updated = PreflightRunner::with_chosen_machines(
-            &stack,
+            &registered,
             &StackState::new(Platform::Azure),
             &choose_fixed("Standard_F4s_v2"),
-            &declared,
+            &release,
         )
         .unwrap()
         .expect("the pool moves");
@@ -1447,6 +1509,44 @@ mod setup_update_authorization_tests {
         );
     }
 
+    /// Registration put the default machine's hardware (16 GiB) in the prepared group; the
+    /// release declares 4 GiB. A smaller pick that meets the declaration is accepted.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_selection_accepts_a_declared_pool_smaller_than_the_registered_default() {
+        let release = declared_release(4, 20);
+        let registered = registered_from(&release, "Standard_D4s_v5");
+        let updated = PreflightRunner::with_chosen_machines(
+            &registered,
+            &StackState::new(Platform::Azure),
+            &choose_fixed("Standard_F4s_v2"),
+            &release,
+        )
+        .unwrap()
+        .expect("the pool moves");
+        assert_eq!(
+            general_group(&updated).instance_type.as_deref(),
+            Some("Standard_F4s_v2")
+        );
+    }
+
+    /// A pick below what the release declares is refused, though the registered default
+    /// would not have been.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_selection_refuses_a_pick_below_the_declared_requirements() {
+        let release = declared_release(12, 20);
+        let registered = registered_from(&release, "Standard_D4s_v5");
+        let error = PreflightRunner::with_chosen_machines(
+            &registered,
+            &StackState::new(Platform::Azure),
+            &choose_fixed("Standard_F4s_v2"),
+            &release,
+        )
+        .expect_err("12 GiB declared does not fit an 8 GiB machine");
+        assert!(format!("{error:?}").contains("Standard_F4s_v2"));
+    }
+
     /// A machine the workload does not fit is still refused.
     #[cfg(feature = "runtime-checks")]
     #[test]
@@ -1456,7 +1556,7 @@ mod setup_update_authorization_tests {
             &stack,
             &StackState::new(Platform::Azure),
             &choose_fixed("Standard_F4s_v2"),
-            &Default::default(),
+            &no_release_stack(),
         )
         .expect_err("12 GiB does not fit an 8 GiB machine");
         assert!(format!("{error:?}").contains("Standard_F4s_v2"));
@@ -1499,7 +1599,7 @@ mod setup_update_authorization_tests {
             &stack,
             &StackState::new(Platform::Azure),
             &chosen,
-            &Default::default(),
+            &no_release_stack(),
         )
         .expect_err("an unrecordable choice is an error, not a silent skip");
         let text = format!("{error:?}");
@@ -1561,7 +1661,7 @@ mod setup_update_authorization_tests {
         });
 
         let updated =
-            PreflightRunner::with_chosen_machines(&stack, &state, &chosen, &Default::default())
+            PreflightRunner::with_chosen_machines(&stack, &state, &chosen, &no_release_stack())
                 .unwrap()
                 .expect("the pool without machines moves");
         let machines: Vec<(String, Option<String>)> = updated
@@ -1583,7 +1683,7 @@ mod setup_update_authorization_tests {
             &updated,
             &state,
             &chosen,
-            &Default::default()
+            &no_release_stack()
         )
         .unwrap()
         .is_none());

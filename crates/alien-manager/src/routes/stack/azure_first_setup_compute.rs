@@ -169,7 +169,7 @@ async fn first_setup_machine_selection_records_the_profile_of_the_chosen_machine
         &registered,
         &StackState::new(Platform::Azure),
         &deploy_config(&chosen_d2s_v5()),
-        &Default::default(),
+        &source_stack(None),
     )
     .unwrap()
     .expect("the machine differs from the registered default");
@@ -306,7 +306,7 @@ async fn imported_first_setup_hands_the_same_cluster_from_step_to_step() {
         &registered,
         &state,
         &chosen,
-        &alien_preflights::runner::PreflightRunner::declared_cluster_ids(&source),
+        &source,
     )
     .unwrap()
     .expect("the pick differs from the registered default");
