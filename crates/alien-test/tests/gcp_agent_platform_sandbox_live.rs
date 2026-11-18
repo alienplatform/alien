@@ -912,7 +912,10 @@ async fn reach_through_a_manager_deployed_binding() {
         .await
         .expect("the deployment is JSON");
     let state = &deployment["stackState"]["resources"][resource.as_str()];
-    assert_eq!(state["status"], "running", "the sandbox is running: {state}");
+    assert_eq!(
+        state["status"], "running",
+        "the sandbox is running: {state}"
+    );
     let internal = &state["_internal"];
     let text = |key: &str| {
         internal[key]
@@ -925,8 +928,14 @@ async fn reach_through_a_manager_deployed_binding() {
         "projects/{project}/locations/{region}/reasoningEngines/{}",
         text("engine")
     );
-    let template = format!("{engine}/sandboxEnvironmentTemplates/{}", text("templateId"));
-    assert_eq!(internal["egress"], "internet", "declared internet: {internal}");
+    let template = format!(
+        "{engine}/sandboxEnvironmentTemplates/{}",
+        text("templateId")
+    );
+    assert_eq!(
+        internal["egress"], "internet",
+        "declared internet: {internal}"
+    );
     let mut binding = SandboxBinding::gcp_agent_platform(
         BindingValue::value(engine),
         BindingValue::value(template),
@@ -992,7 +1001,10 @@ async fn reach_through_a_manager_deployed_binding() {
     }
     let text = String::from_utf8_lossy(&stdout).to_string();
     println!("{text}");
-    sandbox.terminate(&sid).await.expect("terminate confirms gone");
+    sandbox
+        .terminate(&sid)
+        .await
+        .expect("terminate confirms gone");
     assert_eq!(exit, Some(0), "the probe ran to the end: {text}");
     let rows: BTreeMap<_, _> = text
         .lines()
