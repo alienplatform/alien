@@ -6,7 +6,7 @@
 //! Env: `AZURE_INTERNET_OUT` (an empty directory), `AZURE_INTERNET_IMAGE` (the registry image the
 //! sandbox group runs, for example `<registry>.azurecr.io/<repository>:<tag>`).
 
-use super::helpers::{prepare_for_target, render};
+use super::helpers::{prepare_for_target_unchecked, render};
 use alien_core::{
     ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
     StackSettings,
@@ -42,7 +42,7 @@ async fn render_the_azure_internet_live_module() {
     let stack = Stack::new("azint".to_string())
         .add(sandbox, ResourceLifecycle::Frozen)
         .build();
-    let prepared = prepare_for_target(stack, TerraformTarget::Azure).await;
+    let prepared = prepare_for_target_unchecked(stack, TerraformTarget::Azure).await;
     let module = render(&prepared, TerraformTarget::Azure, StackSettings::default());
     std::fs::create_dir_all(&out).expect("output directory");
     for (path, contents) in module.iter() {

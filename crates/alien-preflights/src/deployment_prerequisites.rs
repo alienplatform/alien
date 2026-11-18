@@ -234,6 +234,45 @@ impl DeploymentPrerequisiteCheck for SandboxEgressGatewayCheck {
     }
 }
 
+/// Azure's sandbox binding requires the gateway's admin protocol. A gateway image that predates
+/// it fails every internet sandbox create after setup has built the gateway VMs, so refuse the
+/// stack while it is still being planned.
+pub struct AzureInternetSandboxGatewayProtocolCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for AzureInternetSandboxGatewayProtocolCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("AZURE_INTERNET_SANDBOX_UNAVAILABLE")
+    }
+
+    fn description(&self) -> &'static str {
+        "Azure internet sandboxes need a gateway image that serves its admin protocol"
+    }
+
+    fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
+        state.platform == Platform::Azure && alien_core::sandbox_egress::has_internet_sandbox(stack)
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        _state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        // The gateway mutation always installs this Container for an Azure internet sandbox, so
+        // the planned image is the one setup will run. If the Container were missing, the
+        // image this release installs is the fallback: the check never passes unread.
+        let image = alien_core::sandbox_egress::planned_gateway_image(stack);
+        if alien_core::sandbox_egress::gateway_image_serves_admin_protocol(image) {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(vec![
+                alien_core::sandbox_egress::AZURE_INTERNET_SANDBOX_UNAVAILABLE.into(),
+            ]))
+        }
+    }
+}
+
 /// Private endpoints must never silently become internet-facing on unsupported targets.
 pub struct PrivateEndpointAccessCheck;
 
@@ -1709,6 +1748,115 @@ mod tests {
                 .unwrap()
                 .success
         );
+    }
+
+    fn sandbox_stack(egress: alien_core::SandboxEgress) -> Stack {
+        let sandbox = alien_core::Sandbox::new("boxes".into())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://example/box.zip".into(),
+                bundled_from: None,
+            })
+            .egress(egress)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        Stack::new("test".into())
+            .add(sandbox, ResourceLifecycle::Live)
+            .build()
+    }
+
+    /// The stack as preflight leaves it: the gateway installed where the platform has one.
+    async fn prepared(stack: Stack, platform: Platform) -> Stack {
+        use crate::StackMutation;
+        let state = stack_state(platform);
+        let config = deployment_config();
+        let mutation = crate::mutations::SandboxGatewayMutation;
+        if mutation.should_run(&stack, &state, &config) {
+            mutation.mutate(stack, &state, &config).await.unwrap()
+        } else {
+            stack
+        }
+    }
+
+    async fn azure_protocol_check(stack: &Stack, platform: Platform) -> Option<CheckResult> {
+        let check = AzureInternetSandboxGatewayProtocolCheck;
+        let state = stack_state(platform);
+        let config = deployment_config();
+        if !check.should_run(stack, &state, &config) {
+            return None;
+        }
+        Some(check.check(stack, &state, &config).await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn azure_internet_sandbox_is_refused_while_the_gateway_lacks_the_admin_protocol() {
+        let stack = prepared(
+            sandbox_stack(alien_core::SandboxEgress::Internet),
+            Platform::Azure,
+        )
+        .await;
+        let result = azure_protocol_check(&stack, Platform::Azure)
+            .await
+            .expect("runs on Azure internet");
+        assert!(!result.success);
+        assert_eq!(
+            result.errors,
+            vec!["Azure internet sandboxes are not available in this release. Use egress none or deny, or deploy the sandbox on another cloud.".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn azure_sandboxes_without_internet_egress_are_not_refused() {
+        for egress in [
+            alien_core::SandboxEgress::None,
+            alien_core::SandboxEgress::Allow,
+        ] {
+            let stack = prepared(sandbox_stack(egress), Platform::Azure).await;
+            assert!(azure_protocol_check(&stack, Platform::Azure)
+                .await
+                .is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn internet_sandboxes_on_other_platforms_are_not_refused() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Kubernetes] {
+            let stack =
+                prepared(sandbox_stack(alien_core::SandboxEgress::Internet), platform).await;
+            assert!(
+                azure_protocol_check(&stack, platform).await.is_none(),
+                "{platform:?}"
+            );
+        }
+    }
+
+    /// The refusal follows the pinned image: once the pin moves off the list, it disappears.
+    #[tokio::test]
+    async fn azure_internet_sandbox_passes_with_a_gateway_image_that_serves_the_protocol() {
+        let mut stack = prepared(
+            sandbox_stack(alien_core::SandboxEgress::Internet),
+            Platform::Azure,
+        )
+        .await;
+        let entry = stack
+            .resources
+            .get_mut(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
+            .expect("gateway installed");
+        let mut gateway = entry
+            .config
+            .downcast_ref::<Container>()
+            .expect("gateway is a container")
+            .clone();
+        gateway.code = alien_core::ContainerCode::Image {
+            image: "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000000".into(),
+        };
+        entry.config = alien_core::Resource::new(gateway);
+        let result = azure_protocol_check(&stack, Platform::Azure)
+            .await
+            .expect("runs on Azure internet");
+        assert!(result.success);
     }
 
     #[tokio::test]
