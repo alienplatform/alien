@@ -820,7 +820,12 @@ fn changes_access(request: &HookRequest) -> bool {
                 || (request.service == "s3"
                     && (query
                         .iter()
-                        .any(|(name, _)| matches!(name.as_str(), "policy" | "acl"))
+                        .any(|(name, _)| {
+                            matches!(
+                                name.to_ascii_lowercase().as_str(),
+                                "policy" | "acl" | "publicaccessblock"
+                            )
+                        })
                         || request.headers.keys().any(|name| {
                             name == "x-amz-acl" || name.as_str().starts_with("x-amz-grant-")
                         })))
@@ -856,10 +861,19 @@ const AZURE_SOURCE_FIELDS: [&str; 4] = [
     "ipaddressorrange",
 ];
 
+/// A field name without case, `_` and `-`, so `invoker_iam_disabled`, `invokerIamDisabled` and
+/// `Invoker-Iam-Disabled` are one name.
+fn field_key(name: &str) -> String {
+    name.chars()
+        .filter(|c| !matches!(c, '_' | '-'))
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
 /// Whether a field by this name sets who can reach a resource: a public-access, network, firewall,
 /// source-range, ingress, ACL or access-policy setting, on any cloud.
 fn exposure_field(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
+    let name = field_key(name);
     name.starts_with("publicaccess")
         || name.starts_with("sourceaddressprefix")
         || name.contains("ingress")
@@ -998,7 +1012,7 @@ fn json_exposures(value: &serde_json::Value, pointer: &str, found: &mut BTreeSet
     match value {
         serde_json::Value::Object(fields) => {
             for (key, field) in fields {
-                let name = key.to_ascii_lowercase();
+                let name = field_key(key);
                 let at = pointer_to(pointer, key);
                 let text = field.as_str().map(|text| text.trim().to_ascii_lowercase());
                 let public = match name.as_str() {
@@ -1097,7 +1111,7 @@ fn names_an_identity(text: &str) -> bool {
 
 /// Whether a field by this name names the identity a resource acts as, whatever its value.
 fn identity_field(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
+    let name = field_key(name);
     matches!(
         name.as_str(),
         "role" | "identity" | "serviceaccount" | "serviceaccountname" | "serviceaccountemail"
@@ -2714,14 +2728,6 @@ mod tests {
             &[("content-type", "application/x-www-form-urlencoded")],
             Some("Action=AuthorizeSecurityGroupIngress&GroupId=sg-1&IpPermissions.1.IpProtocol=-1&IpPermissions.1.IpRanges.1.CidrIp=10.0.0.0%2F16"),
         );
-        const PUBLIC_ACCESS_BLOCK: Built = (
-            Cloud::Aws,
-            "s3",
-            Method::PUT,
-            "https://bucket.s3.amazonaws.com/?publicAccessBlock",
-            &[],
-            Some("<PublicAccessBlockConfiguration><BlockPublicAcls>true</BlockPublicAcls><RestrictPublicBuckets>true</RestrictPublicBuckets></PublicAccessBlockConfiguration>"),
-        );
         const GCS_BUCKET: Built = (
             Cloud::Gcp,
             "storage",
@@ -2738,7 +2744,7 @@ mod tests {
             &[("content-type", "application/json")],
             Some(r#"{"name":"f","sourceRanges":["10.0.0.0/16"]}"#),
         );
-        let cases: [(&str, Built, fn(&mut HookRequest)); 16] = [
+        let cases: [(&str, Built, fn(&mut HookRequest)); 15] = [
             (
                 "an Azure storage account allowing public blobs",
                 azure_call("storage account"),
@@ -2814,18 +2820,6 @@ mod tests {
                     .push_str("&IpPermissions.1.Ipv6Ranges.1.CidrIpv6=%3A%3A%2F0")
             }),
             (
-                "an S3 public access block turned off",
-                PUBLIC_ACCESS_BLOCK,
-                |r| {
-                    r.body = Some(
-                        r.body
-                            .as_ref()
-                            .unwrap()
-                            .replace("<BlockPublicAcls>true", "<BlockPublicAcls>false"),
-                    )
-                },
-            ),
-            (
                 "a Cloud Storage public access prevention turned off",
                 GCS_BUCKET,
                 |r| {
@@ -2893,14 +2887,6 @@ mod tests {
             &[("content-type", "application/json")],
             Some(r#"{"properties":{"configuration":{"ingress":{"external":false,"targetPort":80}}}}"#),
         );
-        const BLOCK: Built = (
-            Cloud::Aws,
-            "s3",
-            Method::PUT,
-            "https://bucket.s3.amazonaws.com/?publicAccessBlock",
-            &[],
-            Some("<PublicAccessBlockConfiguration><BlockPublicAcls>true</BlockPublicAcls><RestrictPublicBuckets>true</RestrictPublicBuckets></PublicAccessBlockConfiguration>"),
-        );
         const VAULT: Built = (
             Cloud::Azure,
             "management",
@@ -2925,7 +2911,7 @@ mod tests {
             &[("content-type", "application/json")],
             Some(r#"{"name":"f","sourceRanges":["10.0.0.0/16"]}"#),
         );
-        let cases: [(&str, Built, fn(&mut HookRequest)); 10] = [
+        let cases: [(&str, Built, fn(&mut HookRequest)); 11] = [
             (
                 "a range split in two halves of the internet",
                 FIREWALL,
@@ -2953,20 +2939,21 @@ mod tests {
                     )
                 },
             ),
+            ("a snake_case Cloud Run invoker_iam_disabled", RUN, |r| {
+                r.body = Some(
+                    r#"{"ingress":"INGRESS_TRAFFIC_INTERNAL_ONLY","invoker_iam_disabled":true}"#
+                        .into(),
+                )
+            }),
+            ("a snake_case publicly_accessible", SQL, |r| {
+                r.body = Some(r#"{"settings":{"publicly_accessible":true}}"#.into())
+            }),
             ("a Container App with external ingress", APP, |r| {
                 r.body = Some(
                     r.body
                         .as_ref()
                         .unwrap()
                         .replace(r#""external":false"#, r#""external":true"#),
-                )
-            }),
-            ("an S3 public access block element removed", BLOCK, |r| {
-                r.body = Some(
-                    r.body
-                        .as_ref()
-                        .unwrap()
-                        .replace("<RestrictPublicBuckets>true</RestrictPublicBuckets>", ""),
                 )
             }),
             ("a Key Vault moved to access policies", VAULT, |r| {
@@ -3076,7 +3063,7 @@ mod tests {
     /// matches it, so one that matches everything never fails it.
     #[test]
     fn a_call_that_changes_access_or_identity_is_never_offered() {
-        let cases: [Built; 19] = [
+        let cases: [Built; 20] = [
             (
                 Cloud::Aws,
                 "iam",
@@ -3103,6 +3090,14 @@ mod tests {
                 "https://bucket.s3.amazonaws.com/?policy",
                 &[],
                 Some(r#"{"Statement":[]}"#),
+            ),
+            (
+                Cloud::Aws,
+                "s3",
+                Method::PUT,
+                "https://bucket.s3.amazonaws.com/?publicAccessBlock",
+                &[],
+                Some("<PublicAccessBlockConfiguration><BlockPublicAcls>false</BlockPublicAcls></PublicAccessBlockConfiguration>"),
             ),
             (
                 Cloud::Aws,
