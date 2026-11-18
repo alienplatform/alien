@@ -129,7 +129,11 @@ impl Replicator {
                         change_token: old_token,
                         ..
                     },
-                ) => size == old_size && change_token == old_token,
+                ) => {
+                    size == old_size
+                        && change_token == old_token
+                        && *change_token != alien_sandbox_storage::UNKNOWN_CHANGE
+                }
                 (
                     TreeEntryKind::Symlink { target },
                     alien_sandbox_storage::EntryKind::Symlink { target: old_target },

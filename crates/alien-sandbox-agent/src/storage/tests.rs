@@ -15,6 +15,12 @@ fn write(root: &Path, path: &str, bytes: &[u8]) {
     std::fs::write(path, bytes).expect("write");
 }
 
+/// Waits past the coarse clock tick inode times are stamped with (at most 10 ms at HZ=100), so
+/// files written before are not ones a walk must reread for having changed in its own tick.
+fn let_the_clock_tick() {
+    std::thread::sleep(std::time::Duration::from_millis(50));
+}
+
 async fn replicator(
     store: &MemoryStore,
     root: &Path,
@@ -74,6 +80,7 @@ async fn a_tree_round_trips_with_modes_links_and_mtimes() {
 
     let store = MemoryStore::new();
     let mut replicator = replicator(&store, root, staging.path(), &["tmp/"]).await;
+    let_the_clock_tick();
     let outcome = replicator.commit(&store).await.expect("commit");
     assert!(
         matches!(outcome, CommitOutcome::Committed { .. }),
@@ -111,6 +118,7 @@ async fn only_changed_files_are_staged_and_a_superseded_writer_stops() {
     write(source.path(), "two", b"2");
     let store = MemoryStore::new();
     let mut a = replicator(&store, source.path(), staging.path(), &[]).await;
+    let_the_clock_tick();
     a.commit(&store).await.expect("first commit");
 
     write(source.path(), "two", b"22");
@@ -686,4 +694,36 @@ async fn an_expired_grant_sends_nothing() {
         .expect_err("expired");
     assert!(store.denied());
     assert!(bucket.objects.lock().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_same_size_rewrite_right_after_a_commit_is_committed() {
+    // Inode times tick with the coarse clock (a few ms), so a rewrite of the same length right
+    // after a commit read the file often keeps size, ctime and mtime. Many rounds make one
+    // such rewrite near certain.
+    let source = tempfile::tempdir().expect("tempdir");
+    let staging = tempfile::tempdir().expect("tempdir");
+    let root = source.path();
+    let store = MemoryStore::new();
+    write(root, "f", b"round-000");
+    let mut replicator = replicator(&store, root, staging.path(), &[]).await;
+    for round in 1..=200 {
+        replicator.commit(&store).await.expect("commit");
+        let next = format!("round-{round:03}");
+        write(root, "f", next.as_bytes());
+        replicator.commit(&store).await.expect("commit");
+        let target = tempfile::tempdir().expect("tempdir");
+        restore(
+            &store,
+            replicator.head().expect("head"),
+            &mut DirSink::new(tree::open_root(target.path()).expect("open"), false),
+        )
+        .await
+        .expect("restore");
+        assert_eq!(
+            std::fs::read_to_string(target.path().join("f")).expect("read"),
+            next,
+            "round {round}"
+        );
+    }
 }
