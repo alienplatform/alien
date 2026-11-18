@@ -335,9 +335,7 @@ async fn arm(
         .await
         .map_err(|e| anyhow::anyhow!("ARM token: {e}"))?;
     let separator = if path.contains('?') { '&' } else { '?' };
-    let url = format!(
-        "https://management.azure.com{path}{separator}api-version=2022-04-01"
-    );
+    let url = format!("https://management.azure.com{path}{separator}api-version=2022-04-01");
     let mut request = reqwest::Client::new()
         .request(method.clone(), &url)
         .bearer_auth(bearer);
@@ -381,10 +379,16 @@ async fn mirror_execution_roles(
     for assignment in listed["value"].as_array().cloned().unwrap_or_default() {
         let properties = &assignment["properties"];
         let scope = properties["scope"].as_str().unwrap_or_default().to_string();
-        let role = properties["roleDefinitionId"].as_str().unwrap_or_default().to_string();
+        let role = properties["roleDefinitionId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         let lower = scope.to_ascii_lowercase();
         let ours = lower.contains(&format!("/sandboxgroups/{}", group.to_ascii_lowercase()))
-            || lower.contains(&format!("/storageaccounts/{}", account.to_ascii_lowercase()));
+            || lower.contains(&format!(
+                "/storageaccounts/{}",
+                account.to_ascii_lowercase()
+            ));
         if !ours
             || properties["principalId"].as_str() == Some(principal)
             || properties["principalType"].as_str() != Some("ServicePrincipal")
@@ -420,7 +424,6 @@ async fn mirror_execution_roles(
 }
 
 async fn all_checks(sandbox: &Arc<dyn Sandbox>, abrupt: &Abrupt) -> anyhow::Result<()> {
-
     let stamp = chrono::Utc::now().timestamp_millis();
     let mut result = Ok(());
     for (key, check) in [
@@ -440,7 +443,7 @@ async fn all_checks(sandbox: &Arc<dyn Sandbox>, abrupt: &Abrupt) -> anyhow::Resu
                     &mut live,
                 )
                 .await
-            },
+            }
             Check::MaxSize => max_size(sandbox, &key, &mut live).await,
             Check::Kills => kills(sandbox, abrupt, &key, *KILLS, &mut live).await,
         };
@@ -513,7 +516,10 @@ async fn max_size(
     ok(sandbox, &id, "truncate -s 2200M /workspace/big.sparse").await?;
     let refused = sandbox.sync_storage(&id).await;
     eprintln!("sync above maxSize: {refused:?}");
-    ensure!(refused.is_err(), "a commit above maxSize went through: {refused:?}");
+    ensure!(
+        refused.is_err(),
+        "a commit above maxSize went through: {refused:?}"
+    );
     let status = sandbox.storage_status(&id).await?.context("status")?;
     ensure!(
         status.head == before.head,
@@ -521,10 +527,24 @@ async fn max_size(
         before.head,
         status.head
     );
-    ok(sandbox, &id, "rm /workspace/big.sparse && echo again > /workspace/small.txt").await?;
-    let after = sandbox.sync_storage(&id).await.context("sync under maxSize")?;
-    ensure!(after.head > before.head, "no commit after the ceiling cleared: {after:?}");
-    eprintln!("maxSize: head stayed {:?} while above, then {:?}", before.head, after.head);
+    ok(
+        sandbox,
+        &id,
+        "rm /workspace/big.sparse && echo again > /workspace/small.txt",
+    )
+    .await?;
+    let after = sandbox
+        .sync_storage(&id)
+        .await
+        .context("sync under maxSize")?;
+    ensure!(
+        after.head > before.head,
+        "no commit after the ceiling cleared: {after:?}"
+    );
+    eprintln!(
+        "maxSize: head stayed {:?} while above, then {:?}",
+        before.head, after.head
+    );
     Ok(())
 }
 
@@ -602,9 +622,11 @@ async fn kills(
         let writer = {
             let sandbox = Arc::clone(sandbox);
             let id = id.clone();
-            let script = format!("python3 - <<'PY'
+            let script = format!(
+                "python3 - <<'PY'
 {WRITER}
-PY");
+PY"
+            );
             tokio::spawn(async move { sh(&sandbox, &id, &script).await })
         };
         tokio::time::sleep(Duration::from_secs(8 + (round as u64 % 5))).await;
@@ -689,7 +711,9 @@ for f in $(grep -rls 'si[g]=' /proc/[0-9]*/environ /proc/[0-9]*/cmdline /tmp /wo
     eprintln!("command-uid probe:\n{}{}", probe.stdout, probe.stderr);
     let says = |line: &str| probe.stdout.lines().any(|l| l == line);
     ensure!(
-        !probe.stdout.contains("REACHED_STORE") && says("store-refused") && says("store-ip-refused"),
+        !probe.stdout.contains("REACHED_STORE")
+            && says("store-refused")
+            && says("store-ip-refused"),
         "a command opened a direct connection to the store account"
     );
     ensure!(
@@ -773,14 +797,13 @@ for f in $(grep -rls 'si[g]=' /proc/[0-9]*/environ /proc/[0-9]*/cmdline /tmp /wo
     );
     eprintln!("restored {} entries exactly", restored.lines().count());
 
-    // 4. A stale writer: a third sandbox takes the key over; the second is stopped and its later
-    //    write never reaches the key.
+    // 4. A stale writer: it writes, a third sandbox takes the key over, and the stale one's next
+    //    commit finds HEAD moved (its `If-Match` is refused) and stops. The claim restores HEAD
+    //    as of the claim, so the late write either landed before it (and the third sandbox has
+    //    it) or never lands.
+    ok(sandbox, &second, "echo stale > /workspace/stale.txt").await?;
     let third = create(sandbox, key).await?;
     live.push(third.clone());
-    wait_for_state(sandbox, &second, SandboxStorageState::Stopped)
-        .await
-        .context("the superseded sandbox reports stopped")?;
-    ok(sandbox, &second, "echo stale > /workspace/stale.txt").await?;
     let stale = sandbox.sync_storage(&second).await;
     eprintln!("stale writer's sync: {stale:?}");
     if let Ok(status) = &stale {
@@ -789,17 +812,23 @@ for f in $(grep -rls 'si[g]=' /proc/[0-9]*/environ /proc/[0-9]*/cmdline /tmp /wo
             "a stale writer's sync answered {status:?}"
         );
     }
+    wait_for_state(sandbox, &second, SandboxStorageState::Stopped)
+        .await
+        .context("the superseded sandbox reports stopped")?;
+    let in_third = sh(sandbox, &third, "test -e /workspace/stale.txt").await?;
     sandbox.terminate(&second).await?;
     live.retain(|id| id != &second);
+    let in_store = sandbox.read_storage_file(key, "stale.txt").await.is_ok();
+    eprintln!(
+        "stale write: in store {in_store}, in the third sandbox {}",
+        in_third.code == Some(0)
+    );
+    ensure!(
+        in_store == (in_third.code == Some(0)),
+        "the store and the claiming sandbox disagree about the stale write"
+    );
     sandbox.terminate(&third).await?;
     live.retain(|id| id != &third);
-    match sandbox.read_storage_file(key, "stale.txt").await {
-        Err(_) => {}
-        Ok(bytes) => bail!(
-            "the stale writer's file reached the key: {:?}",
-            String::from_utf8_lossy(&bytes)
-        ),
-    }
 
     // 5. Erase the key.
     sandbox.delete_storage(key).await.context("deleteStorage")?;
