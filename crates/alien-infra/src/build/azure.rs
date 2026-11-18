@@ -8,7 +8,7 @@ use alien_core::{
     BuildOutputs, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
     ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus,
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
 
@@ -25,6 +25,15 @@ pub struct AzureBuildController {
     pub(crate) managed_identity_id: Option<String>,
     /// The resource prefix for generating unique job names
     pub(crate) resource_prefix: Option<String>,
+    /// Full deterministic ids of the role assignments this Build's grants created: on the stack's
+    /// resource group, on the one environment it joins (which may be shared with other stacks) and
+    /// on its one identity. Recorded before they are written so a partial failure stays cleanable,
+    /// and removed when the Build is deleted.
+    #[serde(default)]
+    pub(crate) role_assignment_ids: Vec<String>,
+    /// Whether the assignment ids were durably planned in an earlier step.
+    #[serde(default)]
+    pub(crate) role_assignments_planned: bool,
 }
 
 #[controller]
@@ -77,6 +86,29 @@ impl AzureBuildController {
         info!(name=%cfg.id, environment_id=%managed_environment_id, "Azure Build environment configured");
 
         Ok(HandlerAction::Continue {
+            state: PlanningPermissions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = PlanningPermissions,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn planning_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Build>()?;
+        self.role_assignment_ids = self.plan_role_assignment_ids(ctx, &config.id).await?;
+        self.role_assignments_planned = true;
+        info!(
+            name = %config.id,
+            role_assignments = self.role_assignment_ids.len(),
+            "Planned Azure Build role assignments"
+        );
+        Ok(HandlerAction::Continue {
             state: ApplyingPermissions,
             suggested_delay: None,
         })
@@ -92,6 +124,13 @@ impl AzureBuildController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Build>()?;
+
+        if !self.role_assignments_planned {
+            return Ok(HandlerAction::Continue {
+                state: PlanningPermissions,
+                suggested_delay: None,
+            });
+        }
 
         info!(name = %config.id, "Applying resource-scoped permissions");
 
@@ -214,7 +253,49 @@ impl AzureBuildController {
 
         info!(name=%build_config.id, "Cleaning up Azure Build environment configuration");
 
-        // No actual resources to delete since we don't create jobs in alien-infra
+        // The Build creates no job here, but its grants wrote role assignments, one of them on an
+        // environment that can outlive this stack. Remove what this Build created. A Build
+        // installed before the ids were recorded plans them now from the stack's grants.
+        if !self.role_assignments_planned {
+            if let Ok(ids) = self.plan_role_assignment_ids(ctx, &build_config.id).await {
+                self.role_assignment_ids = ids;
+            }
+            self.role_assignments_planned = true;
+        }
+        if !self.role_assignment_ids.is_empty() {
+            let azure_config = ctx.get_azure_config()?;
+            let authorization_client = ctx
+                .service_provider
+                .get_azure_authorization_client(azure_config)?;
+            while let Some(assignment_id) = self.role_assignment_ids.last().cloned() {
+                match authorization_client
+                    .delete_role_assignment_by_id(assignment_id.clone())
+                    .await
+                {
+                    Ok(_) => {
+                        info!(name=%build_config.id, assignment_id, "Deleted Azure Build role assignment");
+                    }
+                    Err(error)
+                        if matches!(
+                            &error.error,
+                            Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                        ) =>
+                    {
+                        info!(name=%build_config.id, assignment_id, "Azure Build role assignment was already deleted");
+                    }
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to delete Azure role assignment '{}' for Build",
+                                assignment_id
+                            ),
+                            resource_id: Some(build_config.id.clone()),
+                        }));
+                    }
+                }
+                self.role_assignment_ids.pop();
+            }
+        }
         self.managed_environment_id = None;
         self.resource_group_name = None;
         self.build_env_vars = None;
@@ -351,17 +432,18 @@ impl AzureBuildController {
             .map(|s| s.to_string())
     }
 
-    /// Applies resource-scoped permissions to the build configuration from stack permission profiles
-    async fn apply_resource_scoped_permissions(
+    /// The scope and variables the Build's grants are rendered with.
+    fn grant_scope_and_context(
         &self,
         ctx: &ResourceControllerContext<'_>,
         build_id: &str,
-    ) -> Result<()> {
-        use crate::core::AzurePermissionsHelper;
+    ) -> Result<(
+        alien_azure_clients::authorization::Scope,
+        alien_permissions::PermissionContext,
+    )> {
         use alien_azure_clients::authorization::Scope;
         use alien_permissions::PermissionContext;
 
-        let config = ctx.desired_resource_config::<Build>()?;
         let azure_config = ctx.get_azure_config()?;
 
         // Build permission context for this specific build resource
@@ -389,13 +471,45 @@ impl AzureBuildController {
         let resource_scope = Scope::ResourceGroup {
             resource_group_name: self.resource_group_name.as_ref().unwrap().clone(),
         };
+        Ok((resource_scope, permission_context))
+    }
 
-        AzurePermissionsHelper::apply_resource_scoped_permissions(
+    /// Every assignment id the Build's grants will write, without writing any.
+    async fn plan_role_assignment_ids(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        build_id: &str,
+    ) -> Result<Vec<String>> {
+        use crate::core::AzurePermissionsHelper;
+        let config = ctx.desired_resource_config::<Build>()?;
+        let (resource_scope, permission_context) = self.grant_scope_and_context(ctx, build_id)?;
+        AzurePermissionsHelper::plan_resource_scoped_role_assignment_ids(
             ctx,
             &config.id,
             "build",
             resource_scope,
             &permission_context,
+        )
+        .await
+    }
+
+    /// Applies the planned resource-scoped permissions from the stack permission profiles.
+    async fn apply_resource_scoped_permissions(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        build_id: &str,
+    ) -> Result<()> {
+        use crate::core::AzurePermissionsHelper;
+
+        let config = ctx.desired_resource_config::<Build>()?;
+        let (resource_scope, permission_context) = self.grant_scope_and_context(ctx, build_id)?;
+        AzurePermissionsHelper::apply_resource_scoped_permissions_from_checkpoint(
+            ctx,
+            &config.id,
+            "build",
+            resource_scope,
+            &permission_context,
+            &self.role_assignment_ids,
         )
         .await
     }
@@ -410,6 +524,8 @@ impl AzureBuildController {
             build_env_vars: Some(HashMap::new()),
             managed_identity_id: Some("/subscriptions/test-sub/resourceGroups/test-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/test-build-identity".to_string()),
             resource_prefix: Some("test-prefix".to_string()),
+            role_assignment_ids: Vec::new(),
+            role_assignments_planned: true,
             _internal_stay_count: None,
         }
     }
@@ -663,6 +779,93 @@ mod tests {
         }
     }
 
+    /// Deleting a Build removes the role assignments its grants wrote, the one on a shared
+    /// Container Apps environment included: nothing else removes that one.
+    #[tokio::test]
+    async fn test_deleting_a_build_removes_every_role_assignment_it_created() {
+        use alien_azure_clients::authorization::MockAuthorizationApi;
+        use alien_core::permissions::{PermissionProfile, PermissionSetReference};
+        use std::sync::Mutex;
+
+        let build = basic_build();
+        let mut profile = PermissionProfile::new();
+        profile.0.insert(
+            "basic-build".to_string(),
+            vec![
+                PermissionSetReference::from_name("build/execute"),
+                PermissionSetReference::from_name("build/provision"),
+            ],
+        );
+
+        let created = Arc::new(Mutex::new(Vec::<String>::new()));
+        let deleted = Arc::new(Mutex::new(Vec::<String>::new()));
+        let (created_log, deleted_log) = (created.clone(), deleted.clone());
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        mock_provider
+            .expect_get_azure_authorization_client()
+            .returning(move |_| {
+                let (created_log, deleted_log) = (created_log.clone(), deleted_log.clone());
+                let mut authorization = MockAuthorizationApi::new();
+                authorization
+                    .expect_get_role_definition()
+                    .returning(|_, id| {
+                        Err(alien_error::AlienError::new(
+                            alien_client_core::ErrorData::RemoteResourceNotFound {
+                                resource_type: "Role definition".to_string(),
+                                resource_name: id,
+                            },
+                        ))
+                    });
+                authorization
+                    .expect_create_or_update_role_definition()
+                    .returning(|_, _, definition| Ok(definition.clone()));
+                authorization
+                    .expect_create_or_update_role_assignment_by_id()
+                    .returning(move |id, assignment| {
+                        created_log.lock().unwrap().push(id);
+                        Ok(assignment.clone())
+                    });
+                authorization
+                    .expect_delete_role_assignment_by_id()
+                    .returning(move |id| {
+                        deleted_log.lock().unwrap().push(id);
+                        Ok(None)
+                    });
+                Ok(Arc::new(authorization))
+            });
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(build)
+            .controller(AzureBuildController::default())
+            .platform(Platform::Azure)
+            .service_provider(Arc::new(mock_provider))
+            .permission_profile("default-profile", profile)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        let mut created_ids = created.lock().unwrap().clone();
+        created_ids.sort();
+        created_ids.dedup();
+        // Two on the group (execute and provision), one on the environment, one on the identity.
+        assert_eq!(created_ids.len(), 4, "{created_ids:?}");
+        assert!(
+            created_ids.iter().any(|id| id.contains("/managedEnvironments/")),
+            "{created_ids:?}"
+        );
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+
+        let mut deleted_ids = deleted.lock().unwrap().clone();
+        deleted_ids.sort();
+        deleted_ids.dedup();
+        assert_eq!(deleted_ids, created_ids);
+    }
+
     #[rstest]
     #[case::basic_to_env(basic_build(), build_with_env_vars())]
     #[case::env_to_complex(build_with_env_vars(), build_medium_compute())]
@@ -717,6 +920,8 @@ mod tests {
             build_env_vars: Some(std::collections::HashMap::new()),
             managed_identity_id: None,
             resource_prefix: None,
+            role_assignment_ids: Vec::new(),
+            role_assignments_planned: true,
             _internal_stay_count: None,
         };
 
