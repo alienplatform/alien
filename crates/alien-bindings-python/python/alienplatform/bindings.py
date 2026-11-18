@@ -807,8 +807,9 @@ class Sandbox:
         )
 
     @translate_errors
-    async def terminate(self, sandbox_id: str) -> None:
-        await (await self._handle.get()).terminate(sandbox_id)
+    async def terminate(self, sandbox_id: str, *, discard: bool = False) -> None:
+        """Destroys a sandbox, committing its persistent storage first unless ``discard``."""
+        await (await self._handle.get()).terminate(sandbox_id, discard)
 
     @translate_errors
     async def storage_status(self, sandbox_id: str) -> SandboxStorageStatus | None:

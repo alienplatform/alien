@@ -450,7 +450,8 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
     preview: (sandboxId, port) => guard(handle, raw => raw.preview(sandboxId, port)),
     pause: sandboxId => guard(handle, raw => raw.pause(sandboxId)),
     resume: sandboxId => guard(handle, raw => raw.resume(sandboxId)),
-    terminate: sandboxId => guard(handle, raw => raw.terminate(sandboxId)),
+    terminate: (sandboxId, options) =>
+      guard(handle, raw => raw.terminate(sandboxId, options?.discard ?? false)),
     storageStatus: sandboxId =>
       guard(handle, async raw => {
         const status = await raw.storageStatus(sandboxId)

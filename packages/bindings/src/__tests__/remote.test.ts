@@ -354,11 +354,15 @@ describe("Bindings.forRemoteDeployment", () => {
     ])
     await agent.updateEgress("session_1", { allow: [] })
     await agent.terminate("session_1")
+    await agent.terminate("session_2", { discard: true })
     await build.capabilities()
 
     expect(fixture.forRemoteDeployment).toHaveBeenCalledOnce()
     expect(fixture.resolveSandbox.mock.calls).toEqual([["agent"], ["build"]])
-    expect(fixture.terminate).toHaveBeenCalledWith("session_1")
+    expect(fixture.terminate.mock.calls).toEqual([
+      ["session_1", false],
+      ["session_2", true],
+    ])
   })
 
   it("unwraps napi errors from Sandbox resolution and operations", async () => {

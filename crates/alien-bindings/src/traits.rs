@@ -1790,6 +1790,13 @@ pub trait Sandbox: Binding {
     /// that could not confirm the sandbox is gone fails with a retryable error and can be repeated.
     async fn terminate(&self, sandbox_id: &str) -> Result<()>;
 
+    /// Terminates a sandbox without committing what its persistent storage wrote since its last
+    /// commit (`terminate { discard: true }`); the key keeps its last commit. Where a terminate
+    /// commits nothing first, this is `terminate`.
+    async fn terminate_discarding(&self, sandbox_id: &str) -> Result<()> {
+        self.terminate(sandbox_id).await
+    }
+
     /// The sandbox's persistent storage state, or `None` when the declaration has none.
     async fn storage_status(&self, sandbox_id: &str) -> Result<Option<SandboxStorageStatus>> {
         let _ = sandbox_id;
