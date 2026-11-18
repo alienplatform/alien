@@ -174,8 +174,8 @@ pub struct SandboxEgressSigningKey {
     pub key: String,
 }
 
-/// Persistent storage as the binding needs it: where the directory is in the sandbox and where
-/// its keys live in the linked Storage.
+/// Persistent storage as the binding needs it: where the directory is in the sandbox and the
+/// store setup created for it, which holds every key under `<key>/`.
 ///
 /// Absent on every sandbox that does not declare persistent storage, so its binding serializes
 /// exactly as before.
@@ -184,10 +184,8 @@ pub struct SandboxEgressSigningKey {
 pub struct SandboxPersistentStorageBinding {
     /// Absolute directory inside the sandbox.
     pub path: String,
-    /// The linked Storage's bucket (AWS) or host directory (Local).
+    /// The persistent storage bucket (AWS) or host directory (Local).
     pub bucket: BindingValue<String>,
-    /// Object prefix every key lives under: `sandbox-storage/<sandbox resource id>`.
-    pub prefix: String,
     /// Paths relative to `path` the agent never replicates.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,

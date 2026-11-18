@@ -3,15 +3,15 @@ use chrono::Utc;
 
 use crate::error::{ErrorData, Result};
 use crate::layout::{Head, ObjectName, HEAD_OBJECT};
-use crate::pack::chunk_hash;
 use crate::manifest::{Entry, EntryKind, Manifest};
-use crate::store::{ObjectStore, Precondition, PutOutcome};
+use crate::pack::chunk_hash;
+use crate::store::{ObjectStore, ObjectVersion, Precondition, PutOutcome};
 
 /// Largest single ranged read a restore issues; adjacent chunks of one pack are merged up to it.
 const MAX_RANGE: u64 = 8 * 1024 * 1024;
 
 /// HEAD and its version, or `None` for a key that was never written.
-pub async fn read_head(store: &dyn ObjectStore) -> Result<Option<(Head, String)>> {
+pub async fn read_head(store: &dyn ObjectStore) -> Result<Option<(Head, ObjectVersion)>> {
     let Some(object) = store.get(HEAD_OBJECT).await? else {
         return Ok(None);
     };
@@ -21,7 +21,7 @@ pub async fn read_head(store: &dyn ObjectStore) -> Result<Option<(Head, String)>
             reason: e.to_string(),
         })
     })?;
-    Ok(Some((head, object.etag)))
+    Ok(Some((head, object.version)))
 }
 
 /// The manifest HEAD names, checked against the hash in its name and then parsed.
@@ -53,7 +53,7 @@ pub async fn read_manifest(store: &dyn ObjectStore, commit: &ObjectName) -> Resu
 #[derive(Debug, Clone)]
 pub struct Takeover {
     /// HEAD's version after the takeover; the new writer's commits match on it.
-    pub head_etag: String,
+    pub head_version: ObjectVersion,
     /// The tree to restore, or `None` for a new key.
     pub manifest: Option<Manifest>,
 }
@@ -68,7 +68,7 @@ pub async fn takeover(store: &dyn ObjectStore, writer: &str) -> Result<Takeover>
     for _ in 0..8 {
         let current = read_head(store).await?;
         let (commit, precondition) = match &current {
-            Some((head, etag)) => (head.commit.clone(), Precondition::Matches(etag.clone())),
+            Some((head, version)) => (head.commit.clone(), Precondition::Matches(version.clone())),
             None => (None, Precondition::Absent),
         };
         let manifest = match &commit {
@@ -88,9 +88,9 @@ pub async fn takeover(store: &dyn ObjectStore, writer: &str) -> Result<Takeover>
             )
             .await?
         {
-            PutOutcome::Written { etag } => {
+            PutOutcome::Written { version } => {
                 return Ok(Takeover {
-                    head_etag: etag,
+                    head_version: version,
                     manifest,
                 })
             }

@@ -21,22 +21,42 @@ pub async fn create(store: &dyn ObjectStore, object: &str, bytes: Vec<u8>) -> Re
     }
 }
 
+/// The version of an object a conditional put compares against. Stores differ in which one
+/// they check: S3 and Azure compare the `ETag`, GCS compares the generation.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ObjectVersion {
+    /// The `ETag`.
+    pub etag: String,
+    /// A store-specific version where the store has one (the GCS generation).
+    pub version: Option<String>,
+}
+
+impl ObjectVersion {
+    /// A version known only by its `ETag`.
+    pub fn etag(etag: impl Into<String>) -> Self {
+        Self {
+            etag: etag.into(),
+            version: None,
+        }
+    }
+}
+
 /// An object and the version a conditional put compares against.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredObject {
     /// The object's bytes.
     pub bytes: Vec<u8>,
-    /// The store's version tag (an S3 or GCS `ETag`, an Azure `ETag`).
-    pub etag: String,
+    /// Its version.
+    pub version: ObjectVersion,
 }
 
 /// When a conditional put may write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Precondition {
-    /// Only if the object does not exist (`If-None-Match: *`).
+    /// Only if the object does not exist (`If-None-Match: *`, `ifGenerationMatch=0`).
     Absent,
-    /// Only if the object's version is this one (`If-Match`).
-    Matches(String),
+    /// Only if the object is still at this version (`If-Match`, `ifGenerationMatch`).
+    Matches(ObjectVersion),
 }
 
 /// What a conditional put did.
@@ -44,8 +64,8 @@ pub enum Precondition {
 pub enum PutOutcome {
     /// Written; the new version.
     Written {
-        /// The new version tag.
-        etag: String,
+        /// The new version.
+        version: ObjectVersion,
     },
     /// The precondition failed and nothing was written.
     Conflict,
@@ -118,6 +138,15 @@ impl MemoryStore {
     }
 }
 
+/// The memory store's versions carry both fields, so a comparison that used only one of them
+/// would still pass here but not against a real store: they must both match.
+fn memory_version(version: u64) -> ObjectVersion {
+    ObjectVersion {
+        etag: format!("\"{version}\""),
+        version: Some(version.to_string()),
+    }
+}
+
 #[async_trait]
 impl ObjectStore for MemoryStore {
     async fn get(&self, object: &str) -> Result<Option<StoredObject>> {
@@ -128,7 +157,7 @@ impl ObjectStore for MemoryStore {
             .get(object)
             .map(|(bytes, version)| StoredObject {
                 bytes: bytes.clone(),
-                etag: version.to_string(),
+                version: memory_version(*version),
             }))
     }
 
@@ -156,7 +185,7 @@ impl ObjectStore for MemoryStore {
     ) -> Result<PutOutcome> {
         let version = self.next_version();
         let mut objects = self.objects.lock().expect("not poisoned");
-        let current = objects.get(object).map(|(_, v)| v.to_string());
+        let current = objects.get(object).map(|(_, v)| memory_version(*v));
         let allowed = match (&precondition, &current) {
             (Precondition::Absent, None) => true,
             (Precondition::Matches(expected), Some(current)) => expected == current,
@@ -167,7 +196,7 @@ impl ObjectStore for MemoryStore {
         }
         objects.insert(object.to_string(), (bytes, version));
         Ok(PutOutcome::Written {
-            etag: version.to_string(),
+            version: memory_version(version),
         })
     }
 

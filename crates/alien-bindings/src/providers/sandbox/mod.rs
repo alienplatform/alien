@@ -36,9 +36,9 @@ pub mod kubernetes;
 pub mod local;
 
 pub(crate) mod egress;
-pub(crate) mod storage_key;
 #[cfg(any(feature = "aws", feature = "gcp"))]
 mod refusal;
+pub(crate) mod storage_key;
 
 #[cfg(all(
     test,

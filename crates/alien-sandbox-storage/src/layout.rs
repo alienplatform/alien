@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorData, Result};
 
-/// Directory in the linked Storage that holds every sandbox's persistent storage.
-pub const ROOT_PREFIX: &str = "sandbox-storage";
 /// The object naming the current commit, relative to the key root.
 pub const HEAD_OBJECT: &str = "HEAD";
 /// Directory of chunk packs, relative to the key root.
@@ -60,10 +58,10 @@ pub fn validate_tree_path(path: &str) -> Result<()> {
     Ok(())
 }
 
-/// The object prefix of one key: `sandbox-storage/<sandbox id>/<key>/`.
-pub fn key_root(sandbox_id: &str, key: &str) -> Result<String> {
+/// The object prefix of one key in the sandbox's own store: `<key>/`.
+pub fn key_root(key: &str) -> Result<String> {
     validate_key(key)?;
-    Ok(format!("{ROOT_PREFIX}/{sandbox_id}/{key}/"))
+    Ok(format!("{key}/"))
 }
 
 /// A pack or manifest: its key's sequence number and the SHA-256 of its bytes.
@@ -178,11 +176,8 @@ mod tests {
     }
 
     #[test]
-    fn key_root_is_scoped_to_sandbox_and_key() {
-        assert_eq!(
-            key_root("agent", "engine-42").unwrap(),
-            "sandbox-storage/agent/engine-42/"
-        );
-        assert!(key_root("agent", "../other").is_err());
+    fn key_root_is_one_validated_segment() {
+        assert_eq!(key_root("engine-42").unwrap(), "engine-42/");
+        assert!(key_root("../other").is_err());
     }
 }

@@ -8,7 +8,7 @@ use crate::error::{ErrorData, Result};
 use crate::layout::{validate_tree_path, Head, ObjectName, HEAD_OBJECT};
 use crate::manifest::{ChunkLocation, Entry, EntryKind, Manifest, MANIFEST_VERSION};
 use crate::pack::{PackBuilder, CHUNK_SIZE};
-use crate::store::{ObjectStore, Precondition, PutOutcome};
+use crate::store::{ObjectStore, ObjectVersion, Precondition, PutOutcome};
 
 /// One entry as a walk of the storage directory found it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,24 +76,24 @@ pub enum CommitOutcome {
 /// put on HEAD.
 pub struct Committer {
     writer: String,
-    head_etag: String,
+    head_version: ObjectVersion,
     head: Option<Manifest>,
     max_size: Option<u64>,
     superseded: bool,
 }
 
 impl Committer {
-    /// A committer that continues from a takeover: `head_etag` is the HEAD version the takeover
+    /// A committer that continues from a takeover: `head_version` is the HEAD version the takeover
     /// wrote, `head` the manifest it restored.
     pub fn new(
         writer: impl Into<String>,
-        head_etag: impl Into<String>,
+        head_version: ObjectVersion,
         head: Option<Manifest>,
         max_size: Option<u64>,
     ) -> Self {
         Self {
             writer: writer.into(),
-            head_etag: head_etag.into(),
+            head_version,
             head,
             max_size,
             superseded: false,
@@ -237,12 +237,12 @@ impl Committer {
             .put_if(
                 HEAD_OBJECT,
                 serde_json::to_vec(&head).expect("HEAD serializes"),
-                Precondition::Matches(self.head_etag.clone()),
+                Precondition::Matches(self.head_version.clone()),
             )
             .await?;
         match outcome {
-            PutOutcome::Written { etag } => {
-                self.head_etag = etag;
+            PutOutcome::Written { version } => {
+                self.head_version = version;
                 self.head = Some(manifest);
                 Ok(CommitOutcome::Committed {
                     commit: name,

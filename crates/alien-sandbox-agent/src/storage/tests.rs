@@ -27,7 +27,7 @@ async fn replicator(
         exclude.iter().map(|s| s.to_string()).collect(),
         staging.to_path_buf(),
         None,
-        Committer::new("writer-a", claim.head_etag, claim.manifest, None),
+        Committer::new("writer-a", claim.head_version, claim.manifest, None),
     )
 }
 

@@ -54,7 +54,6 @@ mod tests {
         SandboxPersistentStorageBinding {
             path: "/workspace".to_string(),
             bucket: BindingValue::from("bucket"),
-            prefix: "sandbox-storage/agent".to_string(),
             exclude: Vec::new(),
             max_size_bytes: None,
         }
@@ -69,7 +68,10 @@ mod tests {
 
     #[test]
     fn a_sandbox_without_storage_takes_no_key() {
-        assert_eq!(resolve_storage_key(None, None, "sandbox.create").unwrap(), None);
+        assert_eq!(
+            resolve_storage_key(None, None, "sandbox.create").unwrap(),
+            None
+        );
         let error = resolve_storage_key(None, Some("engine-42"), "sandbox.create").unwrap_err();
         assert_eq!(field(error).as_deref(), Some("storageKey"));
     }
