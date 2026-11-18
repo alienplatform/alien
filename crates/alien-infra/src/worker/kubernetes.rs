@@ -12,12 +12,12 @@ use crate::kubernetes_public_endpoint::{
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    assess_rollout, deployment_has_ready_replicas, readiness_holds, deployment_rollout_complete,
-    emit_kubernetes_workload_heartbeat, label_selector, last_poll, recovery_check,
-    rollout_timeout_message, stalled_rollout_message, update_wait_max_polls, workload_fully_ready,
-    workload_pod_reason, KubernetesWorkload, KubernetesWorkloadDataKind,
-    KubernetesWorkloadHeartbeatInput, NotReadyObservations, ReadyHold, RolloutWait, RolloutWatch,
-    KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+    assess_rollout, deployment_has_ready_replicas, deployment_rollout_complete,
+    emit_kubernetes_workload_heartbeat, label_selector, last_poll, readiness_holds, recovery_check,
+    rollout_budget_exhausted, rollout_timeout_message, stalled_rollout_message,
+    update_wait_max_polls, workload_fully_ready, workload_pod_reason, KubernetesWorkload,
+    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, NotReadyObservations, ReadyHold,
+    RolloutWait, RolloutWatch, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -410,15 +410,17 @@ impl KubernetesWorkerController {
         if last_poll(self._internal_stay_count, 60) {
             let selector = worker_labels(deployment_name);
             let pod_reason = workload_pod_reason(ctx, namespace, &selector, None).await;
-            return Err(AlienError::new(ErrorData::WorkloadNotReady {
-                resource_id: config.id.clone(),
-                message: rollout_timeout_message(
-                    "Deployment",
-                    deployment_name,
-                    &counts,
-                    pod_reason.as_deref(),
-                ),
-            }));
+            return Err(rollout_budget_exhausted(AlienError::new(
+                ErrorData::WorkloadNotReady {
+                    resource_id: config.id.clone(),
+                    message: rollout_timeout_message(
+                        "Deployment",
+                        deployment_name,
+                        &counts,
+                        pod_reason.as_deref(),
+                    ),
+                },
+            )));
         }
 
         Ok(HandlerAction::Stay {
@@ -1020,15 +1022,17 @@ impl KubernetesWorkerController {
         if last_poll(self._internal_stay_count, max_polls) {
             let selector = worker_labels(deployment_name);
             let pod_reason = workload_pod_reason(ctx, namespace, &selector, None).await;
-            return Err(AlienError::new(ErrorData::WorkloadNotReady {
-                resource_id: config.id.clone(),
-                message: rollout_timeout_message(
-                    "Deployment",
-                    deployment_name,
-                    &counts,
-                    pod_reason.as_deref(),
-                ),
-            }));
+            return Err(rollout_budget_exhausted(AlienError::new(
+                ErrorData::WorkloadNotReady {
+                    resource_id: config.id.clone(),
+                    message: rollout_timeout_message(
+                        "Deployment",
+                        deployment_name,
+                        &counts,
+                        pod_reason.as_deref(),
+                    ),
+                },
+            )));
         }
 
         Ok(HandlerAction::Stay {

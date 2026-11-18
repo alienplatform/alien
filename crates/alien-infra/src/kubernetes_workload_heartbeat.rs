@@ -1,7 +1,7 @@
 use alien_core::{
     HeartbeatBackend, KubernetesWorkloadKind, Platform, ResourceHeartbeat, ResourceType,
 };
-use alien_error::Context;
+use alien_error::{AlienError, Context};
 use alien_k8s_clients::read_kubernetes_workload;
 pub use alien_k8s_clients::{
     label_selector, KubernetesWorkload, KubernetesWorkloadDataKind, KubernetesWorkloadReadInput,
@@ -452,6 +452,15 @@ fn unscheduled_reason(pod: &k8s_openapi::api::core::v1::Pod) -> Option<String> {
 /// the workload's own state instead of the generic polling timeout.
 pub(crate) fn last_poll(stay_count: Option<u32>, max_times: u32) -> bool {
     stay_count.unwrap_or(0) + 1 >= max_times
+}
+
+/// The error of a rollout wait whose whole budget is spent: not retryable, so the executor
+/// fails the step now instead of waiting out another budget on each retry. It keeps the
+/// `WORKLOAD_NOT_READY` code, so a manual retry still re-applies the spec. Ordinary not-ready
+/// observations stay retryable.
+pub(crate) fn rollout_budget_exhausted(mut error: AlienError<ErrorData>) -> AlienError<ErrorData> {
+    error.retryable = false;
+    error
 }
 
 /// The message of a rollout wait that ran out of time: the counts, and the first pod that is

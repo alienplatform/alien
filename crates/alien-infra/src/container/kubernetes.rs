@@ -21,10 +21,11 @@ use crate::kubernetes_public_endpoint::{
 use crate::kubernetes_workload_heartbeat::{
     assess_rollout, deployment_has_ready_replicas, deployment_rollout_complete,
     emit_kubernetes_workload_heartbeat, label_selector, last_poll, readiness_holds, recovery_check,
-    rollout_timeout_message, stalled_rollout_message, statefulset_has_ready_replicas,
-    update_wait_max_polls, workload_fully_ready, workload_pod_reason, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, NotReadyObservations, ReadyHold,
-    RolloutWait, RolloutWatch, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+    rollout_budget_exhausted, rollout_timeout_message, stalled_rollout_message,
+    statefulset_has_ready_replicas, update_wait_max_polls, workload_fully_ready,
+    workload_pod_reason, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadHeartbeatInput, NotReadyObservations, ReadyHold, RolloutWait, RolloutWatch,
+    KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -871,8 +872,7 @@ impl KubernetesContainerController {
 
         let ready_selector =
             self.workload_labels(ctx, &config.id, self.build_labels(workload_name));
-        if healthy
-            && readiness_holds(ctx, &mut self.ready_hold, namespace, &ready_selector).await?
+        if healthy && readiness_holds(ctx, &mut self.ready_hold, namespace, &ready_selector).await?
         {
             let workload_type = if self.is_stateful {
                 "StatefulSet"
@@ -926,24 +926,26 @@ impl KubernetesContainerController {
             let pod_reason =
                 workload_pod_reason(ctx, namespace, &selector, self.workload_failure.as_deref())
                     .await;
-            return Err(AlienError::new(ErrorData::WorkloadNotReady {
-                resource_id: config.id.clone(),
-                message: rollout_timeout_message(
-                    if self.is_stateful {
-                        "StatefulSet"
-                    } else {
-                        "Deployment"
-                    },
-                    workload_name,
-                    &format!(
-                        "desired {}, ready {}, total {}",
-                        config.replicas.unwrap_or(1),
-                        ready_replicas.unwrap_or(0),
-                        replicas.unwrap_or(0)
+            return Err(rollout_budget_exhausted(AlienError::new(
+                ErrorData::WorkloadNotReady {
+                    resource_id: config.id.clone(),
+                    message: rollout_timeout_message(
+                        if self.is_stateful {
+                            "StatefulSet"
+                        } else {
+                            "Deployment"
+                        },
+                        workload_name,
+                        &format!(
+                            "desired {}, ready {}, total {}",
+                            config.replicas.unwrap_or(1),
+                            ready_replicas.unwrap_or(0),
+                            replicas.unwrap_or(0)
+                        ),
+                        pod_reason.as_deref(),
                     ),
-                    pod_reason.as_deref(),
-                ),
-            }));
+                },
+            )));
         }
 
         Ok(HandlerAction::Stay {
@@ -1912,24 +1914,26 @@ impl KubernetesContainerController {
             let pod_reason =
                 workload_pod_reason(ctx, namespace, &selector, self.workload_failure.as_deref())
                     .await;
-            return Err(AlienError::new(ErrorData::WorkloadNotReady {
-                resource_id: config.id.clone(),
-                message: rollout_timeout_message(
-                    if self.is_stateful {
-                        "StatefulSet"
-                    } else {
-                        "Deployment"
-                    },
-                    workload_name,
-                    &format!(
-                        "desired {}, ready {}, total {}",
-                        desired_replicas,
-                        ready_replicas.unwrap_or(0),
-                        replicas.unwrap_or(0)
+            return Err(rollout_budget_exhausted(AlienError::new(
+                ErrorData::WorkloadNotReady {
+                    resource_id: config.id.clone(),
+                    message: rollout_timeout_message(
+                        if self.is_stateful {
+                            "StatefulSet"
+                        } else {
+                            "Deployment"
+                        },
+                        workload_name,
+                        &format!(
+                            "desired {}, ready {}, total {}",
+                            desired_replicas,
+                            ready_replicas.unwrap_or(0),
+                            replicas.unwrap_or(0)
+                        ),
+                        pod_reason.as_deref(),
                     ),
-                    pod_reason.as_deref(),
-                ),
-            }));
+                },
+            )));
         }
 
         Ok(HandlerAction::Stay {
@@ -3689,7 +3693,10 @@ mod tests {
                 );
             }
             assert!(
-                matches!(action, Some(KubernetesContainerHandlerAction::Continue { .. })),
+                matches!(
+                    action,
+                    Some(KubernetesContainerHandlerAction::Continue { .. })
+                ),
                 "all created replicas run the new template, stateful={stateful}"
             );
         }

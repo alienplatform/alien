@@ -18,9 +18,9 @@ use crate::kubernetes_public_endpoint::{
 };
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, last_poll, readiness_holds, recovery_check,
-    rollout_timeout_message, update_wait_max_polls, workload_pod_reason, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, NotReadyObservations, ReadyHold,
-    KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+    rollout_budget_exhausted, rollout_timeout_message, update_wait_max_polls, workload_pod_reason,
+    KubernetesWorkload, KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
+    NotReadyObservations, ReadyHold, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -520,7 +520,11 @@ impl KubernetesDaemonController {
                 message: "Daemon daemonset is missing".to_string(),
             }));
         }
-        if !live.as_ref().is_some_and(daemonset_is_ready) {
+        // While recovering from a failed refresh, "ready" also means the rollout is complete:
+        // during a stalled rolling update the old pods keep every node ready.
+        let healthy = live.as_ref().is_some_and(daemonset_is_ready)
+            && (!self.recovering || live.as_ref().is_some_and(daemonset_rollout_complete));
+        if !healthy {
             let config = ctx.desired_resource_config::<Daemon>()?;
             // Not ready (or still rolling) is a health observation, not drift: it is retried
             // (three observations in a window fail the refresh), and the refresh that follows a
@@ -1396,7 +1400,7 @@ impl KubernetesDaemonController {
             }
             None => self.workload_failure.clone(),
         };
-        AlienError::new(ErrorData::WorkloadNotReady {
+        rollout_budget_exhausted(AlienError::new(ErrorData::WorkloadNotReady {
             resource_id,
             message: rollout_timeout_message(
                 "DaemonSet",
@@ -1404,7 +1408,7 @@ impl KubernetesDaemonController {
                 &daemonset_counts(live),
                 pod_reason.as_deref(),
             ),
-        })
+        }))
     }
 
     /// The live DaemonSet, or `None` when it does not exist.
@@ -2875,7 +2879,8 @@ mod tests {
             "apiVersion":"apps/v1", "kind":"DaemonSet",
             "metadata":{"name":"agent", "generation":2, "labels":labels},
             "spec":{"selector":{"matchLabels":{"app":"agent"}},"template":{"spec":{"containers":[]}}},
-            "status":{"desiredNumberScheduled":10, "numberReady":ready, "observedGeneration":2}
+            "status":{"desiredNumberScheduled":10, "numberReady":ready, "observedGeneration":2,
+                "updatedNumberScheduled":ready, "numberAvailable":ready}
         })
     }
 
@@ -3080,7 +3085,8 @@ mod tests {
         let error = controller.step(&ctx).await.expect_err("times out");
 
         assert_eq!(error.code, "WORKLOAD_NOT_READY");
-        assert!(error.retryable);
+        // The whole budget is spent: final, so the executor does not wait out ~10 more budgets.
+        assert!(!error.retryable);
         for part in [
             "desired 10, updated 6, available 6",
             "pod agent-x7k2p is Pending",
@@ -3088,5 +3094,55 @@ mod tests {
         ] {
             assert!(error.message.contains(part), "{}", error.message);
         }
+    }
+
+    /// During a stalled rolling update the old pods keep every node ready, so `numberReady`
+    /// alone is no proof of recovery: a refresh-failed DaemonSet whose rollout is unfinished
+    /// does not count ready checks, and resets any it had.
+    #[tokio::test]
+    async fn a_stalled_rollout_with_ready_old_pods_does_not_recover_a_failed_refresh() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes config")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual config")
+        };
+        *server_url = server.base_url();
+        for (path, kind) in [("pods", "PodList"), ("events", "EventList")] {
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path(format!("/api/v1/namespaces/test-ns/{path}"));
+                then.status(200).json_body(
+                    serde_json::json!({"apiVersion":"v1","kind":kind,"metadata":{},"items":[]}),
+                );
+            });
+        }
+        let mut controller = manifest_test_controller();
+        let labels = controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+        // All 10 old pods are ready, but only 4 run the current template.
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200).json_body(serde_json::json!({
+                "apiVersion":"apps/v1", "kind":"DaemonSet",
+                "metadata":{"name":"agent", "generation":2, "labels":labels},
+                "spec":{"selector":{"matchLabels":{"app":"agent"}},"template":{"spec":{"containers":[]}}},
+                "status":{"desiredNumberScheduled":10, "numberReady":10, "updatedNumberScheduled":4,
+                    "numberAvailable":10, "observedGeneration":2}
+            }));
+        });
+        controller.state = KubernetesDaemonState::RefreshFailed;
+        controller.recovery_checks = 2;
+        let error = controller
+            .step(&ctx)
+            .await
+            .expect_err("an unfinished rollout is not a recovery");
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
+        assert_eq!(controller.recovery_checks, 0);
+        assert_eq!(controller.get_status(), ResourceStatus::RefreshFailed);
     }
 }
