@@ -785,13 +785,16 @@ impl SandboxHandle {
     }
 
     /// Destroys a sandbox. Idempotent: a sandbox already gone is the desired end state.
+    /// Persistent storage is committed first unless `discard` is true.
     #[napi]
-    pub async fn terminate(&self, sandbox_id: String) -> napi::Result<()> {
+    pub async fn terminate(&self, sandbox_id: String, discard: Option<bool>) -> napi::Result<()> {
         let sandbox = self.inner.clone();
-        sandbox
-            .terminate(&sandbox_id)
-            .await
-            .map_err(map_alien_error)
+        if discard.unwrap_or(false) {
+            sandbox.terminate_discarding(&sandbox_id).await
+        } else {
+            sandbox.terminate(&sandbox_id).await
+        }
+        .map_err(map_alien_error)
     }
 }
 

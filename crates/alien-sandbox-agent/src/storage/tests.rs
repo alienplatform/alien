@@ -33,7 +33,6 @@ async fn replicator(
         tree::open_root(root).expect("open root"),
         exclude.iter().map(|s| s.to_string()).collect(),
         staging.to_path_buf(),
-        None,
         Committer::new("writer-a", claim.head_version, claim.manifest, None),
     )
 }
@@ -466,7 +465,6 @@ async fn the_agent_commits_and_restores_through_an_s3_grant() {
         tree::open_root(source.path()).expect("open"),
         vec![],
         staging.path().to_path_buf(),
-        None,
         Committer::new("sandbox-1", claim.head_version, claim.manifest, None),
     );
     let CommitOutcome::Committed { commit, .. } = writer.commit(&agent).await.expect("commit")
@@ -521,7 +519,6 @@ async fn attach_restores_then_sync_publishes() {
         tree::open_root(source.path()).expect("open"),
         vec![],
         staging.path().to_path_buf(),
-        None,
         Committer::new("sandbox-1", claim.head_version, None, None),
     );
     first
@@ -587,305 +584,6 @@ async fn attach_restores_then_sync_publishes() {
             .unwrap(),
         b"after restore"
     );
-}
-
-/// Without a grant the binding pulls: the agent restores what the binding seeded into its spool,
-/// commits into the spool, and the binding's puller publishes those commits; a second sandbox
-/// restores them the same way, and the first, superseded, stops.
-#[tokio::test(flavor = "multi_thread")]
-async fn attach_without_a_grant_restores_from_and_commits_to_the_spool() {
-    use super::attach::{AttachRequest, PersistentStorage, ReplicationState, StorageConfig};
-    use alien_sandbox_storage::{read_file, read_head, seed, PullOutcome, Puller};
-
-    let store = MemoryStore::new();
-    // SAFETY: plain getters.
-    let me = unsafe {
-        crate::exec::ExecIdentity {
-            uid: libc::getuid(),
-            gid: libc::getgid(),
-        }
-    };
-    let sandbox = |dir: &Path| {
-        std::sync::Arc::new(PersistentStorage::with_staging(
-            StorageConfig {
-                path: dir.join("workspace").display().to_string(),
-                exclude: vec![],
-                max_size_bytes: None,
-            },
-            dir.join("staging"),
-        ))
-    };
-    let attach = |writer: &str, head_version, commit| -> AttachRequest {
-        serde_json::from_value(serde_json::json!({
-            "key": "engine-42",
-            "writer": writer,
-            "headVersion": head_version,
-            "commit": commit,
-        }))
-        .expect("an attach without a grant parses")
-    };
-
-    // The first sandbox: an empty key, so nothing is seeded.
-    let first_dir = tempfile::tempdir().expect("tempdir");
-    let first = sandbox(first_dir.path());
-    let claim = takeover(&store, "sandbox-1").await.expect("claim");
-    let image = crate::image_command::ImageProcess::default().awaiting_restore();
-    first
-        .attach(
-            attach("sandbox-1", claim.head_version.clone(), None),
-            &image,
-            me,
-        )
-        .await
-        .expect("attach");
-    assert!(!image.restore_pending().unwrap());
-    let workspace = first_dir.path().join("workspace");
-    write(&workspace, "repo/README", b"hello");
-    let synced = first.sync().await.expect("sync");
-    assert_eq!(synced.head, Some(1));
-    assert_eq!(
-        read_head(&store).await.unwrap().unwrap().0.commit,
-        None,
-        "a commit stays in the spool until the binding pulls it"
-    );
-    let spool = first.existing_spool().expect("the attach made a spool");
-    let mut puller = Puller::new("sandbox-1", claim.head_version, 900_000);
-    let outcome = puller
-        .pull(spool.as_ref(), &store, "engine-42")
-        .await
-        .expect("pull");
-    assert!(
-        matches!(outcome, PullOutcome::Published { .. }),
-        "{outcome:?}"
-    );
-    assert_eq!(
-        read_file(&store, "engine-42", "repo/README").await.unwrap(),
-        b"hello"
-    );
-
-    // The second sandbox claims the key; the binding seeds its spool, then attaches.
-    let second_dir = tempfile::tempdir().expect("tempdir");
-    let second = sandbox(second_dir.path());
-    let claim = takeover(&store, "sandbox-2").await.expect("claim");
-    let commit = read_head(&store)
-        .await
-        .unwrap()
-        .unwrap()
-        .0
-        .commit
-        .expect("a commit");
-    let second_spool = second.spool().await.expect("spool");
-    seed(second_spool.as_ref(), &store, &commit, 900_000)
-        .await
-        .expect("seed");
-    let image = crate::image_command::ImageProcess::default().awaiting_restore();
-    let status = second
-        .attach(
-            attach("sandbox-2", claim.head_version.clone(), Some(commit)),
-            &image,
-            me,
-        )
-        .await
-        .expect("attach");
-    assert_eq!(status.state, ReplicationState::Replicating);
-    assert_eq!(
-        std::fs::read(second_dir.path().join("workspace/repo/README")).unwrap(),
-        b"hello"
-    );
-    let renew: super::attach::RenewRequest = serde_json::from_value(serde_json::json!({
-        "grant": s3_grant("http://unused", "engine-42", &[]),
-    }))
-    .unwrap();
-    second
-        .renew(renew)
-        .await
-        .expect_err("a pulled key holds no grant to renew");
-
-    // The first sandbox writes on; its puller finds the key taken and its replication stops.
-    write(&workspace, "repo/late", b"late");
-    first.sync().await.expect("committed to the spool");
-    puller
-        .pull(spool.as_ref(), &store, "engine-42")
-        .await
-        .expect_err("superseded at HEAD");
-    write(&workspace, "repo/later", b"later");
-    first
-        .sync()
-        .await
-        .expect_err("the spool refuses a superseded writer");
-    assert_eq!(first.status().state, ReplicationState::Stopped);
-    assert!(read_file(&store, "engine-42", "repo/late").await.is_err());
-}
-
-#[test]
-fn files_that_name_git_objects_are_refs_heads_and_the_index() {
-    for path in [
-        ".git/HEAD",
-        ".git/ORIG_HEAD",
-        ".git/FETCH_HEAD",
-        ".git/packed-refs",
-        ".git/index",
-        ".git/refs/heads/main",
-        ".git/refs/tags/v1/x",
-        "repos/a/.git/refs/heads/main",
-        ".git/worktrees/wt/HEAD",
-        ".git/worktrees/wt/index",
-    ] {
-        assert!(tree::names_git_objects(path), "{path}");
-    }
-    for path in [
-        "HEAD",
-        "refs/heads/main",
-        ".git",
-        ".git/refs",
-        ".git/config",
-        ".git/objects/ab/cdef",
-        ".git/objects/pack/pack-1.pack",
-        ".git/logs/refs/heads/main",
-        ".git/worktrees/wt/logs/HEAD",
-        "src/index",
-    ] {
-        assert!(!tree::names_git_objects(path), "{path}");
-    }
-}
-
-/// Commits what `stage_with` staged, restores it elsewhere, and returns the restored directory.
-async fn commit_staged(
-    store: &MemoryStore,
-    replicator: &mut Replicator,
-    between: &mut dyn FnMut(super::Phase),
-) -> tempfile::TempDir {
-    let (walk, mut staging) = replicator.stage_with(between).expect("stage");
-    replicator
-        .committer
-        .commit(store, "k", walk, &mut staging)
-        .await
-        .expect("commit");
-    let target = tempfile::tempdir().expect("tempdir");
-    restore(
-        store,
-        replicator.head().expect("head"),
-        &mut DirSink::new(tree::open_root(target.path()).expect("open"), false),
-    )
-    .await
-    .expect("restore");
-    target
-}
-
-/// A loose object `.git/objects/<2>/<rest>` for a name.
-fn object(root: &Path, name: &str) {
-    write(
-        root,
-        &format!(".git/objects/{}/{}", &name[..2], &name[2..]),
-        name.as_bytes(),
-    );
-}
-
-fn object_exists(root: &Path, name: &str) -> bool {
-    root.join(format!(".git/objects/{}/{}", &name[..2], &name[2..]))
-        .exists()
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn without_a_freezer_a_ref_never_names_an_object_the_commit_lacks() {
-    let source = tempfile::tempdir().expect("tempdir");
-    let staging = tempfile::tempdir().expect("tempdir");
-    let root = source.path().to_path_buf();
-    object(&root, "aa01");
-    write(&root, ".git/refs/heads/main", b"aa01");
-    write(&root, ".git/HEAD", b"ref: refs/heads/main");
-    let store = MemoryStore::new();
-    let mut replicator = replicator(&store, &root, staging.path(), &[]).await;
-    replicator.commit(&store).await.expect("first commit");
-    object(&root, "ab05");
-    write(&root, ".git/refs/heads/main", b"ab05");
-
-    // Another commit lands after the objects were listed and before the files are copied: git
-    // writes the object, then moves the ref.
-    let restored = commit_staged(&store, &mut replicator, &mut |phase| {
-        if phase == super::Phase::SecondWalk {
-            object(&root, "bb02");
-            write(&root, ".git/refs/heads/main", b"bb02");
-        }
-    })
-    .await;
-    let main = std::fs::read_to_string(restored.path().join(".git/refs/heads/main")).expect("ref");
-    assert!(
-        object_exists(restored.path(), &main),
-        "main names {main}, which the commit lacks"
-    );
-    assert_eq!(
-        main, "ab05",
-        "the ref is the one copied before the objects were listed"
-    );
-
-    // The next commit takes the new ref with its object.
-    let restored = commit_staged(&store, &mut replicator, &mut |_| {}).await;
-    let main = std::fs::read_to_string(restored.path().join(".git/refs/heads/main")).expect("ref");
-    assert_eq!(main, "bb02");
-    assert!(object_exists(restored.path(), "bb02"));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn without_a_freezer_refs_come_from_the_first_walk_with_their_directories() {
-    let source = tempfile::tempdir().expect("tempdir");
-    let staging = tempfile::tempdir().expect("tempdir");
-    let root = source.path().to_path_buf();
-    object(&root, "aa01");
-    write(&root, ".git/refs/heads/topic/one", b"aa01");
-    let store = MemoryStore::new();
-    let mut replicator = replicator(&store, &root, staging.path(), &[]).await;
-
-    // Between the walks a branch is deleted with its directory and another is created.
-    let restored = commit_staged(&store, &mut replicator, &mut |phase| {
-        if phase == super::Phase::RefsCopied {
-            std::fs::remove_dir_all(root.join(".git/refs/heads/topic")).expect("rm");
-            object(&root, "cc03");
-            write(&root, ".git/refs/heads/new", b"cc03");
-        }
-    })
-    .await;
-    assert_eq!(
-        std::fs::read(restored.path().join(".git/refs/heads/topic/one")).expect("kept ref"),
-        b"aa01"
-    );
-    assert!(object_exists(restored.path(), "aa01"));
-    assert!(
-        !restored.path().join(".git/refs/heads/new").exists(),
-        "a ref seen only by the second walk waits for the next commit"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_same_size_rewrite_right_after_a_commit_is_committed() {
-    // Inode times tick with the coarse clock (a few ms), so a rewrite of the same length right
-    // after a commit read the file often keeps size, ctime and mtime. Many rounds make one
-    // such rewrite near certain.
-    let source = tempfile::tempdir().expect("tempdir");
-    let staging = tempfile::tempdir().expect("tempdir");
-    let root = source.path();
-    let store = MemoryStore::new();
-    write(root, "f", b"round-000");
-    let mut replicator = replicator(&store, root, staging.path(), &[]).await;
-    for round in 1..=200 {
-        replicator.commit(&store).await.expect("commit");
-        let next = format!("round-{round:03}");
-        write(root, "f", next.as_bytes());
-        replicator.commit(&store).await.expect("commit");
-        let target = tempfile::tempdir().expect("tempdir");
-        restore(
-            &store,
-            replicator.head().expect("head"),
-            &mut DirSink::new(tree::open_root(target.path()).expect("open"), false),
-        )
-        .await
-        .expect("restore");
-        assert_eq!(
-            std::fs::read_to_string(target.path().join("f")).expect("read"),
-            next,
-            "round {round}"
-        );
-    }
 }
 
 /// What setup writes into the image is exactly what the agent reads, and a sandbox without
@@ -1001,6 +699,177 @@ async fn an_expired_grant_sends_nothing() {
         .expect_err("expired");
     assert!(store.denied());
     assert!(bucket.objects.lock().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_same_size_rewrite_right_after_a_commit_is_committed() {
+    // Inode times tick with the coarse clock (a few ms), so a rewrite of the same length right
+    // after a commit read the file often keeps size, ctime and mtime. Many rounds make one
+    // such rewrite near certain.
+    let source = tempfile::tempdir().expect("tempdir");
+    let staging = tempfile::tempdir().expect("tempdir");
+    let root = source.path();
+    let store = MemoryStore::new();
+    write(root, "f", b"round-000");
+    let mut replicator = replicator(&store, root, staging.path(), &[]).await;
+    for round in 1..=200 {
+        replicator.commit(&store).await.expect("commit");
+        let next = format!("round-{round:03}");
+        write(root, "f", next.as_bytes());
+        replicator.commit(&store).await.expect("commit");
+        let target = tempfile::tempdir().expect("tempdir");
+        restore(
+            &store,
+            replicator.head().expect("head"),
+            &mut DirSink::new(tree::open_root(target.path()).expect("open"), false),
+        )
+        .await
+        .expect("restore");
+        assert_eq!(
+            std::fs::read_to_string(target.path().join("f")).expect("read"),
+            next,
+            "round {round}"
+        );
+    }
+}
+
+#[test]
+fn files_that_name_git_objects_are_refs_heads_and_the_index() {
+    for path in [
+        ".git/HEAD",
+        ".git/ORIG_HEAD",
+        ".git/FETCH_HEAD",
+        ".git/packed-refs",
+        ".git/index",
+        ".git/refs/heads/main",
+        ".git/refs/tags/v1/x",
+        "repos/a/.git/refs/heads/main",
+        ".git/worktrees/wt/HEAD",
+        ".git/worktrees/wt/index",
+    ] {
+        assert!(tree::names_git_objects(path), "{path}");
+    }
+    for path in [
+        "HEAD",
+        "refs/heads/main",
+        ".git",
+        ".git/refs",
+        ".git/config",
+        ".git/objects/ab/cdef",
+        ".git/objects/pack/pack-1.pack",
+        ".git/logs/refs/heads/main",
+        ".git/worktrees/wt/logs/HEAD",
+        "src/index",
+    ] {
+        assert!(!tree::names_git_objects(path), "{path}");
+    }
+}
+
+/// Commits what `stage_with` staged, restores it elsewhere, and returns the restored directory.
+async fn commit_staged(
+    store: &MemoryStore,
+    replicator: &mut Replicator,
+    between: &mut dyn FnMut(super::Phase),
+) -> tempfile::TempDir {
+    let (walk, mut staging) = replicator.stage_with(between).expect("stage");
+    replicator
+        .committer
+        .commit(store, "k", walk, &mut staging)
+        .await
+        .expect("commit");
+    let target = tempfile::tempdir().expect("tempdir");
+    restore(
+        store,
+        replicator.head().expect("head"),
+        &mut DirSink::new(tree::open_root(target.path()).expect("open"), false),
+    )
+    .await
+    .expect("restore");
+    target
+}
+
+/// A loose object `.git/objects/<2>/<rest>` for a name.
+fn object(root: &Path, name: &str) {
+    write(
+        root,
+        &format!(".git/objects/{}/{}", &name[..2], &name[2..]),
+        name.as_bytes(),
+    );
+}
+
+fn object_exists(root: &Path, name: &str) -> bool {
+    root.join(format!(".git/objects/{}/{}", &name[..2], &name[2..]))
+        .exists()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_a_freezer_a_ref_never_names_an_object_the_commit_lacks() {
+    let source = tempfile::tempdir().expect("tempdir");
+    let staging = tempfile::tempdir().expect("tempdir");
+    let root = source.path().to_path_buf();
+    object(&root, "aa01");
+    write(&root, ".git/refs/heads/main", b"aa01");
+    write(&root, ".git/HEAD", b"ref: refs/heads/main");
+    let store = MemoryStore::new();
+    let mut replicator = replicator(&store, &root, staging.path(), &[]).await;
+    replicator.commit(&store).await.expect("first commit");
+    object(&root, "ab0005");
+    write(&root, ".git/refs/heads/main", b"ab0005");
+
+    // Another commit lands after the objects were listed and before the files are copied: git
+    // writes the object, then moves the ref.
+    let restored = commit_staged(&store, &mut replicator, &mut |phase| {
+        if phase == super::Phase::SecondWalk {
+            object(&root, "bb000002");
+            write(&root, ".git/refs/heads/main", b"bb000002");
+        }
+    })
+    .await;
+    let main = std::fs::read_to_string(restored.path().join(".git/refs/heads/main")).expect("ref");
+    assert!(
+        object_exists(restored.path(), &main),
+        "main names {main}, which the commit lacks"
+    );
+    assert_eq!(
+        main, "ab0005",
+        "the ref is the one copied before the objects were listed"
+    );
+
+    // The next commit takes the new ref with its object.
+    let restored = commit_staged(&store, &mut replicator, &mut |_| {}).await;
+    let main = std::fs::read_to_string(restored.path().join(".git/refs/heads/main")).expect("ref");
+    assert_eq!(main, "bb000002");
+    assert!(object_exists(restored.path(), "bb000002"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_a_freezer_refs_come_from_the_first_walk_with_their_directories() {
+    let source = tempfile::tempdir().expect("tempdir");
+    let staging = tempfile::tempdir().expect("tempdir");
+    let root = source.path().to_path_buf();
+    object(&root, "aa01");
+    write(&root, ".git/refs/heads/topic/one", b"aa01");
+    let store = MemoryStore::new();
+    let mut replicator = replicator(&store, &root, staging.path(), &[]).await;
+
+    // Between the walks a branch is deleted with its directory and another is created.
+    let restored = commit_staged(&store, &mut replicator, &mut |phase| {
+        if phase == super::Phase::RefsCopied {
+            std::fs::remove_dir_all(root.join(".git/refs/heads/topic")).expect("rm");
+            object(&root, "cc03");
+            write(&root, ".git/refs/heads/new", b"cc03");
+        }
+    })
+    .await;
+    assert_eq!(
+        std::fs::read(restored.path().join(".git/refs/heads/topic/one")).expect("kept ref"),
+        b"aa01"
+    );
+    assert!(object_exists(restored.path(), "aa01"));
+    assert!(
+        !restored.path().join(".git/refs/heads/new").exists(),
+        "a ref seen only by the second walk waits for the next commit"
+    );
 }
 
 /// SQLite without a freezer: a database is copied with its journal, and kept only when it did
@@ -1274,4 +1143,129 @@ mod sqlite_without_a_freezer {
             "rollback mode: no round took the database ({taken}/{rounds})"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attach_without_a_grant_restores_from_and_commits_to_the_spool() {
+    use super::attach::{AttachRequest, PersistentStorage, ReplicationState, StorageConfig};
+    use alien_sandbox_storage::{read_file, read_head, seed, PullOutcome, Puller};
+
+    let store = MemoryStore::new();
+    // SAFETY: plain getters.
+    let me = unsafe {
+        crate::exec::ExecIdentity {
+            uid: libc::getuid(),
+            gid: libc::getgid(),
+        }
+    };
+    let sandbox = |dir: &Path| {
+        std::sync::Arc::new(PersistentStorage::with_staging(
+            StorageConfig {
+                path: dir.join("workspace").display().to_string(),
+                exclude: vec![],
+                max_size_bytes: None,
+            },
+            dir.join("staging"),
+        ))
+    };
+    let attach = |writer: &str, head_version, commit| -> AttachRequest {
+        serde_json::from_value(serde_json::json!({
+            "key": "engine-42",
+            "writer": writer,
+            "headVersion": head_version,
+            "commit": commit,
+        }))
+        .expect("an attach without a grant parses")
+    };
+
+    // The first sandbox: an empty key, so nothing is seeded.
+    let first_dir = tempfile::tempdir().expect("tempdir");
+    let first = sandbox(first_dir.path());
+    let claim = takeover(&store, "sandbox-1").await.expect("claim");
+    let image = crate::image_command::ImageProcess::default().awaiting_restore();
+    first
+        .attach(
+            attach("sandbox-1", claim.head_version.clone(), None),
+            &image,
+            me,
+        )
+        .await
+        .expect("attach");
+    assert!(!image.restore_pending().unwrap());
+    let workspace = first_dir.path().join("workspace");
+    write(&workspace, "repo/README", b"hello");
+    let synced = first.sync().await.expect("sync");
+    assert_eq!(synced.head, Some(1));
+    assert_eq!(
+        read_head(&store).await.unwrap().unwrap().0.commit,
+        None,
+        "a commit stays in the spool until the binding pulls it"
+    );
+    let spool = first.existing_spool().expect("the attach made a spool");
+    let mut puller = Puller::new("sandbox-1", claim.head_version, 900_000);
+    let outcome = puller
+        .pull(spool.as_ref(), &store, "engine-42")
+        .await
+        .expect("pull");
+    assert!(
+        matches!(outcome, PullOutcome::Published { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        read_file(&store, "engine-42", "repo/README").await.unwrap(),
+        b"hello"
+    );
+
+    // The second sandbox claims the key; the binding seeds its spool, then attaches.
+    let second_dir = tempfile::tempdir().expect("tempdir");
+    let second = sandbox(second_dir.path());
+    let claim = takeover(&store, "sandbox-2").await.expect("claim");
+    let commit = read_head(&store)
+        .await
+        .unwrap()
+        .unwrap()
+        .0
+        .commit
+        .expect("a commit");
+    let second_spool = second.spool().await.expect("spool");
+    seed(second_spool.as_ref(), &store, &commit, 900_000)
+        .await
+        .expect("seed");
+    let image = crate::image_command::ImageProcess::default().awaiting_restore();
+    let status = second
+        .attach(
+            attach("sandbox-2", claim.head_version.clone(), Some(commit)),
+            &image,
+            me,
+        )
+        .await
+        .expect("attach");
+    assert_eq!(status.state, ReplicationState::Replicating);
+    assert_eq!(
+        std::fs::read(second_dir.path().join("workspace/repo/README")).unwrap(),
+        b"hello"
+    );
+    let renew: super::attach::RenewRequest = serde_json::from_value(serde_json::json!({
+        "grant": s3_grant("http://unused", "engine-42", &[]),
+    }))
+    .unwrap();
+    second
+        .renew(renew)
+        .await
+        .expect_err("a pulled key holds no grant to renew");
+
+    // The first sandbox writes on; its puller finds the key taken and its replication stops.
+    write(&workspace, "repo/late", b"late");
+    first.sync().await.expect("committed to the spool");
+    puller
+        .pull(spool.as_ref(), &store, "engine-42")
+        .await
+        .expect_err("superseded at HEAD");
+    write(&workspace, "repo/later", b"later");
+    first
+        .sync()
+        .await
+        .expect_err("the spool refuses a superseded writer");
+    assert_eq!(first.status().state, ReplicationState::Stopped);
+    assert!(read_file(&store, "engine-42", "repo/late").await.is_err());
 }

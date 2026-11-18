@@ -40,6 +40,8 @@ path = "src/main.rs"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# Tests write real databases; the agent itself links no SQLite.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nlink = { version = "0.32", features = ["sockdiag"] }
@@ -50,4 +52,4 @@ tempfile = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 libc = "0.2"
 # Tests write real databases; the agent itself links no SQLite.
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled"] }

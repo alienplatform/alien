@@ -17,7 +17,8 @@ use crate::{
 };
 use alien_core::sandbox_build_role::sandbox_build_role_name;
 use alien_core::sandbox_egress::{
-    sandbox_egress_name, sandbox_egress_network, sandbox_needs_connector, LOOPBACK_ONLY_CIDR,
+    aws_sandbox_has_store_path, sandbox_egress_name, sandbox_egress_network,
+    sandbox_needs_connector, LOOPBACK_ONLY_CIDR,
 };
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::sandbox_setup_inputs::aws_sandbox_renders_bundle;
@@ -91,6 +92,13 @@ impl TfEmitter for AwsSandboxEmitter {
             Expression::Null
         } else if matches!(sandbox.egress, SandboxEgress::Internet) {
             super::network::sandbox_subnet_ids(ctx)?
+        } else if aws_sandbox_has_store_path(ctx.stack, sandbox) {
+            // The store's endpoint is on the dedicated route table this module creates; the
+            // network's guard refuses any other network mode.
+            expr::raw(format!(
+                "aws_subnet.{}_sandbox[*].id",
+                store_network_label(ctx)?
+            ))
         } else {
             sandbox_egress_network(ctx.stack).map_err(|refusal| {
                 AlienError::new(ErrorData::OperationNotSupported {
@@ -260,14 +268,22 @@ impl TfEmitter for AwsSandboxEmitter {
                             ]
                         },
                     ),
-                    attr("tags", tags(ctx, "sandbox")),
-                ],
+                ]
+                .into_iter()
+                .chain(store_egress_rule(ctx, sandbox)?)
+                .chain([attr("tags", tags(ctx, "sandbox"))]),
             );
 
             let mut connector_dependencies = vec![expr::traversal([
                 PROPAGATION_BARRIER_RESOURCE,
                 &format!("{label}_iam_propagation"),
             ])];
+            if aws_sandbox_has_store_path(ctx.stack, sandbox) {
+                connector_dependencies.push(expr::traversal([
+                    "terraform_data",
+                    &format!("{}_sandbox_store_guard", store_network_label(ctx)?),
+                ]));
+            }
             if matches!(sandbox.egress, SandboxEgress::Internet) {
                 let network = sandbox_egress_network(ctx.stack).map_err(|error| {
                     AlienError::new(ErrorData::OperationNotSupported {
@@ -893,8 +909,46 @@ fn emit_profile_policies(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Re
     Ok(())
 }
 
+/// Terraform label of the network that carries the sandboxes' store path.
+fn store_network_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {
+    let network = sandbox_egress_network(ctx.stack).map_err(|error| {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "sandbox persistent store path".into(),
+            reason: error.to_string(),
+        })
+    })?;
+    ctx.name_for(network.id).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!("network '{}' has no generated name", network.id),
+        })
+    })
+}
+
+/// As in the CloudFormation template: HTTPS to the region's S3 prefix list, for a sandbox with a
+/// path to its persistent store; only the agent's marked sockets get there.
+fn store_egress_rule(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Option<hcl::Structure>> {
+    if !aws_sandbox_has_store_path(ctx.stack, sandbox) {
+        return Ok(None);
+    }
+    Ok(Some(nested_block(
+        "egress",
+        vec![
+            attr("from_port", Expression::from(443)),
+            attr("to_port", Expression::from(443)),
+            attr("protocol", Expression::from("tcp")),
+            attr(
+                "prefix_list_ids",
+                expr::raw(format!(
+                    "[data.aws_prefix_list.{}_s3.id]",
+                    store_network_label(ctx)?
+                )),
+            ),
+        ],
+    )))
+}
+
 /// Terraform label of the bucket a sandbox's persistent storage lives in.
-fn persistent_store_label(label: &str) -> String {
+pub(crate) fn persistent_store_label(label: &str) -> String {
     format!("{label}_persistent_store")
 }
 

@@ -656,10 +656,21 @@ impl SandboxHandle {
         })
     }
 
-    fn terminate<'py>(&self, py: Python<'py>, sandbox_id: String) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (sandbox_id, discard=false))]
+    fn terminate<'py>(
+        &self,
+        py: Python<'py>,
+        sandbox_id: String,
+        discard: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         future_into_py(py, async move {
-            inner.terminate(&sandbox_id).await.map_err(map_alien_error)
+            if discard {
+                inner.terminate_discarding(&sandbox_id).await
+            } else {
+                inner.terminate(&sandbox_id).await
+            }
+            .map_err(map_alien_error)
         })
     }
 

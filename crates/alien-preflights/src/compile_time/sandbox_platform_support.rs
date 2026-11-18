@@ -385,12 +385,37 @@ mod tests {
             });
             stack_with(sandbox)
         };
-        let refused = SandboxPlatformSupportCheck
+        // Build-time checks run before the build resolves `imageUser`: a source-built sandbox
+        // with `none` and an unprivileged supervisor is what the redirect needs, so it passes
+        // here (a live release was refused before this), and the deployment checks the image.
+        let unresolved = SandboxPlatformSupportCheck
             .check(&declared(None), Platform::Aws)
             .await
             .expect("check runs");
+        assert!(unresolved.success, "{:?}", unresolved.errors);
+        let mut domains = declared(None);
+        if let Some(entry) = domains.resources.get_mut("agent") {
+            let mut sandbox = entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .expect("sandbox")
+                .clone();
+            // A domain list keeps the connector but installs no redirect for the store.
+            sandbox.egress = SandboxEgress::AllowDomains {
+                domains: vec!["example.com".to_string()],
+            };
+            entry.config = alien_core::Resource::new(sandbox);
+        }
+        let refused = SandboxPlatformSupportCheck
+            .check(&domains, Platform::Aws)
+            .await
+            .expect("check runs");
         assert!(!refused.success);
-        assert!(refused.errors.join(" ").contains("imageUser"));
+        assert!(
+            refused.errors.join(" ").contains("imageUser"),
+            "{:?}",
+            refused.errors
+        );
         let accepted = SandboxPlatformSupportCheck
             .check(&declared(Some(1001)), Platform::Aws)
             .await

@@ -1,4 +1,4 @@
-//! SQLite databases where the platform has no freezer.
+//! SQLite databases in persistent storage, copied while commands keep writing.
 //!
 //! A database is a group of files: the database itself and its `-wal` or `-journal`. Copied one
 //! after the other while the application writes, the copies can come from different moments and

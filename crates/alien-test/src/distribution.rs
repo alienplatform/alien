@@ -2991,6 +2991,8 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
                 | TestApp::AutomaticSetup
                 | TestApp::StorageNotifications
                 | TestApp::SandboxRemote
+                | TestApp::SandboxStorage
+                | TestApp::SandboxStorageGcp
         )
         && matches!(
             ctx.platform,
@@ -4513,6 +4515,7 @@ resource "terraform_data" "gate_keeper" {}
             e2e_artifact_registry: crate::config::E2eArtifactRegistryConfig {
                 aws_ar_push_role_arn: None,
                 aws_ar_pull_role_arn: None,
+                aws_repository_prefix: None,
                 gcp_gar_repository: None,
                 gcp_ar_pull_sa_email: None,
                 gcp_ar_push_sa_email: None,

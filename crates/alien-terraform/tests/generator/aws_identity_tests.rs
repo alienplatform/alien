@@ -2376,3 +2376,83 @@ fn the_registration_hands_the_controller_the_persistent_store() {
         .expect("the sandbox registers");
     assert!(!plain.contains("persistentStorage"), "{plain}");
 }
+
+/// As in CloudFormation: the connector of a sandbox with persistent storage sits in the dedicated
+/// sandbox subnets, one S3 gateway endpoint on their route table admits object reads and writes
+/// on the persistent store alone, the connector's security group gains HTTPS to the region's S3
+/// prefix list, and a guard the connector waits on refuses a network the module does not create.
+#[test]
+fn persistent_storage_opens_only_the_store_path_to_the_connector() {
+    let module = persistent_storage_module();
+    let all: String = module
+        .iter()
+        .filter(|(name, _)| name.ends_with(".tf"))
+        .map(|(_, contents)| format!("{contents}\n"))
+        .collect();
+    let body: hcl::Body = hcl::parse(&all).expect("the module parses");
+    let block = |kind: &str, name: &str| {
+        body.blocks()
+            .find(|block| {
+                block.labels().len() == 2
+                    && block.labels()[0].as_str() == kind
+                    && block.labels()[1].as_str() == name
+            })
+            .unwrap_or_else(|| panic!("{kind}.{name} renders"))
+            .clone()
+    };
+    let text = |block: &hcl::Block| hcl::format::to_string(block).expect("formats");
+    let endpoints: Vec<_> = body
+        .blocks()
+        .filter(|block| {
+            block.identifier() == "resource" && block.labels()[0].as_str() == "aws_vpc_endpoint"
+        })
+        .collect();
+    assert_eq!(endpoints.len(), 1);
+    let network = endpoints[0].labels()[1]
+        .as_str()
+        .strip_suffix("_sandbox_store")
+        .expect("named for the network")
+        .to_string();
+    let endpoint = text(endpoints[0]);
+    for expected in [
+        "vpc_endpoint_type = \"Gateway\"".to_string(),
+        format!("aws_route_table.{network}_sandbox[0].id"),
+        "aws_s3_bucket.agents_persistent_store.arn}/*".to_string(),
+        "s3:GetObject".to_string(),
+        "s3:PutObject".to_string(),
+    ] {
+        assert!(endpoint.contains(&expected), "{expected}: {endpoint}");
+    }
+    assert!(
+        !endpoint.contains("s3:*") && !endpoint.contains("ListBucket"),
+        "{endpoint}"
+    );
+    block("aws_route_table", &format!("{network}_sandbox"));
+    let guard = text(&block(
+        "terraform_data",
+        &format!("{network}_sandbox_store_guard"),
+    ));
+    assert!(
+        guard.contains("var.network_mode == \"create-new\""),
+        "{guard}"
+    );
+
+    let security_group = text(&block("aws_security_group", "agents_egress"));
+    assert!(
+        security_group.contains(&format!("data.aws_prefix_list.{network}_s3.id")),
+        "{security_group}"
+    );
+    assert!(
+        security_group.contains("from_port = 443"),
+        "{security_group}"
+    );
+    let connector = text(&block("awscc_lambda_network_connector", "agents"));
+    assert!(
+        connector.contains(&format!("aws_subnet.{network}_sandbox[*].id")),
+        "{connector}"
+    );
+    assert!(
+        connector.contains(&format!("terraform_data.{network}_sandbox_store_guard")),
+        "{connector}"
+    );
+}

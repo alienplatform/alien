@@ -737,9 +737,11 @@ export interface Sandbox {
   resume(sandboxId: string): Promise<void>
   /**
    * Destroys a sandbox. Idempotent, so a terminate that could not confirm the sandbox is gone
-   * rejects with a retryable error and can be repeated.
+   * rejects with a retryable error and can be repeated. Persistent storage is committed first;
+   * with `discard: true` what was written since the last commit is dropped and the key keeps
+   * its last commit.
    */
-  terminate(sandboxId: string): Promise<void>
+  terminate(sandboxId: string, options?: { discard?: boolean }): Promise<void>
   /**
    * The sandbox's persistent storage: the key it holds and how far its writes are durable.
    * `null` where the sandbox declares no persistent storage.

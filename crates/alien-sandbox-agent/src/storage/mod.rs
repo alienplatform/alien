@@ -3,11 +3,12 @@
 //!
 //! The layout, the one-writer rule and integrity checks are `alien-sandbox-storage`'s. This
 //! module is the part only the agent can do: read and write the directory as root without
-//! following anything a command placed there, and freeze the guest for the instant a commit
-//! copies changed files to staging.
+//! following anything a command placed there, and copy changed files to staging consistently
+//! while commands keep writing: files that name git objects first, an SQLite database with its
+//! journal, and a file changed in the tick a walk starts in reread next time. There is no
+//! freeze: one path on every platform, and nothing can leave a sandbox stopped.
 
 pub mod attach;
-pub mod freeze;
 mod http;
 pub mod push;
 mod sqlite;
@@ -24,7 +25,6 @@ use alien_sandbox_storage::{
     Result as StorageResult, TreeEntry, TreeEntryKind,
 };
 
-use self::freeze::{Freezer, FREEZE_BOUND};
 use self::tree::Staging;
 
 /// Where commits stage changed files: agent-only, outside the session root.
@@ -44,7 +44,6 @@ pub struct Replicator {
     root: OwnedFd,
     exclude: Vec<String>,
     staging: PathBuf,
-    freezer: Option<Freezer>,
     committer: Committer,
     /// Since when an SQLite database has kept HEAD's copy because it changed during every copy.
     deferred_since: Mutex<Option<Instant>>,
@@ -57,7 +56,6 @@ impl Replicator {
         root: OwnedFd,
         exclude: Vec<String>,
         staging: PathBuf,
-        freezer: Option<Freezer>,
         committer: Committer,
     ) -> Self {
         Self {
@@ -65,14 +63,13 @@ impl Replicator {
             root,
             exclude,
             staging,
-            freezer,
             committer,
             deferred_since: Mutex::new(None),
         }
     }
 
     /// How long an SQLite database has been left at HEAD's copy because it changed during every
-    /// copy (only without a freezer); `None` when the last commit took every database.
+    /// copy; `None` when the last commit took every database.
     pub fn deferred_for(&self) -> Option<Duration> {
         self.deferred_since
             .lock()
@@ -104,9 +101,8 @@ impl Replicator {
 
     /// Walks the directory and copies every changed file to staging. Blocking.
     ///
-    /// Where the platform has a freezer, one walk and its copies run with the guest frozen, so
-    /// the commit is the state of one instant. Without one (gVisor has no freezer controller),
-    /// each file is copied as it was when read, files that name git objects are taken first,
+    /// Commands keep running: each file is copied as it was when read, files that name git
+    /// objects are taken first,
     /// and an SQLite database is copied together with its journal: see
     /// [`Replicator::stage_unfrozen`].
     pub fn stage(&self) -> StorageResult<(Vec<TreeEntry>, Staging)> {
@@ -117,22 +113,11 @@ impl Replicator {
         &self,
         between: &mut dyn FnMut(Phase),
     ) -> StorageResult<(Vec<TreeEntry>, Staging)> {
-        let mut staging = Staging::new(&self.staging).map_err(|e| io_error("stage", e))?;
-        let Some(freezer) = &self.freezer else {
-            return self.stage_unfrozen(staging, between);
-        };
-        let frozen = freezer
-            .freeze(FREEZE_BOUND)
-            .map_err(|e| io_error("freeze the guest", e))?;
-        let walk = tree::walk(&self.root, &self.exclude).map_err(|e| io_error("walk", e))?;
-        let mut changed = HashSet::new();
-        self.copy_changed(&walk, &mut staging, &mut changed, &HashSet::new())?;
-        frozen.thaw().map_err(|e| io_error("thaw the guest", e))?;
-        self.note_deferred(false);
-        Ok((drop_vanished(walk, &changed, &staging), staging))
+        let staging = Staging::new(&self.staging).map_err(|e| io_error("stage", e))?;
+        self.stage_unfrozen(staging, between)
     }
 
-    /// Without a freezer, a ref copied after the objects were listed can name an object written
+    /// A ref copied after the objects were listed can name an object written
     /// in between, and the commit would hold a repository whose ref points at nothing. So the
     /// files that name git objects (refs, HEADs, the index) are walked and copied first, then
     /// everything else is walked and copied: every object a copied ref names already existed

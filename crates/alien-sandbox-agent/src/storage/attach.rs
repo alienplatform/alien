@@ -17,7 +17,6 @@ use alien_sandbox_storage::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::freeze::Freezer;
 use super::push::GrantStore;
 use super::tree::{self, DirSink};
 use super::{Replicator, STAGING_DIR};
@@ -32,8 +31,8 @@ pub const ENV_PERSISTENT_STORAGE: &str = "ALIEN_SANDBOX_PERSISTENT_STORAGE";
 /// is committed within about two of these plus the upload.
 const TICK: Duration = Duration::from_secs(1);
 
-/// How long an SQLite database may keep HEAD's copy (it changed during every copy, with no
-/// freezer to stop it) before the status says `behind`; the same bound as a pulled commit.
+/// How long an SQLite database may keep HEAD's copy (it changed during every copy)
+/// before the status says `behind`; the same bound as a pulled commit.
 const DATABASE_BEHIND_AFTER: Duration = Duration::from_secs(10);
 
 /// The declaration as the agent receives it.
@@ -346,7 +345,6 @@ impl PersistentStorage {
             open()?,
             self.config.exclude.clone(),
             self.staging.clone(),
-            Freezer::guest(),
             Committer::new(
                 request.writer,
                 head_version,

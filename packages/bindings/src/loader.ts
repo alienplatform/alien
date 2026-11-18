@@ -302,7 +302,7 @@ export interface RawSandboxHandle {
   preview(sandboxId: string, port: number): Promise<RawSandboxPreview>
   pause(sandboxId: string): Promise<void>
   resume(sandboxId: string): Promise<void>
-  terminate(sandboxId: string): Promise<void>
+  terminate(sandboxId: string, discard?: boolean | null): Promise<void>
   storageStatus(sandboxId: string): Promise<RawSandboxStorageStatus | null>
   syncStorage(sandboxId: string): Promise<RawSandboxStorageStatus>
   readStorageFile(key: string, path: string): Promise<Buffer>

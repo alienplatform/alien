@@ -227,16 +227,29 @@ pub fn aws_sandbox_agent_environment(
 /// agent installs that redirect when its environment carries the `none` or `internet` policy;
 /// a sandbox without it (no `imageUser`, a privileged supervisor, or a domain list) would open
 /// the store's network path to its commands, so it is refused at plan time.
+///
+/// `imageUser` is build output: before the build resolves it, only the declaration is checked
+/// here, and [`aws_persistent_storage_image_user_refusal`] checks the built image (the build
+/// after resolving it, and every deployment).
 pub fn aws_persistent_storage_refusal(stack: &Stack, sandbox: &Sandbox) -> Option<String> {
     sandbox.persistent_storage.as_ref()?;
     if !sandbox_needs_connector(stack, sandbox) {
         return None;
     }
-    let environment = aws_sandbox_agent_environment(stack, sandbox);
-    if !matches!(
-        environment.get("ALIEN_SANDBOX_EGRESS").map(String::as_str),
-        Some("\"none\"") | Some("\"internet\"")
-    ) {
+    let redirected = if sandbox.image_user.is_some() {
+        let environment = aws_sandbox_agent_environment(stack, sandbox);
+        matches!(
+            environment.get("ALIEN_SANDBOX_EGRESS").map(String::as_str),
+            Some("\"none\"") | Some("\"internet\"")
+        )
+    } else {
+        sandbox.privileged_supervisor.is_none()
+            && matches!(
+                sandbox.egress,
+                SandboxEgress::None | SandboxEgress::Internet
+            )
+    };
+    if !redirected {
         return Some(format!(
             "sandbox '{}' declares persistent storage on AWS, which needs the agent to keep \
              commands off the store's network path: declare `imageUser` (the image command \
@@ -258,6 +271,30 @@ pub fn aws_persistent_storage_refusal(stack: &Stack, sandbox: &Sandbox) -> Optio
         ));
     }
     None
+}
+
+/// Why a built AWS sandbox cannot have persistent storage: its image resolved no `imageUser`, so
+/// it keeps the released boot contract, whose agent installs no in-guest redirect under `none`.
+/// Only meaningful once the build has resolved the image ([`aws_persistent_storage_refusal`]
+/// covers the declaration before it).
+pub fn aws_persistent_storage_image_user_refusal(
+    stack: &Stack,
+    sandbox: &Sandbox,
+) -> Option<String> {
+    sandbox.persistent_storage.as_ref()?;
+    if !sandbox_needs_connector(stack, sandbox) || sandbox.image_user.is_some() {
+        return None;
+    }
+    // `internet` carries its policy without the image command contract.
+    if sandbox.egress == SandboxEgress::Internet {
+        return None;
+    }
+    Some(format!(
+        "sandbox '{}' declares persistent storage on AWS, but its built image keeps the released \
+         boot contract (no resolved `imageUser`), whose agent does not keep commands off the \
+         store's network path; rebuild it with a current `alien release`",
+        sandbox.id
+    ))
 }
 
 /// Whether AWS setup opens this sandbox's connector to its persistent store: it declares one and
@@ -598,9 +635,36 @@ mod tests {
             None,
             "nothing to refuse without persistent storage"
         );
-        let reason = aws_persistent_storage_refusal(&stack, &sandbox(None, false, true))
-            .expect("no imageUser: no redirect, refused");
+        // Before the build resolves `imageUser` (a source-built image), the declaration alone is
+        // checked, and `none` with an unprivileged supervisor is what the redirect needs.
+        assert_eq!(
+            aws_persistent_storage_refusal(&stack, &sandbox(None, false, true)),
+            None,
+            "an unresolved image is not refused before it is built"
+        );
+        // Built without a resolved `imageUser`: the released boot contract, no redirect, refused.
+        let reason = aws_persistent_storage_image_user_refusal(&stack, &sandbox(None, false, true))
+            .expect("a built image without imageUser has no redirect");
         assert!(reason.contains("imageUser"), "{reason}");
+        assert_eq!(
+            aws_persistent_storage_image_user_refusal(&stack, &sandbox(Some(1001), false, true)),
+            None
+        );
+        assert_eq!(
+            aws_persistent_storage_image_user_refusal(&stack, &sandbox(None, false, false)),
+            None
+        );
+        // A domain list has no redirect for the store whether or not the image is built.
+        for image_user in [None, Some(1001)] {
+            let mut domains = sandbox(image_user, false, true);
+            domains.egress = SandboxEgress::AllowDomains {
+                domains: vec!["example.com".to_string()],
+            };
+            assert!(
+                aws_persistent_storage_refusal(&stack, &domains).is_some(),
+                "a domain list is refused (imageUser {image_user:?})"
+            );
+        }
         // A privileged supervisor runs without a session connector (its egress is enforced in
         // the guest), so setup opens nothing to S3 for it and there is nothing to refuse here.
         assert_eq!(

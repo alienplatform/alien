@@ -1,515 +1,444 @@
-//! Checks for the `sandbox-storage` app: a sandbox with persistent storage driven through the
-//! Worker that holds its binding. Each Worker endpoint is one whole check, so the binding's
-//! replication runs inside the request that needs it (on GCP the binding pulls commits from the
-//! sandbox, and Cloud Run gives a Worker CPU only during a request).
-//!
-//! The abrupt kill goes around the binding: the test deletes the sandbox through the cloud API with
-//! the target credentials while the writer runs, and compares the writer's last acknowledged round
-//! with what a new sandbox on the same key restores.
+//! Acceptance checks for persistent storage, through the `sandbox-storage` app's Worker (a sandbox
+//! that declares persistent storage refuses remote access). Each check names the item of the
+//! acceptance suite it covers.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use alien_core::{GcpClientConfig, GcpCredentials, Platform};
-use alien_gcp_clients::gcp::agent_platform::{AgentPlatformApi, AgentPlatformClient};
-use alien_test::config::TestConfig;
 use alien_test::TestContext;
-use anyhow::{ensure, Context};
-use futures::StreamExt;
+use anyhow::{bail, ensure, Context};
+use base64::Engine;
 use serde_json::{json, Value};
 
-/// Design acceptance item 1: abrupt terminations per run, and the p95 loss allowed where the
-/// binding pulls commits.
-const KILL_RUNS: usize = 20;
-const PULL_P95_LOSS_SECONDS: f64 = 5.0;
-/// Seconds between the writer's rounds (`sleep 0.1` in the app's writer).
-const ROUND_SECONDS: f64 = 0.1;
-
-fn url(ctx: &TestContext) -> anyhow::Result<String> {
-    Ok(ctx
-        .deployment
-        .url
-        .as_deref()
-        .context("the deployment has no public URL")?
-        .trim_end_matches('/')
-        .to_string())
+struct App {
+    url: String,
+    bearer: String,
+    http: reqwest::Client,
 }
 
-/// Posts to one of the Worker's check endpoints and returns its JSON answer. Long checks answer
-/// 200 with whitespace heartbeats before the JSON, so a failure arrives as `{ "error": ... }`.
-async fn post(ctx: &TestContext, path: &str, body: Value) -> anyhow::Result<Value> {
-    let started = Instant::now();
-    let response = reqwest::Client::new()
-        .post(format!("{}{path}", url(ctx)?))
-        .bearer_auth(&ctx.deployment.id)
-        .json(&body)
-        .timeout(Duration::from_secs(3600))
-        .send()
-        .await
-        .with_context(|| format!("POST {path}"))?;
-    let status = response.status();
-    let text = response
-        .text()
-        .await
-        .with_context(|| format!("read {path}"))?;
-    eprintln!("{path} took {:.1} s", started.elapsed().as_secs_f64());
-    ensure!(status.is_success(), "{path} answered {status}: {text}");
-    let answer: Value =
-        serde_json::from_str(&text).with_context(|| format!("parse {path} answer: {text}"))?;
-    if let Some(error) = answer.get("error").and_then(Value::as_str) {
-        anyhow::bail!("{path} failed: {error}");
-    }
-    Ok(answer)
-}
-
-/// `name=value` lines of a check's stdout.
-fn fields(answer: &Value) -> BTreeMap<String, String> {
-    answer["stdout"]
-        .as_str()
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|line| line.split_once('='))
-        .map(|(name, value)| (name.to_string(), value.trim().to_string()))
-        .collect()
-}
-
-fn ensure_ran(path: &str, answer: &Value) -> anyhow::Result<()> {
-    ensure!(
-        answer["exitCode"] == json!(0),
-        "{path} exited {}: {}",
-        answer["exitCode"],
-        answer["stderr"]
-    );
-    Ok(())
-}
-
-/// A key no earlier run used, so runs never see each other's data.
-fn fresh_key(ctx: &TestContext, purpose: &str) -> String {
-    let suffix: u32 = rand::random();
-    let id: String = ctx
-        .deployment
-        .id
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .take(12)
-        .collect();
-    format!("{purpose}-{id}-{suffix:08x}")
-}
-
-/// The app's sandbox declared with `egress`: `agents` for `none`, `open` for `allow` (direct
-/// internet access). A runtime per-create policy needs the egress gateway, which this test does
-/// not set up, so the policies are two declarations.
-fn sandbox_for(egress: &str) -> &'static str {
-    if egress == "allow" {
-        "open"
-    } else {
-        "agents"
-    }
-}
-
-/// Every acceptance check of the design the app can drive (items 1 to 6). The full round trip runs
-/// under egress `none`, a smaller one and the isolation check under both declared policies.
-pub async fn check_persistent_storage(ctx: &TestContext) -> anyhow::Result<()> {
-    check_round_trip(ctx, "none", 10_000, 1024).await?;
-    check_round_trip(ctx, "allow", 1_000, 16).await?;
-    check_isolation(ctx, "none").await?;
-    check_isolation(ctx, "allow").await?;
-    check_takeover(ctx).await?;
-    check_oversize(ctx).await?;
-    check_kill_runs(ctx).await?;
-    Ok(())
-}
-
-/// Items 2 and 5: an exact round trip of 10k files and 1 GiB (content, owner, mode, mtime, hard
-/// links, symlinks; `tmp/` excluded), `readStorageFile` returns the synced bytes and
-/// `deleteStorage` erases the key.
-pub async fn check_round_trip(
-    ctx: &TestContext,
-    egress: &str,
-    files: u32,
-    mib: u32,
-) -> anyhow::Result<()> {
-    let key = fresh_key(ctx, "roundtrip");
-    let prepared = post(
-        ctx,
-        "/s/prepare",
-        json!({ "key": key, "files": files, "mib": mib, "sandbox": sandbox_for(egress) }),
-    )
-    .await?;
-    ensure_ran("/s/prepare", &prepared)?;
-    let written = fields(&prepared);
-    eprintln!("prepared {key}: {written:?}, synced {}", prepared["synced"]);
-    ensure!(
-        prepared["synced"]["state"] == json!("replicating"),
-        "the sync did not end replicating: {}",
-        prepared["synced"]
-    );
-
-    let started = Instant::now();
-    let verified = post(
-        ctx,
-        "/s/verify",
-        json!({ "key": key, "sandbox": sandbox_for(egress) }),
-    )
-    .await?;
-    ensure_ran("/s/verify", &verified)?;
-    let restored = fields(&verified);
-    eprintln!(
-        "restored {key} in {} ms (request {:?}): {restored:?}",
-        verified["restoredMs"],
-        started.elapsed()
-    );
-    for name in ["entries", "bytes", "manifest"] {
-        ensure!(
-            written.get(name) == restored.get(name),
-            "{name} differs after restore: wrote {:?}, restored {:?}",
-            written.get(name),
-            restored.get(name)
-        );
-    }
-    ensure!(
-        restored.get("git_fsck").map(String::as_str) == Some("ok"),
-        "git fsck: {restored:?}"
-    );
-    ensure!(
-        restored
-            .get("sqlite")
-            .is_some_and(|value| value.starts_with("ok 1000")),
-        "SQLite after restore: {restored:?}"
-    );
-    ensure!(
-        restored.get("hard_link").map(String::as_str) == Some("same"),
-        "hard link split"
-    );
-    ensure!(
-        restored.get("excluded").map(String::as_str) == Some("absent"),
-        "tmp/ replicated"
-    );
-
-    let read = post(
-        ctx,
-        "/s/read",
-        json!({ "key": key, "path": "linked-a", "sandbox": sandbox_for(egress) }),
-    )
-    .await?;
-    ensure!(read["found"] == json!(true), "readStorageFile: {read}");
-    let bytes = base64_decode(read["base64"].as_str().unwrap_or_default())?;
-    ensure!(bytes == b"linked\n", "readStorageFile returned {bytes:?}");
-
-    post(
-        ctx,
-        "/s/delete",
-        json!({ "key": key, "sandbox": sandbox_for(egress) }),
-    )
-    .await?;
-    let gone = post(
-        ctx,
-        "/s/read",
-        json!({ "key": key, "path": "linked-a", "sandbox": sandbox_for(egress) }),
-    )
-    .await?;
-    ensure!(
-        gone["found"] == json!(false),
-        "the key outlived deleteStorage: {gone}"
-    );
-    Ok(())
-}
-
-/// Item 4: the command's user holds no store credentials and cannot reach the metadata server's
-/// token, nor object storage under egress `none`; symlinks aimed out of the tree come back as
-/// symlinks, not as the files they point at.
-pub async fn check_isolation(ctx: &TestContext, egress: &str) -> anyhow::Result<()> {
-    let key = fresh_key(ctx, "isolation");
-    let answer = post(
-        ctx,
-        "/s/isolation",
-        json!({ "key": key, "sandbox": sandbox_for(egress) }),
-    )
-    .await?;
-    ensure_ran("/s/isolation", &answer)?;
-    let seen = fields(&answer);
-    eprintln!("isolation under {egress}: {seen:?}");
-    ensure!(
-        seen.get("uid").map(String::as_str) != Some("0"),
-        "the command runs as root"
-    );
-    ensure!(
-        seen.get("credential_env").map(String::as_str) == Some("0"),
-        "credentials in the command's environment: {seen:?}"
-    );
-    // curl reports 000 when nothing answers.
-    let token = seen.get("metadata_token").map(String::as_str).unwrap_or("");
-    ensure!(token != "200", "the command read a metadata server token");
-    if sandbox_for(egress) == "agents" {
-        let api = seen.get("storage_api").map(String::as_str).unwrap_or("");
-        ensure!(
-            api == "000" || api.is_empty(),
-            "object storage answered under egress none: {api}"
-        );
-    }
-    let escaped = post(
-        ctx,
-        "/s/read",
-        json!({ "key": key, "path": "escape/root/etc/passwd", "sandbox": sandbox_for(egress) }),
-    )
-    .await?;
-    ensure!(
-        escaped["found"] == json!(false),
-        "a symlink redirected the walk out of the tree: {escaped}"
-    );
-    post(
-        ctx,
-        "/s/delete",
-        json!({ "key": key, "sandbox": sandbox_for(egress) }),
-    )
-    .await?;
-    Ok(())
-}
-
-/// Item 3: a second sandbox on the key takes it over; the first reports `stopped` and its later
-/// writes never reach the store.
-pub async fn check_takeover(ctx: &TestContext) -> anyhow::Result<()> {
-    let key = fresh_key(ctx, "takeover");
-    let answer = post(ctx, "/s/takeover", json!({ "key": key })).await?;
-    eprintln!("takeover: {answer}");
-    ensure!(
-        answer["firstStatus"]["state"] == json!("stopped"),
-        "the stale sandbox did not stop: {}",
-        answer["firstStatus"]
-    );
-    ensure!(
-        answer["owner"] == json!("second\n"),
-        "the store holds {} instead of the new owner's write",
-        answer["owner"]
-    );
-    post(ctx, "/s/delete", json!({ "key": key })).await?;
-    Ok(())
-}
-
-/// Item 6: a tree above `maxSize` is refused whole; the key keeps its last good commit.
-pub async fn check_oversize(ctx: &TestContext) -> anyhow::Result<()> {
-    let key = fresh_key(ctx, "oversize");
-    let answer = post(ctx, "/s/oversize", json!({ "key": key })).await?;
-    eprintln!(
-        "oversize: synced {} status {}",
-        answer["synced"], answer["status"]
-    );
-    ensure_ran("/s/oversize", &answer)?;
-    ensure!(
-        answer["synced"]["state"] != json!("replicating") || answer["synced"]["error"].is_string(),
-        "a sync above maxSize reported replicating: {}",
-        answer["synced"]
-    );
-    let read = post(
-        ctx,
-        "/s/read",
-        json!({ "key": key, "path": "oversize.bin" }),
-    )
-    .await?;
-    ensure!(
-        read["found"] == json!(false),
-        "part of an oversize tree was published"
-    );
-    post(ctx, "/s/delete", json!({ "key": key })).await?;
-    Ok(())
-}
-
-/// Item 1: abrupt terminations under the SQLite WAL writer, the rename loop and git commits.
-/// Each run kills the sandbox from outside after a random 8 to 20 seconds; the loss is the
-/// writer's last acknowledged round minus the restored one, in seconds.
-pub async fn check_kill_runs(ctx: &TestContext) -> anyhow::Result<()> {
-    ensure!(
-        ctx.platform == Platform::Gcp,
-        "the kill runs reach the sandbox through the GCP API only"
-    );
-    let killer = GcpKiller::new(ctx).await?;
-    let mut losses = Vec::new();
-    for run in 0..KILL_RUNS {
-        let key = fresh_key(ctx, &format!("kill{run:02}"));
-        let wait = Duration::from_secs(8 + u64::from(rand::random::<u8>() % 13));
-        let (acked, sandbox_id) = writer_until_killed(ctx, &killer, &key, wait).await?;
-        let restored = post(ctx, "/s/restored", json!({ "key": key })).await?;
-        ensure_ran("/s/restored", &restored)?;
-        let seen = fields(&restored);
-        let last: u64 = seen
-            .get("last")
-            .and_then(|value| value.parse().ok())
-            .with_context(|| format!("restore of {key} has no writer log: {seen:?}"))?;
-        let loss = acked.saturating_sub(last) as f64 * ROUND_SECONDS;
-        eprintln!(
-            "kill run {run}: sandbox {sandbox_id} after {wait:?}, acked {acked}, restored {last}, \
-             loss {loss:.1} s, {seen:?}"
-        );
-        ensure!(
-            last <= acked + 1,
-            "restored round {last} past the acknowledged {acked}"
-        );
-        ensure!(
-            seen.get("sqlite").is_some_and(|value| value.trim() == "ok"),
-            "run {run}: SQLite integrity after restore: {seen:?}"
-        );
-        ensure!(
-            matches!(
-                seen.get("git_fsck").map(String::as_str),
-                Some("ok" | "none")
-            ),
-            "run {run}: git fsck after restore: {seen:?}"
-        );
-        losses.push(loss);
-        post(ctx, "/s/delete", json!({ "key": key })).await?;
-    }
-    losses.sort_by(f64::total_cmp);
-    let p50 = losses[losses.len() / 2];
-    let p95 = losses[(losses.len() * 95).div_ceil(100) - 1];
-    eprintln!(
-        "kill runs: loss p50 {p50:.1} s, p95 {p95:.1} s over {}",
-        losses.len()
-    );
-    ensure!(
-        p95 <= PULL_P95_LOSS_SECONDS,
-        "p95 loss {p95:.1} s is above {PULL_P95_LOSS_SECONDS} s"
-    );
-    Ok(())
-}
-
-/// Streams the writer's acknowledgements, deletes the sandbox after `wait`, and returns the last
-/// acknowledged round once the Worker's stream ends.
-async fn writer_until_killed(
-    ctx: &TestContext,
-    killer: &GcpKiller,
-    key: &str,
-    wait: Duration,
-) -> anyhow::Result<(u64, String)> {
-    let response = reqwest::Client::new()
-        .post(format!("{}/s/writer", url(ctx)?))
-        .bearer_auth(&ctx.deployment.id)
-        .json(&json!({ "key": key, "rounds": 3000 }))
-        .timeout(Duration::from_secs(600))
-        .send()
-        .await
-        .context("POST /s/writer")?;
-    ensure!(
-        response.status().is_success(),
-        "/s/writer answered {}",
-        response.status()
-    );
-    let mut body = response.bytes_stream();
-    let mut buffer = String::new();
-    let mut sandbox_id = None;
-    let mut acked = 0u64;
-    let mut kill_at = None;
-    let mut killed = false;
-    loop {
-        if let (Some(at), Some(id)) = (kill_at, sandbox_id.as_deref()) {
-            if !killed && Instant::now() >= at {
-                killer.kill(id).await?;
-                killed = true;
-            }
-        }
-        let next = tokio::time::timeout(Duration::from_millis(200), body.next()).await;
-        let chunk = match next {
-            Err(_) => continue,
-            Ok(None) => break,
-            Ok(Some(chunk)) => chunk.context("read the writer stream")?,
-        };
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(end) = buffer.find('\n') {
-            let line: String = buffer.drain(..=end).collect();
-            let event: Value = serde_json::from_str(line.trim())
-                .with_context(|| format!("writer line {line:?}"))?;
-            if let Some(id) = event["sandboxId"].as_str() {
-                sandbox_id = Some(id.to_string());
-                kill_at = Some(Instant::now() + wait);
-            } else if let Some(round) = event["ack"].as_u64() {
-                // Rounds the Worker relays after the kill was sent were acknowledged before it.
-                acked = acked.max(round);
-            } else if event.get("end").is_some() {
-                ensure!(killed, "the writer ended before the kill: {event}");
-            }
-        }
-    }
-    ensure!(killed, "the writer stream closed before the kill");
-    let sandbox_id = sandbox_id.context("the writer stream named no sandbox")?;
-    ensure!(acked > 0, "the writer acknowledged nothing before the kill");
-    Ok((acked, sandbox_id))
-}
-
-/// Deletes one of the deployment's sandboxes through the Agent Platform API with the target
-/// credentials, which the agent and the binding never see coming.
-struct GcpKiller {
-    client: Arc<AgentPlatformClient>,
-    engine: String,
-}
-
-impl GcpKiller {
-    async fn new(ctx: &TestContext) -> anyhow::Result<Self> {
-        let target = TestConfig::from_env()
-            .gcp_target
-            .context("GOOGLE_TARGET_* is required for the kill runs")?;
-        let credentials = target
-            .credentials_json
-            .context("GOOGLE_TARGET_SERVICE_ACCOUNT_KEY is required for the kill runs")?;
-        let config = GcpClientConfig {
-            project_id: target.project_id,
-            region: target.region,
-            credentials: GcpCredentials::ServiceAccountKey { json: credentials },
-            service_overrides: None,
-            project_number: None,
-        };
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(90))
-            .build()
-            .context("build the HTTP client")?;
+impl App {
+    fn new(ctx: &TestContext) -> anyhow::Result<Self> {
+        let url = ctx
+            .deployment
+            .url
+            .as_deref()
+            .context("the deployment has no public URL")?
+            .trim_end_matches('/')
+            .to_string();
         Ok(Self {
-            client: Arc::new(AgentPlatformClient::new(http, config)),
-            engine: sandbox_engine(ctx, "agents").await?,
+            url,
+            bearer: ctx.deployment.id.clone(),
+            http: reqwest::Client::new(),
         })
     }
 
-    async fn kill(&self, sandbox_id: &str) -> anyhow::Result<()> {
-        self.client
-            .delete_sandbox(&self.engine, sandbox_id)
+    async fn op(&self, op: &str, body: Value) -> anyhow::Result<Value> {
+        let response = self
+            .http
+            .post(format!("{}/op/{op}", self.url))
+            .bearer_auth(&self.bearer)
+            .json(&body)
+            .timeout(Duration::from_secs(300))
+            .send()
             .await
-            .with_context(|| format!("delete sandbox {sandbox_id}"))
+            .with_context(|| format!("POST /op/{op}"))?;
+        let status = response.status();
+        let text = response.text().await.context("read response")?;
+        ensure!(status.is_success(), "/op/{op} answered {status}: {text}");
+        serde_json::from_str(&text).with_context(|| format!("parse /op/{op}: {text}"))
+    }
+
+    async fn create(&self, key: &str) -> anyhow::Result<(String, Duration)> {
+        let started = Instant::now();
+        let created = self.op("create", json!({ "key": key })).await?;
+        let id = created["sandboxId"]
+            .as_str()
+            .context("create returned no sandboxId")?
+            .to_string();
+        eprintln!("sandbox {id} on key {key} in {:?}", started.elapsed());
+        Ok((id, started.elapsed()))
+    }
+
+    async fn exec(&self, id: &str, command: &str, args: &[&str]) -> anyhow::Result<(i64, String)> {
+        let run = self
+            .op(
+                "exec",
+                json!({ "sandboxId": id, "command": command, "args": args, "timeoutMs": 280_000 }),
+            )
+            .await?;
+        let code = run["exitCode"].as_i64().unwrap_or(-1);
+        let stdout = run["stdout"].as_str().unwrap_or_default().to_string();
+        if code != 0 {
+            eprintln!(
+                "{command} {args:?} exited {code}: {}",
+                run["stderr"].as_str().unwrap_or_default()
+            );
+        }
+        Ok((code, stdout))
+    }
+
+    async fn ok(&self, id: &str, command: &str, args: &[&str]) -> anyhow::Result<String> {
+        let (code, stdout) = self.exec(id, command, args).await?;
+        ensure!(code == 0, "{command} {args:?} exited {code}");
+        Ok(stdout)
+    }
+
+    async fn python(&self, id: &str, code: &str) -> anyhow::Result<String> {
+        self.ok(id, "python3", &["-c", code]).await
+    }
+
+    async fn status(&self, id: &str) -> anyhow::Result<Value> {
+        Ok(self.op("status", json!({ "sandboxId": id })).await?["status"].clone())
+    }
+
+    async fn sync(&self, id: &str) -> anyhow::Result<Value> {
+        self.op("sync", json!({ "sandboxId": id })).await
+    }
+
+    async fn terminate(&self, id: &str, discard: bool) -> anyhow::Result<()> {
+        self.op("terminate", json!({ "sandboxId": id, "discard": discard }))
+            .await
+            .map(|_| ())
+    }
+
+    async fn read_storage_file(
+        &self,
+        key: &str,
+        path: &str,
+    ) -> anyhow::Result<Result<Vec<u8>, String>> {
+        let read = self
+            .op("read-storage-file", json!({ "key": key, "path": path }))
+            .await?;
+        if let Some(refused) = read["refused"].as_str() {
+            return Ok(Err(refused.to_string()));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(read["base64"].as_str().context("no base64")?)
+            .context("decode")?;
+        Ok(Ok(bytes))
+    }
+
+    async fn delete_storage(&self, key: &str) -> anyhow::Result<Result<(), String>> {
+        let deleted = self.op("delete-storage", json!({ "key": key })).await?;
+        match deleted["refused"].as_str() {
+            Some(refused) => Ok(Err(refused.to_string())),
+            None => Ok(Ok(())),
+        }
+    }
+
+    async fn manifest(&self, id: &str) -> anyhow::Result<Value> {
+        let out = self.ok(id, "python3", &["/opt/app/manifest.py"]).await?;
+        serde_json::from_str(&out).context("parse manifest")
     }
 }
 
-/// The reasoning engine id of sandbox `resource_id`, from the deployment's stack state: the first
-/// `…/reasoningEngines/<id>` name the resource's saved state holds.
-async fn sandbox_engine(ctx: &TestContext, resource_id: &str) -> anyhow::Result<String> {
-    let response = ctx
-        .deployment
-        .manager()
-        .client()
-        .get_deployment()
-        .id(&ctx.deployment.id)
-        .send()
-        .await
-        .map_err(|error| anyhow::anyhow!("get_deployment failed: {error}"))?;
-    let state = response
-        .into_inner()
-        .stack_state
-        .context("deployment is missing stack_state")?;
-    let resource = &state["resources"][resource_id];
-    find_engine(resource)
-        .with_context(|| format!("no reasoning engine in the state of '{resource_id}'"))
+fn unique_key(label: &str) -> String {
+    format!(
+        "{label}-{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    )
 }
 
-fn find_engine(value: &Value) -> Option<String> {
-    match value {
-        Value::String(text) => text
-            .split_once("/reasoningEngines/")
-            .map(|(_, rest)| rest.split('/').next().unwrap_or(rest).to_string()),
-        Value::Array(items) => items.iter().find_map(find_engine),
-        Value::Object(map) => map.values().find_map(find_engine),
-        _ => None,
+/// Items 2, 4 and 5: an exact round trip of the fixture, `sync` then terminate loses nothing,
+/// `readStorageFile` returns the synced bytes, a symlink out of the tree stays a symlink, and
+/// `deleteStorage` erases the key. Item 3: a sandbox whose key another one claimed is refused.
+/// Item 6 (`maxSize`): a tree over the ceiling is refused whole.
+pub async fn check_round_trip_and_lifecycle(ctx: &TestContext) -> anyhow::Result<()> {
+    let app = App::new(ctx)?;
+    let key = unique_key("rt");
+    let files: u32 = std::env::var("ALIEN_E2E_STORAGE_FILES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(2000);
+    let big_mib: u32 = std::env::var("ALIEN_E2E_STORAGE_BIG_MIB")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(64);
+
+    let (first, _) = app.create(&key).await?;
+    let populated = Instant::now();
+    app.ok(
+        &first,
+        "python3",
+        &[
+            "/opt/app/populate.py",
+            &files.to_string(),
+            &big_mib.to_string(),
+        ],
+    )
+    .await?;
+    let before = app.manifest(&first).await?;
+    let synced_at = Instant::now();
+    let synced = app.sync(&first).await?;
+    eprintln!(
+        "sync after populate: {synced} ({:?} after the write began, sync {:?})",
+        populated.elapsed(),
+        synced_at.elapsed()
+    );
+    ensure!(synced.get("refused").is_none(), "sync refused: {synced}");
+
+    // Item 5: the synced bytes are readable without a sandbox.
+    let notes = app.read_storage_file(&key, "notes.txt").await?;
+    ensure!(
+        notes.as_deref() == Ok(b"persistent storage acceptance\n".as_slice()),
+        "readStorageFile returned {notes:?}"
+    );
+    let excluded = app.read_storage_file(&key, "scratch/local-only").await?;
+    ensure!(
+        excluded.is_err(),
+        "an excluded file reached the store: {excluded:?}"
+    );
+    // Item 4: the walk stores a symlink as a link, never what it points at.
+    let escape = app.read_storage_file(&key, "escape").await?;
+    ensure!(
+        !matches!(&escape, Ok(bytes) if !bytes.is_empty()),
+        "readStorageFile followed a symlink out of the tree: {escape:?}"
+    );
+
+    app.terminate(&first, false).await?;
+    let (second, restore) = app.create(&key).await?;
+    eprintln!("restore of {files} files + {big_mib} MiB took {restore:?} (create included)");
+    let after = app.manifest(&second).await?;
+    ensure!(
+        before["checks"]["sqlite"] == "ok" && after["checks"]["sqlite"] == "ok",
+        "SQLite integrity: before {} after {}",
+        before["checks"]["sqlite"],
+        after["checks"]["sqlite"]
+    );
+    ensure!(
+        after["checks"]["gitFsck"] == 0,
+        "git fsck after restore: {}",
+        after["checks"]["gitFsckOutput"]
+    );
+    compare_manifests(&before["entries"], &after["entries"])?;
+
+    // Item 4: a command uid reaches neither the agent's grant nor object storage.
+    let probe = app
+        .python(
+            &second,
+            r#"
+import json, os, socket, urllib.request
+out = {}
+for path in ["/proc/1/environ", "/proc/1/mem", "/opt/alien"]:
+    try:
+        if os.path.isdir(path):
+            out[path] = sorted(os.listdir(path))
+        else:
+            open(path, "rb").read(64)
+            out[path] = "readable"
+    except Exception as error:
+        out[path] = type(error).__name__
+region = os.environ.get("AWS_REGION", "us-east-2")
+try:
+    urllib.request.urlopen(f"https://s3.{region}.amazonaws.com/", timeout=5)
+    out["s3"] = "reached"
+except Exception as error:
+    out["s3"] = type(error).__name__ + ": " + str(error)[:120]
+try:
+    socket.create_connection(("169.254.169.254", 80), timeout=3)
+    out["imds"] = "reached"
+except Exception as error:
+    out["imds"] = type(error).__name__
+print(json.dumps(out))
+"#,
+        )
+        .await?;
+    eprintln!("command-uid probe: {probe}");
+    let probe: Value = serde_json::from_str(&probe).context("parse probe")?;
+    ensure!(
+        probe["/proc/1/environ"] != "readable",
+        "a command read the agent's environment"
+    );
+    ensure!(probe["s3"] != "reached", "a command reached S3");
+    ensure!(
+        probe["imds"] != "reached",
+        "a command reached instance metadata"
+    );
+
+    // Item 6: a tree over maxSize is refused whole; the key keeps its last commit.
+    app.python(
+        &second,
+        "f=open('/workspace/over.bin','wb'); f.truncate(int(2.1*(1<<30))); f.close()",
+    )
+    .await?;
+    let over = app.sync(&second).await?;
+    let over_status = app.status(&second).await?;
+    eprintln!("sync over maxSize: {over}; status {over_status}");
+    ensure!(
+        over.get("refused").is_some() || over_status["state"] == "behind",
+        "a tree over maxSize was not refused: {over} / {over_status}"
+    );
+    let still = app.read_storage_file(&key, "over.bin").await?;
+    ensure!(still.is_err(), "a part of the over-size commit landed");
+    app.ok(&second, "rm", &["-f", "/workspace/over.bin"])
+        .await?;
+    let recovered = app.sync(&second).await?;
+    ensure!(
+        recovered.get("refused").is_none(),
+        "sync after removing the file: {recovered}"
+    );
+
+    // Item 3: a new sandbox claims the key; the old one's commit is refused and it stops.
+    app.ok(&second, "sh", &["-c", "echo late > /workspace/late.txt"])
+        .await?;
+    let (third, _) = app.create(&key).await?;
+    let stale = app.sync(&second).await?;
+    let stale_status = app.status(&second).await?;
+    eprintln!("stale sandbox sync: {stale}; status {stale_status}");
+    ensure!(
+        stale_status["state"] == "stopped",
+        "the stale sandbox is not stopped: {stale_status}"
+    );
+    let late = app.read_storage_file(&key, "late.txt").await?;
+    let in_third = app
+        .exec(&third, "test", &["-e", "/workspace/late.txt"])
+        .await?
+        .0;
+    eprintln!(
+        "late write: store {:?}, third sandbox exit {in_third}",
+        late.as_ref().map(|b| b.len())
+    );
+    let late_landed = late.is_ok();
+    // The claim restores HEAD as of the claim, so a late write either landed before it (and the
+    // claimer sees it) or never lands.
+    ensure!(
+        late_landed == (in_third == 0),
+        "the store and the claiming sandbox disagree about the stale write"
+    );
+    app.terminate(&second, true).await.ok();
+
+    // Item 5: deleteStorage is refused while held, then erases the key.
+    let held = app.delete_storage(&key).await?;
+    eprintln!("deleteStorage while held: {held:?}");
+    ensure!(
+        held.is_err(),
+        "deleteStorage succeeded while a sandbox held the key"
+    );
+    app.terminate(&third, false).await?;
+    app.delete_storage(&key)
+        .await?
+        .map_err(|refused| anyhow::anyhow!("deleteStorage refused: {refused}"))?;
+    let gone = app.read_storage_file(&key, "notes.txt").await?;
+    ensure!(gone.is_err(), "a deleted key still reads: {gone:?}");
+    let (fourth, _) = app.create(&key).await?;
+    let listing = app.ok(&fourth, "ls", &["-A", "/workspace"]).await?;
+    ensure!(
+        listing.trim().is_empty(),
+        "a deleted key restored files: {listing}"
+    );
+    app.terminate(&fourth, true).await?;
+    app.delete_storage(&key).await?.ok();
+    Ok(())
+}
+
+fn compare_manifests(before: &Value, after: &Value) -> anyhow::Result<()> {
+    let before = before.as_object().context("manifest entries")?;
+    let after = after.as_object().context("manifest entries")?;
+    let mut differences = Vec::new();
+    for (path, entry) in before {
+        if path == "scratch" || path.starts_with("scratch/") {
+            continue;
+        }
+        match after.get(path) {
+            None => differences.push(format!("{path}: missing after restore")),
+            Some(restored) if restored != entry => {
+                differences.push(format!("{path}: {entry} -> {restored}"))
+            }
+            Some(_) => {}
+        }
     }
+    for path in after.keys() {
+        if !before.contains_key(path) && path != "scratch" {
+            differences.push(format!("{path}: appeared after restore"));
+        }
+    }
+    if after.contains_key("scratch/local-only") {
+        differences.push("scratch/local-only: an excluded file was restored".to_string());
+    }
+    eprintln!(
+        "round trip: {} entries compared, {} differences",
+        before.len(),
+        differences.len()
+    );
+    if !differences.is_empty() {
+        bail!(
+            "{} differences after restore, first: {:#?}",
+            differences.len(),
+            &differences[..differences.len().min(20)]
+        );
+    }
+    Ok(())
 }
 
-fn base64_decode(text: &str) -> anyhow::Result<Vec<u8>> {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD
-        .decode(text)
-        .map_err(|error| anyhow::anyhow!("base64: {error}"))
+/// Item 1: abrupt terminations under an SQLite WAL writer and a rename loop. Each run starts the
+/// image command's writer, waits, terminates without a final commit (`discard`), restores the key
+/// in a new sandbox and measures the seconds of writes lost; integrity holds on every restore.
+pub async fn check_abrupt_terminations(ctx: &TestContext) -> anyhow::Result<()> {
+    let app = App::new(ctx)?;
+    let runs: usize = std::env::var("ALIEN_E2E_STORAGE_KILL_RUNS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(5);
+    let key = unique_key("kill");
+    let (mut current, _) = app.create(&key).await?;
+    app.ok(
+        &current,
+        "sh",
+        &["-c", "mkdir -p /workspace/kill && touch /workspace/kill/on"],
+    )
+    .await?;
+    let mut losses = Vec::new();
+    for run in 0..runs {
+        tokio::time::sleep(Duration::from_secs(8 + (run as u64 % 5))).await;
+        let newest = app
+            .python(
+                &current,
+                "import sqlite3,time; print(sqlite3.connect('/workspace/kill/w.db').execute('select max(ts) from t').fetchone()[0])",
+            )
+            .await?;
+        let killed_after: f64 = newest.trim().parse().context("newest row")?;
+        app.terminate(&current, true).await?;
+        let (next, _) = app.create(&key).await?;
+        let restored = app
+            .python(
+                &next,
+                r#"
+import json, sqlite3
+db = sqlite3.connect('/workspace/kill/w.db')
+print(json.dumps({"ok": db.execute("pragma integrity_check").fetchone()[0],
+                  "max": db.execute("select max(ts) from t").fetchone()[0],
+                  "renamed": open('/workspace/kill/renamed').read().strip()}))
+"#,
+            )
+            .await?;
+        let restored: Value = serde_json::from_str(&restored).context("parse restored")?;
+        ensure!(
+            restored["ok"] == "ok",
+            "run {run}: integrity {}",
+            restored["ok"]
+        );
+        ensure!(
+            restored["renamed"]
+                .as_str()
+                .is_some_and(|v| v.parse::<f64>().is_ok()),
+            "run {run}: the renamed file is torn: {}",
+            restored["renamed"]
+        );
+        let lost = (killed_after - restored["max"].as_f64().unwrap_or(0.0)).max(0.0);
+        eprintln!("kill run {run}: lost {lost:.2} s, integrity ok");
+        losses.push(lost);
+        current = next;
+    }
+    app.terminate(&current, true).await?;
+    app.delete_storage(&key).await?.ok();
+    losses.sort_by(f64::total_cmp);
+    let p = |q: f64| losses[((losses.len() as f64 - 1.0) * q).round() as usize];
+    eprintln!(
+        "kill runs: {} runs, lost p50 {:.2} s, p95 {:.2} s, max {:.2} s",
+        losses.len(),
+        p(0.5),
+        p(0.95),
+        losses[losses.len() - 1]
+    );
+    ensure!(p(0.95) <= 3.0, "p95 loss {:.2} s exceeds 3 s", p(0.95));
+    Ok(())
 }
