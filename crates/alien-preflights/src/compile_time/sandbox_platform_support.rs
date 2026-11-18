@@ -73,6 +73,18 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                         return Some(format!("Sandbox '{}': {reason}", sandbox.id()));
                     }
                 }
+                // GCP keeps a persistent store in a bucket that setup creates and grants to the
+                // sandbox's workloads. A Live sandbox never runs setup, so it would have no store.
+                if platform == Platform::Gcp
+                    && lifecycle == ResourceLifecycle::Live
+                    && sandbox.persistent_storage.is_some()
+                {
+                    return Some(format!(
+                        "Sandbox '{}': {}",
+                        sandbox.id(),
+                        alien_core::sandbox_egress::GCP_PERSISTENT_STORAGE_NEEDS_SETUP
+                    ));
+                }
                 // Azure hosts the gateway as two VMs that setup creates in the deployment's VNet,
                 // and the sandbox reaches it through the agent's startup gate. A catalog image
                 // runs no agent, so nothing inside it could prove or use that path.
@@ -370,6 +382,39 @@ mod tests {
         assert!(refused.errors.join(" ").contains("imageUser"));
         let accepted = SandboxPlatformSupportCheck
             .check(&declared(Some(1001)), Platform::Aws)
+            .await
+            .expect("check runs");
+        assert!(accepted.success, "{:?}", accepted.errors);
+    }
+
+    /// Setup creates a GCP sandbox's persistent store, so only a Frozen sandbox may declare one;
+    /// a Live one is refused at plan time instead of waiting for a setup that never runs.
+    #[tokio::test]
+    async fn gcp_persistent_storage_needs_a_frozen_sandbox() {
+        let declared = |lifecycle| {
+            let mut sandbox = sandbox("agent", None, SandboxEgress::None);
+            sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+                path: "/workspace".to_string(),
+                exclude: vec![],
+                max_size: None,
+                encryption_key: None,
+            });
+            stack_with_lifecycle(sandbox, lifecycle)
+        };
+        let refused = SandboxPlatformSupportCheck
+            .check(&declared(ResourceLifecycle::Live), Platform::Gcp)
+            .await
+            .expect("check runs");
+        assert!(!refused.success);
+        assert_eq!(
+            refused.errors,
+            vec![format!(
+                "Sandbox 'agent': {}",
+                alien_core::sandbox_egress::GCP_PERSISTENT_STORAGE_NEEDS_SETUP
+            )]
+        );
+        let accepted = SandboxPlatformSupportCheck
+            .check(&declared(ResourceLifecycle::Frozen), Platform::Gcp)
             .await
             .expect("check runs");
         assert!(accepted.success, "{:?}", accepted.errors);

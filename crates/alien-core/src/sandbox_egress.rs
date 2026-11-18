@@ -244,6 +244,13 @@ pub fn aws_persistent_storage_refusal(stack: &Stack, sandbox: &Sandbox) -> Optio
     }
 }
 
+/// Why a Live GCP sandbox cannot declare persistent storage: its store is a bucket the setup
+/// package creates and grants, and a Live sandbox never runs setup.
+pub const GCP_PERSISTENT_STORAGE_NEEDS_SETUP: &str =
+    "persistent storage on GCP keeps each key in a bucket that the setup package creates and \
+     grants to the sandbox's workloads, and a Live sandbox never runs setup; declare the sandbox \
+     Frozen";
+
 /// The agent variable that declares persistent storage and holds the image command until the
 /// key is restored. Absent unless declared, so other sandboxes' images are unchanged.
 pub const ENV_PERSISTENT_STORAGE: &str = "ALIEN_SANDBOX_PERSISTENT_STORAGE";

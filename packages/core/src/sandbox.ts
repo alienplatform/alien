@@ -136,6 +136,13 @@ export class Sandbox extends ResourceBuilder {
    * it into a new sandbox created with the same `storageKey` before the image command starts.
    * The application reads a key's files without a sandbox and erases a key through the binding.
    * Platforms without a replication transport refuse the declaration when the stack is planned.
+   *
+   * On GCP the sandbox cannot reach a store itself: a workload holding the sandbox binding
+   * pulls each commit and writes it, so writes are published while such a workload runs. Call
+   * `sync()` before that workload exits or scales to zero; `status()` reports `behind` while
+   * commits wait. GCP has no file system freeze, so each file is copied whole and consistent
+   * (Git refs before objects, an SQLite database with its journal), not the tree at one instant.
+   * Setup creates the store, so on GCP only a Frozen sandbox may declare persistent storage.
    */
   public persistentStorage(options: SandboxPersistentStorageOptions): this {
     const persistentStorage: SandboxPersistentStorage = { path: options.path }
