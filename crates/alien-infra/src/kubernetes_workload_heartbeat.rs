@@ -17,8 +17,9 @@ use crate::error::{ErrorData, Result};
 pub(crate) const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
 
 /// Polls (5 s apart) a re-apply whose pod template did not change waits for readiness: nothing
-/// rolls, so the workload is either already healthy or still failing, and 1 minute tells which.
-pub(crate) const UNCHANGED_REAPPLY_MAX_POLLS: u32 = 12;
+/// rolls, so the workload is either already healthy or still failing, and 2 minutes (the ready
+/// hold plus a margin) tells which.
+pub(crate) const UNCHANGED_REAPPLY_MAX_POLLS: u32 = 24;
 
 /// The polls an update waits for readiness: the full rollout limit when the apply changed the
 /// pod template (pods roll), the short bound when it did not.
@@ -576,8 +577,9 @@ pub(crate) fn recovery_check(
 
 /// Consecutive polls a finished-looking rollout must stay ready before it counts as complete.
 pub(crate) const READY_HOLD_POLLS: u32 = 3;
-/// Seconds the ready polls must span.
-pub(crate) const READY_HOLD_MIN_SECS: i64 = 10;
+/// Seconds the ready polls must span: a container that runs for a while before it crashes
+/// (no readiness probe) is ready for the whole of one up period, so the hold outlasts it.
+pub(crate) const READY_HOLD_MIN_SECS: i64 = 60;
 
 /// Whether readiness holds across the polls of a create or update wait. A container without a
 /// readiness probe is ready for a moment after each start, so one ready poll proves nothing: the
@@ -729,7 +731,7 @@ fn hold_now_unix() -> i64 {
     Utc::now().timestamp()
 }
 
-/// In tests every poll takes the 5 s a real poll does, so a hold is reached in a few steps
+/// In tests every poll takes 30 s, so the 60 s hold, so a hold is reached in a few steps
 /// without waiting. The clock is per test thread.
 #[cfg(test)]
 fn hold_now_unix() -> i64 {
@@ -737,7 +739,7 @@ fn hold_now_unix() -> i64 {
         static TICKS: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
     }
     TICKS.with(|ticks| {
-        ticks.set(ticks.get() + 5);
+        ticks.set(ticks.get() + 30);
         Utc::now().timestamp() + ticks.get()
     })
 }
@@ -866,11 +868,11 @@ mod tests {
     }
 
     #[test]
-    fn readiness_holds_after_three_polls_spanning_ten_seconds() {
+    fn readiness_holds_after_three_polls_spanning_a_minute() {
         let mut hold = ReadyHold::default();
         assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_000));
-        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_005));
-        assert!(hold.observe_ready(pods(&[("a", 0)]), 1_010));
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_030));
+        assert!(hold.observe_ready(pods(&[("a", 0)]), 1_060));
     }
 
     #[test]
@@ -879,35 +881,50 @@ mod tests {
         for _ in 0..5 {
             assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_000));
         }
-        assert!(hold.observe_ready(pods(&[("a", 0)]), 1_010));
+        assert!(hold.observe_ready(pods(&[("a", 0)]), 1_060));
     }
 
     #[test]
     fn a_restart_of_a_ready_pod_starts_the_hold_again() {
         let mut hold = ReadyHold::default();
         assert!(!hold.observe_ready(pods(&[("a", 7)]), 1_000));
-        assert!(!hold.observe_ready(pods(&[("a", 7)]), 1_005));
+        assert!(!hold.observe_ready(pods(&[("a", 7)]), 1_030));
         // Ready again after one more restart: the count starts over.
-        assert!(!hold.observe_ready(pods(&[("a", 8)]), 1_010));
-        assert!(!hold.observe_ready(pods(&[("a", 8)]), 1_015));
-        assert!(hold.observe_ready(pods(&[("a", 8)]), 1_020));
+        assert!(!hold.observe_ready(pods(&[("a", 8)]), 1_060));
+        assert!(!hold.observe_ready(pods(&[("a", 8)]), 1_090));
+        assert!(hold.observe_ready(pods(&[("a", 8)]), 1_120));
+    }
+
+    #[test]
+    fn a_pod_that_is_ready_for_twelve_seconds_per_cycle_never_holds() {
+        // Up for 12 s, polled every 5 s, then it exits and restarts: ready, not ready, ready...
+        let mut hold = ReadyHold::default();
+        let mut now = 1_000;
+        for restarts in 0..40 {
+            for _ in 0..3 {
+                assert!(!hold.observe_ready(pods(&[("a", restarts)]), now));
+                now += 5;
+            }
+            hold.reset();
+            now += 20;
+        }
     }
 
     #[test]
     fn a_not_ready_poll_resets_the_hold() {
         let mut hold = ReadyHold::default();
         assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_000));
-        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_005));
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_030));
         hold.reset();
-        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_010));
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_060));
     }
 
     #[test]
     fn a_replaced_pod_is_not_a_restart() {
         let mut hold = ReadyHold::default();
         assert!(!hold.observe_ready(pods(&[("old", 3)]), 1_000));
-        assert!(!hold.observe_ready(pods(&[("new", 0)]), 1_005));
-        assert!(hold.observe_ready(pods(&[("new", 0)]), 1_010));
+        assert!(!hold.observe_ready(pods(&[("new", 0)]), 1_030));
+        assert!(hold.observe_ready(pods(&[("new", 0)]), 1_060));
     }
 
     #[test]
@@ -998,7 +1015,7 @@ mod tests {
             update_wait_max_polls(false),
             KUBERNETES_WORKLOAD_READY_MAX_POLLS
         );
-        assert_eq!(UNCHANGED_REAPPLY_MAX_POLLS * 5, 60);
+        assert_eq!(UNCHANGED_REAPPLY_MAX_POLLS * 5, 120);
     }
 
     use super::*;
