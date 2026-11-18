@@ -526,3 +526,25 @@ async fn a_pull_overtaken_by_another_puller_is_idle_not_failed() {
     assert_eq!(files_at_head(&store).await, sample().files());
     assert!(!sandbox.spool.is_superseded());
 }
+
+/// `since` is the oldest unpublished commit: later commits do not move it, a publish clears it.
+#[tokio::test]
+async fn pending_says_since_when_writes_have_waited() {
+    let store = MemoryStore::new();
+    let mut sandbox = sandbox(&store, "sandbox-1").await;
+    sandbox.commit(&sample()).await.unwrap();
+    let first = sandbox.spool.pending().unwrap().since.expect("since");
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    sandbox
+        .commit(&sample().file("later", vec![1], 2))
+        .await
+        .unwrap();
+    assert_eq!(sandbox.spool.pending().unwrap().since, Some(first));
+    sandbox.pull(&store).await.unwrap();
+    assert_eq!(sandbox.spool.pending(), None);
+    sandbox
+        .commit(&sample().file("third", vec![2], 3))
+        .await
+        .unwrap();
+    assert!(sandbox.spool.pending().unwrap().since.unwrap() > first);
+}

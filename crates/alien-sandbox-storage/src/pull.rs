@@ -45,6 +45,10 @@ pub struct Pending {
     pub head: String,
     /// Packs and manifests to create before HEAD moves, in the order they were written.
     pub objects: Vec<PendingObject>,
+    /// When the oldest commit not yet published was made: how long writes have waited for the
+    /// binding. Absent from an agent older than the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// One object waiting in the spool.
@@ -106,6 +110,8 @@ struct SpoolState {
     generation: u64,
     /// Unpublished objects, with the tick they were written at.
     pending: BTreeMap<String, u64>,
+    /// When each unpublished HEAD was written, by its tick.
+    commits: BTreeMap<u64, chrono::DateTime<chrono::Utc>>,
     /// Objects the binding copied in for a restore.
     seeded: BTreeSet<String>,
     superseded: bool,
@@ -140,6 +146,7 @@ impl Spool {
                 tick: 0,
                 generation: 0,
                 pending: BTreeMap::new(),
+                commits: BTreeMap::new(),
                 seeded: BTreeSet::new(),
                 superseded: false,
             }),
@@ -193,6 +200,7 @@ impl Spool {
             generation: state.generation,
             head: String::from_utf8_lossy(head).into_owned(),
             objects: objects.into_iter().map(|(_, object)| object).collect(),
+            since: state.commits.values().next().copied(),
         })
     }
 
@@ -226,6 +234,7 @@ impl Spool {
             AckOutcome::Superseded => {
                 state.superseded = true;
                 state.head = None;
+                state.commits.clear();
             }
             AckOutcome::Published => {
                 if generation > state.generation {
@@ -248,6 +257,7 @@ impl Spool {
                     state.pending.remove(&name);
                     let _ = fs::remove_file(self.path(&name));
                 }
+                state.commits.retain(|tick, _| *tick > generation);
                 if generation == state.generation {
                     state.head = None;
                 }
@@ -362,6 +372,8 @@ impl ObjectStore for Spool {
             state.generation = state.tick;
             state.head_version = ObjectVersion::etag(format!("spool-{}", state.tick));
             state.head = Some(bytes);
+            let tick = state.tick;
+            state.commits.insert(tick, chrono::Utc::now());
             return Ok(PutOutcome::Written {
                 version: state.head_version.clone(),
             });
