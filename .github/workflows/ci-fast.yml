@@ -810,6 +810,60 @@ jobs:
       - name: Check every package and target
         run: cargo check --workspace --all-targets --features alien-manager/openapi,alien-bindings/platform-sdk --locked
 
+  # A crate that gates code on a platform feature must compile with only the features a consumer
+  # picks; the workspace check above unifies features and hides a missing import or gate.
+  rust-feature-sets:
+    name: Rust feature sets
+    needs: [pr-conventions, changes]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_BUILD_JOBS: "6"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
+
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        continue-on-error: true
+        with:
+          version: v0.16.0
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "35.x"
+          repo-token: ${{ github.token }}
+
+      - name: Configure git credentials for cargo
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      # alien-bindings: each platform alone and the clouds together. alien-infra's cloud
+      # modules share code (storage, worker), so it is built with the three clouds, alone and
+      # with each of kubernetes and local.
+      - name: Check each feature set on its own
+        run: |
+          failed=0
+          check() {
+            echo "::group::cargo check -p $1 --features $2"
+            cargo check -p "$1" --no-default-features --features "$2" --locked || { echo "::error::$1 does not build with only features: $2"; failed=1; }
+            echo "::endgroup::"
+          }
+          for set in aws gcp azure aws,gcp,azure kubernetes local; do check alien-bindings "$set"; done
+          for set in aws,gcp,azure aws,gcp,azure,kubernetes aws,gcp,azure,local; do check alien-infra "$set"; done
+          exit $failed
+
   workspace-hack:
     name: Workspace-hack up to date
     needs: [pr-conventions, changes]
@@ -1043,7 +1097,7 @@ jobs:
       github.event.pull_request.head.repo.fork != true) &&
       (github.event_name != 'push' ||
       startsWith(github.event.head_commit.message, 'chore: release '))
-    needs: [pr-conventions, changes, rust, rust-check, workspace-hack, typescript, worker-integration, node-addon-portability, python-bindings, tpm-device-key]
+    needs: [pr-conventions, changes, rust, rust-check, rust-feature-sets, workspace-hack, typescript, worker-integration, node-addon-portability, python-bindings, tpm-device-key]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area
