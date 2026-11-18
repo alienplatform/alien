@@ -534,6 +534,13 @@ pub(super) mod tests {
         struct OnlyResolve;
         #[async_trait::async_trait]
         impl CredentialResolver for OnlyResolve {
+            async fn management_external_id(
+                &self,
+                _: &crate::traits::DeploymentRecord,
+            ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+                Ok(None)
+            }
+
             async fn resolve(
                 &self,
                 _: &crate::traits::DeploymentRecord,
