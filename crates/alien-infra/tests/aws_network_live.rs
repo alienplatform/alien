@@ -231,6 +231,7 @@ faulty_ec2_api! {
     describe_addresses() -> DescribeAddressesResponse;
     release_address(allocation_id: &str) -> ();
     describe_route_tables(request: DescribeRouteTablesRequest) -> DescribeRouteTablesResponse;
+    describe_managed_prefix_lists(filters: Vec<Filter>) -> DescribeManagedPrefixListsResponse;
     create_route_table(request: CreateRouteTableRequest) -> CreateRouteTableResponse;
     delete_route_table(route_table_id: &str) -> ();
     create_route(request: CreateRouteRequest) -> ();
