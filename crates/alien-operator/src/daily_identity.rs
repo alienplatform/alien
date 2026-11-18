@@ -225,7 +225,7 @@ impl DailyIdentity {
                 if status.is_server_error() || matches!(status.as_u16(), 408 | 429) {
                     self.mark_enrollment_uncertain();
                 }
-                return Err(refused(status));
+                return Err(refused_enrollment(status));
             }
             Err(error) => {
                 self.mark_enrollment_uncertain();
@@ -767,6 +767,21 @@ fn refused(status: reqwest::StatusCode) -> AlienError<ErrorData> {
     } else {
         failed(&message)
     }
+}
+
+/// The manager refused an enrollment code. A code works once, so a refusal that is the
+/// manager's decision (not a server error, timeout or throttling) most often means this one was
+/// already used: for example the release was uninstalled and installed again with the same
+/// values, whose state volume (the saved identity) was removed with it. Say so, once.
+fn refused_enrollment(status: reqwest::StatusCode) -> AlienError<ErrorData> {
+    let error = refused(status);
+    if status.is_server_error() || matches!(status.as_u16(), 408 | 429) {
+        return error;
+    }
+    failed(&format!(
+        "{} The enrollment code in this install was already used or is no longer valid, and this Operator has no saved identity to use instead. Install again with a new enrollment code, or delete the deployment.",
+        error.message
+    ))
 }
 
 fn failed(message: &str) -> AlienError<ErrorData> {
@@ -2177,6 +2192,31 @@ mod grace_tests {
 mod lost_enrollment_tests {
     use super::*;
     use std::sync::atomic::{AtomicU8, Ordering};
+
+    /// A spent code is named as such; a server error stays retryable and is not blamed on the code.
+    #[test]
+    fn a_refused_enrollment_names_the_spent_code_and_what_to_do() {
+        let spent = refused_enrollment(reqwest::StatusCode::UNAUTHORIZED);
+        assert!(
+            spent
+                .message
+                .starts_with("Component identity request refused (HTTP 401)"),
+            "{}",
+            spent.message
+        );
+        assert!(spent.message.contains("already used"), "{}", spent.message);
+        assert!(
+            spent.message.contains("new enrollment code"),
+            "{}",
+            spent.message
+        );
+        let outage = refused_enrollment(reqwest::StatusCode::BAD_GATEWAY);
+        assert!(
+            !outage.message.contains("already used"),
+            "{}",
+            outage.message
+        );
+    }
 
     const LOST: u8 = 0;
     const REFUSED: u8 = 1;
