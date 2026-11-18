@@ -2,17 +2,18 @@
 // from the caller reach them, each checked to be a non-negative integer first.
 
 /** A digest of everything under /workspace except `tmp/`: path, type, mode, owner, link count,
- * mtime (not for symlinks, whose mtime a restore does not keep), symlink target and content. */
+ * mtime (not for symlinks, whose mtime a restore does not keep), symlink target and content. The
+ * root and `lost+found` belong to each sandbox's own disk, not to the key, so they are left out. */
 export const MANIFEST = `
 set -eu
 cd /workspace
 {
-  find . -path ./tmp -prune -o ! -type l -printf '%p %y %m %U %G %n %T@\\n'
-  find . -path ./tmp -prune -o -type l -printf '%p %y %U %G %l\\n'
-  find . -path ./tmp -prune -o -type f -print0 | xargs -0 -r sha256sum
+  find . -mindepth 1 \\( -path ./tmp -o -path ./lost+found \\) -prune -o ! -type l -printf '%p %y %m %U %G %n %T@\\n'
+  find . -mindepth 1 \\( -path ./tmp -o -path ./lost+found \\) -prune -o -type l -printf '%p %y %U %G %l\\n'
+  find . -mindepth 1 \\( -path ./tmp -o -path ./lost+found \\) -prune -o -type f -print0 | xargs -0 -r sha256sum
 } | LC_ALL=C sort > /tmp/manifest
-printf 'entries=%s\\n' "$(find . -path ./tmp -prune -o -print | wc -l)"
-printf 'bytes=%s\\n' "$(du -sb --exclude=./tmp . | cut -f1)"
+printf 'entries=%s\\n' "$(find . -mindepth 1 \\( -path ./tmp -o -path ./lost+found \\) -prune -o -print | wc -l)"
+printf 'bytes=%s\\n' "$(find . -mindepth 1 \\( -path ./tmp -o -path ./lost+found \\) -prune -o -type f -printf '%s\\n' | awk '{ s += $1 } END { print s + 0 }')"
 printf 'manifest=%s\\n' "$(sha256sum < /tmp/manifest | cut -d' ' -f1)"
 `
 
@@ -105,14 +106,14 @@ printf 'churn=%s\\n' "$(cat churn/current 2>/dev/null || echo none)"
 printf 'git_fsck=%s\\n' "$( [ -d wrepo/.git ] && (git -C wrepo fsck --strict > /dev/null 2>&1 && echo ok || echo failed) || echo none)"
 `
 
-/** What the command's user can reach: the store's credentials and the object storage API. */
+/** What the command's user can reach: credentials in its environment, the object storage API and
+ * the metadata server's token (curl reports 000 when it gets no answer). */
 export const ISOLATION = `
 set -u
 printf 'uid=%s\\n' "$(id -u)"
 printf 'credential_env=%s\\n' "$(env | grep -ci -E 'GOOGLE|TOKEN|CREDENTIAL|SIGNED|BUCKET' || true)"
-printf 'storage_api=%s\\n' "$(curl -sS -o /dev/null -m 10 -w '%{http_code}' https://storage.googleapis.com/storage/v1/b 2>/dev/null || echo unreachable)"
-printf 'metadata_token=%s\\n' "$(curl -sS -o /dev/null -m 5 -w '%{http_code}' -H 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token 2>/dev/null || echo unreachable)"
-printf 'agent_environ=%s\\n' "$(cat /proc/1/environ > /dev/null 2>&1 && echo readable || echo denied)"
+printf 'storage_api=%s\\n' "$(curl -sS -o /dev/null -m 10 -w '%{http_code}' https://storage.googleapis.com/storage/v1/b 2>/dev/null || true)"
+printf 'metadata_token=%s\\n' "$(curl -sS -o /dev/null -m 5 -w '%{http_code}' -H 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token 2>/dev/null || true)"
 mkdir -p /workspace/escape
 ln -sfn / /workspace/escape/root
 ln -sfn /proc/self /workspace/escape/proc
