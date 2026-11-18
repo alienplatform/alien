@@ -1747,7 +1747,7 @@ async fn prepare_import_stack(
         .resources
         .iter()
         .any(|resource| resource.id == "enable-cloud-quotas");
-    let stack_settings = &settings_with_imported_cluster_namespace(req, stack_settings);
+    let stack_settings = &settings_with_imported_cluster_namespace(req, stack_settings)?;
     prepare_setup_stack(
         source_stack,
         &PrepareSetupStack {
@@ -1774,7 +1774,7 @@ async fn prepare_import_stack(
 fn settings_with_imported_cluster_namespace(
     req: &StackImportRequest,
     settings: &StackSettings,
-) -> StackSettings {
+) -> crate::error::Result<StackSettings> {
     let mut settings = settings.clone();
     let Some(cluster) = settings
         .kubernetes
@@ -1782,21 +1782,24 @@ fn settings_with_imported_cluster_namespace(
         .and_then(|kubernetes| kubernetes.cluster.as_mut())
         .filter(|cluster| cluster.namespace.is_none())
     else {
-        return settings;
+        return Ok(settings);
     };
-    cluster.namespace = req
+    let Some(resource) = req
         .resources
         .iter()
         .find(|resource| resource.resource_type == alien_core::KubernetesCluster::RESOURCE_TYPE)
-        .and_then(|resource| {
-            serde_json::from_value::<alien_core::import::data::KubernetesClusterImportData>(
-                resource.import_data.clone(),
-            )
-            .ok()
-        })
-        .map(|data| data.namespace)
-        .filter(|namespace| !namespace.is_empty());
-    settings
+    else {
+        return Ok(settings);
+    };
+    let data: alien_core::import::data::KubernetesClusterImportData =
+        serde_json::from_value(resource.import_data.clone()).map_err(|error| {
+            ErrorData::bad_request(format!(
+                "Invalid import data for the Kubernetes cluster '{}': {error}",
+                resource.id
+            ))
+        })?;
+    cluster.namespace = Some(data.namespace).filter(|namespace| !namespace.is_empty());
+    Ok(settings)
 }
 
 /// The message of the innermost error in the chain. A wrapper such as "Mutation execution

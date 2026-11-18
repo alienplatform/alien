@@ -5146,3 +5146,25 @@ async fn existing_cluster_import_then_the_operators_first_update_is_accepted() {
         .expect_err("a changed cluster reference needs setup");
     assert!(format!("{refused:?}").contains("'kubernetes' was modified"));
 }
+
+#[tokio::test]
+async fn existing_cluster_import_with_unreadable_cluster_data_is_refused() {
+    let fixture =
+        make_fixture_for_platform(Platform::Kubernetes, Some(stack_with_worker("worker"))).await;
+    let mut body = eks_cluster_import_request("acme-k8s", "us-east-1");
+    body.stack_settings.kubernetes = Some(alien_core::KubernetesSettings {
+        cluster: Some(alien_core::KubernetesClusterSettings {
+            ownership: KubernetesClusterOwnership::Existing,
+            namespace: None,
+            cloud: None,
+        }),
+        exposure: None,
+    });
+    for resource in &mut body.resources {
+        if resource.id == "kubernetes" {
+            resource.import_data = serde_json::json!({ "namespace": 7 });
+        }
+    }
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);
+}
