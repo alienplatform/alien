@@ -20,10 +20,12 @@ use crate::providers::sandbox::refusal::Unreachable;
 use crate::traits::{
     Binding, CommandOutput, CreateSandboxRequest, InteractiveCommand, JobPoll, JobStart,
     PreviewCapability, ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
+    SandboxStorageStatus,
 };
 use alien_aws_clients::aws::lambda_microvms::{LambdaMicrovmsApi, Microvm, MAX_AUTH_TOKEN_MINUTES};
 use alien_core::{Platform, SandboxCapabilities};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_sandbox_storage::ObjectStore as _;
 use tracing::warn;
 
 /// Header the proxy reads to decide which port inside the MicroVM a request reaches.
@@ -165,6 +167,11 @@ impl AwsSandbox {
         let claim = alien_sandbox_storage::takeover(&store, microvm_id)
             .await
             .map_err(|e| unreachable(format!("could not claim storage key '{key}': {e}")))?;
+        // After the claim no other writer can publish, and this one has not started: whatever
+        // HEAD does not reach is garbage now. A failed collection only leaves garbage behind.
+        if let Err(error) = alien_sandbox_storage::collect_garbage(&store).await {
+            warn!(%error, key, "persistent storage garbage collection failed");
+        }
         let commit = match alien_sandbox_storage::read_head(&store)
             .await
             .map_err(|e| unreachable(format!("could not read storage key '{key}': {e}")))?
@@ -205,6 +212,59 @@ impl AwsSandbox {
             )));
         }
         Ok(())
+    }
+
+    fn key_store(&self, key: &str, operation: &str) -> Result<super::persistent_store::KeyStore> {
+        let grants = self.persistent_grants.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: operation.to_string(),
+                reason: "this sandbox declares no persistent storage".to_string(),
+            })
+        })?;
+        grants.key_store(key).map_err(|e| {
+            AlienError::new(ErrorData::InvalidInput {
+                operation_context: operation.to_string(),
+                details: e.to_string(),
+                field_name: Some("storageKey".to_string()),
+            })
+        })
+    }
+
+    async fn agent_storage(
+        &self,
+        sandbox_id: &str,
+        method: reqwest::Method,
+        path: &str,
+        operation: &str,
+    ) -> Result<SandboxStorageStatus> {
+        let response = self
+            .authorized_request(sandbox_id, method, path)
+            .await?
+            .timeout(SANDBOX_READY_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: operation.to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "storage".to_string(),
+                reason: format!("{status}: {}", text.chars().take(500).collect::<String>()),
+            }));
+        }
+        serde_json::from_str(&text).map_err(|e| {
+            AlienError::new(ErrorData::UnexpectedResponseFormat {
+                provider: "aws-sandbox".to_string(),
+                binding_name: operation.to_string(),
+                field: "persistentStorage".to_string(),
+                response_json: e.to_string(),
+            })
+        })
     }
 
     pub fn with_default_policy(mut self, policy: Option<alien_core::EgressPolicy>) -> Self {
@@ -1312,7 +1372,92 @@ impl Sandbox for AwsSandbox {
     /// Idempotent per the trait: a sandbox AWS has already reaped is terminated, not an error.
     /// Absence and "someone else's" part ways here and in `resume`; every other operation needs
     /// the sandbox to exist, so for them the two are the same refusal.
+    async fn storage_status(&self, sandbox_id: &str) -> Result<Option<SandboxStorageStatus>> {
+        if self.persistent_storage.is_none() {
+            return Ok(None);
+        }
+        self.agent_storage(
+            sandbox_id,
+            reqwest::Method::GET,
+            "/v1/storage",
+            "sandbox.persistentStorage",
+        )
+        .await
+        .map(Some)
+    }
+
+    async fn sync_storage(&self, sandbox_id: &str) -> Result<SandboxStorageStatus> {
+        if self.persistent_storage.is_none() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.sync".to_string(),
+                reason: "this sandbox declares no persistent storage".to_string(),
+            }));
+        }
+        self.agent_storage(
+            sandbox_id,
+            reqwest::Method::POST,
+            "/v1/storage/sync",
+            "sandbox.sync",
+        )
+        .await
+    }
+
+    async fn read_storage_file(&self, key: &str, path: &str) -> Result<Vec<u8>> {
+        let store = self.key_store(key, "sandbox.readStorageFile")?;
+        alien_sandbox_storage::read_file(&store, key, path)
+            .await
+            .map_err(|e| {
+                AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "readStorageFile".to_string(),
+                    reason: e.to_string(),
+                })
+            })
+    }
+
+    async fn delete_storage(&self, key: &str) -> Result<()> {
+        let store = self.key_store(key, "sandbox.deleteStorage")?;
+        let failed = |reason: String| {
+            AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "deleteStorage".to_string(),
+                reason,
+            })
+        };
+        if let Some((head, _)) = alien_sandbox_storage::read_head(&store)
+            .await
+            .map_err(|e| failed(e.to_string()))?
+        {
+            if let Some(holder) = self.fetch(&head.writer, "sandbox.deleteStorage").await? {
+                if holder.state != SandboxState::Terminated {
+                    return Err(failed(format!(
+                        "storage key '{key}' is held by sandbox '{}'; terminate it first",
+                        head.writer
+                    )));
+                }
+            }
+        }
+        // HEAD first: a writer that slipped in can no longer move it, and no reader finds a
+        // HEAD whose manifest is gone.
+        store
+            .delete(alien_sandbox_storage::HEAD_OBJECT)
+            .await
+            .map_err(|e| failed(e.to_string()))?;
+        for object in store.list("").await.map_err(|e| failed(e.to_string()))? {
+            store
+                .delete(&object)
+                .await
+                .map_err(|e| failed(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
+        // Persistent storage: commit what was written before the MicroVM goes. Best effort: a
+        // sandbox that is already gone or unreachable still terminates.
+        if self.persistent_storage.is_some() {
+            if let Err(error) = self.sync_storage(sandbox_id).await {
+                warn!(sandbox = sandbox_id, %error, "could not sync persistent storage before terminating");
+            }
+        }
         let state = match self
             .fetched_microvm("sandbox.terminate", sandbox_id)
             .await?

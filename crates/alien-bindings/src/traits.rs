@@ -1304,6 +1304,42 @@ pub struct CreateSandboxRequest {
     pub storage_key: Option<String>,
 }
 
+/// Replication state of a sandbox's persistent storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum SandboxStorageState {
+    /// The key's tree is being restored; the image command waits.
+    AwaitingRestore,
+    /// Every change seen so far is committed or in flight.
+    Replicating,
+    /// The last commit failed (store unreachable, `maxSize` exceeded); retried on the next change.
+    Behind,
+    /// Another sandbox claimed the key; this one commits nothing more.
+    Stopped,
+}
+
+/// `sandbox.persistentStorage`: the key a sandbox holds and how far its writes are durable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxStorageStatus {
+    /// The storage key, once attached.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// Replication state.
+    pub state: SandboxStorageState,
+    /// When a commit last published or found nothing to publish.
+    #[serde(default)]
+    pub last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Sequence number of the commit HEAD names now.
+    #[serde(default)]
+    pub head: Option<u64>,
+    /// Why the state is `behind` or `stopped`.
+    #[serde(default)]
+    pub last_error: Option<String>,
+}
+
 /// A live sandbox.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -1746,8 +1782,39 @@ pub trait Sandbox: Binding {
     /// that could not confirm the sandbox is gone fails with a retryable error and can be repeated.
     async fn terminate(&self, sandbox_id: &str) -> Result<()>;
 
+    /// The sandbox's persistent storage state, or `None` when the declaration has none.
+    async fn storage_status(&self, sandbox_id: &str) -> Result<Option<SandboxStorageStatus>> {
+        let _ = sandbox_id;
+        Ok(None)
+    }
+
+    /// Commits everything the sandbox wrote so far and returns once it is durable.
+    async fn sync_storage(&self, sandbox_id: &str) -> Result<SandboxStorageStatus> {
+        let _ = sandbox_id;
+        Err(storage_unsupported("sandbox.sync"))
+    }
+
+    /// Reads one file of a key's last commit, without a sandbox.
+    async fn read_storage_file(&self, key: &str, path: &str) -> Result<Vec<u8>> {
+        let _ = (key, path);
+        Err(storage_unsupported("sandbox.readStorageFile"))
+    }
+
+    /// Erases a key. Refused while a running sandbox holds it.
+    async fn delete_storage(&self, key: &str) -> Result<()> {
+        let _ = key;
+        Err(storage_unsupported("sandbox.deleteStorage"))
+    }
+
     /// Get a reference to this object as `Any` for dynamic casting
     fn as_any(&self) -> &dyn std::any::Any;
+}
+
+fn storage_unsupported(operation: &str) -> alien_error::AlienError<crate::error::ErrorData> {
+    alien_error::AlienError::new(crate::error::ErrorData::OperationNotSupported {
+        operation: operation.to_string(),
+        reason: "this sandbox binding has no persistent storage".to_string(),
+    })
 }
 
 /// A provider must implement methods to load the various types of bindings
