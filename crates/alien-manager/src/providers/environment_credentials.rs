@@ -425,4 +425,24 @@ pub(super) mod tests {
             .await
             .is_err());
     }
+    /// A resolver that only implements `resolve` must not serve Azure remote
+    /// Storage with the management identity.
+    #[tokio::test]
+    async fn the_default_remote_storage_source_fails_closed_on_azure() {
+        struct OnlyResolve;
+        #[async_trait::async_trait]
+        impl CredentialResolver for OnlyResolve {
+            async fn resolve(
+                &self,
+                _: &crate::traits::DeploymentRecord,
+            ) -> Result<alien_core::ClientConfig, AlienError> {
+                panic!("the management credentials must not be resolved for Azure remote Storage")
+            }
+        }
+        let error = OnlyResolve
+            .resolve_remote_storage_source(&azure_deployment("running"), "storage")
+            .await
+            .expect_err("Azure remote Storage needs an explicit source");
+        assert!(error.to_string().contains("Remote Bindings identity"));
+    }
 }
