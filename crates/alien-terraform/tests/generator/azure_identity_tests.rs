@@ -100,7 +100,7 @@ fn azure_service_account_build_execute_binds_the_builds_environment_and_identity
         "the assign grant must not name the build's identity by its literal name:\n{rendered}"
     );
     assert!(
-        rendered.contains("scope") && rendered.contains("${azurerm_user_assigned_identity."),
+        rendered.contains("azurerm_user_assigned_identity.build_sa.id"),
         "the assign grant references the build's identity resource:\n{rendered}"
     );
     assert!(
@@ -108,7 +108,8 @@ fn azure_service_account_build_execute_binds_the_builds_environment_and_identity
         "{rendered}"
     );
     assert!(
-        rendered.contains("${azurerm_container_app_environment."),
+        // `terraform fmt` drops the `"${...}"` wrapper of a lone reference, so match the reference.
+        rendered.contains("azurerm_container_app_environment.default_container_env.id"),
         "the join grant names the environment resource:\n{rendered}"
     );
     assert_terraform_valid(&module, "azure_service_account_build_execute");
