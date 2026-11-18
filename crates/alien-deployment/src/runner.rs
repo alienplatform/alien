@@ -1716,6 +1716,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
         }
     }
 

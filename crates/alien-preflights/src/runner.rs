@@ -1408,6 +1408,7 @@ mod setup_update_authorization_tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "stack".to_string(),
             resources: IndexMap::new(),
             inputs: vec![],

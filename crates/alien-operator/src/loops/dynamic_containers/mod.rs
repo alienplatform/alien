@@ -207,7 +207,7 @@ async fn reconcile_with_admission(
         let errors = alien_core::validate_kubernetes_compute(stack);
         if errors.is_empty() {
             alien_core::kubernetes_dynamic_pool(stack)
-                .and_then(|pool| alien_core::kubernetes_compute_node_selector(stack, pool))
+                .and_then(|pool| alien_core::kubernetes_compute_node_selector(stack, pool, &[]))
         } else {
             Err(errors.join("; "))
         }
