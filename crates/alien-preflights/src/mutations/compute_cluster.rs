@@ -1445,17 +1445,20 @@ fn workload_requirements(containers: &[&Container]) -> Result<WorkloadRequiremen
 /// portable profile comes from the pool's workloads (not from whatever machine the group
 /// carried before), then the machine supplies the hardware. Used at first setup, when the
 /// group still holds the registration default machine, which may be larger or smaller than
-/// the one chosen.
+/// the one chosen. For a GENERATED cluster only: a declared cluster's group keeps its own
+/// declared requirements and scale bounds (`materialize_selected_group`).
 pub(crate) fn materialize_selected_group_for_workloads(
     group: &mut CapacityGroup,
     platform: Platform,
     selection: &ComputePoolSelection,
     stack: &Stack,
+    cluster_id: &str,
 ) -> Result<()> {
     let containers: Vec<&Container> = stack
         .resources
         .values()
         .filter_map(|entry| entry.config.downcast_ref::<Container>())
+        .filter(|container| container.cluster.as_deref() == Some(cluster_id))
         .filter(|container| match container.pool.as_deref() {
             Some(pool) => pool == group.group_id,
             None => needed_capacity_group(container) == group.group_id,
@@ -1468,10 +1471,17 @@ pub(crate) fn materialize_selected_group_for_workloads(
         memory_bytes: requirements.max_memory_per_container,
         ephemeral_storage_bytes: requirements.max_ephemeral_storage_bytes,
         architecture: requirements.architecture,
-        gpu: requirements.gpu,
+        gpu: requirements.gpu.clone(),
         data_disk: None,
     });
-    materialize_selected_group(group, platform, selection)
+    // A generated pool's counts are bounded as the planner bounds them, not by the
+    // registration-time counts (those are only the recommendation).
+    let scale = generated_pool_scale_policy(
+        default_min_machines(&requirements),
+        default_max_machines(&requirements),
+        Some(selection.max_size()),
+    );
+    materialize_selection_within(group, platform, selection, &scale)
 }
 
 /// Build a capacity group for a specific group_id.

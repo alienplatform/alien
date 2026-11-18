@@ -6,6 +6,10 @@ use super::*;
 use alien_core::{Container, ContainerCode, PermissionProfile, ResourceSpec, Storage, Vault};
 
 fn source_stack(ephemeral_storage: Option<&str>) -> Stack {
+    source_stack_with_memory("512Mi", ephemeral_storage)
+}
+
+fn source_stack_with_memory(memory: &str, ephemeral_storage: Option<&str>) -> Stack {
     let mut container = Container::new("test-alien-ts-container".to_string())
         .code(ContainerCode::Image {
             image: "example.com/web:latest".to_string(),
@@ -15,8 +19,8 @@ fn source_stack(ephemeral_storage: Option<&str>) -> Stack {
             desired: "0.5".into(),
         })
         .memory(ResourceSpec {
-            min: "512Mi".into(),
-            desired: "512Mi".into(),
+            min: memory.into(),
+            desired: memory.into(),
         })
         .port(3000)
         .public_endpoint(alien_core::PublicEndpoint {
@@ -164,6 +168,7 @@ async fn first_setup_machine_selection_records_the_profile_of_the_chosen_machine
         &registered,
         &StackState::new(Platform::Azure),
         &deploy_config(&chosen_d2s_v5()),
+        &Default::default(),
     )
     .unwrap()
     .expect("the machine differs from the registered default");
@@ -201,5 +206,155 @@ async fn an_install_recorded_with_the_default_profile_is_adopted_by_the_next_rel
         default_profile.as_ref().map(|p| p.ephemeral_storage_bytes),
         Some(50 * 1024 * 1024 * 1024)
     );
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+/// Offers only the machines `fits` accepts, as the subscription's quota would.
+struct QuotaRoom<F: Fn(&str) -> bool>(F);
+
+impl<F: Fn(&str) -> bool> alien_core::compute_planner::MachineRoom for QuotaRoom<F> {
+    fn has_room(
+        &self,
+        _pool_id: &str,
+        spec: &alien_core::instance_catalog::InstanceTypeSpec,
+        _machines: u32,
+    ) -> bool {
+        (self.0)(spec.name)
+    }
+
+    fn commit(
+        &self,
+        _pool_id: &str,
+        _spec: &alien_core::instance_catalog::InstanceTypeSpec,
+        _machines: u32,
+    ) {
+    }
+}
+
+fn compute_of(stack: &Stack) -> alien_core::ComputeCluster {
+    stack.resources["compute"]
+        .config
+        .downcast_ref::<alien_core::ComputeCluster>()
+        .unwrap()
+        .clone()
+}
+
+/// What registration records for an imported install: every setup-owned resource in the
+/// prepared stack, the cluster still being provisioned.
+fn registered_state(prepared: &Stack) -> StackState {
+    let mut state = StackState::new(Platform::Azure);
+    for (id, entry) in &prepared.resources {
+        if entry.lifecycle != ResourceLifecycle::Frozen {
+            continue;
+        }
+        let mut resource = alien_core::StackResourceState::new_pending(
+            entry.config.resource_type().to_string(),
+            entry.config.clone(),
+            Some(entry.lifecycle),
+            entry.combined_dependencies(),
+        );
+        resource.status = if id == "compute" {
+            resource.internal_state = Some(serde_json::json!({"imported": true}));
+            ResourceStatus::Provisioning
+        } else {
+            ResourceStatus::Running
+        };
+        state.resources.insert(id.clone(), resource);
+    }
+    state
+}
+
+/// The whole imported first setup in one pass: registration, the quota's pick (a machine
+/// smaller than the default, with counts the registration did not have), the pick carried
+/// into the registered state, the setup's next step, and the first deployment's check. The
+/// cluster is the same at every hand-off, and no step asks for setup again.
+#[tokio::test]
+async fn imported_first_setup_hands_the_same_cluster_from_step_to_step() {
+    // A workload that makes the registration default a large machine.
+    let source = source_stack_with_memory("6Gi", None);
+    let settings = with_pool(alien_core::ComputePoolSelection::Autoscale {
+        min: 1,
+        max: 3,
+        machine: None,
+        failure_domains: None,
+        data_disk_gib: None,
+    });
+
+    // 1. register
+    let registered =
+        prepare_setup_stack(source.clone(), &registration_request(), &default_settings())
+            .await
+            .unwrap();
+    let default_machine = compute_of(&registered).capacity_groups[0]
+        .instance_type
+        .clone();
+    let mut state = registered_state(&registered);
+
+    // 2. the quota refuses the default machine and offers only a smaller one (8 GiB against the default's)
+    let planning =
+        alien_preflights::runner::PreflightRunner::first_setup_planning_stack(&source, &registered);
+    let chosen = alien_preflights::mutations::ComputeClusterMutation
+        .choose_pool_machines(
+            planning,
+            &state,
+            &deploy_config(&settings),
+            &QuotaRoom(|machine| machine == "Standard_D2s_v5"),
+        )
+        .unwrap();
+    let picked = alien_preflights::runner::PreflightRunner::with_chosen_machines(
+        &registered,
+        &state,
+        &chosen,
+        &alien_preflights::runner::PreflightRunner::declared_cluster_ids(&source),
+    )
+    .unwrap()
+    .expect("the pick differs from the registered default");
+    let group = &compute_of(&picked).capacity_groups[0];
+    assert_ne!(group.instance_type, default_machine);
+    assert_eq!(group.instance_type.as_deref(), Some("Standard_D2s_v5"));
+    assert_eq!((group.min_size, group.max_size), (1, 3));
+
+    // 3. carry the pick into the registered state
+    alien_deployment::carry_selection_into_imported_state(&mut state, &picked);
+    assert_eq!(
+        state.resources["compute"].config, picked.resources["compute"].config,
+        "the registered cluster equals the picked one"
+    );
+
+    // 4. the next setup step (`StackExecutor::continue_imported`) refuses a registered resource
+    // whose config or dependencies differ from the stack it plans from. The executor itself
+    // cannot run here (the Azure cluster controller is not part of this repository), so its
+    // comparison is made directly, for every setup-owned resource.
+    for (id, entry) in &picked.resources {
+        if entry.lifecycle != ResourceLifecycle::Frozen {
+            continue;
+        }
+        let registered = &state.resources[id];
+        assert_eq!(registered.config, entry.config, "{id}: config");
+        assert_eq!(
+            registered.dependencies,
+            entry.combined_dependencies(),
+            "{id}: dependencies"
+        );
+    }
+
+    // 5. the first deployment plans the same release against the installed state
+    let runner = alien_preflights::runner::PreflightRunner::new();
+    let mut picked_config = deploy_config(&settings);
+    picked_config.stack_settings = chosen.stack_settings.clone();
+    let planned = runner
+        .apply_mutations(source, &state, &picked_config)
+        .await
+        .unwrap();
+    assert_eq!(compute_of(&planned), compute_of(&picked));
+    let summary = runner
+        .run_compatibility_checks(&picked, &planned, &picked_config, Platform::Azure)
+        .await
+        .unwrap();
+    let errors: Vec<String> = summary
+        .results
+        .iter()
+        .flat_map(|r| r.errors.clone())
+        .collect();
     assert!(errors.is_empty(), "{errors:#?}");
 }
