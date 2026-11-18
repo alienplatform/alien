@@ -5,6 +5,22 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 
+/// Creates an object that must not exist yet. A name that already exists is a store-level
+/// refusal, never an overwrite.
+pub async fn create(store: &dyn ObjectStore, object: &str, bytes: Vec<u8>) -> Result<()> {
+    match store.put_if(object, bytes, Precondition::Absent).await? {
+        PutOutcome::Written { .. } => Ok(()),
+        PutOutcome::Conflict => Err(alien_error::AlienError::new(
+            crate::ErrorData::StoreFailed {
+                operation: "create".to_string(),
+                object: object.to_string(),
+                reason: "the object already exists; published objects are never replaced"
+                    .to_string(),
+            },
+        )),
+    }
+}
+
 /// An object and the version a conditional put compares against.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredObject {
@@ -46,9 +62,9 @@ pub trait ObjectStore: Send + Sync {
     async fn get(&self, object: &str) -> Result<Option<StoredObject>>;
     /// `len` bytes of an existing object from `offset`.
     async fn get_range(&self, object: &str, offset: u64, len: u64) -> Result<Vec<u8>>;
-    /// Writes an object unconditionally.
-    async fn put(&self, object: &str, bytes: Vec<u8>) -> Result<()>;
-    /// Writes an object only if the precondition holds.
+    /// Writes an object only if the precondition holds. There is no unconditional put: packs
+    /// and manifests are created with [`Precondition::Absent`] and HEAD moves with
+    /// [`Precondition::Matches`], so nothing a writer published can be replaced.
     async fn put_if(
         &self,
         object: &str,
@@ -79,6 +95,16 @@ impl MemoryStore {
         let mut version = self.version.lock().expect("not poisoned");
         *version += 1;
         *version
+    }
+
+    /// Replaces an object regardless of what is there, as damage or a hostile writer with raw
+    /// store access would. Not part of [`ObjectStore`]: no writer can do this.
+    pub fn overwrite(&self, object: &str, bytes: Vec<u8>) {
+        let version = self.next_version();
+        self.objects
+            .lock()
+            .expect("not poisoned")
+            .insert(object.to_string(), (bytes, version));
     }
 
     /// Every object name, for assertions.
@@ -120,15 +146,6 @@ impl ObjectStore for MemoryStore {
             .min(bytes.len());
         let end = start.saturating_add(len as usize).min(bytes.len());
         Ok(bytes[start..end].to_vec())
-    }
-
-    async fn put(&self, object: &str, bytes: Vec<u8>) -> Result<()> {
-        let version = self.next_version();
-        self.objects
-            .lock()
-            .expect("not poisoned")
-            .insert(object.to_string(), (bytes, version));
-        Ok(())
     }
 
     async fn put_if(

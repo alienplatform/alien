@@ -113,12 +113,26 @@ impl ObjectName {
     }
 }
 
+/// What HEAD names: a commit and the SHA-256 of its manifest's bytes.
+///
+/// Every object but HEAD is written create-only, so a stale writer cannot overwrite one; the
+/// hash makes that checkable by the reader too, so a manifest that is not the bytes HEAD's
+/// writer published is refused rather than restored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitRef {
+    /// The commit's sequence number and id, which name its pack and manifest.
+    pub name: ObjectName,
+    /// Hex SHA-256 of the manifest object's bytes.
+    pub manifest_sha256: String,
+}
+
 /// The content of `HEAD`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Head {
     /// The current commit, or `None` for a key taken over before its first commit.
-    pub commit: Option<ObjectName>,
+    pub commit: Option<CommitRef>,
     /// The sandbox that last moved HEAD. A takeover changes it, which is what refuses the
     /// previous writer.
     pub writer: String,

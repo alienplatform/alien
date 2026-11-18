@@ -395,7 +395,7 @@ async fn a_damaged_pack_fails_the_restore() {
         .unwrap();
     let mut bytes = store.get(&pack).await.unwrap().unwrap().bytes;
     bytes[600] ^= 1;
-    store.put(&pack, bytes).await.unwrap();
+    store.overwrite(&pack, bytes);
 
     let error = read_file(&store, "engine-42", "db.sqlite")
         .await
@@ -428,4 +428,88 @@ fn a_hard_link_must_point_at_an_earlier_file() {
         "chunks": {},
     });
     assert!(Manifest::parse("m", &serde_json::to_vec(&manifest).unwrap()).is_err());
+}
+
+/// Every object a store holds, with its bytes.
+async fn snapshot(store: &MemoryStore) -> BTreeMap<String, Vec<u8>> {
+    let mut objects = BTreeMap::new();
+    for name in store.names() {
+        objects.insert(name.clone(), store.get(&name).await.unwrap().unwrap().bytes);
+    }
+    objects
+}
+
+/// The race seen on another cloud: a superseded writer, still at the sequence number the new
+/// owner has just used, publishes its pack and manifest before its HEAD put is refused. Nothing
+/// the owner published may change, and a restore must return the owner's tree.
+#[tokio::test]
+async fn a_stale_writer_racing_the_new_owner_never_changes_the_owners_tree() {
+    let store = MemoryStore::new();
+    let first = takeover(&store, "sandbox-1").await.unwrap();
+    let mut stale = Committer::new("sandbox-1", first.head_etag, None, None);
+    commit(&store, &mut stale, &sample()).await.0.unwrap();
+
+    // The owner takes over and commits seq 2 while the stale writer still believes it is at 1.
+    let second = takeover(&store, "sandbox-2").await.unwrap();
+    let mut owner = Committer::new("sandbox-2", second.head_etag, second.manifest, None);
+    let owners = sample()
+        .file("db.sqlite", pattern(2 * CHUNK_SIZE, 77), 20)
+        .file("notes.md", b"owner".to_vec(), 20);
+    let CommitOutcome::Committed { commit: owner_commit, .. } =
+        commit(&store, &mut owner, &owners).await.0.unwrap()
+    else {
+        panic!("the owner's tree changed")
+    };
+    assert_eq!(owner_commit.seq, 2);
+    let published = snapshot(&store).await;
+
+    // The stale writer's commit is also seq 2.
+    let stales = sample()
+        .file("db.sqlite", pattern(2 * CHUNK_SIZE, 13), 30)
+        .file("notes.md", b"stale".to_vec(), 30);
+    let refused = commit(&store, &mut stale, &stales).await.0.unwrap_err();
+    assert_eq!(refused.code, "SANDBOX_STORAGE_SUPERSEDED");
+
+    let after = snapshot(&store).await;
+    for (name, bytes) in &published {
+        assert_eq!(after.get(name), Some(bytes), "{name} changed");
+    }
+    let restored = restore_head(&store).await;
+    assert_eq!(restored.files["notes.md"].1, b"owner");
+    assert_eq!(restored.files["db.sqlite"].1, pattern(2 * CHUNK_SIZE, 77));
+}
+
+/// No writer can replace an object once it exists: creating a name that is taken is refused.
+#[tokio::test]
+async fn a_published_object_cannot_be_created_again() {
+    let store = MemoryStore::new();
+    alien_sandbox_storage::create(&store, "manifests/x.json", b"one".to_vec())
+        .await
+        .unwrap();
+    let error = alien_sandbox_storage::create(&store, "manifests/x.json", b"two".to_vec())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "SANDBOX_STORAGE_STORE_FAILED");
+    assert_eq!(store.get("manifests/x.json").await.unwrap().unwrap().bytes, b"one");
+}
+
+/// A manifest replaced behind the store's back (raw access, damage) is refused by its hash in
+/// HEAD rather than restored.
+#[tokio::test]
+async fn a_replaced_manifest_is_refused_by_heads_hash() {
+    let store = MemoryStore::new();
+    let start = takeover(&store, "sandbox-1").await.unwrap();
+    let mut writer = Committer::new("sandbox-1", start.head_etag, None, None);
+    commit(&store, &mut writer, &sample()).await.0.unwrap();
+    let (head, _) = read_head(&store).await.unwrap().unwrap();
+    let object = head.commit.as_ref().unwrap().name.manifest();
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&store.get(&object).await.unwrap().unwrap().bytes).unwrap();
+    manifest["writer"] = serde_json::json!("someone-else");
+    store.overwrite(&object, serde_json::to_vec(&manifest).unwrap());
+
+    let error = read_file(&store, "engine-42", "src/main.rs")
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "SANDBOX_STORAGE_CORRUPT");
 }

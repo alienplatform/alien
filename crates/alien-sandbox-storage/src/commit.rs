@@ -5,9 +5,9 @@ use alien_error::AlienError;
 use chrono::Utc;
 
 use crate::error::{ErrorData, Result};
-use crate::layout::{validate_tree_path, Head, ObjectName, HEAD_OBJECT};
+use crate::layout::{validate_tree_path, CommitRef, Head, ObjectName, HEAD_OBJECT};
 use crate::manifest::{ChunkLocation, Entry, EntryKind, Manifest, MANIFEST_VERSION};
-use crate::pack::{PackBuilder, CHUNK_SIZE};
+use crate::pack::{chunk_hash, PackBuilder, CHUNK_SIZE};
 use crate::store::{ObjectStore, Precondition, PutOutcome};
 
 /// One entry as a walk of the storage directory found it.
@@ -212,12 +212,16 @@ impl Committer {
         let pack_bytes = pack.finish();
         let pack_len = pack_bytes.len() as u64;
         if !pack_empty {
-            store.put(&name.pack(), pack_bytes).await?;
+            crate::store::create(store, &name.pack(), pack_bytes).await?;
         }
         let manifest_bytes = serde_json::to_vec(&manifest).expect("a manifest serializes");
-        store.put(&name.manifest(), manifest_bytes).await?;
+        let manifest_sha256 = chunk_hash(&manifest_bytes);
+        crate::store::create(store, &name.manifest(), manifest_bytes).await?;
         let head = Head {
-            commit: Some(name.clone()),
+            commit: Some(CommitRef {
+                name: name.clone(),
+                manifest_sha256,
+            }),
             writer: self.writer.clone(),
             updated_at: Utc::now(),
         };

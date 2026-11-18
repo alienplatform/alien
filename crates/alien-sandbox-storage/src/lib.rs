@@ -14,7 +14,10 @@
 //!   the SHA-256 of its bytes.
 //! - `manifests/<seq>-<commit>.json`: the whole tree at commit `seq` (path, type, mode, owner,
 //!   mtime, size, chunks, hard links, symlink targets) and where every chunk it uses lives.
-//! - `HEAD`: the current commit, moved only with a conditional put.
+//! - `HEAD`: the current commit and its manifest's SHA-256, moved only with a conditional put.
+//!
+//! Every object but HEAD is written create-only (`If-None-Match: *`), so no writer, stale or
+//! not, can replace an object once it exists.
 //!
 //! Pack and manifest names carry a random commit id next to the sequence number, so a superseded
 //! writer racing the live one can never overwrite an object HEAD points at.
@@ -39,10 +42,10 @@ pub use commit::{CommitOutcome, Committer, FileSource, TreeEntry, TreeEntryKind}
 pub use error::{ErrorData, Result};
 pub use gc::{collect_garbage, GcReport};
 pub use layout::{
-    key_root, validate_key, validate_tree_path, Head, ObjectName, HEAD_OBJECT, MANIFESTS_DIR,
+    key_root, validate_key, validate_tree_path, CommitRef, Head, ObjectName, HEAD_OBJECT, MANIFESTS_DIR,
     PACKS_DIR,
 };
 pub use manifest::{ChunkLocation, Entry, EntryKind, Manifest, MANIFEST_VERSION};
 pub use pack::{chunk_hash, PackBuilder, CHUNK_SIZE};
 pub use read::{read_file, read_head, read_manifest, restore, takeover, Takeover, TreeSink};
-pub use store::{MemoryStore, ObjectStore, Precondition, PutOutcome, StoredObject};
+pub use store::{create, MemoryStore, ObjectStore, Precondition, PutOutcome, StoredObject};

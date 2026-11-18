@@ -34,7 +34,7 @@ pub async fn collect_garbage(store: &dyn ObjectStore) -> Result<GcReport> {
         let Some(name) = ObjectName::parse(&object) else {
             continue;
         };
-        if name.seq <= commit.seq && !live.contains(&name) {
+        if name.seq <= commit.name.seq && !live.contains(&name) {
             store.delete(&object).await?;
             report.packs.push(object);
         }
@@ -43,7 +43,7 @@ pub async fn collect_garbage(store: &dyn ObjectStore) -> Result<GcReport> {
         let Some(name) = ObjectName::parse(&object) else {
             continue;
         };
-        if name.seq <= commit.seq && name != commit {
+        if name.seq <= commit.name.seq && name != commit.name {
             store.delete(&object).await?;
             report.manifests.push(object);
         }
