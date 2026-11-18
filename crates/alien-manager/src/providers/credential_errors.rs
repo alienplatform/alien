@@ -9,11 +9,15 @@ pub(crate) fn classify_credential_error(mut error: AlienError) -> AlienError {
     let mut retryable = None;
     while let Some(cause) = current {
         retryable = match cause.code.as_str() {
-            "REMOTE_ACCESS_DENIED"
-            | "REMOTE_RESOURCE_NOT_FOUND"
-            | "REMOTE_ACCESS_INVALID"
-            | "INVALID_CLIENT_CONFIG"
-            | "INVALID_client_config" => Some(false),
+            "REMOTE_ACCESS_DENIED" | "REMOTE_RESOURCE_NOT_FOUND" | "REMOTE_ACCESS_INVALID" => {
+                Some(false)
+            }
+            // `ClientConfig::from_env` wraps the platform loader's error in this code. The
+            // wrapper alone says nothing about retryability, so look at its cause; a wrapper
+            // without a cause is a real configuration error.
+            "INVALID_CLIENT_CONFIG" | "INVALID_client_config" if cause.source.is_none() => {
+                Some(false)
+            }
             "RATE_LIMIT_EXCEEDED"
             | "REMOTE_SERVICE_UNAVAILABLE"
             | "TIMEOUT"
@@ -68,6 +72,32 @@ mod tests {
     }
 
     #[test]
+    fn config_wrapper_defers_to_its_cause() {
+        use alien_client_core::ErrorData as Wrapper;
+        use alien_error::Context;
+        let wrap = |cause: AlienError| {
+            Err::<(), _>(cause)
+                .context(Wrapper::InvalidClientConfig {
+                    message: "Failed to create client configuration".to_string(),
+                    errors: None,
+                })
+                .unwrap_err()
+                .into_generic()
+        };
+        let transient = AlienError::new(alien_aws_clients::ErrorData::RemoteServiceUnavailable {
+            message: "token request failed with HTTP 404".to_string(),
+        })
+        .into_generic();
+        assert!(classify_credential_error(wrap(transient)).retryable);
+        let permanent = AlienError::new(alien_aws_clients::ErrorData::InvalidClientConfig {
+            message: "token request failed with HTTP 403".to_string(),
+            errors: None,
+        })
+        .into_generic();
+        assert!(!classify_credential_error(wrap(permanent)).retryable);
+    }
+
+    #[test]
     fn credential_classification_preserves_provider_failures_and_transport_retries() {
         let cases = [
             (
@@ -111,6 +141,34 @@ mod tests {
                     })
                     .into_generic(),
                 true,
+            ),
+            // The metadata proxy answering 404/5xx/429 or being unreachable right after the
+            // manager starts: the IMDS loader's wrapper must not make the failure permanent.
+            (
+                Platform::Aws,
+                AlienError::new(alien_aws_clients::ErrorData::RemoteServiceUnavailable {
+                    message: "AWS IMDSv2 token request failed with HTTP 404 Not Found".to_string(),
+                })
+                .into_generic(),
+                true,
+            ),
+            (
+                Platform::Aws,
+                AlienError::new(alien_aws_clients::ErrorData::HttpRequestFailed {
+                    message: "Failed to request AWS IMDSv2 token".to_string(),
+                })
+                .into_generic(),
+                true,
+            ),
+            // A real metadata misconfiguration (for example HTTP 403) stays permanent.
+            (
+                Platform::Aws,
+                AlienError::new(alien_aws_clients::ErrorData::InvalidClientConfig {
+                    message: "AWS IMDSv2 token request failed with HTTP 403 Forbidden".to_string(),
+                    errors: None,
+                })
+                .into_generic(),
+                false,
             ),
         ];
         for (platform, source, retryable) in cases {

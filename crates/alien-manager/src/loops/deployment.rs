@@ -4942,6 +4942,102 @@ mod tests {
             }
         }
 
+        /// The metadata proxy not knowing a freshly started manager yet (HTTP 404 on the IMDSv2
+        /// token request) must keep an in-progress update in Updating, not fail it. The error is
+        /// produced by the real AWS loader against a mock metadata server.
+        async fn metadata_token_error() -> AlienError {
+            use alien_error::ContextError;
+            use alien_infra::ClientConfigExt;
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let mut buffer = [0u8; 2048];
+                    let _ = stream.read(&mut buffer).await;
+                    let _ = stream
+                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+                        .await;
+                }
+            });
+            let env = std::collections::HashMap::from([
+                ("AWS_REGION".to_string(), "us-east-1".to_string()),
+                ("AWS_EC2_METADATA_SERVICE_ENDPOINT".to_string(), endpoint),
+                (
+                    "AWS_SHARED_CREDENTIALS_FILE".to_string(),
+                    "/nonexistent/credentials".to_string(),
+                ),
+                (
+                    "AWS_CONFIG_FILE".to_string(),
+                    "/nonexistent/config".to_string(),
+                ),
+            ]);
+            // The same call the environment credential provider makes, including the
+            // INVALID_CLIENT_CONFIG wrapper it adds around the loader's error.
+            let error = alien_core::ClientConfig::from_env(Platform::Aws, &env)
+                .await
+                .unwrap_err()
+                .into_generic();
+            error
+                .context(crate::error::ErrorData::CredentialMaterializationFailed {
+                    platform: Platform::Aws,
+                    purpose: "test metadata token failure".to_string(),
+                })
+                .into_generic()
+        }
+
+        #[tokio::test]
+        async fn metadata_token_failure_keeps_updating_then_fails_after_grace_period() {
+            let fixture =
+                Fixture::new(DeploymentStatus::Updating, metadata_token_error().await).await;
+            fixture.process(&fixture.runner()).await;
+            let waiting = fixture.record().await;
+            assert_eq!(waiting.status, "updating");
+            assert!(waiting.error.is_none());
+            let retry = waiting
+                .runtime_metadata
+                .as_ref()
+                .unwrap()
+                .credential_retry
+                .as_ref()
+                .expect("a retry window starts");
+            assert_eq!(retry.status, DeploymentStatus::Updating);
+
+            // Another tick inside the window retries without failing or restarting the window.
+            fixture.process(&fixture.runner()).await;
+            let still_waiting = fixture.record().await;
+            assert_eq!(still_waiting.status, "updating");
+            assert!(still_waiting.error.is_none());
+            assert_eq!(still_waiting.runtime_metadata, waiting.runtime_metadata);
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 2);
+        }
+
+        #[tokio::test]
+        async fn metadata_token_failure_past_grace_period_fails_the_update() {
+            let fixture =
+                Fixture::new(DeploymentStatus::Updating, metadata_token_error().await).await;
+            fixture.process(&fixture.runner()).await;
+            assert_eq!(fixture.record().await.status, "updating");
+            let mut metadata = fixture.record().await.runtime_metadata.unwrap();
+            metadata.credential_retry.as_mut().unwrap().started_at =
+                Utc::now() - chrono::Duration::minutes(11);
+            let serialized = serde_json::to_string(&metadata)
+                .unwrap()
+                .replace('\'', "''");
+            fixture
+                .db
+                .execute(&format!(
+                    "UPDATE deployments SET runtime_metadata = '{serialized}'"
+                ))
+                .await
+                .unwrap();
+            fixture.process(&fixture.runner()).await;
+            let record = fixture.record().await;
+            assert_eq!(record.status, "update-failed");
+            assert!(record.error.is_some());
+        }
+
         #[tokio::test]
         async fn expired_transient_error_fails_with_real_error_after_restart() {
             let error = transient_error();
