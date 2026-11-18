@@ -1291,11 +1291,10 @@ impl AzureSandboxController {
                 &permission_context,
             )
             .await?;
-        crate::core::ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
-            ctx, &config.id, &group, scope, "Sandbox", "sandbox",
-        )
-        .await?;
-        // A profile that lost its sandbox verbs loses the assignments they gave.
+        // A profile that lost its sandbox verbs loses the assignments they gave. They go before
+        // the new ones are written: assignment ids are numbered by position, so a grant that
+        // moves up onto a dropped one's id is equal to an assignment that still exists under
+        // another id, which Azure refuses and the writer reads as "already there".
         let authorization = ctx
             .service_provider
             .get_azure_authorization_client(ctx.get_azure_config()?)?;
@@ -1324,6 +1323,10 @@ impl AzureSandboxController {
                 }
             }
         }
+        crate::core::ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
+            ctx, &config.id, &group, scope, "Sandbox", "sandbox",
+        )
+        .await?;
         self.group_assignment_ids = planned;
         self.reconciled_grants = Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(
             ctx,
@@ -4160,6 +4163,71 @@ mod direct_setup_tests {
         )
         .await;
         assert!(!runtime.needs_update().unwrap());
+    }
+
+    /// Assignment ids are numbered by position, so a profile that drops its first grant moves
+    /// the next grant onto the dropped one's id. Azure refuses an assignment equal to one that
+    /// exists under another id, which the controller reads as "already there": the dropped
+    /// grants must be removed before the new ones are written, or the grant the stack still asks
+    /// for is deleted as stale while the one it dropped stays.
+    #[tokio::test]
+    async fn a_setup_rerun_removes_dropped_grants_before_it_places_the_rest() {
+        let stale = "/subscriptions/s/resourceGroups/default-resource-group/providers/Microsoft.App/sandboxGroups/g/providers/Microsoft.Authorization/roleAssignments/old";
+        let controller = AzureSandboxController {
+            state: AzureSandboxState::Ready,
+            sandbox_group: Some("g".to_string()),
+            region: Some("eastus".to_string()),
+            resource_group: Some("default-resource-group".to_string()),
+            created_group: true,
+            reconciled_grants: None,
+            group_assignment_ids: vec![stale.to_string()],
+            group_create_intent: true,
+            group_absent: false,
+            ..Default::default()
+        };
+        let mut groups = MockSandboxGroupsApi::new();
+        groups
+            .expect_get_sandbox_group()
+            .returning(|_, _| Ok(group("Succeeded")));
+        let log = Assigned::default();
+        let mut authorization = recording_authorization(log.clone());
+        let delete_log = log.clone();
+        authorization
+            .expect_delete_role_assignment_by_id()
+            .returning(move |id| {
+                delete_log
+                    .lock()
+                    .unwrap()
+                    .push((format!("DELETE {id}"), String::new(), String::new()));
+                Ok(None)
+            });
+        let mut executor = executor_with_authorization(
+            controller,
+            groups,
+            true,
+            SandboxEgress::None,
+            authorization,
+            true,
+            false,
+        )
+        .await;
+        executor
+            .update(sandbox(SandboxEgress::None))
+            .expect("update is accepted");
+        drive(&mut executor).await;
+        let log = log.lock().unwrap();
+        let delete = log
+            .iter()
+            .position(|(id, _, _)| id.starts_with("DELETE "))
+            .expect("the dropped grant is removed");
+        let first_put = log
+            .iter()
+            .position(|(id, _, _)| !id.starts_with("DELETE "))
+            .expect("the remaining grants are placed");
+        assert!(
+            delete < first_put,
+            "the dropped grant is removed before any grant is written: {log:?}"
+        );
     }
 
     /// An internet-egress group connects to subnets only the package creates, so a direct setup
