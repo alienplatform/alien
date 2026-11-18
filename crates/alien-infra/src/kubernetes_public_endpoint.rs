@@ -78,6 +78,11 @@ pub(crate) struct KubernetesPublicEndpointState {
     pub(crate) load_balancer_endpoint: Option<LoadBalancerEndpoint>,
     pub(crate) published_certificate_id: Option<String>,
     pub(crate) published_certificate_issued_at: Option<String>,
+    /// Hostname the published certificate serves. A renewal keeps the published certificate only
+    /// for the same hostname; unlike `public_url`, a wait that finds the endpoint not ready yet
+    /// does not clear it. Absent in state written by earlier releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) published_hostname: Option<String>,
 }
 
 impl KubernetesPublicEndpointState {
@@ -154,9 +159,10 @@ enum EndpointStep {
     Waiting {
         kind: EndpointWait,
         suggested_delay: Duration,
+        /// The issuer last reported the certificate as failed (it retries on its own); named in
+        /// the timeout error so the cause is not lost.
+        certificate_failed: bool,
     },
-    /// The certificate failed for good: ends the wait and the clocks with it.
-    CertificateFailed(String),
 }
 
 impl EndpointStep {
@@ -164,6 +170,7 @@ impl EndpointStep {
         Self::Waiting {
             kind: EndpointWait::Endpoint,
             suggested_delay,
+            certificate_failed: false,
         }
     }
 }
@@ -180,16 +187,10 @@ fn apply_wait_deadline(
             state.clear_waits();
             Ok(KubernetesEndpointAction::Ready)
         }
-        EndpointStep::CertificateFailed(fqdn) => {
-            state.clear_waits();
-            Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: format!("Certificate issuance failed for '{}'", fqdn),
-                resource_id: Some(resource_id.to_string()),
-            }))
-        }
         EndpointStep::Waiting {
             kind,
             suggested_delay,
+            certificate_failed,
         } => {
             // Not polled for a while: an update or a retry came in between, so this is a new wait.
             if state
@@ -207,9 +208,14 @@ fn apply_wait_deadline(
                 state.clear_waits();
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: format!(
-                        "Timed out after {} seconds waiting for {}",
+                        "Timed out after {} seconds waiting for {}{}",
                         elapsed,
-                        kind.description()
+                        kind.description(),
+                        if certificate_failed {
+                            " (last status: failed)"
+                        } else {
+                            ""
+                        }
                     ),
                     resource_id: Some(resource_id.to_string()),
                 }));
@@ -232,8 +238,7 @@ struct EndpointPlan {
 #[derive(Debug, Clone)]
 enum EndpointPlanResolution {
     Disabled,
-    CertificateFailed(String),
-    WaitingForCertificate,
+    WaitingForCertificate { failed: bool },
     Ready(EndpointPlan),
 }
 
@@ -309,13 +314,11 @@ async fn reconcile_endpoint_step(
             state.load_balancer_endpoint = None;
             return Ok(EndpointStep::Ready);
         }
-        EndpointPlanResolution::CertificateFailed(fqdn) => {
-            return Ok(EndpointStep::CertificateFailed(fqdn));
-        }
-        EndpointPlanResolution::WaitingForCertificate => {
+        EndpointPlanResolution::WaitingForCertificate { failed } => {
             return Ok(EndpointStep::Waiting {
                 kind: EndpointWait::Certificate,
                 suggested_delay: CERTIFICATE_WAIT,
+                certificate_failed: failed,
             });
         }
         EndpointPlanResolution::Ready(plan) => plan,
@@ -400,6 +403,7 @@ async fn reconcile_endpoint_step(
             pending_state.managed_tls_secret_name = Some(name.clone());
             pending_state.published_certificate_id = Some(certificate_id.clone());
             pending_state.published_certificate_issued_at = issued_at.clone();
+            pending_state.published_hostname = plan.hostname.clone();
             active_managed_tls_secret_name = Some(name.clone());
             Some(KubernetesTlsSecretRef {
                 secret_name: name.clone(),
@@ -485,6 +489,8 @@ async fn reconcile_endpoint_step(
             state.published_certificate_id = pending_state.published_certificate_id.clone();
             state.published_certificate_issued_at =
                 pending_state.published_certificate_issued_at.clone();
+            pending_state.published_hostname = plan.hostname.clone();
+            state.published_hostname = plan.hostname.clone();
             active_managed_acm_certificate = true;
             plan.certificate = EndpointCertificate::AwsAcmArn(certificate_arn);
             None
@@ -982,6 +988,7 @@ pub(crate) async fn delete_kubernetes_public_endpoint(
     state.load_balancer_endpoint = None;
     state.published_certificate_id = None;
     state.published_certificate_issued_at = None;
+    state.published_hostname = None;
     Ok(())
 }
 
@@ -1681,17 +1688,13 @@ fn resolve_endpoint_plan(
                     | KubernetesCertificateMode::AwsAcmArn { .. }
                     | KubernetesCertificateMode::TlsSecretRef(_)
             );
-            // A failed issuance is final here, as for the public workers on AWS, GCP and Azure
-            // (`worker/aws.rs`, `worker/gcp.rs`, `worker/azure.rs`): nothing in this repo asks for
-            // a new attempt, and the metadata carries no provider reason, only the hostname.
-            if managed && domain.certificate_status == CertificateStatus::Failed {
-                return Ok(EndpointPlanResolution::CertificateFailed(
-                    domain.fqdn.clone(),
-                ));
-            }
+            // `Failed` is not final: the issuer moves a failed certificate back to pending and
+            // issues it again, and an attempt that errors stays pending with a retry. So it
+            // waits like pending, bounded by the certificate window.
             // A renewal does not take the certificate away: while the metadata still carries the
             // material it is used as issued, otherwise what is served stays.
             let has_material = domain.certificate_chain.is_some() && domain.private_key.is_some();
+            let certificate_failed = domain.certificate_status == CertificateStatus::Failed;
             let renewing = matches!(
                 domain.certificate_status,
                 CertificateStatus::Renewing | CertificateStatus::RenewalFailed
@@ -1705,16 +1708,28 @@ fn resolve_endpoint_plan(
                     || state.managed_acm_certificate_arn.is_some())
                 && state.published_certificate_id.as_deref()
                     == Some(domain.certificate_id.as_str())
-                && state.public_url.as_deref() == Some(format!("https://{}", domain.fqdn).as_str());
+                && match state.published_hostname.as_deref() {
+                    Some(published) => published == domain.fqdn,
+                    // State written by an earlier release has no published hostname: the
+                    // served URL tells which hostname the certificate was published for.
+                    None => {
+                        state.public_url.as_deref()
+                            == Some(format!("https://{}", domain.fqdn).as_str())
+                    }
+                };
             if managed && renewing && !has_material && !keep_published {
                 // Nothing was ever published: wait like a certificate that is still pending.
-                return Ok(EndpointPlanResolution::WaitingForCertificate);
+                return Ok(EndpointPlanResolution::WaitingForCertificate {
+                    failed: certificate_failed,
+                });
             }
             let issued = domain.certificate_status == CertificateStatus::Issued
                 || (renewing && has_material);
 
             if !issued && managed && !keep_published {
-                return Ok(EndpointPlanResolution::WaitingForCertificate);
+                return Ok(EndpointPlanResolution::WaitingForCertificate {
+                    failed: certificate_failed,
+                });
             }
 
             let issued = issued || keep_published;
@@ -5006,6 +5021,7 @@ mod tests {
                 managed_tls_secret_name: Some("api-tls".to_string()),
                 published_certificate_id: Some("cert-1".to_string()),
                 public_url: Some("https://api.example.com".to_string()),
+                published_hostname: Some("api.example.com".to_string()),
                 ..Default::default()
             }
         }
@@ -5032,6 +5048,7 @@ mod tests {
             EndpointStep::Waiting {
                 kind: EndpointWait::Certificate,
                 suggested_delay: CERTIFICATE_WAIT,
+                certificate_failed: false,
             }
         }
 
@@ -5079,20 +5096,30 @@ mod tests {
             assert!(message.contains("after 1860 seconds"), "{message}");
         }
 
+        /// A certificate the issuer reports as failed is retried by the issuer: it waits like
+        /// pending, and only the bound ends it.
         #[tokio::test]
-        async fn a_failed_issuance_fails_at_once_with_the_hostname() {
+        async fn a_failed_status_waits_until_the_bound() {
             let harness = harness(CertificateStatus::Failed, false);
             let mut state = KubernetesPublicEndpointState::default();
+            let action =
+                reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
+                    .await
+                    .expect("waits");
+            assert!(matches!(action, KubernetesEndpointAction::Waiting { .. }));
+            let now = chrono::Utc::now().timestamp();
+            state
+                .wait_started_unix
+                .insert(EndpointWait::Certificate, now - 31 * 60);
             let error =
                 reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
                     .await
-                    .expect_err("issuance failed");
-            let message = error.to_string();
+                    .expect_err("past the bound");
+            assert!(error.to_string().contains("managed certificate"), "{error}");
             assert!(
-                message.contains("Certificate issuance failed for 'api.example.com'"),
-                "{message}"
+                error.to_string().ends_with("(last status: failed)"),
+                "{error}"
             );
-            assert!(state.wait_started_unix.is_empty());
         }
 
         /// A renewal does not take the published certificate away, and the Service and route are
@@ -5128,7 +5155,7 @@ mod tests {
                 )
                 .expect("resolves");
                 assert!(
-                    matches!(plan, EndpointPlanResolution::WaitingForCertificate),
+                    matches!(plan, EndpointPlanResolution::WaitingForCertificate { .. }),
                     "{status:?}: {plan:?}"
                 );
             }
@@ -5260,17 +5287,78 @@ mod tests {
                     ..published_state()
                 },
                 KubernetesPublicEndpointState {
-                    public_url: Some("https://old.example.com".to_string()),
+                    published_hostname: Some("old.example.com".to_string()),
                     ..published_state()
                 },
             ] {
                 let plan = resolve_endpoint_plan(&harness.ctx(), &endpoint_target(), &changed)
                     .expect("resolves");
                 assert!(
-                    matches!(plan, EndpointPlanResolution::WaitingForCertificate),
+                    matches!(plan, EndpointPlanResolution::WaitingForCertificate { .. }),
                     "{plan:?}"
                 );
             }
+        }
+
+        /// One failed health check or a missing load balancer address clears `public_url`; the
+        /// next renewal poll must still keep serving the published certificate.
+        #[test]
+        fn renewal_keeps_serving_after_a_wait_cleared_the_public_url() {
+            let harness = harness(CertificateStatus::Renewing, false);
+            let state = KubernetesPublicEndpointState {
+                public_url: None,
+                load_balancer_endpoint: None,
+                ..published_state()
+            };
+            let plan = resolve_endpoint_plan(&harness.ctx(), &endpoint_target(), &state)
+                .expect("resolves");
+            assert!(
+                matches!(
+                    plan,
+                    EndpointPlanResolution::Ready(EndpointPlan {
+                        certificate: EndpointCertificate::KeepPublished { .. },
+                        ..
+                    })
+                ),
+                "{plan:?}"
+            );
+        }
+
+        /// State saved by an earlier release has no `publishedHostname`: a renewal still keeps
+        /// serving what is published, judged by the served URL.
+        #[test]
+        fn renewal_with_state_from_an_earlier_release_keeps_serving() {
+            let harness = harness(CertificateStatus::Renewing, false);
+            let mut json = serde_json::to_value(published_state()).expect("serializes");
+            json.as_object_mut()
+                .expect("object")
+                .remove("publishedHostname");
+            let state: KubernetesPublicEndpointState =
+                serde_json::from_value(json).expect("old state loads");
+            assert_eq!(state.published_hostname, None);
+            let plan = resolve_endpoint_plan(&harness.ctx(), &endpoint_target(), &state)
+                .expect("resolves");
+            assert!(
+                matches!(
+                    plan,
+                    EndpointPlanResolution::Ready(EndpointPlan {
+                        certificate: EndpointCertificate::KeepPublished { .. },
+                        ..
+                    })
+                ),
+                "{plan:?}"
+            );
+            // The served URL of another hostname does not count.
+            let other = KubernetesPublicEndpointState {
+                public_url: Some("https://old.example.com".to_string()),
+                ..state
+            };
+            let plan = resolve_endpoint_plan(&harness.ctx(), &endpoint_target(), &other)
+                .expect("resolves");
+            assert!(
+                matches!(plan, EndpointPlanResolution::WaitingForCertificate { .. }),
+                "{plan:?}"
+            );
         }
 
         /// A DNS lag in Running starts the endpoint clock; an update rollout then takes longer
