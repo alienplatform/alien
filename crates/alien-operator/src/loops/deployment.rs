@@ -124,9 +124,15 @@ impl DeploymentLoopTransport for OperatorTransport {
                         // on top of this step's result and end the pass, so the
                         // next pass runs every gate (approval, signature, retry
                         // budget) for it. Anything else is not ours to keep.
-                        let newer = previous
-                            .as_ref()
-                            .and_then(|previous| previous.target_release.clone())
+                        // Read now: the copy from the top of this call can predate the
+                        // change that made the compare fail.
+                        let stored = self
+                            .db
+                            .get_deployment_state()
+                            .await
+                            .map_err(|e| e.into_generic())?;
+                        let newer = stored
+                            .and_then(|stored| stored.target_release)
                             .filter(|stored| written.target_release.as_ref() != Some(stored));
                         match newer {
                             Some(newer) => {
