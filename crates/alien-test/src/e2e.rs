@@ -384,7 +384,10 @@ pub fn exclusion_reason(
                 "TS comprehensive app has no artifact-registry/service-account handlers after the SDK facade split",
             )
         }
-        Binding::Build => Some("Build binding not yet stable across all platforms"),
+        // The Rust comprehensive app declares a Build on Azure only.
+        Binding::Build if platform != Platform::Azure || app != TestApp::ComprehensiveRust => {
+            Some("Build is run end to end on Azure with the Rust comprehensive app only")
+        }
         Binding::ServiceAccount if platform == Platform::Local => {
             Some("Local service account binding not yet wired up")
         }
@@ -1739,10 +1742,20 @@ mod tests {
     }
 
     #[test]
+    fn build_runs_on_azure_with_the_rust_app_only() {
+        let reason = |platform, app| {
+            exclusion_reason(platform, DeploymentModel::Push, Binding::Build, app)
+        };
+        assert!(reason(Platform::Azure, TestApp::ComprehensiveRust).is_none());
+        assert!(reason(Platform::Azure, TestApp::ComprehensiveTs).is_some());
+        assert!(reason(Platform::Aws, TestApp::ComprehensiveRust).is_some());
+        assert!(reason(Platform::Gcp, TestApp::ComprehensiveRust).is_some());
+    }
+
+    #[test]
     fn ts_app_excludes_manager_internal_bindings_on_every_platform() {
-        // Build is intentionally omitted: it is excluded for every app, not the
-        // TS app specifically, so asserting its exclusion here would be
-        // tautological. artifact-registry and service-account are the genuinely
+        // Build is intentionally omitted: it runs on Azure with the Rust app only
+        // (see `build_runs_on_azure_with_the_rust_app_only`). artifact-registry and service-account are the genuinely
         // TS-specific exclusions (the Rust app still serves them — see
         // `rust_app_keeps_service_account_and_artifact_registry_coverage`).
         for platform in [

@@ -19,6 +19,12 @@ const queue = new alien.Queue("alien-queue").build()
 // race that consumer. This queue has exactly one consumer: the queue trigger.
 const eventsQueue = new alien.Queue("alien-events-queue").build()
 const serviceAccount = new alien.ServiceAccount("test-alien-sa").build()
+// Build runs end to end on Azure only (the worker starts a build through its binding and waits for
+// it to succeed). Other clouds keep the resource out of the stack until their check is enabled.
+const isAzure = process.env.ALIEN_TARGET_PLATFORM === "azure"
+const build = isAzure
+  ? new alien.Build("test-alien-build").permissions("build").computeType("small").build()
+  : undefined
 const postgres = isLocal ? new alien.Postgres("alien-postgres").build() : undefined
 // Sandbox is Local-only: none of this suite's cloud targets has a sandbox controller registered
 // in this repo, so declaring one there would ask the executor to provision a backend nothing
@@ -63,6 +69,9 @@ let workerBuilder = new alien.Worker("alien-rs-worker")
 if (postgres) {
   workerBuilder = workerBuilder.link(postgres)
 }
+if (build) {
+  workerBuilder = workerBuilder.link(build)
+}
 if (sandbox) {
   workerBuilder = workerBuilder.link(sandbox)
 }
@@ -94,6 +103,12 @@ let stackBuilder = new alien.Stack("alien-rs-stack")
       execution: {
         "*": executionPermissions,
         "test-alien-sa": ["service-account/impersonate"],
+        // Named grant: the worker may start and read only this build's runs.
+        ...(build ? { "test-alien-build": ["build/execute", "build/provision"] } : {}),
+      },
+      // The build's own identity needs nothing beyond what the platform grants it.
+      build: {
+        "*": ["storage/data-read"],
       },
     },
   })
@@ -109,6 +124,9 @@ if (postgres) {
 }
 if (sandbox) {
   stackBuilder = stackBuilder.add(sandbox, "frozen")
+}
+if (build) {
+  stackBuilder = stackBuilder.add(build, "frozen")
 }
 const stack = stackBuilder.add(worker, "live").build()
 
