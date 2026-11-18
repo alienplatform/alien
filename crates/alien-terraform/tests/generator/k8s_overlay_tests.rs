@@ -13,13 +13,13 @@ use super::helpers::{
     prepare_for_target, render, snapshot_module,
 };
 use alien_core::{
-    ArtifactRegistry, AzureResourceGroup, CapacityGroup, ComputeCluster, ComputePoolSelection,
-    ComputeSettings, Container, ContainerCode, KubernetesCertificateMode, KubernetesCluster,
-    KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
-    KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
-    KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
-    PermissionsConfig, Postgres, RemoteStackManagement, ResourceLifecycle, ResourceSpec, Sandbox,
-    ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
+    ArtifactRegistry, AzureResourceGroup, AzureStorageAccount, CapacityGroup, ComputeCluster,
+    ComputePoolSelection, ComputeSettings, Container, ContainerCode, KubernetesCertificateMode,
+    KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
+    KubernetesExposureSettings, KubernetesHeartbeatMode, KubernetesIngressRouteProfile,
+    KubernetesRouteProfile, KubernetesSettings, ManagementPermissions, Network, NetworkSettings,
+    PermissionProfile, PermissionsConfig, Postgres, RemoteStackManagement, ResourceLifecycle,
+    ResourceSpec, Sandbox, ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_terraform::{
     generate_product_terraform_module, generate_terraform_module, TerraformHelmInstall,
@@ -2962,6 +2962,17 @@ fn chart_bound_stack(id: &str, provider: KubernetesClusterProvider, gated_extra:
             "Create the extra store.",
         )]);
     }
+    if provider == KubernetesClusterProvider::Aks {
+        stack = stack
+            .add(
+                AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                AzureStorageAccount::new("default-storage-account".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+    }
     let stack = stack
         .add(
             KubernetesCluster::new("kubernetes".to_string())
@@ -3003,6 +3014,11 @@ fn the_installed_chart_gets_the_bindings_of_the_resources_the_module_created() {
             TerraformTarget::Gke,
             KubernetesClusterProvider::Gke,
             "google_storage_bucket.data",
+        ),
+        (
+            TerraformTarget::Aks,
+            KubernetesClusterProvider::Aks,
+            "azurerm_storage_container.data",
         ),
     ] {
         let stack = chart_bound_stack("chart-helm-bindings", provider, false);
