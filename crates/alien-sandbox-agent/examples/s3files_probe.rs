@@ -49,8 +49,9 @@ fn main() {
     if let Some(seconds) = args.get(6).and_then(|s| s.parse::<u64>().ok()) {
         std::thread::sleep(std::time::Duration::from_secs(seconds));
     }
-    helper.stop_proxy(path);
-    println!("proxy stopped; the mount stays until unmounted");
+    // The proxy keeps running after this process exits, as it does after the agent starts it.
+    println!("done; the mount and its proxy stay up");
+    std::mem::forget(helper);
 }
 
 #[cfg(not(target_os = "linux"))]

@@ -619,7 +619,13 @@ class MountCredentials(TypedDict):
     expiration: str
 
 
-class MountSource(TypedDict):
+class _MountSourceOptional(TypedDict, total=False):
+    # Zone id of the mount target to attach, e.g. "use2-az1"; S3 Files resolves a mount target
+    # by "<zone id>.<file system id>.s3files.<region>.on.aws".
+    availabilityZoneId: str
+
+
+class MountSource(_MountSourceOptional):
     """What one declared ``s3files`` mount attaches. Keyed by its declared path."""
 
     fileSystemId: str

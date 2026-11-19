@@ -110,6 +110,22 @@ pub fn validate_sources(
             {
                 return Err(refuse(format!("mount '{path}': region is not a valid region name")));
             }
+            if let Some(zone) = &source.availability_zone_id {
+                let mut parts = zone.splitn(2, "-az");
+                let valid = matches!(
+                    (parts.next(), parts.next()),
+                    (Some(prefix), Some(number))
+                        if !prefix.is_empty()
+                            && prefix.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                            && !number.is_empty()
+                            && number.bytes().all(|c| c.is_ascii_digit())
+                );
+                if !valid {
+                    return Err(refuse(format!(
+                        "mount '{path}': availabilityZoneId must look like use2-az1"
+                    )));
+                }
+            }
             validate_credentials(path, &source.credentials)?;
         }
     }
@@ -125,6 +141,7 @@ mod tests {
             file_system_id: "fs-0123456789abcdef0".into(),
             access_point_id: "fsap-0123456789abcdef0".into(),
             region: "us-east-1".into(),
+            availability_zone_id: Some("use1-az1".into()),
             credentials: SandboxMountCredentials {
                 access_key_id: "AKIDEXAMPLE".into(),
                 secret_access_key: "SECRETVALUE".into(),
@@ -179,6 +196,7 @@ mod tests {
             (|s: &mut SandboxMountSource| s.file_system_id = "xx-1".into()) as fn(&mut _),
             |s| s.access_point_id = "fs-1".into(),
             |s| s.region = "US East".into(),
+            |s| s.availability_zone_id = Some("use2".into()),
             |s| s.credentials.session_token.clear(),
             |s| s.credentials.expiration = "tomorrow".into(),
             |s| s.credentials.expiration = "2001-01-01T00:00:00Z".into(),

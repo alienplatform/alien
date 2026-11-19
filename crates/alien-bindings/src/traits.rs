@@ -1306,6 +1306,12 @@ pub struct SandboxMountSource {
     pub access_point_id: String,
     /// Region of the file system
     pub region: String,
+    /// Availability zone id of the mount target to attach (for example `use2-az1`). S3 Files
+    /// resolves a mount target by `<zone id>.<file system id>.s3files.<region>.on.aws`; a name
+    /// without the zone id does not resolve. Pick a zone that has a mount target in the
+    /// sandbox's network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub availability_zone_id: Option<String>,
     /// Credentials for this mount
     pub credentials: SandboxMountCredentials,
 }

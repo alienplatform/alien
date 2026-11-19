@@ -514,6 +514,12 @@ export interface SandboxMountSource {
   accessPointId: string
   /** Region of the file system. */
   region: string
+  /**
+   * Availability zone id of the mount target to attach, for example `use2-az1`. S3 Files names a
+   * mount target `<zone id>.<file system id>.s3files.<region>.on.aws`; the name without a zone id
+   * does not resolve. Pick a zone that has a mount target in the sandbox's network.
+   */
+  availabilityZoneId?: string
   credentials: SandboxMountCredentials
 }
 
