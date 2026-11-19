@@ -551,16 +551,17 @@ fn parse_mountinfo(text: &str) -> Vec<(u64, String, String)> {
         .collect()
 }
 
-/// Detaches (lazily, `MNT_DETACH`) every NFS mount at one of `points`, the declared paths,
-/// checking by mount ID that the path still shows that mount. Only the broker mounts there (the
-/// image cannot), so this also takes a mount whose helper was killed before it reported. Repeats
-/// until a pass finds none, so mounts stacked on one path all go. Returns how many were detached.
-pub fn detach_nfs(points: &[String]) -> usize {
+/// Detaches (lazily, `MNT_DETACH`) every NFS mount in this mount namespace, wherever it is,
+/// checking by mount ID that the path still shows that mount. Only the broker makes NFS mounts
+/// here (the image cannot), so this also takes a mount whose helper was killed before it reported,
+/// even one the image moved off its declared path. Repeats until a pass finds none, so mounts
+/// stacked on one path all go. Returns how many were detached.
+pub fn detach_nfs() -> usize {
     let mut detached = 0;
     for _ in 0..64 {
         let found: Vec<(u64, String)> = mounts()
             .into_iter()
-            .filter(|(_, point, fstype)| fstype.starts_with("nfs") && points.contains(point))
+            .filter(|(_, _, fstype)| fstype.starts_with("nfs"))
             .map(|(id, point, _)| (id, point))
             .collect();
         let before = detached;

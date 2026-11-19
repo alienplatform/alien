@@ -2,9 +2,9 @@
 //!
 //! A step runs inside the image with the image's own grant: in the image cgroup (through the
 //! mount broker), as root with the bounded root capabilities and the image filters, never with
-//! more. Its environment is the image command's own, without agent settings. It runs in a process
-//! group of its own; at the deadline the whole group is killed and the step fails. Exit 0 within
-//! the deadline is success. Best effort: an image must still survive a stop with no warning.
+//! more. Its environment is the image command's own, without agent settings. It runs in a cgroup
+//! of its own below the image's; at the deadline every process in it is killed (a process that
+//! left the step's process group too) and the step fails. Exit 0 within the deadline is success. Best effort: an image must still survive a stop with no warning.
 
 use std::{os::unix::process::CommandExt, process::Stdio, time::Duration};
 
@@ -64,7 +64,7 @@ pub async fn run(name: &str, command: &[String], deadline: Duration) -> Result<(
     // SAFETY: both calls are async-signal-safe and allocate nothing.
     unsafe {
         process.pre_exec(|| {
-            crate::mount_broker::join_image_cgroup()?;
+            crate::mount_broker::join_steps_cgroup()?;
             crate::privilege::drop_image_to(ExecIdentity { uid: 0, gid: 0 })
         });
     }
@@ -82,9 +82,17 @@ pub async fn run(name: &str, command: &[String], deadline: Duration) -> Result<(
                 // SAFETY: signalling the step's own process group.
                 unsafe { libc::kill(-group, libc::SIGKILL) };
             }
+            // Whatever left the group is still in the steps cgroup.
+            let killed = tokio::task::spawn_blocking(crate::mount_broker::kill_steps).await;
             let _ = child.wait().await;
+            if !matches!(killed, Ok(Ok(()))) {
+                return Err(format!(
+                    "{name} did not finish within {}s; its processes could not all be killed",
+                    deadline.as_secs()
+                ));
+            }
             Err(format!(
-                "{name} did not finish within {}s; its process group was killed",
+                "{name} did not finish within {}s; its processes were killed",
                 deadline.as_secs()
             ))
         }

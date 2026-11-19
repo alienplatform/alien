@@ -22,6 +22,10 @@ use crate::image_permissions::Declared;
 pub const IMAGE_CGROUP: &str = "/sys/fs/cgroup/alien-guest/image";
 /// Its name as `/proc/<pid>/cgroup` shows it.
 pub const IMAGE_CGROUP_NAME: &str = "/alien-guest/image";
+
+/// The image's lifecycle steps run in this cgroup below the image's, so a step that leaves its
+/// process group is still found and killed at its deadline.
+pub const STEPS_CGROUP: &str = "steps";
 /// The socket mark the image cgroup's marker sets. The guest firewall treats it as guest traffic
 /// apart from the declared connections; the agent's peer check refuses any non-zero mark.
 pub const IMAGE_MARK: u32 = 0xa120;
@@ -421,18 +425,54 @@ pub fn socket_holders(inode: u64) -> io::Result<Vec<u64>> {
     serde_json::from_slice(&answer[..n as usize]).map_err(io::Error::other)
 }
 
-/// Asks the broker to detach every NFS mount it made (blocking; bounded by the broker's request
-/// deadline).
+/// Asks the broker to detach every NFS mount in the image's mount namespace (blocking; bounded by
+/// [`DETACH_DEADLINE`] and the request the broker may be reading).
 pub fn detach_nfs_mounts() -> io::Result<()> {
+    let broker = BROKER
+        .get()
+        .ok_or_else(|| io::Error::other("no mount broker"))?;
+    let _ = broker;
+    // The broker may first finish reading one request and end the one in flight.
+    control_message(
+        b'D',
+        "to detach the NFS mounts",
+        DETACH_DEADLINE + REQUEST_READ * 2 + Duration::from_secs(1),
+    )
+}
+
+/// Sends a control message without descriptors and waits for its answer within `within`.
+fn control_message(tag: u8, what: &str, within: Duration) -> io::Result<()> {
     let broker = BROKER
         .get()
         .ok_or_else(|| io::Error::other("no mount broker"))?;
     let _serial = CONTROL
         .lock()
         .map_err(|_| io::Error::other("broker control poisoned"))?;
-    drain_late_acks(broker.control.as_raw_fd());
-    send_with_fds(broker.control.as_raw_fd(), b'D', &[])?;
-    wait_ack(broker.control.as_raw_fd(), "to detach its NFS mounts")
+    let control = broker.control.as_raw_fd();
+    drain_late_acks(control);
+    let timeout = libc::timeval {
+        tv_sec: within.as_secs() as libc::time_t,
+        tv_usec: 0,
+    };
+    receive_timeout(control, &timeout)?;
+    let result = send_with_fds(control, tag, &[]).and_then(|()| wait_ack(control, what));
+    receive_timeout(control, &broker.answer_within)?;
+    result
+}
+
+/// A pause starts: the broker refuses new mounts until [`resumed`].
+pub fn pausing() -> io::Result<()> {
+    control_message(b'Q', "a pause", Duration::from_secs(5))
+}
+
+/// The sandbox resumed: mounts are allowed again.
+pub fn resumed() -> io::Result<()> {
+    control_message(b'R', "a resume", Duration::from_secs(5))
+}
+
+/// Kills every process of the image's lifecycle steps.
+pub fn kill_steps() -> io::Result<()> {
+    control_message(b'K', "to kill the steps", Duration::from_secs(5))
 }
 
 /// Moves the calling process into the image cgroup, through the broker.
@@ -440,6 +480,20 @@ pub fn detach_nfs_mounts() -> io::Result<()> {
 /// # Safety
 /// Async-signal-safe: meant for `pre_exec`. No allocation.
 pub unsafe fn join_image_cgroup() -> io::Result<()> {
+    join_cgroup(b'J')
+}
+
+/// Moves the calling process into the image's steps cgroup, through the broker.
+///
+/// # Safety
+/// As [`join_image_cgroup`].
+pub unsafe fn join_steps_cgroup() -> io::Result<()> {
+    join_cgroup(b'j')
+}
+
+/// # Safety
+/// As [`join_image_cgroup`].
+unsafe fn join_cgroup(tag: u8) -> io::Result<()> {
     let Some(broker) = BROKER.get() else {
         return Err(io::Error::from_raw_os_error(libc::ENOTCONN));
     };
@@ -454,7 +508,7 @@ pub unsafe fn join_image_cgroup() -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     let sent = receive_timeout(fds[0], &broker.answer_within)
-        .and_then(|()| send_with_fds(broker.join.as_raw_fd(), b'J', &[fds[1]]));
+        .and_then(|()| send_with_fds(broker.join.as_raw_fd(), tag, &[fds[1]]));
     libc::close(fds[1]);
     let result = sent.and_then(|()| {
         let mut ack = [0u8];
@@ -627,6 +681,7 @@ fn broker_main(
         inflight: None,
         zombies: Vec::new(),
         sealed: false,
+        paused: false,
     }
     .run(&control, &join)
 }
@@ -642,6 +697,8 @@ struct Loop<'a> {
     zombies: Vec<i32>,
     /// The kernel's helpers are sealed (once, before the image first starts).
     sealed: bool,
+    /// From the start of a pause until the resume: no new mounts.
+    paused: bool,
 }
 
 impl Loop<'_> {
@@ -731,7 +788,13 @@ impl Loop<'_> {
         if message.tag == b'D' {
             self.detach_nfs();
         }
-        let mut ok = message.tag == b'D'
+        match message.tag {
+            b'Q' => self.paused = true,
+            b'R' => self.paused = false,
+            b'K' => self.kill_steps(),
+            _ => {}
+        }
+        let mut ok = matches!(message.tag, b'D' | b'Q' | b'R' | b'K')
             || (message.tag == b'S' && message.fds.len() == 2)
             || (message.tag == b'P' && message.fds.len() == 1);
         if message.tag == b'P' && ok {
@@ -813,14 +876,50 @@ impl Loop<'_> {
         Ok(())
     }
 
+    /// Kills every process in the steps cgroup (`cgroup.kill`, or one by one where the kernel
+    /// has none), bounded.
+    fn kill_steps(&mut self) {
+        let steps = self.config.cgroup_dir.join(STEPS_CGROUP);
+        if std::fs::write(steps.join("cgroup.kill"), "1").is_ok() {
+            return;
+        }
+        let until = Instant::now() + REQUEST_READ;
+        while Instant::now() < until {
+            let Ok(procs) = std::fs::read_to_string(steps.join("cgroup.procs")) else {
+                return;
+            };
+            let pids: Vec<i32> = procs.lines().filter_map(|l| l.parse().ok()).collect();
+            if pids.is_empty() {
+                return;
+            }
+            for pid in pids {
+                // SAFETY: signalling a process in the steps cgroup.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// Moves the sender into the image cgroup and answers on the descriptor it sent.
     fn join(&mut self, message: Received) {
         let Some(reply) = message.fds.into_iter().next() else {
             return;
         };
-        let moved = match message.credentials {
-            Some((pid, 0)) if message.tag == b'J' && pid > 0 => {
-                std::fs::write(self.config.cgroup_dir.join("cgroup.procs"), pid.to_string()).is_ok()
+        let directory = match message.tag {
+            b'J' => Some(self.config.cgroup_dir.clone()),
+            b'j' => {
+                let steps = self.config.cgroup_dir.join(STEPS_CGROUP);
+                match std::fs::create_dir(&steps) {
+                    Ok(()) => Some(steps),
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Some(steps),
+                    Err(_) => None,
+                }
+            }
+            _ => None,
+        };
+        let moved = match (message.credentials, directory) {
+            (Some((pid, 0)), Some(directory)) if pid > 0 => {
+                std::fs::write(directory.join("cgroup.procs"), pid.to_string()).is_ok()
             }
             _ => false,
         };
@@ -856,10 +955,11 @@ impl Loop<'_> {
         }
         let cgroup = std::fs::read_to_string(format!("/proc/{}/cgroup", credentials.pid))
             .map_err(|e| format!("cannot read the caller's cgroup: {e}"))?;
-        if !cgroup
-            .lines()
-            .any(|line| line.strip_prefix("0::") == Some(self.config.cgroup_name.as_str()))
-        {
+        let steps = format!("{}/{STEPS_CGROUP}", self.config.cgroup_name);
+        if !cgroup.lines().any(|line| {
+            line.strip_prefix("0::")
+                .is_some_and(|name| name == self.config.cgroup_name || name == steps)
+        }) {
             return Err("only the image's own processes may ask the broker".into());
         }
         Ok(())
@@ -918,6 +1018,16 @@ impl Loop<'_> {
                 return;
             }
         };
+        if self.paused && !matches!(plan, Plan::Umount { .. }) {
+            respond(
+                &mut connection,
+                Reply::refused(
+                    Errno::Ebusy,
+                    "the sandbox is pausing; mounts are refused until it resumes",
+                ),
+            );
+            return;
+        }
         let Some(namespace) = &self.namespace else {
             respond(
                 &mut connection,
@@ -993,20 +1103,13 @@ impl Loop<'_> {
         let Some(namespace) = &self.namespace else {
             return;
         };
-        let points: Vec<String> = self
-            .declared
-            .permissions
-            .mounts
-            .iter()
-            .map(|mount| mount.path.clone())
-            .collect();
         let namespace = namespace.as_raw_fd();
         // SAFETY: the broker is single-threaded, so the child may allocate.
         let pid = unsafe { libc::fork() };
         if pid == 0 {
             // SAFETY: a mount namespace descriptor; the helper is single-threaded.
             let code = if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } == 0 {
-                ops::detach_nfs(&points);
+                ops::detach_nfs();
                 0
             } else {
                 1

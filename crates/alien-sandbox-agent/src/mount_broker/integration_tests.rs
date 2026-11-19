@@ -603,17 +603,22 @@ print(results)
         ))
     };
     step(
-        &["/bin/sh", "-c", "grep -q '^0::/alien-guest/image$' /proc/self/cgroup && test \"$(id -u)\" = 0 && python3 -c \"import sys; v = int([l for l in open('/proc/self/status') if l.startswith('CapEff')][0].split()[1], 16); sys.exit(1 if v & (1 << 21) else 0)\""],
+        &["/bin/sh", "-c", "grep -q '^0::/alien-guest/image/steps$' /proc/self/cgroup && test \"$(id -u)\" = 0 && python3 -c \"import sys; v = int([l for l in open('/proc/self/status') if l.startswith('CapEff')][0].split()[1], 16); sys.exit(1 if v & (1 << 21) else 0)\""],
         10,
     )
     .expect("a step in the image");
     let started = Instant::now();
-    let error = step(&["/bin/sh", "-c", "sleep 300 & sleep 301"], 2).unwrap_err();
-    assert!(error.contains("process group was killed"), "{error}");
+    // One child stays in the step's process group, one leaves it (setsid).
+    let error = step(
+        &["/bin/sh", "-c", "sleep 300 & setsid sleep 302 & sleep 301"],
+        2,
+    )
+    .unwrap_err();
+    assert!(error.contains("its processes were killed"), "{error}");
     assert!(started.elapsed() < Duration::from_secs(5));
     std::thread::sleep(Duration::from_millis(300));
     let left = Command::new("pgrep")
-        .args(["-f", "sleep 30[01]"])
+        .args(["-f", "sleep 30[012]"])
         .output()
         .unwrap();
     assert!(
@@ -631,6 +636,38 @@ print(results)
         "the NFS mount is still there"
     );
     println!("PAUSE    a failed pause step detached the broker's NFS mount");
+
+    // An NFS mount off every declared path (where a helper killed between attach and check
+    // would leave one the image moved) goes at the pause detach too.
+    std::fs::create_dir_all("/elsewhere/moved").unwrap();
+    assert!(Command::new("mount")
+        .args(["-i", "-t", "nfs4", "-o"])
+        .arg(format!("{options},addr=127.0.0.1"))
+        .args(["127.0.0.1:/", "/elsewhere/moved"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mount_line("/elsewhere/moved").is_some());
+    mount_broker::detach_nfs_mounts().expect("detach");
+    assert!(
+        mount_line("/elsewhere/moved").is_none(),
+        "an NFS mount off the declared paths survived the pause detach"
+    );
+    println!("PAUSE    an NFS mount off the declared paths was detached too");
+
+    // From the pause until the resume, no new mounts.
+    mount_broker::pausing().expect("pausing");
+    refused(
+        &format!("/opt/alien/bin/mount.nfs4 127.0.0.1:/ /workspace -o {options}"),
+        "pausing",
+    );
+    refused(
+        "/opt/alien/bin/alien-mount tmpfs /scratch -o size=1m",
+        "pausing",
+    );
+    mount_broker::resumed().expect("resumed");
+    allowed("/opt/alien/bin/alien-mount tmpfs /scratch -o size=1m && /opt/alien/bin/alien-mount umount /scratch");
+    println!("PAUSE    mounts were refused from the pause until the resume");
 
     // A caller trickling its request one byte at a time cannot hold the broker: every caller
     // gets the whole request read within one bound, so the next caller is answered promptly.

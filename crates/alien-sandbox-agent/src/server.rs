@@ -588,11 +588,24 @@ async fn run_image_step(
         Step::OnPause => ("onPause", declared.permissions.on_pause.as_ref()),
         Step::OnResume => ("onResume", declared.permissions.on_resume.as_ref()),
     };
+    authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
+    let _serial = SERIAL.lock().await;
+    // From the pause until the resume the broker takes no new mounts: one made after the pause
+    // step would be in the snapshot. Resume allows them first, for the image's own remount.
+    let mode = match step {
+        Step::OnPause => crate::mount_broker::pausing,
+        Step::OnResume => crate::mount_broker::resumed,
+    };
+    if let Err(error) = tokio::task::spawn_blocking(mode)
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|result| result)
+    {
+        tracing::error!(%error, step = name, "the mount broker did not take the pause state");
+    }
     let Some(command) = command else {
         return Ok(());
     };
-    authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
-    let _serial = SERIAL.lock().await;
     // Best effort: a failed step never fails the provider's hook (a failed hook can make the
     // provider discard the sandbox). A failed pause step still must not leave an NFS connection
     // in the snapshot, so the broker detaches every NFS mount it made.
