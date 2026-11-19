@@ -1,11 +1,16 @@
 //! Run only in a disposable VM or isolated privileged container: changes cgroups and firewall.
 use std::{
+    collections::HashMap,
     fs,
     io::Write,
     net::{TcpListener, UdpSocket},
     os::unix::process::CommandExt,
     path::PathBuf,
     process::Command,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use crate::{exec::ExecIdentity, privilege};
@@ -232,7 +237,7 @@ print(f'uid={os.getuid()} ordinary devices and PTY work; raw devices denied')
 }
 
 #[test]
-#[ignore = "requires isolated network/mount/cgroup namespaces, ALL capabilities, cgroup2, Python 3 and 10.0.1.5 and 10.0.2.5 on lo"]
+#[ignore = "requires isolated network/mount/cgroup namespaces, ALL capabilities, cgroup2, Python 3, the NFS client, 10.0.1.5, 10.0.2.5 and fd00::5 on lo"]
 fn image_nfs_leaves_only_through_its_mark_and_declared_connections() {
     // A declaration with one private connection, read the way the agent reads it at boot.
     std::env::set_var(
@@ -251,16 +256,30 @@ fn image_nfs_leaves_only_through_its_mark_and_declared_connections() {
     privilege::block_command_ipv6();
     super::redirect::install().expect("install real gateway redirects");
     // The gateway's redirect target, a server at a declared address, one at an undeclared
-    // address, and a loopback NFS proxy. Each answers with its name.
+    // address, and a loopback NFS proxy. Each answers with its name and counts connections.
+    let connections: Mutex<HashMap<&str, Arc<AtomicUsize>>> = Mutex::default();
     for (address, name) in [
         ("127.0.0.1:15001", "gateway"),
         ("10.0.1.5:2049", "declared"),
         ("10.0.2.5:2049", "undeclared"),
         ("127.0.0.1:2049", "loopback"),
+        // Where a pNFS layout from the image's server could send the kernel client.
+        ("10.0.1.5:20049", "data-server"),
+        ("127.0.0.1:20049", "loopback-data-server"),
+        ("[fd00::5]:20049", "data-server-v6"),
+        ("[::1]:20049", "loopback-data-server-v6"),
     ] {
         let listener = TcpListener::bind(address).expect(address);
+        let count = Arc::clone(
+            connections
+                .lock()
+                .unwrap()
+                .entry(address)
+                .or_insert_with(|| Arc::new(AtomicUsize::new(0))),
+        );
         std::thread::spawn(move || {
             for mut socket in listener.incoming().flatten() {
+                count.fetch_add(1, Ordering::SeqCst);
                 let _ = socket.write_all(name.as_bytes());
             }
         });
@@ -336,6 +355,21 @@ except OSError as error:
         ("0", "10.0.1.5", 2049, "0x0 dropped".to_string()),
         ("0", "10.0.2.5", 2049, "0x0 dropped".to_string()),
         ("0", "127.0.0.1", 2049, "0x0 loopback".to_string()),
+        // Nor anywhere else off loopback (the kernel's helpers, outside the guest cgroup).
+        ("0", "10.0.1.5", 20049, "0x0 dropped".to_string()),
+        (
+            "0",
+            "127.0.0.1",
+            20049,
+            "0x0 loopback-data-server".to_string(),
+        ),
+        // The agent's own sockets carry its mark and are not affected.
+        (
+            "0xa11e",
+            "10.0.1.5",
+            20049,
+            "0xa11e data-server".to_string(),
+        ),
     ];
     let mut failures = Vec::new();
     for (who, host, port, expected) in cases {
@@ -344,6 +378,92 @@ except OSError as error:
         if got != expected {
             failures.push(format!(
                 "{who} -> {host}:{port}: got '{got}', expected '{expected}'"
+            ));
+        }
+    }
+    // UDP without a mark (a kernel helper's DNS, say) reaches only loopback; the agent's own
+    // marked UDP is not affected.
+    for (mark, address, expected) in [
+        (0, "10.0.1.5:20053", "dropped"),
+        (0, "[fd00::5]:20053", "dropped"),
+        (0, "127.0.0.1:20053", "delivered"),
+        (0, "[::1]:20053", "delivered"),
+        (super::redirect::MARK, "10.0.1.5:20053", "delivered"),
+    ] {
+        let receiver = UdpSocket::bind(address).expect(address);
+        receiver
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        let sender = UdpSocket::bind(if address.starts_with('[') {
+            "[::]:0"
+        } else {
+            "0.0.0.0:0"
+        })
+        .unwrap();
+        // SAFETY: a live socket and a correctly sized option.
+        let marked = unsafe {
+            libc::setsockopt(
+                std::os::fd::AsRawFd::as_raw_fd(&sender),
+                libc::SOL_SOCKET,
+                libc::SO_MARK,
+                (&mark as *const u32).cast(),
+                size_of::<u32>() as _,
+            )
+        };
+        assert_eq!(marked, 0, "{}", std::io::Error::last_os_error());
+        let got = match sender
+            .send_to(b"x", address)
+            .and_then(|_| receiver.recv(&mut [0; 8]))
+        {
+            Ok(_) => "delivered",
+            Err(_) => "dropped",
+        };
+        println!("udp {mark:#x} -> {address}: {got}");
+        if got != expected {
+            failures.push(format!(
+                "udp {mark:#x} -> {address}: got '{got}', expected '{expected}'"
+            ));
+        }
+    }
+    // The kernel's NFS client itself (a socket the kernel made, which carries no mark) opens a connection only to
+    // loopback, on any port and in IPv4 and IPv6. `mount -i` makes the mount(2) call directly.
+    let target = tempfile::tempdir().unwrap();
+    for (address, source, expected) in [
+        ("10.0.1.5:20049", "10.0.1.5:/", "dropped"),
+        ("127.0.0.1:20049", "127.0.0.1:/", "connected"),
+        ("[fd00::5]:20049", "[fd00::5]:/", "dropped"),
+        ("[::1]:20049", "[::1]:/", "connected"),
+    ] {
+        let count = Arc::clone(&connections.lock().unwrap()[address]);
+        let before = count.load(Ordering::SeqCst);
+        let host = source.trim_end_matches(":/").trim_matches(['[', ']']);
+        let mut mount = Command::new("mount")
+            .args(["-i", "-t", "nfs4", "-o"])
+            .arg(format!(
+                "vers=4.2,proto={},addr={host},port=20049,soft,timeo=10,retrans=1",
+                if host.contains(':') { "tcp6" } else { "tcp" }
+            ))
+            .arg(source)
+            .arg(target.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("mount");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        while count.load(Ordering::SeqCst) == before && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let _ = mount.kill();
+        let _ = mount.wait();
+        let got = if count.load(Ordering::SeqCst) > before {
+            "connected"
+        } else {
+            "dropped"
+        };
+        println!("kernel -> {address}: {got}");
+        if got != expected {
+            failures.push(format!(
+                "kernel NFS client -> {address}: got '{got}', expected '{expected}'"
             ));
         }
     }

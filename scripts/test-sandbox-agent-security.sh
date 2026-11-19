@@ -59,6 +59,8 @@ docker create --name "$container" --privileged --cgroupns=private \
       ip link set lo up
       ip addr add 10.0.1.5/32 dev lo
       ip addr add 10.0.2.5/32 dev lo
+      echo 0 > /proc/sys/net/ipv6/conf/lo/disable_ipv6
+      ip -6 addr add fd00::5/128 dev lo nodad
       exec /agent-tests --ignored --exact $name --nocapture
     "
   ' >/dev/null
