@@ -250,6 +250,12 @@ pub fn run(plan: &Plan, made: &BTreeSet<u64>) -> Result<Option<u64>, Refusal> {
         }
         Plan::Bind { from, target } => {
             let source = open_dir(libc::AT_FDCWD, from, false)?;
+            if !made.contains(&mount_id(&source)?) {
+                return Err((
+                    Errno::Eperm,
+                    format!("{from} is not on a mount the broker made"),
+                ));
+            }
             let at = open_dir(libc::AT_FDCWD, target, false)?;
             let empty = c("")?;
             // SAFETY: valid descriptor, empty path with AT_EMPTY_PATH.
@@ -353,4 +359,55 @@ pub fn port_held_by(port: u16, procs: &str) -> Result<(), Refusal> {
     refused(format!(
         "the listener on 127.0.0.1:{port} is not the image's own proxy"
     ))
+}
+
+/// Where each mount in this namespace is: mount ID to mount point, from `/proc/self/mountinfo`
+/// (whose octal escapes are decoded).
+fn mount_points() -> std::collections::BTreeMap<u64, String> {
+    let decode = |field: &str| {
+        let bytes = field.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'\\' && i + 3 < bytes.len() {
+                if let Ok(value) = u8::from_str_radix(&field[i + 1..i + 4], 8) {
+                    out.push(value);
+                    i += 4;
+                    continue;
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    };
+    std::fs::read_to_string("/proc/self/mountinfo")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split(' ');
+            let id = fields.next()?.parse().ok()?;
+            Some((id, decode(fields.nth(3)?)))
+        })
+        .collect()
+}
+
+/// Detaches each of `ids` (lazily, `MNT_DETACH`), checking by mount ID that the path still
+/// shows that mount. Returns how many were detached.
+pub fn detach(ids: &[u64]) -> usize {
+    let points = mount_points();
+    let mut detached = 0;
+    for id in ids {
+        let Some(point) = points.get(id) else {
+            continue;
+        };
+        let one = Plan::Umount {
+            target: point.clone(),
+            flags: libc::MNT_DETACH,
+        };
+        if run(&one, &BTreeSet::from([*id])).is_ok() {
+            detached += 1;
+        }
+    }
+    detached
 }

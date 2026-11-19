@@ -1,7 +1,7 @@
 //! The broker process, the agent's handle on it, and the join step the image spawn path uses.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     io::{self, Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd},
@@ -277,12 +277,30 @@ pub fn serve_socket(path: &Path) -> io::Result<()> {
     unsafe { libc::umask(previous) };
     let listener = listener?;
     let namespace = std::fs::File::open("/proc/self/ns/mnt")?;
+    let _serial = CONTROL
+        .lock()
+        .map_err(|_| io::Error::other("broker control poisoned"))?;
     send_with_fds(
         broker.control.as_raw_fd(),
         b'S',
         &[listener.as_raw_fd(), namespace.as_raw_fd()],
     )?;
     wait_ack(broker.control.as_raw_fd(), "its socket")
+}
+
+static CONTROL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Asks the broker to detach every NFS mount it made (blocking; bounded by the broker's request
+/// deadline).
+pub fn detach_nfs_mounts() -> io::Result<()> {
+    let broker = BROKER
+        .get()
+        .ok_or_else(|| io::Error::other("no mount broker"))?;
+    let _serial = CONTROL
+        .lock()
+        .map_err(|_| io::Error::other("broker control poisoned"))?;
+    send_with_fds(broker.control.as_raw_fd(), b'D', &[])?;
+    wait_ack(broker.control.as_raw_fd(), "to detach its NFS mounts")
 }
 
 /// Moves the calling process into the image cgroup, through the broker.
@@ -427,7 +445,7 @@ fn broker_main(
         config,
         listener: None,
         namespace: None,
-        made: BTreeSet::new(),
+        made: BTreeMap::new(),
         inflight: None,
         zombies: Vec::new(),
     }
@@ -439,7 +457,8 @@ struct Loop<'a> {
     config: &'a Config,
     listener: Option<UnixListener>,
     namespace: Option<OwnedFd>,
-    made: BTreeSet<u64>,
+    /// Every mount the broker made that still exists, with its kind (`nfs`, `tmpfs`, `bind`).
+    made: BTreeMap<u64, &'static str>,
     inflight: Option<Inflight>,
     zombies: Vec<i32>,
 }
@@ -528,8 +547,11 @@ impl Loop<'_> {
     }
 
     fn control(&mut self, control: &OwnedFd, mut message: Received) {
-        let ok = message.tag == b'S' && message.fds.len() == 2;
-        if ok {
+        if message.tag == b'D' {
+            self.detach_nfs();
+        }
+        let ok = message.tag == b'D' || (message.tag == b'S' && message.fds.len() == 2);
+        if message.tag == b'S' && ok {
             let namespace = message.fds.pop().expect("two descriptors");
             let listener = message.fds.pop().expect("two descriptors");
             // SAFETY: the agent sent a listening unix socket.
@@ -682,7 +704,8 @@ impl Loop<'_> {
         }
         if pid == 0 {
             drop(read);
-            let outcome = helper(plan, namespace, &self.made, &self.config.cgroup_dir);
+            let made: BTreeSet<u64> = self.made.keys().copied().collect();
+            let outcome = helper(plan, namespace, &made, &self.config.cgroup_dir);
             let mut write = std::fs::File::from(write);
             let _ = write.write_all(&serde_json::to_vec(&outcome).unwrap_or_default());
             // SAFETY: leaving the forked helper.
@@ -690,6 +713,58 @@ impl Loop<'_> {
         }
         drop(write);
         Ok((pid, std::fs::File::from(read)))
+    }
+
+    /// Detaches every NFS mount the broker made, in a helper bound by the request deadline. Used
+    /// when the image's own pause step fails: an NFS connection does not survive the snapshot.
+    fn detach_nfs(&mut self) {
+        let Some(namespace) = &self.namespace else {
+            return;
+        };
+        let ids: Vec<u64> = self
+            .made
+            .iter()
+            .filter(|(_, kind)| **kind == "nfs")
+            .map(|(id, _)| *id)
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let namespace = namespace.as_raw_fd();
+        // SAFETY: the broker is single-threaded, so the child may allocate.
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            // SAFETY: a mount namespace descriptor; the helper is single-threaded.
+            let code = if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } == 0 {
+                ops::detach(&ids);
+                0
+            } else {
+                1
+            };
+            // SAFETY: leaving the forked helper.
+            unsafe { libc::_exit(code) };
+        }
+        if pid < 0 {
+            return;
+        }
+        let deadline = Instant::now() + self.config.deadline;
+        loop {
+            // SAFETY: reaping our own helper without blocking.
+            if unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) } != 0 {
+                break;
+            }
+            if Instant::now() >= deadline {
+                // SAFETY: signalling our own helper.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+                self.zombies.push(pid);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Detached mounts are gone from the namespace; the next request's helper prunes the rest.
+        for id in ids {
+            self.made.remove(&id);
+        }
     }
 
     fn finish(&mut self) {
@@ -703,13 +778,22 @@ impl Loop<'_> {
         let reply = match serde_json::from_slice::<ops::Outcome>(&text) {
             Ok(outcome) => {
                 let alive: BTreeSet<u64> = outcome.alive.into_iter().collect();
-                self.made.retain(|id| alive.contains(id));
+                self.made.retain(|id, _| alive.contains(id));
                 match outcome.result {
                     Ok(Some(id)) => {
-                        if matches!(inflight.plan, Plan::Umount { .. }) {
-                            self.made.remove(&id);
-                        } else {
-                            self.made.insert(id);
+                        match inflight.plan {
+                            Plan::Umount { .. } => {
+                                self.made.remove(&id);
+                            }
+                            Plan::Nfs { .. } => {
+                                self.made.insert(id, "nfs");
+                            }
+                            Plan::Tmpfs { .. } => {
+                                self.made.insert(id, "tmpfs");
+                            }
+                            Plan::Bind { .. } => {
+                                self.made.insert(id, "bind");
+                            }
                         }
                         Reply::ok()
                     }

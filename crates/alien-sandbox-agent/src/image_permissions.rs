@@ -46,6 +46,8 @@ const RESERVED: &[&str] = &[
 pub enum MountType {
     Nfs,
     Tmpfs,
+    /// A bind from a declared nfs or tmpfs path (or below it) onto this path.
+    Bind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -57,6 +59,9 @@ pub struct DeclaredMount {
     /// The largest tmpfs the image may ask for. Required for tmpfs, refused for nfs.
     #[serde(default)]
     pub size_bytes: Option<u64>,
+    /// For a bind: the declared nfs or tmpfs path it binds from.
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -185,12 +190,25 @@ fn validate(
             (MountType::Tmpfs, None | Some(0)) => {
                 return Err(format!("the tmpfs at '{}' needs sizeBytes", mount.path))
             }
-            (MountType::Nfs, Some(_)) => {
-                return Err(format!(
-                    "the nfs mount at '{}' takes no sizeBytes",
-                    mount.path
-                ))
+            (MountType::Nfs | MountType::Bind, Some(_)) => {
+                return Err(format!("the mount at '{}' takes no sizeBytes", mount.path))
             }
+            _ => {}
+        }
+        match (mount.kind, &mount.from) {
+            (MountType::Bind, None) => {
+                return Err(format!("the bind at '{}' needs from", mount.path))
+            }
+            (MountType::Bind, Some(from)) => {
+                let source = permissions.mounts.iter().find(|m| &m.path == from);
+                if !source.is_some_and(|m| m.kind != MountType::Bind) {
+                    return Err(format!(
+                        "the bind at '{}' must come from a declared nfs or tmpfs path",
+                        mount.path
+                    ));
+                }
+            }
+            (_, Some(_)) => return Err(format!("only a bind takes from ('{}')", mount.path)),
             _ => {}
         }
     }
@@ -223,6 +241,12 @@ fn validate(
 
 /// A plain absolute path, not `/`, and not at, under or above a reserved path.
 pub fn check_path(path: &str) -> std::result::Result<(), String> {
+    check_clean(path)?;
+    check_not_reserved(path)
+}
+
+/// A plain absolute path other than `/`: no empty, `.` or `..` component.
+pub fn check_clean(path: &str) -> std::result::Result<(), String> {
     if !path.starts_with('/')
         || path.len() == 1
         || path.len() > 1024
@@ -234,6 +258,10 @@ pub fn check_path(path: &str) -> std::result::Result<(), String> {
     {
         return Err(format!("'{path}' is not a plain absolute path"));
     }
+    Ok(())
+}
+
+fn check_not_reserved(path: &str) -> std::result::Result<(), String> {
     let within =
         |inner: &str, outer: &str| inner == outer || inner.starts_with(&format!("{outer}/"));
     if RESERVED
@@ -290,21 +318,24 @@ mod tests {
     use super::*;
 
     const V1: Option<&str> = Some(alien_core::sandbox_image::IMAGE_COMMAND_WITH_IMAGE_PERMISSIONS);
-    const CONTRACT: &str = r#"{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/workspace/tmp","sizeBytes":8589934592}],"connections":[{"cidr":"10.0.1.0/24","port":2049}],"onPause":["/bin/agentd","pause"],"onResume":["/bin/agentd","resume"]}"#;
+    const CONTRACT: &str = r#"{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/var/lib/vendor/workspace-tmp","sizeBytes":8589934592},{"type":"bind","from":"/var/lib/vendor/workspace-tmp","path":"/workspace/tmp"}],"connections":[{"cidr":"10.0.1.0/24","port":2049}],"onPause":["/bin/agentd","pause"],"onResume":["/bin/agentd","resume"]}"#;
 
     #[test]
     fn the_contract_example_is_accepted() {
         let declared = from_values(V1, Some("1"), Some(CONTRACT), None)
             .unwrap()
             .unwrap();
-        assert_eq!(declared.permissions.mounts.len(), 2);
+        assert_eq!(declared.permissions.mounts.len(), 3);
         assert_eq!(
             declared.destinations,
             vec![("10.0.1.0".parse().unwrap(), 24, 2049)]
         );
         assert_eq!(declared.lifecycle_deadline.as_secs(), 50);
         assert_eq!(
-            declared.mount("/workspace/tmp").unwrap().size_bytes,
+            declared
+                .mount("/var/lib/vendor/workspace-tmp")
+                .unwrap()
+                .size_bytes,
             Some(8 << 30)
         );
         let short = from_values(V1, Some("1"), Some(CONTRACT), Some("5"))
@@ -346,6 +377,10 @@ mod tests {
             r#"{"connections":[{"cidr":"10.0.1.0/24","port":53}]}"#,
             r#"{"connections":[{"cidr":"127.0.0.1","port":2049}]}"#,
             r#"{"onPause":[]}"#,
+            r#"{"mounts":[{"type":"bind","path":"/b"}]}"#,
+            r#"{"mounts":[{"type":"bind","from":"/etc","path":"/b"}]}"#,
+            r#"{"mounts":[{"type":"bind","from":"/c","path":"/b"},{"type":"bind","from":"/b","path":"/c"}]}"#,
+            r#"{"mounts":[{"type":"nfs","from":"/b","path":"/n"}]}"#,
             r#"{"unknown":true}"#,
         ] {
             assert!(parse(body).is_err(), "{body}");

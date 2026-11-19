@@ -572,7 +572,7 @@ async fn suspend_hook(
 }
 
 /// One step at a time, and only on the platform's own call: a workload that could reach this
-/// port must not be able to make the image unmount or remount. A failed step fails the hook.
+/// port must not be able to make the image unmount or remount.
 #[cfg(target_os = "linux")]
 async fn run_image_step(
     state: &Arc<AgentState>,
@@ -593,15 +593,24 @@ async fn run_image_step(
     };
     authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
     let _serial = SERIAL.lock().await;
-    crate::image_lifecycle::run(name, command, declared.lifecycle_deadline)
-        .await
-        .map_err(|reason| {
-            tracing::error!(%reason, "image lifecycle step failed");
-            ApiError::from(AlienError::new(ErrorData::OperationFailed {
-                operation: format!("image {name}"),
-                reason,
-            }))
-        })
+    // Best effort: a failed step never fails the provider's hook (a failed hook can make the
+    // provider discard the sandbox). A failed pause step still must not leave an NFS connection
+    // in the snapshot, so the broker detaches every NFS mount it made.
+    if let Err(reason) =
+        crate::image_lifecycle::run(name, command, declared.lifecycle_deadline).await
+    {
+        tracing::error!(%reason, step = name, "image lifecycle step failed");
+        if matches!(step, Step::OnPause) {
+            match tokio::task::spawn_blocking(crate::mount_broker::detach_nfs_mounts).await {
+                Ok(Ok(())) => {
+                    tracing::warn!("detached the image's NFS mounts after onPause failed")
+                }
+                Ok(Err(error)) => tracing::error!(%error, "cannot detach the image's NFS mounts"),
+                Err(error) => tracing::error!(%error, "cannot detach the image's NFS mounts"),
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn run_command(

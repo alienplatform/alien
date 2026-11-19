@@ -212,10 +212,17 @@ pub fn plan(declared: &Declared, request: &Request) -> Result<Plan, Refusal> {
             )),
         },
         Request::Bind { from, target } => {
-            declared_as(declared, from, None)?;
-            declared_as(declared, target, None)?;
-            if from == target {
-                return Err((Errno::Einval, "a bind needs two different paths".into()));
+            let bind = declared_as(declared, target, Some(MountType::Bind))?;
+            let declared_from = bind.from.as_deref().unwrap_or_default();
+            // The declared source or a directory below it; the helper then requires that the
+            // source is on a mount the broker made.
+            let below = from
+                .strip_prefix(declared_from)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
+            if !below || crate::image_permissions::check_clean(from).is_err() {
+                return refuse(format!(
+                    "'{target}' may only be bound from {declared_from} or below it"
+                ));
             }
             Ok(Plan::Bind {
                 from: from.clone(),
@@ -321,7 +328,7 @@ fn nfs_options(source: &str, options: &str) -> Result<NfsOptions, Refusal> {
     }
     let mut params: Vec<(String, Option<String>)> = Vec::new();
     let mut attributes = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV;
-    let (mut vers, mut addr, mut proto, mut port) = (None, false, false, None);
+    let (mut vers, mut addr, mut client, mut port) = (None, false, false, None);
     for (key, value) in split(options) {
         if user_space_only(key) {
             continue;
@@ -352,12 +359,11 @@ fn nfs_options(source: &str, options: &str) -> Result<NfsOptions, Refusal> {
                 addr = true;
                 Some(("addr", value.map(str::to_string)))
             }
-            "clientaddr" => Some(("clientaddr", value_of(&["127.0.0.1"])?)),
-            "proto" => {
-                value_of(&["tcp"])?;
-                proto = true;
-                Some(("proto", value.map(str::to_string)))
+            "clientaddr" => {
+                client = true;
+                Some(("clientaddr", value_of(&["127.0.0.1"])?))
             }
+            "proto" => Some(("proto", value_of(&["tcp"])?)),
             "port" => {
                 let p = value
                     .and_then(|v| v.parse::<u16>().ok())
@@ -391,7 +397,6 @@ fn nfs_options(source: &str, options: &str) -> Result<NfsOptions, Refusal> {
                     return Err((Errno::Einval, format!("'{key}' takes no value")));
                 }
                 if key == "tcp" {
-                    proto = true;
                     Some(("proto", Some("tcp".to_string())))
                 } else {
                     Some((key, None))
@@ -416,8 +421,8 @@ fn nfs_options(source: &str, options: &str) -> Result<NfsOptions, Refusal> {
     if !addr {
         return refuse("addr=127.0.0.1 is required");
     }
-    if !proto {
-        return refuse("proto=tcp is required");
+    if !client {
+        return refuse("clientaddr=127.0.0.1 is required");
     }
     let port = port.ok_or_else(|| {
         (
@@ -508,7 +513,7 @@ mod tests {
 
     fn declared() -> Declared {
         crate::image_permissions::parse(
-            r#"{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/workspace/tmp","sizeBytes":8589934592},{"type":"nfs","path":"/other"}]}"#,
+            r#"{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/workspace/tmp","sizeBytes":8589934592},{"type":"nfs","path":"/other"},{"type":"tmpfs","path":"/var/lib/vendor/workspace-tmp","sizeBytes":8589934592},{"type":"bind","from":"/var/lib/vendor/workspace-tmp","path":"/workspace/bound"}]}"#,
         )
         .unwrap()
     }
@@ -522,14 +527,16 @@ mod tests {
         }
     }
 
-    const GOOD: &str = "vers=4.2,addr=127.0.0.1,proto=tcp,port=20123,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev";
+    const GOOD: &str = "vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev";
 
     #[test]
     fn the_contract_requests_parse_and_pass() {
         for text in [
-            r#"{"op":"mount","type":"nfs","source":"127.0.0.1:/","target":"/workspace","options":"vers=4.2,addr=127.0.0.1,proto=tcp,port=20123"}"#,
+            r#"{"op":"mount","type":"nfs","source":"127.0.0.1:/","target":"/workspace","options":"vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123"}"#,
             r#"{"op":"mount","type":"tmpfs","target":"/workspace/tmp","options":"size=8g,mode=1777"}"#,
-            r#"{"op":"bind","from":"/workspace","target":"/other"}"#,
+            r#"{"op":"bind","from":"/var/lib/vendor/workspace-tmp","target":"/workspace/bound"}"#,
+            r#"{"op":"bind","from":"/var/lib/vendor/workspace-tmp/sub","target":"/workspace/bound"}"#,
+            r#"{"op":"mount","type":"nfs4","source":"127.0.0.1:/","target":"/workspace","options":"actimeo=30,nfsvers=4.2,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,port=20514,addr=127.0.0.1,clientaddr=127.0.0.1"}"#,
             r#"{"op":"umount","target":"/workspace","flags":["force","detach"]}"#,
         ] {
             let request: Request = serde_json::from_str(text).unwrap();
@@ -561,54 +568,54 @@ mod tests {
     #[test]
     fn nfs_refusals() {
         let cases: &[(&str, &str)] = &[
-            ("vers=3,addr=127.0.0.1,proto=tcp,port=20123", "v3"),
-            ("vers=4.0,addr=127.0.0.1,proto=tcp,port=20123", "4.0"),
+            ("vers=3,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123", "v3"),
+            ("vers=4.0,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123", "4.0"),
             (
-                "nfsvers=4.1,vers=4.2,addr=127.0.0.1,proto=tcp,port=20123",
+                "nfsvers=4.1,vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123",
                 "conflict",
             ),
-            ("addr=127.0.0.1,proto=tcp,port=20123", "no version"),
-            ("vers=4.2,proto=tcp,port=20123", "no addr"),
+            ("addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123", "no version"),
+            ("vers=4.2,clientaddr=127.0.0.1,proto=tcp,port=20123", "no addr"),
             ("vers=4.2,addr=10.0.1.5,proto=tcp,port=20123", "addr spoof"),
-            ("vers=4.2,addr=127.0.0.1,proto=udp,port=20123", "udp"),
+            ("vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=udp,port=20123", "udp"),
             ("vers=4.2,addr=127.0.0.1,udp,port=20123", "udp flag"),
-            ("vers=4.2,addr=127.0.0.1,proto=rdma,port=20123", "rdma"),
-            ("vers=4.2,addr=127.0.0.1,port=20123", "no proto"),
-            ("vers=4.2,addr=127.0.0.1,proto=tcp", "no port"),
+            ("vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=rdma,port=20123", "rdma"),
+            ("vers=4.2,addr=127.0.0.1,port=20123", "no clientaddr"),
+            ("vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp", "no port"),
             (
-                "vers=4.2,addr=127.0.0.1,proto=tcp,port=2049",
+                "vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=2049",
                 "port outside proxy range",
             ),
-            ("vers=4.2,addr=127.0.0.1,proto=tcp,port=8971", "agent port"),
+            ("vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=8971", "agent port"),
             (
-                "vers=4.2,addr=127.0.0.1,proto=tcp,port=20123,mountaddr=10.0.0.1",
+                "vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123,mountaddr=10.0.0.1",
                 "mountaddr",
             ),
             (
-                "vers=4.2,addr=127.0.0.1,proto=tcp,port=20123,mountport=2049",
+                "vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123,mountport=2049",
                 "mountport",
             ),
-            ("vers=4.2,addr=127.0.0.1,proto=tcp,port=20123,fsc", "fsc"),
+            ("vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123,fsc", "fsc"),
             (
-                "vers=4.2,addr=127.0.0.1,proto=tcp,port=20123,xprtsec=tls",
+                "vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123,xprtsec=tls",
                 "xprtsec",
             ),
             (
-                "vers=4.2,addr=127.0.0.1,proto=tcp,port=20123,sec=krb5",
+                "vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123,sec=krb5",
                 "krb5",
             ),
             (
-                "vers=4.2,addr=127.0.0.1,proto=tcp,port=20123,sec=krb5p",
+                "vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123,sec=krb5p",
                 "krb5p",
             ),
-            ("vers=4.2,addr=127.0.0.1,proto=tcp,port=20123,suid", "suid"),
-            ("vers=4.2,addr=127.0.0.1,proto=tcp,port=20123,dev", "dev"),
+            ("vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123,suid", "suid"),
+            ("vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123,dev", "dev"),
             (
-                "vers=4.2,addr=127.0.0.1,proto=tcp,port=20123,clientaddr=10.0.0.9",
+                "vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123,clientaddr=10.0.0.9",
                 "clientaddr",
             ),
             (
-                "vers=4.2,addr=127.0.0.1,proto=tcp,port=20123,whatever",
+                "vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123,whatever",
                 "unknown",
             ),
         ];
@@ -654,6 +661,18 @@ mod tests {
             target: "/workspace".into(),
         };
         assert!(plan(&declared(), &bind).is_err(), "bind from undeclared");
+        for (from, target) in [
+            ("/workspace", "/workspace/bound"),
+            ("/var/lib/vendor/workspace-tmpX", "/workspace/bound"),
+            ("/var/lib/vendor/workspace-tmp/../x", "/workspace/bound"),
+            ("/var/lib/vendor/workspace-tmp", "/other"),
+        ] {
+            let bind = Request::Bind {
+                from: from.into(),
+                target: target.into(),
+            };
+            assert!(plan(&declared(), &bind).is_err(), "bind {from} -> {target}");
+        }
         let umount = Request::Umount {
             target: "/opt/alien".into(),
             flags: vec![],

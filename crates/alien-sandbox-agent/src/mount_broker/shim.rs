@@ -24,7 +24,7 @@ pub fn shim_name(argv0: &str) -> Option<&'static str> {
 }
 
 /// Builds the request a `mount.nfs` argv asks for. `mount.nfs` itself adds `addr=` from the
-/// source host; so does this, and `proto=tcp` when no transport is named.
+/// source host, and `clientaddr=`; so does this.
 pub fn nfs_request(kind: &str, args: &[String]) -> Result<Option<Request>, String> {
     let mut positional = Vec::new();
     let mut options: Vec<String> = Vec::new();
@@ -56,11 +56,10 @@ pub fn nfs_request(kind: &str, args: &[String]) -> Result<Option<Request>, Strin
             extra.push(format!("addr={host}"));
         }
     }
-    if !keys
-        .iter()
-        .any(|k| matches!(*k, "proto" | "tcp" | "udp" | "rdma"))
-    {
-        extra.push("proto=tcp".into());
+    if !keys.contains(&"clientaddr") {
+        if let Some((host, _)) = source.split_once(":/") {
+            extra.push(format!("clientaddr={host}"));
+        }
     }
     for item in extra {
         if !joined.is_empty() {
@@ -208,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn mount_nfs_argv_becomes_a_request_with_addr_and_proto() {
+    fn mount_nfs_argv_becomes_a_request_with_addr_and_clientaddr() {
         let request = nfs_request(
             "nfs4",
             &args("127.0.0.1:/ /workspace/ -o nfsvers=4.2,port=20123,hard -n"),
@@ -221,7 +220,7 @@ mod tests {
                 kind: "nfs4".into(),
                 source: Some("127.0.0.1:/".into()),
                 target: "/workspace".into(),
-                options: "nfsvers=4.2,port=20123,hard,addr=127.0.0.1,proto=tcp".into(),
+                options: "nfsvers=4.2,port=20123,hard,addr=127.0.0.1,clientaddr=127.0.0.1".into(),
             }
         );
         assert!(nfs_request("nfs4", &args("127.0.0.1:/ /w -f"))
