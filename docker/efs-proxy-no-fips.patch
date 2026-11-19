@@ -1,0 +1,13 @@
+diff --git a/src/proxy/Cargo.toml b/src/proxy/Cargo.toml
+index 330903b..15a7d14 100644
+--- a/src/proxy/Cargo.toml
++++ b/src/proxy/Cargo.toml
+@@ -74,7 +74,7 @@ nix = { version = "0.26.2", features = ["signal"]}
+ onc-rpc = "0.3.3"
+ rand = "0.8"
+ regex = "1.10.2"
+-s2n-tls = {version="^0.3.19",features=["fips"]}
++s2n-tls = {version="^0.3.19"}
+ s2n-tls-tokio = "^0.3.19"
+ socket2 = { version = "0.6", features = ["all"] }
+ serde = {version="1.0.175",features=["derive"]}
