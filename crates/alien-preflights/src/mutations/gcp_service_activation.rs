@@ -244,6 +244,8 @@ impl GcpServiceActivationMutation {
                     // sandbox but no ai resource would otherwise never enable aiplatform. Same
                     // key as "ai", so a stack with both enables it once.
                     apis.insert(AI_PLATFORM);
+                    // Its image is copied into a repository of its own in this project.
+                    apis.insert(ARTIFACT_REGISTRY);
                 }
                 "queue" => {
                     apis.insert(PUBSUB);
@@ -472,6 +474,36 @@ mod tests {
             Some("aiplatform.googleapis.com"),
             "a GCP AI resource must inject Vertex AI enablement for the Terraform/Frozen path"
         );
+    }
+
+    #[test]
+    fn sandbox_requires_artifact_registry_for_its_image_repository() {
+        for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+            let stack = Stack::new("test-stack".to_string())
+                .add(
+                    alien_core::Sandbox::new("agents".to_string())
+                        .code(alien_core::SandboxCode::Image {
+                            image: "ubuntu".to_string(),
+                            bundled_from: None,
+                        })
+                        .egress(alien_core::SandboxEgress::None)
+                        .lifecycle(alien_core::SandboxLifecyclePolicy {
+                            max_lifetime_seconds: None,
+                            idle_pause_seconds: None,
+                        })
+                        .build(),
+                    lifecycle,
+                )
+                .build();
+            let services = GcpServiceActivationMutation
+                .get_required_services(&stack, &StackState::new(Platform::Gcp))
+                .unwrap();
+            assert_eq!(
+                services.get("enable-artifact-registry").map(String::as_str),
+                Some("artifactregistry.googleapis.com"),
+                "{lifecycle:?}"
+            );
+        }
     }
 
     #[test]

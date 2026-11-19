@@ -264,10 +264,8 @@ fn scaffolded(
         }
         let scaffolded = match platform {
             Platform::Aws => Scaffolded::AwsSandbox(entry.config.downcast_ref()?),
-            // A Live one is the runtime controller's, which cannot create what a repository needs.
-            Platform::Gcp if entry.lifecycle == ResourceLifecycle::Frozen => {
-                Scaffolded::GcpSandbox(entry.config.downcast_ref()?)
-            }
+            // Either lifecycle: the runtime controller cannot create what a repository needs.
+            Platform::Gcp => Scaffolded::GcpSandbox(entry.config.downcast_ref()?),
             _ => return None,
         };
         Some((resource_id, entry, scaffolded))

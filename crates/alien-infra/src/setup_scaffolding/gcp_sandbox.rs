@@ -755,6 +755,31 @@ mod tests {
             .build()
     }
 
+    /// A Live sandbox copies its image into a repository the runtime identity cannot create, so
+    /// setup scaffolds it under either lifecycle.
+    #[test]
+    fn a_live_sandbox_is_scaffolded_too() {
+        for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+            let stack = alien_core::Stack::new("acme".to_string())
+                .add(
+                    alien_core::Sandbox::new("agents".to_string())
+                        .code(alien_core::SandboxCode::Image {
+                            image: "ubuntu".to_string(),
+                            bundled_from: None,
+                        })
+                        .egress(alien_core::SandboxEgress::None)
+                        .lifecycle(alien_core::SandboxLifecyclePolicy {
+                            max_lifetime_seconds: None,
+                            idle_pause_seconds: None,
+                        })
+                        .build(),
+                    lifecycle,
+                )
+                .build();
+            assert!(super::super::scaffolds_any(&stack, Platform::Gcp), "{lifecycle:?}");
+        }
+    }
+
     fn record(writer: bool) -> BTreeMap<String, SetupScaffolding> {
         BTreeMap::from([(
             "agents".to_string(),

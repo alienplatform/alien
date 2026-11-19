@@ -244,7 +244,10 @@ fn template_manager_label<'a>(ctx: &'a EmitContext<'_>) -> Result<Option<&'a str
         .profile()
         .and_then(|profile| profile.0.get(ctx.resource_id))
         .is_some_and(|refs| refs.iter().any(|reference| reference.id() == TEMPLATES));
-    if !granted || ctx.resource.lifecycle != ResourceLifecycle::Frozen {
+    // A Live sandbox's template is the runtime controller's, so it needs no engine grant; it still
+    // copies its image into a repository only setup can create, so that one is made for it.
+    let live = ctx.resource.lifecycle == ResourceLifecycle::Live;
+    if !live && !(granted && ctx.resource.lifecycle == ResourceLifecycle::Frozen) {
         return Ok(None);
     }
     let Some(management_id) = ctx.stack.resources().find_map(|(id, entry)| {
@@ -265,13 +268,15 @@ fn emit_template_management(ctx: &EmitContext<'_>, fragment: &mut TfFragment) ->
     let Some(management_label) = template_manager_label(ctx)? else {
         return Ok(());
     };
-    emit_engine_grant(
-        ctx,
-        fragment,
-        "sandbox/templates",
-        management_label,
-        "templates",
-    )?;
+    if ctx.resource.lifecycle == ResourceLifecycle::Frozen {
+        emit_engine_grant(
+            ctx,
+            fragment,
+            "sandbox/templates",
+            management_label,
+            "templates",
+        )?;
+    }
     emit_image_repository(ctx, fragment, management_label)
 }
 
@@ -789,6 +794,60 @@ mod tests {
         /// this sandbox, none without it. Where the member lands is pinned by the generator test
         /// `a_frozen_gcp_sandbox_manager_gets_template_verbs_on_its_engine_only`.
         #[test]
+        fn a_live_sandbox_gets_its_image_repository_but_no_engine_grant() {
+            let sandbox = Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            let stack = Stack::new("acme".to_string())
+                .add(
+                    GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .add(
+                    RemoteStackManagement::new("manager".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(sandbox, ResourceLifecycle::Live)
+                .build();
+            let mut names = names();
+            names.insert("manager".to_string(), "manager".to_string());
+            let resource = stack.resources.get("agents").expect("sandbox");
+            let settings = StackSettings::default();
+            let ctx = EmitContext {
+                stack: &stack,
+                resource,
+                resource_id: "agents",
+                platform: alien_core::Platform::Gcp,
+                targets_kubernetes: false,
+                stack_settings: &settings,
+                names: &names,
+                pins: &alien_core::SetupPins::default(),
+            };
+            let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
+            let kinds: Vec<_> = fragment
+                .resource_blocks
+                .iter()
+                .filter_map(|block| block.labels.first().map(|l| l.as_str().to_string()))
+                .collect();
+            assert!(
+                kinds.contains(&"google_artifact_registry_repository".to_string()),
+                "{kinds:?}"
+            );
+            assert!(
+                !kinds.contains(&"google_vertex_ai_reasoning_engine_iam_member".to_string()),
+                "{kinds:?}"
+            );
+        }
+
+        #[test]
         fn template_management_is_bound_only_when_granted() {
             let granted = |with_profile: bool, with_verifier: bool| {
                 let sandbox = Sandbox::new("agents".to_string())
@@ -1220,6 +1279,12 @@ mod tests {
                         "google_service_account" => "preview-signer-account".to_string(),
                         "google_project_iam_custom_role" => "preview-sign-role".to_string(),
                         "google_service_account_iam_member" => "preview-sign-binding".to_string(),
+                        "google_artifact_registry_repository" => "image-repository".to_string(),
+                        "google_artifact_registry_repository_iam_member"
+                            if label.ends_with("_write") =>
+                        {
+                            "image-repository-write".to_string()
+                        }
                         other => panic!(
                             "the Google Cloud sandbox emitter produced `{other}` ({label}), which \
                              alien_core::sandbox_setup_parity does not account for. Add it there \
