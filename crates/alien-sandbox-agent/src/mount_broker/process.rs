@@ -631,10 +631,6 @@ impl Loop<'_> {
         };
         let _ = connection.set_read_timeout(Some(Duration::from_secs(2)));
         let _ = connection.set_write_timeout(Some(Duration::from_secs(2)));
-        if let Err(reason) = self.peer_allowed(&connection) {
-            respond(&mut connection, Reply::refused(Errno::Eperm, reason));
-            return;
-        }
         let mut text = Vec::new();
         let mut buffer = [0u8; 4096];
         loop {
@@ -648,6 +644,12 @@ impl Loop<'_> {
                 }
                 Err(_) => break,
             }
+        }
+        // Checked after the request is read, so a refused caller gets its answer rather than a
+        // reset connection.
+        if let Err(reason) = self.peer_allowed(&connection) {
+            respond(&mut connection, Reply::refused(Errno::Eperm, reason));
+            return;
         }
         let line = text.split(|b| *b == b'\n').next().unwrap_or_default();
         let parsed: request::Request = match serde_json::from_slice(line) {
@@ -839,20 +841,27 @@ fn respond(connection: &mut UnixStream, reply: Reply) {
 /// Runs in the forked helper: checks that need the broker's view, then joins the image's mount
 /// namespace and carries out the plan.
 fn helper(plan: &Plan, namespace: RawFd, made: &BTreeSet<u64>, cgroup_dir: &Path) -> ops::Outcome {
+    // SAFETY: a mount namespace descriptor; the helper is single-threaded.
+    if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } != 0 {
+        let error = io::Error::last_os_error();
+        return ops::Outcome {
+            result: Err((
+                Errno::Eio.name().to_string(),
+                format!("cannot enter the image's mount namespace: {error}"),
+            )),
+            // Nothing is known about the image's mounts from here: keep the record as it is.
+            alive: made.iter().copied().collect(),
+        };
+    }
     let result = (|| {
         if let Plan::Nfs { port, .. } = plan {
+            // The image's view of the (read-only) cgroup mount shows the same members.
             ops::port_held_by(*port, &cgroup_dir.join("cgroup.procs").to_string_lossy())?;
-        }
-        // SAFETY: a mount namespace descriptor; the helper is single-threaded.
-        if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } != 0 {
-            let error = io::Error::last_os_error();
-            return Err((
-                Errno::Eio,
-                format!("cannot enter the image's mount namespace: {error}"),
-            ));
         }
         ops::run(plan, made)
     })();
+    // Listed in the image's mount namespace, so a mount the image's view no longer has is
+    // forgotten (a lazily detached parent takes its children with it).
     let present = ops::mount_ids();
     ops::Outcome {
         result: result.map_err(|(errno, reason)| (errno.name().to_string(), reason)),

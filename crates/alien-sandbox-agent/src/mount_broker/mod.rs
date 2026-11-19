@@ -29,6 +29,9 @@ pub mod shim;
 #[cfg(target_os = "linux")]
 mod process;
 
+#[cfg(all(test, target_os = "linux"))]
+mod integration_tests;
+
 #[cfg(target_os = "linux")]
 pub use process::*;
 
