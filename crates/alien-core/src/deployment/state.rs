@@ -481,6 +481,27 @@ impl DeploymentState {
             || self.target_release.is_some()
             || self.stack_state.is_some()
     }
+
+    /// The stack an unfinished update is still applying after a newer target release arrived,
+    /// with the release it was prepared from. Such an update finishes on that stack before the
+    /// newer target is prepared, so its resources need that release's extensions, not the
+    /// target's. `None` when no update is unfinished or it applies the target release.
+    pub fn unfinished_update(&self) -> Option<(&str, &crate::Stack)> {
+        let metadata = self.runtime_metadata.as_ref()?;
+        let stack = metadata.pending_prepared_stack.as_ref()?;
+        let prepared_from = metadata.pending_prepared_release_id.as_deref()?;
+        let target = self.target_release.as_ref()?.release_id.as_deref()?;
+        (prepared_from != target).then_some((prepared_from, stack))
+    }
+
+    /// The stack whose resources the deployment applies: an unfinished update's, otherwise the
+    /// target release's, otherwise the current release's.
+    pub fn applied_stack(&self) -> Option<&crate::Stack> {
+        self.unfinished_update()
+            .map(|(_, stack)| stack)
+            .or(self.target_release.as_ref().map(|release| &release.stack))
+            .or(self.current_release.as_ref().map(|release| &release.stack))
+    }
 }
 
 /// Result of a deployment step
@@ -578,7 +599,9 @@ mod tests {
             inputs: vec![],
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             permissions: crate::PermissionsConfig::default(),
             supported_platforms: None,
         }
@@ -626,6 +649,39 @@ mod tests {
         let mut imported = state();
         imported.stack_state = Some(StackState::new(Platform::Kubernetes));
         assert!(imported.has_desired());
+    }
+
+    /// An update still applying the stack of an earlier release, after a newer target arrived,
+    /// applies that stack until it finishes; once the update applies the target release, or
+    /// none is unfinished, the target release's stack is the one applied.
+    #[test]
+    fn an_unfinished_update_applies_the_stack_it_was_prepared_from() {
+        let mut in_flight = empty_stack();
+        in_flight.id = "in-flight".to_string();
+        let mut deployment = state();
+        deployment.current_release = Some(release_info("rel_a"));
+        deployment.target_release = Some(release_info("rel_c"));
+        assert_eq!(deployment.unfinished_update(), None);
+        assert_eq!(
+            deployment.applied_stack(),
+            Some(&deployment.target_release.as_ref().unwrap().stack)
+        );
+
+        deployment.runtime_metadata = Some(RuntimeMetadata {
+            pending_prepared_stack: Some(in_flight.clone()),
+            pending_prepared_release_id: Some("rel_b".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(deployment.unfinished_update(), Some(("rel_b", &in_flight)));
+        assert_eq!(deployment.applied_stack(), Some(&in_flight));
+
+        // Prepared from the target itself: the update applies the target release.
+        deployment
+            .runtime_metadata
+            .as_mut()
+            .unwrap()
+            .pending_prepared_release_id = Some("rel_c".to_string());
+        assert_eq!(deployment.unfinished_update(), None);
     }
 
     #[test]

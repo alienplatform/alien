@@ -34,6 +34,7 @@ jwt-simple = { version = "0.13.0", default-features = false, features = ["pure-r
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+alien-client-core = { workspace = true, features = ["test-utils"] }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
 serde_json = { workspace = true, features = ["preserve_order"] }

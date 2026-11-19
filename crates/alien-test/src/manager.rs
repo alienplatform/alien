@@ -15,7 +15,7 @@ use alien_manager::{
     stores::sqlite::{SqliteDatabase, SqliteTokenStore},
     traits::{
         CreateTokenParams, CredentialResolver, DeploymentRecord, DeploymentStore,
-        ResolvedCredentials, TokenStore, TokenType,
+        RemoteStorageCredentialSource, ResolvedCredentials, TokenStore, TokenType,
     },
     AlienManagerBuilder, ManagerTomlConfig,
 };
@@ -37,6 +37,13 @@ struct LocalAzureTargetCredentialResolver {
 
 #[async_trait]
 impl CredentialResolver for LocalAzureTargetCredentialResolver {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         Ok(ClientConfig::Azure(Box::new(
             alien_core::AzureClientConfig {
@@ -62,11 +69,78 @@ impl CredentialResolver for LocalAzureTargetCredentialResolver {
         })
     }
 
+    /// Local test path: the target service principal stands in for the Remote
+    /// Bindings identity, so remote Storage gets the same config `resolve` gives.
+    async fn resolve_remote_storage_source(
+        &self,
+        deployment: &DeploymentRecord,
+        _resource_id: &str,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        Ok(RemoteStorageCredentialSource::Direct(
+            self.resolve(deployment).await?,
+        ))
+    }
+
     async fn resolve_management_config(
         &self,
         _platform: Platform,
     ) -> Result<Option<ManagementConfig>, AlienError> {
         Ok(self.management_config.clone())
+    }
+}
+
+/// Azure in CI: credentials come from the environment (the workload identity),
+/// and the management identity the manager renders into an update is the one the
+/// harness rendered into setup.
+///
+/// Without it the manager has no Azure management binding, renders updates without
+/// the setup-owned `management` resource, and refuses a setup rerun as changing the
+/// setup digest. Both sides take the value from
+/// [`TestManager::build_management_config`] so they cannot drift. This makes the
+/// Azure Terraform upgrade tests exercise the setup-rerun path; it does not
+/// exercise managed-identity impersonation.
+struct AzureManagementConfigResolver {
+    inner: alien_manager::providers::environment_credentials::EnvironmentCredentialResolver,
+    management_config: ManagementConfig,
+}
+
+#[async_trait]
+impl CredentialResolver for AzureManagementConfigResolver {
+    async fn resolve(&self, deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
+        self.inner.resolve(deployment).await
+    }
+
+    async fn resolve_with_capability(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<ResolvedCredentials, AlienError> {
+        self.inner.resolve_with_capability(deployment).await
+    }
+
+    /// Azure remote data access belongs to the Remote Bindings identity; the
+    /// trait default would call `resolve` and mint the management identity.
+    async fn resolve_remote_storage_source(
+        &self,
+        deployment: &DeploymentRecord,
+        resource_id: &str,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        self.inner
+            .resolve_remote_storage_source(deployment, resource_id)
+            .await
+    }
+
+    async fn resolve_management_config(
+        &self,
+        platform: Platform,
+    ) -> Result<Option<ManagementConfig>, AlienError> {
+        Ok((platform == Platform::Azure).then(|| self.management_config.clone()))
+    }
+
+    async fn management_external_id(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        self.inner.management_external_id(deployment).await
     }
 }
 
@@ -247,6 +321,11 @@ impl TestManager {
         if local_azure_resolver.is_some() {
             management_config = None;
         }
+        let azure_ci_resolver = if local_azure_resolver.is_none() {
+            Self::build_azure_management_resolver(platforms, management_config.clone())
+        } else {
+            None
+        };
 
         // 6c. Build typed bindings for the TOML config from test resources.
         //     This replaces the old env var injection pattern — all binding
@@ -303,6 +382,8 @@ impl TestManager {
         //    and starts an embedded local registry when no cloud AR is configured.
         let mut builder = AlienManagerBuilder::new(manager_config).token_store(token_store.clone());
         if let Some(resolver) = local_azure_resolver {
+            builder = builder.credential_resolver(Arc::new(resolver));
+        } else if let Some(resolver) = azure_ci_resolver {
             builder = builder.credential_resolver(Arc::new(resolver));
         }
         let server = builder
@@ -488,6 +569,19 @@ impl TestManager {
             }
             _ => None,
         }
+    }
+
+    fn build_azure_management_resolver(
+        platforms: &[Platform],
+        management_config: Option<ManagementConfig>,
+    ) -> Option<AzureManagementConfigResolver> {
+        if platforms != [Platform::Azure] {
+            return None;
+        }
+        Some(AzureManagementConfigResolver {
+            inner: alien_manager::providers::environment_credentials::EnvironmentCredentialResolver::new(),
+            management_config: management_config?,
+        })
     }
 
     fn build_local_azure_target_resolver(
@@ -763,6 +857,116 @@ impl TestManager {
 #[cfg(test)]
 mod tests {
     use super::{derive_response_signing_key, TestManager};
+    use alien_core::{AzureManagementConfig, ManagementConfig, Platform};
+    use alien_manager::traits::CredentialResolver;
+
+    #[tokio::test]
+    async fn azure_ci_manager_returns_the_management_config_the_setup_renders() {
+        let config = ManagementConfig::Azure(AzureManagementConfig {
+            managing_tenant_id: "tenant".into(),
+            oidc_issuer: "https://issuer.example".into(),
+            oidc_subject: "subject".into(),
+        });
+        let resolver =
+            TestManager::build_azure_management_resolver(&[Platform::Azure], Some(config.clone()))
+                .expect("azure only, with a management config");
+        assert_eq!(
+            resolver
+                .resolve_management_config(Platform::Azure)
+                .await
+                .unwrap(),
+            Some(config.clone())
+        );
+        assert_eq!(
+            resolver
+                .resolve_management_config(Platform::Aws)
+                .await
+                .unwrap(),
+            None
+        );
+        // Other platform sets keep the default resolver.
+        assert!(TestManager::build_azure_management_resolver(
+            &[Platform::Aws, Platform::Azure],
+            Some(config)
+        )
+        .is_none());
+        assert!(TestManager::build_azure_management_resolver(&[Platform::Azure], None).is_none());
+    }
+
+    #[tokio::test]
+    async fn azure_ci_manager_forwards_the_remote_storage_source_to_the_environment_resolver() {
+        let config = ManagementConfig::Azure(AzureManagementConfig {
+            managing_tenant_id: "tenant".into(),
+            oidc_issuer: "https://issuer.example".into(),
+            oidc_subject: "subject".into(),
+        });
+        let resolver =
+            TestManager::build_azure_management_resolver(&[Platform::Azure], Some(config))
+                .expect("azure only, with a management config");
+        let deployment: alien_manager::traits::DeploymentRecord =
+            serde_json::from_value(serde_json::json!({
+                "id": "dp",
+                "name": "dp",
+                "deploymentGroupId": "group",
+                "platform": "azure",
+                "deploymentProtocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                "status": "running",
+                "retryRequested": false,
+                "createdAt": "2026-01-01T00:00:00Z",
+            }))
+            .expect("minimal deployment record");
+        // The environment resolver refuses a deployment without Remote Bindings
+        // state. The trait default would instead fall back to `resolve`.
+        let error = resolver
+            .resolve_remote_storage_source(&deployment, "storage")
+            .await
+            .expect_err("no Remote Bindings state");
+        assert!(
+            error
+                .to_string()
+                .contains("Remote Bindings identity state is required"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_azure_target_resolver_serves_remote_storage() {
+        let resolver = super::LocalAzureTargetCredentialResolver {
+            target: crate::config::AzureConfig {
+                subscription_id: "sub".into(),
+                tenant_id: "tenant".into(),
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                region: "eastus".into(),
+                principal_id: None,
+                oidc_issuer: None,
+                oidc_subject: None,
+            },
+            management_config: None,
+        };
+        let deployment: alien_manager::traits::DeploymentRecord =
+            serde_json::from_value(serde_json::json!({
+                "id": "dp",
+                "name": "dp",
+                "deploymentGroupId": "group",
+                "platform": "azure",
+                "deploymentProtocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                "status": "running",
+                "retryRequested": false,
+                "createdAt": "2026-01-01T00:00:00Z",
+            }))
+            .expect("minimal deployment record");
+        let source = resolver
+            .resolve_remote_storage_source(&deployment, "storage")
+            .await
+            .expect("local resolver serves remote Storage");
+        match source {
+            alien_manager::traits::RemoteStorageCredentialSource::Direct(
+                alien_core::ClientConfig::Azure(config),
+            ) => assert_eq!(config.subscription_id, "sub"),
+            _ => panic!("expected direct Azure credentials"),
+        }
+    }
 
     #[tokio::test]
     async fn manager_serves_requests_with_embedded_registry() {

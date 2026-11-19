@@ -17,6 +17,8 @@ pub mod gcp_request_utils;
 pub mod gcs;
 pub mod iam;
 mod iam_workload_identity;
+#[cfg(test)]
+mod interceptor_tests;
 pub mod longrunning;
 pub mod memorystore;
 pub mod model_garden;
@@ -173,7 +175,7 @@ impl GcpClientConfigExt for GcpClientConfig {
             let region = if let Some(region) = environment_variables.get("GCP_REGION") {
                 region.clone()
             } else {
-                Self::fetch_metadata_region().await?
+                region_from_metadata_or_explain().await?
             };
 
             (
@@ -250,7 +252,7 @@ impl GcpClientConfigExt for GcpClientConfig {
             let region = if let Some(region) = environment_variables.get("GCP_REGION") {
                 region.clone()
             } else {
-                Self::fetch_metadata_region().await?
+                region_from_metadata_or_explain().await?
             };
             (GcpCredentials::ServiceMetadata, project_id, region)
         };
@@ -1069,7 +1071,7 @@ impl GcpClientConfigExt for GcpClientConfig {
             let region = if let Some(region) = environment_variables.get("GCP_REGION") {
                 region.clone()
             } else {
-                Self::fetch_metadata_region().await?
+                region_from_metadata_or_explain().await?
             };
 
             Ok((
@@ -1127,6 +1129,19 @@ async fn generate_impersonated_access_token(
     iam_client
         .generate_access_token(config.service_account_email.clone(), token_request)
         .await
+}
+
+/// Reads the region from the metadata server, which only exists on Google
+/// compute. Elsewhere (a laptop, another cloud) the failure names the variable
+/// to set instead of a metadata-server connection error.
+async fn region_from_metadata_or_explain() -> Result<String> {
+    use alien_error::ContextError as _;
+    GcpClientConfig::fetch_metadata_region().await.map_err(|error| {
+        error.context(ErrorData::InvalidClientConfig {
+            message: "GCP region is not set. Set GCP_REGION (for example us-central1); the metadata server that would supply it is only reachable on Google compute".to_string(),
+            errors: None,
+        })
+    })
 }
 
 fn gcp_region_from_zone(zone: &str) -> Option<String> {

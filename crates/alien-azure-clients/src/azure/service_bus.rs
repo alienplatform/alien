@@ -1231,6 +1231,7 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
             .client
             .put(url.to_string())
             .header("Authorization", format!("Bearer {}", bearer_token))
+            .header("Content-Length", "0")
             .send()
             .await
             .into_alien_error()
@@ -1282,6 +1283,7 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
             .client
             .post(url.to_string())
             .header("Authorization", format!("Bearer {}", bearer_token))
+            .header("Content-Length", "0")
             .send()
             .await
             .into_alien_error()
@@ -1315,7 +1317,10 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
 mod batch_tests {
     use super::*;
     use crate::azure::{AzureClientConfig, AzureClientConfigExt, ServiceOverrides};
-    use httpmock::{Method::POST, MockServer};
+    use httpmock::{
+        Method::{POST, PUT},
+        MockServer,
+    };
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -1355,5 +1360,43 @@ mod batch_tests {
             .await
             .is_err());
         failure.assert_hits_async(1).await;
+    }
+
+    /// Service Bus answers 411 to a body-less PUT or POST without a content length, so the
+    /// requests that carry no body must say `Content-Length: 0`.
+    #[tokio::test]
+    async fn abandon_and_renew_send_an_explicit_empty_content_length() {
+        let server = MockServer::start_async().await;
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("servicebus".to_string(), server.base_url())]),
+        });
+        let client =
+            AzureServiceBusDataPlaneClient::new(Client::new(), AzureTokenCache::new(config));
+        let abandon = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/events/messages/m1/lock1")
+                    .header("content-length", "0");
+                then.status(200);
+            })
+            .await;
+        let renew = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/events/messages/m1/lock1")
+                    .header("content-length", "0");
+                then.status(200);
+            })
+            .await;
+        client
+            .abandon_message("test".into(), "events".into(), "m1".into(), "lock1".into())
+            .await
+            .unwrap();
+        client
+            .renew_message_lock("test".into(), "events".into(), "m1".into(), "lock1".into())
+            .await
+            .unwrap();
+        abandon.assert_hits_async(1).await;
+        renew.assert_hits_async(1).await;
     }
 }

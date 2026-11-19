@@ -567,6 +567,13 @@ mod tests {
 
     #[async_trait]
     impl CredentialResolver for AwsAccount {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(&self, _: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
             Ok(ClientConfig::Aws(Box::new(AwsClientConfig {
                 account_id: fake_sts::ACCOUNT_ID.into(),

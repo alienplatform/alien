@@ -30,7 +30,8 @@ use super::kubernetes_command_service::{
     delete_command_service, reconcile_command_service, reconcile_ready_command_service,
 };
 use super::kubernetes_deployment::{
-    build_worker_deployment, kubernetes_namespace, worker_labels, WORKER_CONTAINER_NAME,
+    build_worker_deployment, kubernetes_namespace, recorded_architecture, worker_labels,
+    WORKER_CONTAINER_NAME,
 };
 
 #[controller]
@@ -67,6 +68,12 @@ pub struct KubernetesWorkerController {
     pub(crate) last_recovery_check_unix: Option<i64>,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
+    /// The single architecture the release recorded when the pod spec was last applied (None: no
+    /// record, or several). It is read at pod-spec build time, so a release that records one for
+    /// an existing worker is invisible to config diffing. Only this is compared, never the whole
+    /// selector, so a pool's selector cannot make an unrecorded workload roll.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_architecture: Option<alien_core::instance_catalog::Architecture>,
 }
 
 #[controller]
@@ -224,6 +231,7 @@ impl KubernetesWorkerController {
             ctx,
         )
         .await?;
+        self.applied_architecture = recorded_architecture(ctx, &config.id);
 
         self.expected_generation = None;
         if let Some(mut existing) = existing_deployment {
@@ -413,7 +421,7 @@ impl KubernetesWorkerController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: Some(60),
+                max_times: None,
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -616,7 +624,7 @@ impl KubernetesWorkerController {
             .await?;
             if let KubernetesEndpointAction::Waiting { suggested_delay } = action {
                 return Ok(HandlerAction::Stay {
-                    max_times: Some(60),
+                    max_times: None,
                     suggested_delay: Some(suggested_delay),
                 });
             }
@@ -818,6 +826,7 @@ impl KubernetesWorkerController {
             ctx,
         )
         .await?;
+        self.applied_architecture = recorded_architecture(ctx, &config.id);
         new_deployment.metadata.resource_version = resource_version;
 
         let updated = deployment_client
@@ -974,7 +983,7 @@ impl KubernetesWorkerController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: Some(60),
+                max_times: None,
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -991,12 +1000,15 @@ impl KubernetesWorkerController {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Worker>()?;
 
-        let namespace = self.namespace.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: config.id.clone(),
-                message: "Namespace not set in state".to_string(),
-            })
-        })?;
+        // The controller records the namespace before it writes, so a state without one is one
+        // whose create was refused first. Nothing is recorded to delete; do not look for more.
+        let Some(namespace) = self.namespace.as_ref() else {
+            warn!(resource_id=%config.id, "No namespace is recorded, so nothing was deleted; an earlier create that failed part-way may have left objects");
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        };
 
         info!(namespace=%namespace, "Initiating Kubernetes Worker deletion");
 
@@ -1327,6 +1339,16 @@ impl KubernetesWorkerController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    /// A release that records (or changes) the architecture its image was built for changes the
+    /// node selector without changing the Worker config, so compare what was applied.
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if self.deployment_name.is_none() {
+            return Ok(false);
+        }
+        let config = ctx.desired_resource_config::<Worker>()?;
+        Ok(recorded_architecture(ctx, &config.id) != self.applied_architecture)
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let Some(deployment_name) = &self.deployment_name {
             Some(ResourceOutputs::new(WorkerOutputs {
@@ -1421,6 +1443,7 @@ impl KubernetesWorkerController {
             expected_generation: None,
             zero_ready_observed: false,
             rollout_watch: None,
+            applied_architecture: None,
             recovery_checks: 0,
             recovering: false,
             last_recovery_check_unix: None,
@@ -1433,6 +1456,80 @@ impl KubernetesWorkerController {
 mod tests {
     use super::*;
     use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+    use crate::core::ResourceController as _;
+    use alien_core::Resource;
+
+    #[test]
+    fn needs_update_follows_the_built_architecture_a_release_records() {
+        use alien_core::instance_catalog::Architecture::{Arm64, X86_64};
+        let config = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "registry.example.com/api:1".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let mut controller = KubernetesWorkerController::mock_ready("api", "ns");
+        let mut stack = harness.ctx().desired_stack.clone();
+        // The stack also pins a node selector of its own (the pool architecture): it must
+        // not make a workload with no record, or a multi-architecture one, roll.
+        crate::core::kubernetes_manifest_test_support::add_x86_64_pool(&mut stack);
+        let id = config.id.clone();
+        let wants_update = |controller: &KubernetesWorkerController, stack: &alien_core::Stack| {
+            let mut ctx = harness.ctx();
+            ctx.desired_stack = stack;
+            controller.needs_update(&ctx).expect("needs_update")
+        };
+
+        // A release without the record, or a multi-architecture one: nothing to apply.
+        assert!(!wants_update(&controller, &stack));
+        stack
+            .built_architectures
+            .insert(id.clone(), vec![X86_64, Arm64]);
+        assert!(!wants_update(&controller, &stack));
+
+        // A release that records one architecture updates the existing workload once.
+        stack.built_architectures.insert(id.clone(), vec![X86_64]);
+        assert!(wants_update(&controller, &stack));
+        controller.applied_architecture = Some(X86_64);
+        assert!(!wants_update(&controller, &stack));
+
+        // A later release that changes it updates again; one that drops it updates once more.
+        stack.built_architectures.insert(id.clone(), vec![Arm64]);
+        assert!(wants_update(&controller, &stack));
+        stack.built_architectures.clear();
+        assert!(wants_update(&controller, &stack));
+    }
+
+    /// A worker refused before its controller recorded a namespace has nothing recorded: deleting it
+    /// completes instead of failing with "Namespace not set in state".
+    #[tokio::test]
+    async fn a_worker_that_never_got_as_far_as_a_namespace_deletes_cleanly() {
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "example.test/worker:1".into(),
+            })
+            .permissions("default".into())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![]);
+        let ctx = harness.ctx();
+        let mut controller = KubernetesWorkerController::default();
+        assert!(controller.namespace.is_none() && controller.deployment_name.is_none());
+        let action = controller
+            .delete_start(&ctx)
+            .await
+            .expect("nothing is recorded, so there is nothing to fail on");
+        assert!(
+            matches!(
+                action,
+                KubernetesWorkerHandlerAction::Continue {
+                    state: KubernetesWorkerState::Deleted,
+                    ..
+                }
+            ),
+            "{action:?}"
+        );
+    }
 
     #[test]
     fn controller_state_written_before_rollout_tracking_still_loads() {
@@ -1990,6 +2087,7 @@ mod tests {
             expected_generation: None,
             zero_ready_observed: false,
             rollout_watch: None,
+            applied_architecture: None,
             recovery_checks: 0,
             recovering: false,
             last_recovery_check_unix: None,
@@ -2034,6 +2132,7 @@ mod tests {
             expected_generation: None,
             zero_ready_observed: false,
             rollout_watch: None,
+            applied_architecture: None,
             recovery_checks: 0,
             recovering: false,
             last_recovery_check_unix: None,
@@ -2076,6 +2175,68 @@ mod tests {
             .expect("Worker outputs")
             .commands_push_target
             .is_none());
+    }
+
+    /// A managed certificate issues asynchronously: the endpoint waits for it with a bound saved
+    /// when the wait starts (not a poll count), on first install and on update, and a failed
+    /// issuance fails at once.
+    #[tokio::test]
+    async fn endpoint_waits_for_the_certificate_on_create_and_update() {
+        use crate::core::kubernetes_manifest_test_support::check_certificate_wait;
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "example.test/worker:1".into(),
+            })
+            .permissions("default".into())
+            .public_endpoint(alien_core::WorkerPublicEndpoint {
+                name: "api".into(),
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .build();
+        // The worker's own Service is written before the endpoint; every other lookup finds nothing.
+        let server = httpmock::MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(httpmock::Method::POST);
+            then.status(201).json_body(serde_json::json!({
+                "metadata": {"name": "worker", "namespace": "test-ns"},
+                "spec": {}
+            }));
+        });
+        server.mock(|when, then| {
+            when.any_request();
+            then.status(404).json_body(serde_json::json!({
+                "kind": "Status", "apiVersion": "v1", "status": "Failure",
+                "reason": "NotFound", "code": 404
+            }));
+        });
+        let mut harness =
+            KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![])
+                .with_server_url(server.base_url());
+        for (state, status) in [
+            (
+                KubernetesWorkerState::ReconcilePublicEndpoint,
+                ResourceStatus::Provisioning,
+            ),
+            (
+                KubernetesWorkerState::ReconcilePublicEndpointAfterUpdate,
+                ResourceStatus::Updating,
+            ),
+        ] {
+            let controller = KubernetesWorkerController {
+                state,
+                deployment_name: Some("worker".into()),
+                namespace: Some("test-ns".into()),
+                ..Default::default()
+            };
+            check_certificate_wait(&mut harness, controller, "worker", status, |c, at| {
+                c.public_endpoint.wait_started_unix.insert(
+                    crate::kubernetes_public_endpoint::EndpointWait::Certificate,
+                    at,
+                );
+            })
+            .await;
+        }
     }
 }
 

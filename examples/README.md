@@ -18,12 +18,21 @@ Each example is a self-contained template you can initialize with `alien init`.
 | [byob-storage-ts](./byob-storage-ts) | Provision customer-owned object storage and access it from an external SaaS backend. | TypeScript |
 | [customer-keys-ts](./customer-keys-ts) | Encrypt data with a key controlled by each customer. | TypeScript |
 | [ai-chatbot-ts](./ai-chatbot-ts) | Answer questions about a private Postgres with ambient cloud models. | TypeScript |
+| [extensions/postgres-iam-auth](./extensions/postgres-iam-auth) | An extension that turns on IAM authentication for Alien's Postgres on every setup path. | Rust |
+| [extensions/postgres-backup-retention](./extensions/postgres-backup-retention) | An extension that keeps Postgres backups for 30 days in every setup template. | Rust |
+| [extensions/resource-tags](./extensions/resource-tags) | An extension that adds your tags to the resources Alien's controllers create. | Rust |
+| [extensions/budget-alert](./extensions/budget-alert) | An extension that adds an AWS budget alert, a custom resource with no controller. | Rust |
+| [extensions/dns-zone](./extensions/dns-zone) | An extension that adds a DNS zone, a custom resource with its own controllers. | Rust |
 
 Some repository directories are supporting projects or advanced source examples. `alien init`
 only lists directories with a valid `template.toml`, so every option it shows can be scaffolded.
 
 The [custom operations example](./custom-operations) demonstrates a Rust Remote Operator
 plugin with typed diagnostics, export throttling, and generated metadata.
+
+[extensions/](./extensions) explains what each extension example shows, and
+[dataplane-with-extension](./dataplane-with-extension) is a project whose `alien.ts` uses an
+extension that lives beside it.
 
 ## Getting started
 

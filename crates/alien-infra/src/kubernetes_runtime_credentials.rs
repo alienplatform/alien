@@ -208,6 +208,36 @@ pub(crate) async fn reconcile(
     Ok(())
 }
 
+/// The (name, namespace) and kind of the workload a controller's saved state describes, when it
+/// has one installed that needs its credentials renewed. A Daemon whose create has not
+/// succeeded has no DaemonSet to renew for; one that failed after its DaemonSet was made has.
+fn installed_workload_of(
+    internal: &serde_json::Value,
+) -> Option<((String, String), CommandTargetType)> {
+    match internal.get("type").and_then(|value| value.as_str()) {
+        Some("KubernetesWorkerController") => {
+            serde_json::from_value::<crate::KubernetesWorkerController>(internal.clone())
+                .ok()
+                .and_then(|controller| controller.deployment_name.zip(controller.namespace))
+                .map(|names| (names, CommandTargetType::Worker))
+        }
+        Some("KubernetesContainerController") => {
+            serde_json::from_value::<crate::KubernetesContainerController>(internal.clone())
+                .ok()
+                .and_then(|controller| controller.workload_name.zip(controller.namespace))
+                .map(|names| (names, CommandTargetType::Container))
+        }
+        Some("KubernetesDaemonController") => {
+            serde_json::from_value::<crate::KubernetesDaemonController>(internal.clone())
+                .ok()
+                .filter(|controller| !controller.create_unfinished)
+                .and_then(|controller| controller.daemon_set_name.zip(controller.namespace))
+                .map(|names| (names, CommandTargetType::Daemon))
+        }
+        _ => None,
+    }
+}
+
 /// Renew the credential Secrets of the installed Kubernetes workloads and
 /// republish their command leaf, without changing any workload. The Operator
 /// runs this when it cannot refresh the installed release: an update waits
@@ -239,27 +269,7 @@ pub async fn refresh_installed_credentials(
         let Some(internal) = resource.internal_state.as_ref() else {
             continue;
         };
-        let installed_workload = match internal.get("type").and_then(|value| value.as_str()) {
-            Some("KubernetesWorkerController") => {
-                serde_json::from_value::<crate::KubernetesWorkerController>(internal.clone())
-                    .ok()
-                    .and_then(|controller| controller.deployment_name.zip(controller.namespace))
-                    .map(|names| (names, CommandTargetType::Worker))
-            }
-            Some("KubernetesContainerController") => {
-                serde_json::from_value::<crate::KubernetesContainerController>(internal.clone())
-                    .ok()
-                    .and_then(|controller| controller.workload_name.zip(controller.namespace))
-                    .map(|names| (names, CommandTargetType::Container))
-            }
-            Some("KubernetesDaemonController") => {
-                serde_json::from_value::<crate::KubernetesDaemonController>(internal.clone())
-                    .ok()
-                    .and_then(|controller| controller.daemon_set_name.zip(controller.namespace))
-                    .map(|names| (names, CommandTargetType::Daemon))
-            }
-            _ => None,
-        };
+        let installed_workload = installed_workload_of(internal);
         let Some(((workload_name, namespace), target_type)) = installed_workload else {
             continue;
         };
@@ -448,6 +458,46 @@ pub(crate) async fn delete_environment_secret(
 
 #[cfg(test)]
 mod tests {
+    /// The saved state of a Daemon, as the executor stores it.
+    fn daemon_state(
+        state: crate::daemon::KubernetesDaemonState,
+        create_unfinished: bool,
+    ) -> serde_json::Value {
+        let mut internal = serde_json::to_value(crate::KubernetesDaemonController {
+            state,
+            daemon_set_name: Some("agent".to_string()),
+            namespace: Some("agents".to_string()),
+            create_unfinished,
+            ..Default::default()
+        })
+        .expect("serialize");
+        internal["type"] = serde_json::json!("KubernetesDaemonController");
+        internal
+    }
+
+    fn names_of(internal: &serde_json::Value) -> Option<(String, String)> {
+        super::installed_workload_of(internal).map(|(names, _)| names)
+    }
+
+    /// A Daemon whose create has not succeeded has no DaemonSet: nothing to renew for.
+    #[test]
+    fn a_daemon_whose_create_has_not_succeeded_is_not_renewed() {
+        let unfinished = daemon_state(crate::daemon::KubernetesDaemonState::CreateFailed, true);
+        assert_eq!(names_of(&unfinished), None);
+    }
+
+    /// A Daemon that failed after its DaemonSet was made (flag false) keeps being renewed, and
+    /// so does one that is running.
+    #[test]
+    fn a_daemon_that_failed_after_its_daemonset_was_made_is_still_renewed() {
+        let expected = Some(("agent".to_string(), "agents".to_string()));
+        for state in [
+            crate::daemon::KubernetesDaemonState::CreateFailed,
+            crate::daemon::KubernetesDaemonState::Ready,
+        ] {
+            assert_eq!(names_of(&daemon_state(state, false)), expected);
+        }
+    }
     /// The manager issues the credential with its own clock, so one that is a
     /// little ahead of this cluster's must still be accepted, the way the
     /// registry pull credential check accepts it.

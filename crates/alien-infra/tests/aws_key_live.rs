@@ -88,6 +88,7 @@ async fn schedule_deletion(http: &Client, aws: &AwsClientConfig, key_id: &str) {
             region: region.clone(),
             credentials: aws.get_credentials(),
             signing_region: None,
+            interceptors: Default::default(),
         },
     )
     .await;

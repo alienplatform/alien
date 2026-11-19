@@ -1,0 +1,4 @@
+{
+  "resource": { "id": "zone", "domain": "internal.acme.dev" },
+  "importData": { "zoneName": "my-app-zone" }
+}

@@ -3887,6 +3887,34 @@
           }
         }
       },
+      "AmbientAiBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BedrockAiBinding",
+                "description": "AWS Bedrock, signed with the workload's AWS credential chain."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "bedrock"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS Bedrock, signed with the workload's AWS credential chain."
+          }
+        ],
+        "description": "A managed cloud AI service the workload reaches with its ambient identity. The installer owns\nthe identity and its permissions; Alien grants nothing for it."
+      },
       "ArtifactRegistryBinding": {
         "oneOf": [
           {
@@ -7566,6 +7594,19 @@
         },
         "additionalProperties": true
       },
+      "BedrockAiBinding": {
+        "type": "object",
+        "description": "AWS Bedrock AI binding configuration",
+        "required": [
+          "region"
+        ],
+        "properties": {
+          "region": {
+            "type": "string",
+            "description": "The AWS region where Bedrock is accessed (for example `us-east-1`). The gateway builds\n`https://bedrock-runtime.<region>.amazonaws.com` from it, so parsing refuses anything\nthat is not a plain AWS region name."
+          }
+        }
+      },
       "BindingValue_Option_String": {
         "oneOf": [
           {
@@ -9396,6 +9437,101 @@
           }
         }
       },
+      "CustomExternalBinding": {
+        "type": "object",
+        "description": "A binding to an existing resource of a type an extension defines, such as a DNS zone the\ncustomer already has. Its fields are the resource's outputs, as the type's descriptor declares\nthem in `schemas.outputs`.",
+        "required": [
+          "type",
+          "service"
+        ],
+        "properties": {
+          "service": {
+            "type": "string",
+            "description": "The service the existing resource lives in, such as `route53`."
+          },
+          "type": {
+            "$ref": "#/components/schemas/CustomResourceType",
+            "description": "The extension's type, such as `acme/dns-zone`."
+          }
+        },
+        "additionalProperties": {
+          "description": "The resource's outputs, such as its `zoneId`."
+        }
+      },
+      "CustomHeartbeat": {
+        "type": "object",
+        "description": "The heartbeat of a resource whose type an extension defines.",
+        "required": [
+          "resourceType",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/CustomHeartbeatData"
+          },
+          "resourceType": {
+            "$ref": "#/components/schemas/CustomResourceType"
+          }
+        }
+      },
+      "CustomHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "details": {
+            "type": "object",
+            "description": "Type-specific fields the extension's controller reports, which Alien does not read.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Value"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/CustomHeartbeatStatus"
+          }
+        }
+      },
+      "CustomHeartbeatStatus": {
+        "type": "object",
+        "description": "The status fields every heartbeat carries, so a custom heartbeat's health reads like a\nbuilt-in one's.",
+        "required": [
+          "health",
+          "lifecycle",
+          "stale",
+          "partial",
+          "collectionIssues"
+        ],
+        "properties": {
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        }
+      },
       "CustomPluginOperationsConfig": {
         "allOf": [
           {
@@ -9421,6 +9557,11 @@
           }
         ],
         "description": "A published custom plugin at an exact version."
+      },
+      "CustomResourceType": {
+        "type": "string",
+        "description": "The type of a resource an extension defines, such as `acme/dns-zone`.",
+        "pattern": "^(?!(?:alien|experimental)/)[^/]+/.+$"
       },
       "DaemonHeartbeatData": {
         "oneOf": [
@@ -10279,6 +10420,19 @@
           "tcp"
         ]
       },
+      "ExternalAi": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AmbientAiBinding",
+            "description": "A managed cloud AI service reached with the workload's own identity."
+          },
+          {
+            "$ref": "#/components/schemas/ExternalAiBinding",
+            "description": "A provider reached with a key the installer supplies."
+          }
+        ],
+        "description": "What an installer supplies for an AI resource with an external binding.\n\nTwo inputs, told apart by whether the JSON carries a `service` tag (other than `external-ai`):\n- `{ \"provider\", \"apiKey\" }` — BYO key (the original input; stored deployments and Helm values\n  carry it, so it parses exactly as before). `{ \"service\": \"external-ai\", \"provider\",\n  \"apiKey\" }` also parses, as it did before the cloud-identity form existed.\n- `{ \"service\": \"bedrock\", \"region\" }` — the cloud's own AI service, called with the workload's\n  ambient identity (for example an EKS pod's IRSA role). No key, no Secret.\n\nThe cloud-identity form needs the pod to have its own AWS identity: on Kubernetes, an IRSA role\non the service account (or an EKS Pod Identity association) with `bedrock:InvokeModel` and\n`bedrock:InvokeModelWithResponseStream`. Without one the gateway refuses to sign and never uses\nthe node's role. The `region` must be a plain AWS region name such as `us-east-1`.\n\nAccess is not checked at install time (the setup credentials cannot speak for the pod's role):\nit is checked on the first call, and a model the role cannot use fails with\n`provider_access_unavailable`.\n\nUntagged, because the BYO-key input has no tag and must keep parsing unchanged. The two shapes\ncannot overlap: the ambient one requires `service`, the key one requires `provider` and `apiKey`.\n`Deserialize` is hand-written (see below) so a typo gets an error naming both accepted forms, and\nso an ambient input carrying an unused key such as `apiKey` is refused instead of dropped."
+      },
       "ExternalAiBinding": {
         "type": "object",
         "description": "External AI provider binding configuration (BYO-key).\n\nThe operator-supplied secret rides inside the binding via\n`BindingValue<String>`, so it is a literal on cloud platforms and gains\nKubernetes SecretRef resolution for free (`extract_binding_secrets` walks\nthe binding JSON for `secretRef`).",
@@ -10512,8 +10666,8 @@
           {
             "allOf": [
               {
-                "$ref": "#/components/schemas/ExternalAiBinding",
-                "description": "External AI provider binding (BYO-key OpenAI/Anthropic, etc.)"
+                "$ref": "#/components/schemas/ExternalAi",
+                "description": "External AI binding: a BYO-key provider (OpenAI/Anthropic, etc.) or a cloud AI service\nreached with the workload's own identity (Bedrock)"
               },
               {
                 "type": "object",
@@ -10530,7 +10684,10 @@
                 }
               }
             ],
-            "description": "External AI provider binding (BYO-key OpenAI/Anthropic, etc.)"
+            "description": "External AI binding: a BYO-key provider (OpenAI/Anthropic, etc.) or a cloud AI service\nreached with the workload's own identity (Bedrock)"
+          },
+          {
+            "$ref": "#/components/schemas/CustomExternalBinding"
           }
         ],
         "description": "Represents a binding to pre-existing infrastructure.\n\nThe binding type must match the resource type it's applied to.\nValidated at runtime by the executor."
@@ -12548,6 +12705,13 @@
               "string",
               "null"
             ]
+          },
+          "setupCapabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the client's setup run can do, such as `create-keys`. A standalone manager\naccepts and ignores it; embedded managers forward it to their control plane.\nOlder clients omit it."
           },
           "setupItem": {
             "type": [
@@ -20906,6 +21070,22 @@
                 "enum": [
                   "sandbox"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The heartbeat of a resource whose type an extension defines.",
+            "required": [
+              "data",
+              "resourceType"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/CustomHeartbeatData"
+              },
+              "resourceType": {
+                "$ref": "#/components/schemas/CustomResourceType"
               }
             }
           }

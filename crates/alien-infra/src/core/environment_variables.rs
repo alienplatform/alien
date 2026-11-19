@@ -393,6 +393,25 @@ fn current_resource_public_endpoint_urls(
     HashMap::from([("default".to_string(), format!("https://{}", resource.fqdn))])
 }
 
+/// How the local platform's refusal names an external binding it cannot serve, or `None` when
+/// the binding is fine there. Postgres, Redis and key-based AI inline a raw secret that the
+/// local runtime-only channel would persist or silently replace with the dev key; the Bedrock
+/// form carries no key but needs the workload's AWS identity, which a local process lacks.
+fn local_unsupported_external_kind(external: &alien_core::ExternalBinding) -> Option<&'static str> {
+    use alien_core::bindings::ExternalAi;
+    match external {
+        alien_core::ExternalBinding::Postgres(_) => Some("external (Remote Access) Postgres"),
+        alien_core::ExternalBinding::Redis(_) => Some("external (Remote Access) Redis"),
+        alien_core::ExternalBinding::Ai(ExternalAi::Ambient(_)) => Some(
+            "an external Bedrock AI binding (it uses the workload's AWS identity, which a local process does not have)",
+        ),
+        alien_core::ExternalBinding::Ai(ExternalAi::ApiKey(_)) => {
+            Some("an external (BYO-key) AI binding")
+        }
+        _ => None,
+    }
+}
+
 impl EnvironmentVariableBuilder {
     /// Create a new builder starting with the initial environment variables.
     pub fn new(initial_env: &HashMap<String, String>) -> Self {
@@ -716,29 +735,17 @@ impl EnvironmentVariableBuilder {
                             // inlines a raw secret, and the local runtime-only channel would
                             // either persist it into worker metadata (Postgres) or silently
                             // replace it with the dev key from the process environment (AI).
-                            if ctx.platform == alien_core::Platform::Local
-                                && matches!(
-                                    external,
-                                    alien_core::ExternalBinding::Postgres(_)
-                                        | alien_core::ExternalBinding::Redis(_)
-                                        | alien_core::ExternalBinding::Ai(_)
-                                )
-                            {
-                                let kind = match external {
-                                    alien_core::ExternalBinding::Postgres(_) => {
-                                        "external (Remote Access) Postgres"
-                                    }
-                                    alien_core::ExternalBinding::Redis(_) => {
-                                        "external (Remote Access) Redis"
-                                    }
-                                    _ => "an external (BYO-key) AI binding",
-                                };
-                                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                                    message: format!(
-                                        "{kind} is not supported on the local platform"
-                                    ),
-                                    resource_id: Some(binding_name.to_string()),
-                                }));
+                            if ctx.platform == alien_core::Platform::Local {
+                                if let Some(kind) = local_unsupported_external_kind(external) {
+                                    return Err(AlienError::new(
+                                        ErrorData::ResourceConfigInvalid {
+                                            message: format!(
+                                                "{kind} is not supported on the local platform"
+                                            ),
+                                            resource_id: Some(binding_name.to_string()),
+                                        },
+                                    ));
+                                }
                             }
                             let value = external
                                 .to_env_binding_value()
@@ -769,9 +776,69 @@ impl EnvironmentVariableBuilder {
 
                 self.env_vars.extend(binding_env_vars);
             }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            self.add_extension_link_env(link, resource_state, ctx, resource_id_for_errors)
+                .await?;
         }
 
         Ok(self)
+    }
+
+    /// The variables an extension's link gives the workload for `link`, a resource of one of the
+    /// extension's types. A name the workload already has, its own or another link's, is refused
+    /// rather than replaced.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn add_extension_link_env(
+        &mut self,
+        link: &ResourceRef,
+        resource_state: &alien_core::StackResourceState,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id_for_errors: &str,
+    ) -> Result<()> {
+        if ctx.desired_stack.descriptor(link.resource_type()).is_none() {
+            return Ok(());
+        }
+        let outputs = match &resource_state.outputs {
+            Some(outputs) => outputs
+                .as_resource_outputs()
+                .to_json_value()
+                .into_alien_error()
+                .context(ErrorData::ResourceStateSerializationFailed {
+                    resource_id: link.id().to_string(),
+                    message: "Failed to serialize the linked resource's outputs".to_string(),
+                })?,
+            None => serde_json::Value::Object(Default::default()),
+        };
+        let extensions = ctx.service_provider.extensions();
+        let env = crate::extensions::link_environment(
+            ctx.desired_stack,
+            extensions.as_deref(),
+            link.resource_type(),
+            link.id(),
+            outputs,
+        )
+        .await
+        .context(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "Failed to read the environment the link to '{}' gives '{resource_id_for_errors}'",
+                link.id()
+            ),
+            resource_id: Some(resource_id_for_errors.to_string()),
+        })?;
+        for (name, value) in env {
+            if self.env_vars.contains_key(&name) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "The link to '{}' sets `{name}`, which '{resource_id_for_errors}' already has from its own environment or another link",
+                        link.id()
+                    ),
+                    resource_id: Some(resource_id_for_errors.to_string()),
+                }));
+            }
+            self.env_vars.insert(name, value);
+        }
+        Ok(())
     }
 
     /// Add a single environment variable.
@@ -1041,10 +1108,13 @@ mod tests {
         };
         use alien_core::ExternalBinding;
 
-        let external = ExternalBinding::Ai(ExternalAiBinding {
-            provider: "openai".to_string(),
-            api_key: "sk-test".into(),
-        });
+        let external = ExternalBinding::Ai(
+            ExternalAiBinding {
+                provider: "openai".to_string(),
+                api_key: "sk-test".into(),
+            }
+            .into(),
+        );
 
         let value = external
             .to_env_binding_value()
@@ -1064,6 +1134,25 @@ mod tests {
                 "apiKey": "sk-test",
             }),
             "injected AI binding env var must match the SDK's expected service-tagged shape"
+        );
+    }
+
+    #[test]
+    fn local_refusal_names_the_ai_form_that_was_given() {
+        let bedrock: alien_core::ExternalBinding = serde_json::from_value(
+            json!({"type": "ai", "service": "bedrock", "region": "us-east-1"}),
+        )
+        .unwrap();
+        let key: alien_core::ExternalBinding = serde_json::from_value(
+            json!({"type": "ai", "provider": "openai", "apiKey": "sk-test"}),
+        )
+        .unwrap();
+        let bedrock_kind = local_unsupported_external_kind(&bedrock).unwrap();
+        assert!(bedrock_kind.contains("Bedrock") && bedrock_kind.contains("AWS identity"));
+        assert!(!bedrock_kind.contains("BYO"), "{bedrock_kind}");
+        assert_eq!(
+            local_unsupported_external_kind(&key),
+            Some("an external (BYO-key) AI binding")
         );
     }
 

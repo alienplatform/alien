@@ -48,9 +48,9 @@ impl StackMutation for ServiceAccountMutation {
     ) -> Result<Stack> {
         info!("Creating ServiceAccount resources from permission profiles");
 
-        // Permission set resolver closure
+        // A workload may hold the permission sets of the stack's extensions, such as a link's.
         let permission_set_resolver = |permission_set_id: &str| -> Option<PermissionSet> {
-            alien_permissions::get_permission_set(permission_set_id).cloned()
+            alien_permissions::get_stack_permission_set(&stack, permission_set_id).cloned()
         };
 
         let mut service_accounts_to_add = Vec::new();

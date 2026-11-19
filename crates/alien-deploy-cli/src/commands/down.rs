@@ -7,8 +7,8 @@ use crate::rerun_credential::{self, InClusterUse, KubeAccess};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{ClientConfig, Platform, StackState};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_infra::ClientConfigExt;
+use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use clap::Parser;
 use std::{future::Future, path::PathBuf, str::FromStr};
 
@@ -303,21 +303,17 @@ async fn down_command_with(
             ),
         }));
     }
+    refuse_a_changed_policy(
+        deployment_status,
+        args.erase_data,
+        alien_deployment::manager_api_transport::recorded_deletion_policy(&deployment_json),
+    )?;
     let run_client_side_deletion = requires_client_side_deletion(platform);
     let total_steps = if run_client_side_deletion { 3 } else { 2 };
 
     if !run_client_side_deletion {
-        if !args.erase_data
-            && matches!(
-                deployment_status,
-                "teardown-required" | "retention-required" | "retained"
-            )
-        {
-            output::step(
-                1,
-                total_steps,
-                "Deletion already requested; continuing setup teardown...",
-            );
+        if needs_no_new_request(deployment_status, args.erase_data) {
+            output::step(1, total_steps, "Deletion already requested; continuing...");
         } else {
             output::step(1, total_steps, "Requesting deployment deletion...");
 
@@ -391,7 +387,16 @@ async fn down_command_with(
                 )?;
             }
 
-            push_deletion(&client, &deployment_id, platform, client_config).await
+            push_deletion(
+                &client,
+                &deployment_id,
+                platform,
+                client_config,
+                args.erase_data,
+                &manager_url,
+                &token,
+            )
+            .await
         },
     )
     .await?;
@@ -537,6 +542,52 @@ fn requires_client_side_deletion(platform: Platform) -> bool {
     platform != Platform::Machines
 }
 
+/// A deletion this run does not request again. The manager refuses a second request while the
+/// first is in progress (`delete-pending`, `deleting`), whatever the policy of the second; once
+/// the runtime cleanup is over (`teardown-required`, `retention-required`) a run that does not
+/// ask to erase goes on with the recorded deletion. A run that asks to erase a retained
+/// deployment is a new request.
+fn deletion_already_requested(status: &str, erase_data: bool) -> bool {
+    matches!(status, "delete-pending" | "deleting")
+        || (!erase_data && matches!(status, "teardown-required" | "retention-required"))
+}
+
+/// A deletion that is under way and whose recorded policy a rerun cannot change.
+fn deletion_under_way(status: &str) -> bool {
+    matches!(status, "delete-pending" | "deleting" | "teardown-required")
+}
+
+/// The request this run does not send because the deletion needs none: one already requested
+/// (see `deletion_already_requested`), or a retained deployment this run does not erase.
+fn needs_no_new_request(status: &str, erase_data: bool) -> bool {
+    deletion_already_requested(status, erase_data) || (!erase_data && status == "retained")
+}
+
+/// A rerun whose `--erase-data` differs from the policy the first delete request recorded does
+/// nothing: the teardown follows the record, and neither silently erasing without the flag on this
+/// run's command line nor reporting success for data that was kept is acceptable. This is the fast,
+/// clear refusal before any request; the acquire repeats it with the record read under the lock
+/// (`acquire_setup_delete_deployment`), which is the one that guarantees it. A record without a
+/// policy is not refused.
+fn refuse_a_changed_policy(
+    status: &str,
+    flag_erase: bool,
+    recorded_erase: Option<bool>,
+) -> Result<()> {
+    match recorded_erase {
+        Some(recorded_erase) if deletion_under_way(status) && recorded_erase != flag_erase => {
+            Err(AlienError::new(ErrorData::ValidationError {
+                field: "erase_data".to_string(),
+                message: alien_deployment::manager_api_transport::changed_policy_message(
+                    recorded_erase,
+                )
+                .to_string(),
+            }))
+        }
+        _ => Ok(()),
+    }
+}
+
 async fn run_setup_owned_deletion<Request, RequestFuture, Acquire, AcquireFuture>(
     status: &str,
     erase_data: bool,
@@ -554,12 +605,14 @@ where
     if status == "retained" && !erase_data {
         return Ok(());
     }
-    let cleanup_required =
-        if !erase_data && matches!(status, "teardown-required" | "retention-required") {
-            true
-        } else {
-            request_deletion().await?
-        };
+    // A deletion that was already requested (an earlier run of this command that did not
+    // finish: it was refused on the wrong cluster, timed out, or the Operator was removed) is
+    // not requested again: the manager refuses a second request while the first is in progress.
+    let cleanup_required = if deletion_already_requested(status, erase_data) {
+        true
+    } else {
+        request_deletion().await?
+    };
 
     if cleanup_required {
         acquire_and_delete().await?;
@@ -807,6 +860,202 @@ mod tests {
         .expect("active teardown should continue");
 
         assert_eq!(*actions.lock().unwrap(), ["acquire"]);
+    }
+
+    /// Running the command again after a run that did not finish (refused on the wrong cluster,
+    /// timed out, Operator removed) goes straight on: the manager refuses a second delete request.
+    #[tokio::test]
+    async fn a_deletion_already_requested_is_not_requested_again() {
+        for status in ["delete-pending", "deleting"] {
+            // With and without --erase-data: the manager refuses a second request in these
+            // statuses whatever its policy.
+            for erase in [false, true] {
+                let actions = std::sync::Mutex::new(Vec::new());
+                run_setup_owned_deletion(
+                    status,
+                    erase,
+                    || async {
+                        actions.lock().unwrap().push("request");
+                        Ok(true)
+                    },
+                    || async {
+                        actions.lock().unwrap().push("acquire");
+                        Ok(())
+                    },
+                )
+                .await
+                .expect("an earlier run already requested the deletion");
+                assert_eq!(
+                    *actions.lock().unwrap(),
+                    ["acquire"],
+                    "{status}, erase {erase}"
+                );
+            }
+        }
+    }
+
+    /// The policy of the first request applies to the whole deletion: a rerun whose flag differs
+    /// does nothing and names the command that continues it.
+    #[test]
+    fn a_rerun_with_another_erase_flag_is_refused_naming_the_command_to_continue() {
+        use alien_deployment::manager_api_transport::recorded_deletion_policy;
+        let recorded =
+            |policy: &str| serde_json::json!({"runtimeMetadata": {"deletionPolicy": policy}});
+        assert_eq!(recorded_deletion_policy(&recorded("erase")), Some(true));
+        assert_eq!(recorded_deletion_policy(&recorded("retain")), Some(false));
+        assert_eq!(recorded_deletion_policy(&serde_json::json!({})), None);
+
+        for status in ["delete-pending", "deleting", "teardown-required"] {
+            // Same choice: goes on.
+            refuse_a_changed_policy(status, true, Some(true)).expect(status);
+            refuse_a_changed_policy(status, false, Some(false)).expect(status);
+            // Recorded erase, rerun without the flag: refused, names --erase-data.
+            let refused = refuse_a_changed_policy(status, false, Some(true)).expect_err(status);
+            let text = refused.message.clone();
+            assert!(
+                text.contains("requested with data erase"),
+                "{status}: {text}"
+            );
+            assert!(
+                text.contains("Run destroy again with --erase-data to continue"),
+                "{status}: {text}"
+            );
+            // Recorded retain, rerun with the flag: refused, names the command without it.
+            let refused = refuse_a_changed_policy(status, true, Some(false)).expect_err(status);
+            let text = refused.message.clone();
+            assert!(
+                text.contains("requested with data retained"),
+                "{status}: {text}"
+            );
+            assert!(
+                text.contains("Run destroy again without --erase-data to finish it"),
+                "{status}: {text}"
+            );
+        }
+        // A retained deployment asked to erase is a new request, not a changed choice; a
+        // failed teardown is re-armed by a request.
+        for status in ["retention-required", "retained", "teardown-failed"] {
+            refuse_a_changed_policy(status, true, Some(false)).expect(status);
+        }
+        // A record without a policy is never refused: the teardown reads it as retain.
+        for status in ["delete-pending", "deleting", "teardown-required"] {
+            refuse_a_changed_policy(status, true, None).expect(status);
+            refuse_a_changed_policy(status, false, None).expect(status);
+        }
+        assert!(!deletion_already_requested("retention-required", true));
+    }
+
+    fn deployment_json(status: &str, policy: Option<&str>) -> serde_json::Value {
+        let mut record = serde_json::json!({
+            "id": "dep_1",
+            "name": "example",
+            "status": status,
+            "platform": "aws",
+            "deploymentGroupId": "dg_1",
+            "deploymentProtocolVersion": 1,
+            "projectId": "prj_1",
+            "workspaceId": "ws_1",
+            "retryRequested": false,
+            "createdAt": "2026-07-16T00:00:00Z"
+        });
+        if let Some(policy) = policy {
+            record["runtimeMetadata"] = serde_json::json!({"deletionPolicy": policy});
+        }
+        record
+    }
+
+    /// Through the command itself: a rerun whose flag differs from the recorded policy sends no
+    /// delete request and takes no lock. Without the refusal the command would go on to the
+    /// acquire (and erase or retain against the recorded choice).
+    #[tokio::test]
+    async fn a_rerun_with_another_erase_flag_sends_no_request_and_takes_no_lock() {
+        use httpmock::prelude::*;
+        for (status, policy, erase_flag, names) in [
+            (
+                "delete-pending",
+                "erase",
+                false,
+                "requested with data erase",
+            ),
+            ("deleting", "retain", true, "requested with data retained"),
+            (
+                "teardown-required",
+                "erase",
+                false,
+                "requested with data erase",
+            ),
+            (
+                "teardown-required",
+                "retain",
+                true,
+                "requested with data retained",
+            ),
+        ] {
+            let server = MockServer::start_async().await;
+            let read = server
+                .mock_async(|when, then| {
+                    when.method(GET).path("/v1/deployments/dep_1");
+                    then.status(200)
+                        .json_body(deployment_json(status, Some(policy)));
+                })
+                .await;
+            let request = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/deployments/dep_1/delete");
+                    then.status(200)
+                        .json_body(serde_json::json!({"cleanupRequired": true}));
+                })
+                .await;
+            let acquire = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/acquire");
+                    then.status(200)
+                        .json_body(serde_json::json!({"deployments": [], "notAcquired": []}));
+                })
+                .await;
+            let mut argv = vec![
+                "destroy".to_string(),
+                "--deployment-id".into(),
+                "dep_1".into(),
+                "--token".into(),
+                "ax_test".into(),
+                "--manager-url".into(),
+                server.base_url(),
+                "--yes".into(),
+            ];
+            if erase_flag {
+                argv.push("--erase-data".into());
+            }
+            let args = DownArgs::try_parse_from(argv).expect("arguments");
+            let error = down_command_with(args, None, &InClusterUse::default())
+                .await
+                .expect_err("a changed policy is refused");
+            assert!(
+                error.message.contains(names),
+                "{status}/{policy}: {}",
+                error.message
+            );
+            read.assert_hits_async(1).await;
+            request.assert_hits_async(0).await;
+            acquire.assert_hits_async(0).await;
+        }
+    }
+
+    /// The Machines path asks the same question as the setup-owned path (one rule, no copy).
+    #[test]
+    fn a_deletion_that_needs_no_new_request_is_decided_in_one_place() {
+        for status in ["delete-pending", "deleting"] {
+            assert!(needs_no_new_request(status, false), "{status}");
+            assert!(needs_no_new_request(status, true), "{status}");
+        }
+        for status in ["teardown-required", "retention-required"] {
+            assert!(needs_no_new_request(status, false), "{status}");
+            assert!(!needs_no_new_request(status, true), "{status}");
+        }
+        assert!(needs_no_new_request("retained", false));
+        assert!(!needs_no_new_request("retained", true));
+        assert!(!needs_no_new_request("running", false));
+        assert!(!needs_no_new_request("teardown-failed", false));
     }
 
     #[tokio::test]

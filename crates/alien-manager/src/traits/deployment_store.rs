@@ -837,6 +837,17 @@ pub trait DeploymentStore: Send + Sync {
         policy: alien_core::DeletionPolicy,
     ) -> Result<(), AlienError>;
 
+    /// Whether this store decides if a retry is accepted.
+    ///
+    /// By default the manager applies its own rule to the stored record's
+    /// status. A store whose record cannot show why a deployment needs a retry
+    /// (for example, an update paused while the deployment keeps running)
+    /// returns true: the manager then always calls `set_retry_requested` and
+    /// returns that call's error to the caller unchanged.
+    fn decides_retry_acceptance(&self) -> bool {
+        false
+    }
+
     async fn set_retry_requested(
         &self,
         caller: &crate::auth::Subject,

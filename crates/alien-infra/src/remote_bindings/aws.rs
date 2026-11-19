@@ -46,7 +46,10 @@ impl AwsRemoteBindingsController {
         .create(
             CreateRoleRequest::builder()
                 .role_name(role_name.clone())
-                .assume_role_policy_document(trust_policy(&management.managing_role_arn))
+                .assume_role_policy_document(managing_role_trust_policy(
+                    &management.managing_role_arn,
+                    None,
+                ))
                 .description(format!(
                     "Application access identity. Resource prefix: {}.",
                     ctx.resource_prefix
@@ -113,7 +116,10 @@ impl AwsRemoteBindingsController {
             resource_id: Some(resource_id.clone()),
         })?;
         client
-            .update_assume_role_policy(role_name, &trust_policy(&management.managing_role_arn))
+            .update_assume_role_policy(
+                role_name,
+                &managing_role_trust_policy(&management.managing_role_arn, None),
+            )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to update Remote Bindings IAM role trust".to_string(),
@@ -257,7 +263,17 @@ impl AwsRemoteBindingsController {
     }
 }
 
-fn trust_policy(managing_role_arn: &str) -> String {
+/// The trust that lets only the managing role assume a setup-created role. With
+/// `external_id`, the managing role must also send it as `sts:ExternalId`, so it can't be
+/// pointed at this role on behalf of another deployment.
+pub(crate) fn managing_role_trust_policy(
+    managing_role_arn: &str,
+    external_id: Option<&str>,
+) -> String {
+    let mut condition = serde_json::json!({ "aws:PrincipalArn": managing_role_arn });
+    if let Some(external_id) = external_id {
+        condition["sts:ExternalId"] = serde_json::json!(external_id);
+    }
     serde_json::json!({
         "Version": "2012-10-17",
         "Statement": [{
@@ -265,9 +281,7 @@ fn trust_policy(managing_role_arn: &str) -> String {
             "Effect": "Allow",
             "Principal": { "AWS": managing_role_arn },
             "Action": "sts:AssumeRole",
-            "Condition": { "StringEquals": {
-                "aws:PrincipalArn": managing_role_arn,
-            }},
+            "Condition": { "StringEquals": condition },
         }],
     })
     .to_string()
@@ -406,7 +420,10 @@ mod tests {
                 assert_eq!(tags, standard_resource_tags("test", "access"));
                 assert_eq!(
                     request.assume_role_policy_document,
-                    trust_policy("arn:aws:iam::111122223333:role/alien-test-manager")
+                    managing_role_trust_policy(
+                        "arn:aws:iam::111122223333:role/alien-test-manager",
+                        None
+                    )
                 );
                 Ok(serde_json::from_value(
                     serde_json::json!({"CreateRoleResult": {"Role": role()}}),
@@ -442,7 +459,10 @@ mod tests {
                     assert_eq!(name, "test-access");
                     assert_eq!(
                         policy,
-                        trust_policy("arn:aws:iam::111122223333:role/alien-test-manager")
+                        managing_role_trust_policy(
+                            "arn:aws:iam::111122223333:role/alien-test-manager",
+                            None
+                        )
                     );
                     Ok(())
                 });

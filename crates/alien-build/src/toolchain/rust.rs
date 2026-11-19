@@ -232,7 +232,7 @@ impl RustToolchain {
     /// Get the target directory for the Rust project.
     /// In workspace scenarios, this returns the workspace target directory.
     /// Otherwise, it returns the project-local target directory.
-    async fn get_target_directory(&self, src_dir: &Path) -> Result<PathBuf> {
+    pub async fn get_target_directory(&self, src_dir: &Path) -> Result<PathBuf> {
         Ok(self.get_cargo_metadata(src_dir).await?.target_directory)
     }
 

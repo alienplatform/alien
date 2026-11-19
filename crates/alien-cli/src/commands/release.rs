@@ -343,6 +343,11 @@ async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<Rele
 
 /// Resolved release configuration shared across human and JSON output paths.
 struct ReleaseConfig {
+    /// The project directory, under which the stack's generated extension modules are found
+    /// when alien.ts was not evaluated.
+    project_dir: PathBuf,
+    /// The folders of the generated extension modules alien.ts imported, when it was evaluated.
+    extension_module_dirs: Option<Vec<PathBuf>>,
     output_dir: PathBuf,
     /// Manager context — used for release creation in standalone/dev mode.
     /// In platform mode, releases are created directly on the platform API.
@@ -403,6 +408,23 @@ impl SigningState {
         }))
     }
 
+    /// Release a stack that lists extensions unsigned: an extension's code runs in the customer's
+    /// environment, outside what a release signs. Protected deployments refuse it.
+    fn unsigned_with_extensions(&mut self, stack: &Stack) -> Result<()> {
+        if self.signing().is_none() || stack.extensions.is_empty() {
+            return Ok(());
+        }
+        let names: Vec<String> = stack
+            .extensions
+            .iter()
+            .map(|extension| format!("`{}`", extension.name))
+            .collect();
+        self.cannot_sign(format!(
+            "signed releases don't support extensions yet, and this stack lists {}",
+            names.join(", ")
+        ))
+    }
+
     fn say(&self, line: &str) {
         if self.json {
             eprintln!("{line}");
@@ -428,17 +450,22 @@ struct AutoBuildPlan {
 async fn load_source_stack_for_release(
     prebuilt: bool,
     current_dir: &Path,
-) -> Result<Option<Stack>> {
+) -> Result<Option<crate::config::LoadedConfiguration>> {
     if prebuilt {
         return Ok(None);
     }
 
-    crate::config::load_configuration(current_dir.to_path_buf())
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to load configuration".to_string(),
-        })
-        .map(Some)
+    // The extensions the stack lists build first, so the stack pins the bundles the release
+    // ships. A stack without extensions evaluates once and builds nothing.
+    crate::commands::extensions::release::evaluate_building_extensions(current_dir, &[], || async {
+        crate::config::load_configuration_and_extension_modules(current_dir.to_path_buf())
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to load configuration".to_string(),
+            })
+    })
+    .await
+    .map(Some)
 }
 
 /// Load and validate all release configuration from args + execution context.
@@ -486,7 +513,17 @@ async fn load_release_config(
     .await?;
     signing.refuse_unsigned()?;
 
-    let source_stack = load_source_stack_for_release(args.prebuilt, &current_dir).await?;
+    let source = load_source_stack_for_release(args.prebuilt, &current_dir).await?;
+    let extension_module_dirs = source
+        .as_ref()
+        .map(|configuration| {
+            crate::commands::extensions::release::imported_module_dirs(configuration, &current_dir)
+        })
+        .transpose()?;
+    let source_stack = source.map(|configuration| configuration.stack);
+    if let Some(stack) = &source_stack {
+        signing.unsigned_with_extensions(stack)?;
+    }
 
     // Determine target platforms:
     // 1. Explicit --platforms flag takes priority (validated against stack.supported_platforms)
@@ -642,6 +679,8 @@ async fn load_release_config(
     );
 
     Ok(ReleaseConfig {
+        project_dir: current_dir,
+        extension_module_dirs,
         output_dir,
         manager,
         workspace_name,
@@ -714,7 +753,7 @@ async fn plan_signing(
     // Planning may show a recovery code or a pairing code; progress drawn
     // meanwhile would erase it.
     let progress = crate::ui::pause_progress();
-    let plan = signing::release::plan(&api, dir, project_id, interactive).await?;
+    let plan = signing::release::plan(&api, dir, interactive).await?;
     drop(progress);
     Ok(SigningState {
         plan,
@@ -799,13 +838,7 @@ async fn previous_components(
         .open()
         .map_err(|error| format!("it doesn't open ({error})"))
         .and_then(|opened| {
-            signing::check_statement(
-                chain,
-                &opened,
-                alien_signing::Kind::Release,
-                None,
-                chrono::Utc::now(),
-            )?;
+            signing::check_statement(chain, &opened, alien_signing::Kind::Release, None)?;
             let body: alien_signing::ReleaseBody = opened
                 .body()
                 .map_err(|error| format!("its body doesn't parse ({error})"))?;
@@ -865,6 +898,23 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
     Ok(release_id)
 }
 
+/// For `alien dev release`, which runs apart from the dev server: records the folders this
+/// release found its bundles beside, for the server's controller lookup. Written before the
+/// release is posted, so the server never runs a release the record does not cover.
+fn record_dev_module_dirs(
+    ctx: &ExecutionMode,
+    project_dir: &Path,
+    dirs: Option<&[PathBuf]>,
+) -> Result<()> {
+    match dirs {
+        Some(dirs) if ctx.is_dev() => crate::commands::dev_helpers::record_released_module_dirs(
+            &project_dir.join(".alien"),
+            dirs,
+        ),
+        _ => Ok(()),
+    }
+}
+
 /// Core release logic shared by all output modes.
 ///
 /// Always uses the manager SDK to create the release — no mode branching.
@@ -876,6 +926,8 @@ async fn release_task_core(
 ) -> Result<ReleaseOutcome> {
     let release_started = Instant::now();
     let ReleaseConfig {
+        project_dir,
+        extension_module_dirs,
         output_dir,
         manager,
         project_link,
@@ -893,6 +945,10 @@ async fn release_task_core(
         local: None,
         test: None,
     };
+    // From the modules alien.ts imported, or found once a built stack lists an extension.
+    let mut extension_module_dirs = extension_module_dirs;
+    let mut checked_extensions = std::collections::HashSet::new();
+    let mut extension_uploads = Vec::new();
     let mut signing = config.signing;
     let mut pushed_stacks: Vec<(Platform, Stack)> = Vec::new();
 
@@ -910,8 +966,23 @@ async fn release_task_core(
 
         // Load built stack
         let mut built_stack = load_built_stack(&output_dir, platform_str)?;
+        signing.unsigned_with_extensions(&built_stack)?;
         if args.prebuilt {
             check_prebuilt_stack(&built_stack, platform).await?;
+        }
+        let unchecked: Vec<_> = built_stack
+            .extensions
+            .iter()
+            .filter(|extension| checked_extensions.insert(extension.digest.clone()))
+            .cloned()
+            .collect();
+        if !unchecked.is_empty() {
+            let module_dirs = extension_module_dirs.get_or_insert_with(|| {
+                crate::commands::extensions::release::local_module_dirs(&project_dir)
+            });
+            extension_uploads.extend(
+                crate::commands::extensions::release::check_listed(&unchecked, module_dirs).await?,
+            );
         }
 
         // Push images if needed (the test platform skips pushing). --prebuilt skips the build,
@@ -986,6 +1057,20 @@ async fn release_task_core(
                 commit_message: inner.commit_message.map(|s| s.to_string()),
             })
         });
+        record_dev_module_dirs(ctx, &project_dir, extension_module_dirs.as_deref())?;
+        if ctx.is_dev() {
+            crate::commands::dev_helpers::keep_released_controllers(
+                &project_dir.join(".alien"),
+                &extension_uploads,
+            )?;
+        }
+        crate::commands::extensions::upload::upload_to_manager(
+            &manager.http_client,
+            &manager.manager_url,
+            &project_link.project_id,
+            &extension_uploads,
+        )
+        .await?;
         create_manager_release(
             manager,
             &project_link.project_id,
@@ -1001,6 +1086,17 @@ async fn release_task_core(
         #[cfg(feature = "platform")]
         {
             let workspace_query = ctx.resolve_workspace_query_with_bootstrap(false).await?;
+            if !extension_uploads.is_empty() {
+                let http = ctx.auth_http().await?;
+                crate::commands::extensions::upload::upload_to_platform(
+                    http.reqwest_client(),
+                    &http.base_url,
+                    workspace_query.as_deref(),
+                    &project_link.project_id,
+                    &extension_uploads,
+                )
+                .await?;
+            }
             create_platform_release(
                 ctx,
                 &project_link.project_id,
@@ -3336,6 +3432,28 @@ fn collect_push_cache_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A dev release records the folders its bundles were beside for the dev server, which may
+    /// run in another process; a release to a standalone manager records nothing.
+    #[test]
+    fn a_dev_release_records_its_extension_module_folders() {
+        let project = tempfile::tempdir().unwrap();
+        let dirs = vec![PathBuf::from("/work/acme/generated")];
+        let standalone = ExecutionMode::Standalone {
+            server_url: "http://localhost:1".to_string(),
+            api_key: "key".to_string(),
+        };
+        record_dev_module_dirs(&standalone, project.path(), Some(&dirs)).unwrap();
+        assert!(!project.path().join(".alien").exists());
+
+        record_dev_module_dirs(&ExecutionMode::Dev { port: 1 }, project.path(), Some(&dirs))
+            .unwrap();
+        let recorded: Vec<PathBuf> = serde_json::from_slice(
+            &fs::read(project.path().join(".alien/extension-module-dirs.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(recorded, dirs);
+    }
     use alien_core::ResourceLifecycle;
     use axum::response::IntoResponse;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3507,6 +3625,8 @@ mod tests {
         ])
         .unwrap();
         let config = ReleaseConfig {
+            project_dir: output.path().to_path_buf(),
+            extension_module_dirs: None,
             output_dir,
             manager: None,
             workspace_name: "sample-workspace".to_string(),
@@ -3551,6 +3671,166 @@ mod tests {
         );
         built.assert_async().await;
         declared.assert_async().await;
+    }
+
+    // The extension checks run before any push or request, and only for a stack that lists an
+    // extension; the test above covers a stack without one.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn a_prebuilt_stack_whose_extension_bundle_is_missing_is_refused_before_any_request() {
+        let error = release_a_prebuilt_stack_with_an_extension(
+            SigningPlan::Unsigned("not under test".to_string()),
+            0,
+        )
+        .await;
+        assert!(
+            error.contains("no generated module's folder has its bundle"),
+            "{error}"
+        );
+    }
+
+    /// An extension's code runs in the customer's environment, outside what a release signs, so
+    /// a release of a stack that lists one can't be signed: protected deployments refuse it.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn a_release_with_an_extension_is_refused_where_protected_deployments_follow() {
+        let error = release_a_prebuilt_stack_with_an_extension(signing_plan(), 1).await;
+
+        assert!(
+            error.contains("protected deployments follow production")
+                && error.contains("signed releases don't support extensions yet")
+                && error.contains("`acme`"),
+            "{error}"
+        );
+    }
+
+    /// With no protected deployment on the channel, the release goes on unsigned: it reaches
+    /// the extension checks that follow.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn a_release_with_an_extension_goes_on_unsigned_without_protected_deployments() {
+        let error = release_a_prebuilt_stack_with_an_extension(signing_plan(), 0).await;
+
+        assert!(
+            error.contains("no generated module's folder has its bundle"),
+            "{error}"
+        );
+    }
+
+    /// A plan that signs with a one-admin signer list.
+    #[cfg(feature = "platform")]
+    fn signing_plan() -> SigningPlan {
+        let alice = alien_signing::SecretKey::from_secret_bytes(&[1; 32]).unwrap();
+        let list = alien_signing::SignedStatement::new(
+            &alien_signing::Envelope {
+                kind: alien_signing::Kind::SignerList.as_str().to_string(),
+                project: "prj".to_string(),
+                install: None,
+                sequence: 1,
+                not_after: None,
+                signer_list_version: 1,
+                body: alien_signing::SignerListBody {
+                    previous: None,
+                    admin_threshold: 1,
+                    signers: vec![alien_signing::Signer {
+                        id: "alice".to_string(),
+                        key: alice.public_key().as_str().to_string(),
+                        kind: alien_signing::SignerKind::Device,
+                        backend: None,
+                        roles: vec![alien_signing::Role::Admin, alien_signing::Role::Release],
+                        label: None,
+                    }],
+                    deny: Vec::new(),
+                    keep: Vec::new(),
+                    recovered: false,
+                },
+            }
+            .to_payload()
+            .unwrap(),
+        )
+        .sign_with("alice", &alice)
+        .unwrap();
+        let fingerprint = alien_signing::fingerprint(&list.open().unwrap().digest);
+        let chain = alien_signing::SignerChain::from_statements(&fingerprint, &[list]).unwrap();
+        SigningPlan::Sign(Box::new(signing::release::ReleaseSigner {
+            signer: crate::signing::StatementSigner::Key {
+                id: "alice".to_string(),
+                key: alice,
+            },
+            chain,
+        }))
+    }
+
+    /// Releases a prebuilt stack that lists the extension `acme` with `plan` and `protected`
+    /// deployments on its channel, and returns why it
+    /// failed. Nothing reaches the platform.
+    #[cfg(feature = "platform")]
+    async fn release_a_prebuilt_stack_with_an_extension(
+        plan: SigningPlan,
+        protected: u64,
+    ) -> String {
+        let server = httpmock::MockServer::start_async().await;
+        let created = server
+            .mock_async(|when, then| {
+                when.method("POST").path("/v1/releases");
+                then.status(201);
+            })
+            .await;
+        let mut stack = Stack::new("prebuilt-app".to_string())
+            .add(test_container("writer", "registry.example.com/writer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string()), ResourceLifecycle::Live)
+            .build();
+        stack.extensions.push(alien_core::ExtensionManifest {
+            name: "acme".to_string(),
+            version: "0.1.0".to_string(),
+            digest: format!("sha256:{}", "0".repeat(64)),
+            resource_types: Default::default(),
+            egress: Vec::new(),
+        });
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().join(".alien");
+        let build_dir = output_dir.join("build/test");
+        fs::create_dir_all(&build_dir).unwrap();
+        fs::write(
+            build_dir.join("stack.json"),
+            serde_json::to_vec(&stack).unwrap(),
+        )
+        .unwrap();
+        let ctx = ExecutionMode::Platform {
+            base_url: server.base_url(),
+            api_key: Some("test-key".to_string()),
+            no_browser: true,
+            workspace: Some("sample-workspace".to_string()),
+            project: Some("sample".to_string()),
+        };
+        let args = ReleaseArgs::try_parse_from(["release", "--prebuilt", "--no-promote"]).unwrap();
+        let config = ReleaseConfig {
+            project_dir: output.path().to_path_buf(),
+            extension_module_dirs: None,
+            output_dir,
+            manager: None,
+            workspace_name: "sample-workspace".to_string(),
+            project_link: crate::project_link::ProjectLink::new(
+                "sample-workspace".to_string(),
+                "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                "sample".to_string(),
+            ),
+            git_metadata: None,
+            platforms: vec!["test".to_string()],
+            onboarding_inputs: vec![],
+            signing: SigningState {
+                plan,
+                protected,
+                channel: "production".to_string(),
+                promoted: true,
+                json: false,
+                quiet: true,
+            },
+        };
+        let Err(error) = release_task_core(args, config, &ctx).await else {
+            panic!("the release is refused");
+        };
+        created.assert_hits_async(0).await;
+        error.to_string()
     }
 
     #[tokio::test]

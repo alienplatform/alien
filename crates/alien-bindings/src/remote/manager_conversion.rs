@@ -323,11 +323,17 @@ impl ResolvedRemoteBinding {
                     expires_at: credential_expires_at,
                 } = client_config.credentials;
                 let expires_at = parse_manager_expiry(expires_at, &resource_id)?;
+                let binding = alien_core::BedrockAiBinding::new(binding.region)
+                        .map_err(|message| {
+                            AlienError::new(ErrorData::RemoteAccessFailed {
+                                operation: format!(
+                                    "read the Bedrock binding for remote binding '{resource_id}': {message}"
+                                ),
+                            })
+                        })?;
                 Self::Bedrock {
                     resource_id,
-                    binding: alien_core::BedrockAiBinding {
-                        region: binding.region,
-                    },
+                    binding,
                     client_config: Box::new(alien_core::AwsClientConfig {
                         account_id: client_config.account_id,
                         region: client_config.region,

@@ -1,0 +1,80 @@
+{
+  "id": "acme/dns-zone/provision",
+  "description": "Create, read and delete the zone",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "route53:ListResourceRecordSets",
+            "route53:ChangeResourceRecordSets",
+            "route53:DeleteHostedZone"
+          ]
+        },
+        // Covers every hosted zone in the account, not only this zone: Route53 names a zone by
+        // an id it assigns at create, which no binding variable holds, and a hosted zone takes
+        // no tag condition.
+        "binding": {
+          "stack": { "resources": ["arn:aws:route53:::hostedzone/*"] },
+          "resource": { "resources": ["arn:aws:route53:::hostedzone/*"] }
+        }
+      },
+      {
+        // These calls take no resource ARN, so they can only be granted on "*". On "*",
+        // ListHostedZonesByName reveals the id of every hosted zone in the account.
+        "grant": {
+          "actions": ["route53:CreateHostedZone", "route53:ListHostedZonesByName"]
+        },
+        "binding": {
+          "stack": { "resources": ["*"] },
+          "resource": { "resources": ["*"] }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "dns.managedZones.create",
+            "dns.managedZones.get",
+            "dns.managedZones.delete",
+            "dns.changes.create",
+            "dns.resourceRecordSets.list",
+            "dns.resourceRecordSets.delete"
+          ]
+        },
+        // Reading a zone tells a create or delete whether a zone with its name is the one it made.
+        // Deleting a record set takes `dns.changes.create` too. Covers every managed zone in the
+        // project, not only this zone: Alien binds a Google Cloud grant on the project or on one
+        // topic, subscription, repository or reasoning engine, never on one managed zone.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        // A zone's delete deletes its record sets too. Reading a zone tells a create or delete
+        // whether the zone at the domain is the one it made.
+        "grant": {
+          "actions": [
+            "Microsoft.Network/dnszones/read",
+            "Microsoft.Network/dnszones/write",
+            "Microsoft.Network/dnszones/delete"
+          ]
+        },
+        // Covers every DNS zone in the deployment's resource group, not only this zone: Azure
+        // names a zone by its domain, which no binding variable holds.
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -19,7 +19,6 @@ use alien_verifier::plan::{OwnResource, Place};
 use alien_verifier::trust::InstallStore;
 use alien_verifier::{Backend, Verifier};
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
 use serde::Serialize;
 
 pub const PROJECT: &str = "prj_test";
@@ -48,7 +47,7 @@ fn statement_for<B: Serialize>(
             project: PROJECT.to_string(),
             install: install.map(ToString::to_string),
             sequence,
-            not_after: (kind == Kind::SignerList).then(|| Utc::now() + Duration::days(30)),
+            not_after: None,
             signer_list_version: 1,
             body,
         }
@@ -77,10 +76,12 @@ fn new_signer_list() -> SignedStatement {
                 id: "ci".to_string(),
                 key: key().public_key().as_str().to_string(),
                 kind: SignerKind::Ci,
+                backend: None,
                 roles: vec![Role::Admin, Role::Release],
                 label: None,
             }],
             deny: Vec::new(),
+            keep: Vec::new(),
             recovered: false,
         },
     )

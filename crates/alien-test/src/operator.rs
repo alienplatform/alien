@@ -330,7 +330,7 @@ impl TestAlienOperator {
             &format!("encryptionKey={}", encryption_key),
             "--wait",
             "--timeout",
-            "120s",
+            "15m",
         ]);
 
         if let Some(kc) = kubeconfig {
@@ -396,7 +396,7 @@ impl TestAlienOperator {
             .arg(values_file)
             .arg("--wait")
             .arg("--timeout")
-            .arg("120s");
+            .arg("15m");
 
         if let Some(kc) = kubeconfig {
             cmd.env("KUBECONFIG", kc);

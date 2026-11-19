@@ -33,10 +33,13 @@ fn external_ai_config(resource_id: &str) -> DeploymentConfig {
     let mut external_bindings = ExternalBindings::new();
     external_bindings.insert(
         resource_id,
-        ExternalBinding::Ai(ExternalAiBinding {
-            provider: "openai".to_string(),
-            api_key: "sk-test".into(),
-        }),
+        ExternalBinding::Ai(
+            ExternalAiBinding {
+                provider: "openai".to_string(),
+                api_key: "sk-test".into(),
+            }
+            .into(),
+        ),
     );
 
     DeploymentConfig::builder()
@@ -1080,4 +1083,31 @@ async fn test_update_without_the_binding_of_an_adopted_resource_fails_and_teardo
     assert!(store.outputs.is_none());
     assert!(store.error.is_none());
     Ok(())
+}
+
+/// An extension's resource with no controller registered for it is refused when the executor
+/// is built, naming the type, before any step runs.
+#[test]
+fn executor_refuses_a_custom_type_with_no_controller() {
+    let stack: Stack = serde_json::from_value(serde_json::json!({
+        "id": "acme",
+        "resources": {
+            "zone": {
+                "config": { "type": "acme/dns-zone", "id": "zone", "domain": "internal.acme.dev" },
+                "lifecycle": "live",
+                "dependencies": []
+            }
+        }
+    }))
+    .expect("an extension's type loads");
+
+    let error = new_executor(&stack)
+        .err()
+        .expect("no controller is registered for acme/dns-zone");
+    assert_eq!(error.code, "CONTROLLER_NOT_AVAILABLE");
+    assert!(
+        error.message.contains("'acme/dns-zone'"),
+        "{}",
+        error.message
+    );
 }

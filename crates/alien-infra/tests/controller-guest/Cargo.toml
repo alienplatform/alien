@@ -1,0 +1,14 @@
+# A controller module for the tests of its host: steps that behave and steps that try what the
+# sandbox and the host's two capabilities must stop. The tests build it for wasm32-wasip1. It has
+# no dependencies, so it builds offline.
+[package]
+name = "controller-test-guest"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# Its own workspace, so the repository's workspace does not build it for the host.
+[workspace]

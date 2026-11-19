@@ -8,6 +8,7 @@ use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as ClientError;
 use alien_core::{Container, Daemon, Stack};
 use alien_error::{AlienError, Context, ContextError};
+use k8s_openapi::api::core::v1::{PodDNSConfig, PodDNSConfigOption};
 use k8s_openapi::api::networking::v1::{
     IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule, NetworkPolicyPeer,
     NetworkPolicyPort, NetworkPolicySpec,
@@ -157,17 +158,7 @@ fn build_policy(
             },
             NetworkPolicyEgressRule {
                 // Only the cluster DNS pods, never arbitrary private UDP/TCP 53.
-                to: Some(vec![NetworkPolicyPeer {
-                    namespace_selector: Some(selector(BTreeMap::from([(
-                        "kubernetes.io/metadata.name".into(),
-                        "kube-system".into(),
-                    )]))),
-                    pod_selector: Some(selector(BTreeMap::from([(
-                        "k8s-app".into(),
-                        "kube-dns".into(),
-                    )]))),
-                    ..Default::default()
-                }]),
+                to: Some(cluster_dns_peers()),
                 ports: Some(vec![port(53, "UDP"), port(53, "TCP")]),
             },
         ];
@@ -209,6 +200,23 @@ fn build_policy(
     }
 }
 
+/// The pods that answer a cluster's DNS: CoreDNS or kube-dns, and on clusters running NodeLocal
+/// DNSCache with a CNI that redirects the DNS Service address to the node's cache pod, that cache.
+/// A CNI judges the destination after the redirect, so the cache pod must be allowed by selector.
+fn cluster_dns_peers() -> Vec<NetworkPolicyPeer> {
+    ["kube-dns", "node-local-dns"]
+        .into_iter()
+        .map(|app| NetworkPolicyPeer {
+            namespace_selector: Some(selector(BTreeMap::from([(
+                "kubernetes.io/metadata.name".into(),
+                "kube-system".into(),
+            )]))),
+            pod_selector: Some(selector(BTreeMap::from([("k8s-app".into(), app.into())]))),
+            ..Default::default()
+        })
+        .collect()
+}
+
 /// Clusters with NodeLocal DNSCache point pods at a link-local resolver, which the public
 /// rule excludes and the kube-dns selector does not match. Read in the controller's pod,
 /// the resolver list is the cluster's own: allow DNS to exactly those addresses. Outside
@@ -240,6 +248,121 @@ fn resolver_rule(resolv_conf: Option<&str>) -> Option<NetworkPolicyEgressRule> {
         ),
         ports: Some(vec![port(53, "UDP"), port(53, "TCP")]),
     })
+}
+
+/// Resolver settings that send a pod's lookups to the cluster DNS Service address.
+///
+/// By default the kubelet writes its own resolver address into the pod. A cluster that runs a
+/// node-local DNS cache points it at a link-local address (for example AKS LocalDNS), and the
+/// network policy dataplane may not match a link-local address as an address block. The
+/// cluster DNS Service address is matched through the `kube-dns` pod selector in the policy.
+/// The search path and `ndots` are the kubelet's defaults for a pod in `namespace`.
+pub(super) fn cluster_dns_config(
+    namespace: &str,
+    domain: &str,
+    service_address: &str,
+) -> PodDNSConfig {
+    PodDNSConfig {
+        nameservers: Some(vec![service_address.to_string()]),
+        searches: Some(vec![
+            format!("{namespace}.svc.{domain}"),
+            format!("svc.{domain}"),
+            domain.to_string(),
+        ]),
+        options: Some(vec![PodDNSConfigOption {
+            name: Some("ndots".into()),
+            value: Some("5".into()),
+        }]),
+    }
+}
+
+/// The resolver the sandbox gateway's pods use.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum GatewayDns {
+    /// Whatever the cluster writes into every pod.
+    ClusterDefault,
+    /// The `kube-dns` Service address, with the cluster domain for the search path.
+    ClusterService { address: String, domain: String },
+}
+
+/// The resolver the gateway should use now. `None` when the `kube-dns` Service could not be read
+/// for any reason (the read is refused, the Service is absent, the API server answers 5xx or does
+/// not answer): that never decides whether the gateway deploys, and never rolls a running one.
+async fn read_gateway_dns(
+    domain: Option<String>,
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<Option<GatewayDns>> {
+    let Some(domain) = domain else {
+        return Ok(Some(GatewayDns::ClusterDefault));
+    };
+    let service = ctx
+        .service_provider
+        .get_kubernetes_service_client(ctx.get_kubernetes_config()?)
+        .await?
+        .get_service("kube-system", "kube-dns")
+        .await;
+    let service = match service {
+        Ok(service) => service,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "Could not read the cluster DNS Service; the gateway keeps its resolver"
+            );
+            return Ok(None);
+        }
+    };
+    let address = service
+        .spec
+        .and_then(|spec| spec.cluster_ip)
+        .filter(|address| address.parse::<std::net::Ipv4Addr>().is_ok());
+    Ok(Some(match address {
+        Some(address) => GatewayDns::ClusterService { address, domain },
+        None => GatewayDns::ClusterDefault,
+    }))
+}
+
+/// Whether the gateway's pods must roll for `read`. A gateway with no recorded resolver was built
+/// before the choice was recorded, with the cluster default.
+fn gateway_dns_differs(applied: Option<&GatewayDns>, read: &GatewayDns) -> bool {
+    applied.unwrap_or(&GatewayDns::ClusterDefault) != read
+}
+
+impl KubernetesContainerController {
+    /// Resolves and records the gateway's resolver for the pod spec about to be built. A read that
+    /// fails keeps the resolver already applied, or the cluster default.
+    pub(super) async fn refresh_gateway_dns(
+        &mut self,
+        config: &alien_core::Container,
+        domain: Option<String>,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        if config.id != alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
+            return Ok(());
+        }
+        let read = read_gateway_dns(domain, ctx).await?;
+        self.applied_gateway_dns = Some(
+            read.or_else(|| self.applied_gateway_dns.take())
+                .unwrap_or(GatewayDns::ClusterDefault),
+        );
+        Ok(())
+    }
+
+    /// Whether the resolver now chosen for the gateway differs from the one its pods run with.
+    /// Rolls the gateway once per change; an unreadable Service is no change.
+    pub(super) async fn gateway_dns_drifted(
+        &mut self,
+        domain: Option<String>,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<bool> {
+        let Some(read) = read_gateway_dns(domain, ctx).await? else {
+            return Ok(false);
+        };
+        let differs = gateway_dns_differs(self.applied_gateway_dns.as_ref(), &read);
+        if !differs && self.applied_gateway_dns.is_none() {
+            self.applied_gateway_dns = Some(read);
+        }
+        Ok(differs)
+    }
 }
 
 fn require_owner(

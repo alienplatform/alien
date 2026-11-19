@@ -23,10 +23,38 @@ pub use test::*;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use alien_core::permissions::PermissionSetReference;
 use alien_core::InitialSetupAuthority;
-use alien_error::{Context, IntoAlienError};
-use alien_permissions::get_permission_set;
+use alien_core::PermissionSet;
+use alien_error::{AlienError, Context, IntoAlienError};
+use alien_permissions::{get_permission_set, get_stack_permission_set};
 use sha2::{Digest, Sha256};
+
+/// A permission set the management profile names. Of the named sets only Alien's own resolve: an
+/// extension's sets are granted to the extension's own identity, never to the management
+/// identity, as the setup templates hold. An inline set resolves as written; the compile-time
+/// preflight refuses one whose id is under an extension's name.
+pub(crate) fn resolve_management_permission_set(
+    stack: &alien_core::Stack,
+    reference: &PermissionSetReference,
+    resource_id: &str,
+) -> Result<PermissionSet> {
+    if let Some(permission_set) = reference.resolve(|name| get_permission_set(name).cloned()) {
+        return Ok(permission_set);
+    }
+    let id = reference.id();
+    let message = if get_stack_permission_set(stack, id).is_some() {
+        format!(
+            "The management profile grants '{id}', but an extension's permission sets are granted only to the extension's own identity. Remove it from the management permissions."
+        )
+    } else {
+        format!("Management permission set '{id}' not found")
+    };
+    Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+        message,
+        resource_id: Some(resource_id.to_string()),
+    }))
+}
 
 /// A revision of the management permissions the stack asks for: a digest of
 /// the management profile with every permission set it names resolved to its
@@ -45,11 +73,13 @@ pub(crate) fn management_permissions_revision(
         .map(|(scope, references)| {
             let sets = references
                 .iter()
-                .map(|reference| reference.resolve(|name| get_permission_set(name).cloned()))
-                .collect::<Vec<_>>();
-            (scope, sets)
+                .map(|reference| {
+                    resolve_management_permission_set(ctx.desired_stack, reference, scope)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok((scope, sets))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     let network = (ctx.platform == alien_core::Platform::Aws)
         .then(|| aws_network_scope(ctx))
         .flatten()
@@ -183,6 +213,78 @@ mod tests {
             .expect("revision")
             .expect("the test stack has a management profile");
         (executor.needs_update().expect("needs_update"), current)
+    }
+
+    /// The management identity never holds an extension's set; a profile that names one is
+    /// refused rather than resolved from the stack or skipped. An unknown id is refused too.
+    #[test]
+    fn a_management_grant_resolves_only_alien_permission_sets() {
+        let (extension, _) = crate::service_account::extension_with_a_stack_wide_set();
+        let mut stack = alien_core::Stack::new("test".to_string()).build();
+        stack.extensions.push(extension);
+        let resolve = |id: &str| {
+            resolve_management_permission_set(
+                &stack,
+                &PermissionSetReference::from_name(id),
+                "files",
+            )
+        };
+        assert_eq!(
+            resolve("storage/data-read").unwrap().id,
+            "storage/data-read"
+        );
+        for (id, message) in [
+            (
+                "acme/dns-zone/records-write",
+                "The management profile grants 'acme/dns-zone/records-write', but an extension's permission sets are granted only to the extension's own identity. Remove it from the management permissions.",
+            ),
+            (
+                "acme/dns-zone/missing",
+                "Management permission set 'acme/dns-zone/missing' not found",
+            ),
+        ] {
+            let error = resolve(id).unwrap_err();
+            assert_eq!(error.code, "RESOURCE_CONFIG_INVALID", "{id}");
+            assert!(error.message.contains(message), "{error:?}");
+            assert!(!error.retryable && !error.internal, "{error:?}");
+        }
+    }
+
+    /// A management profile naming an extension's set has no revision: it is refused at stack
+    /// scope and on a resource.
+    #[tokio::test]
+    async fn the_revision_refuses_a_management_grant_of_an_extensions_set() {
+        let (extension, _) = crate::service_account::extension_with_a_stack_wide_set();
+        for management in [
+            alien_core::permissions::PermissionProfile::new()
+                .global(["acme/dns-zone/records-write"]),
+            alien_core::permissions::PermissionProfile::new()
+                .resource("files", ["acme/dns-zone/records-write"]),
+        ] {
+            let executor = SingleControllerExecutor::builder()
+                .resource(RemoteStackManagement::new("management".to_string()).build())
+                .controller(AwsRemoteStackManagementController::mock_ready("test"))
+                .platform(Platform::Aws)
+                .with_stack_resource(
+                    alien_core::Storage::new("files".to_string()).build(),
+                    alien_core::ResourceLifecycle::Live,
+                )
+                .management_permissions(alien_core::ManagementPermissions::Extend(management))
+                .extension(extension.clone())
+                .build()
+                .await
+                .unwrap();
+            let error = executor
+                .with_context(management_permissions_revision)
+                .unwrap_err();
+            assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+            assert!(
+                error
+                    .message
+                    .contains("granted only to the extension's own identity"),
+                "{error:?}"
+            );
+        }
     }
 
     #[tokio::test]

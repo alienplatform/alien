@@ -2706,6 +2706,12 @@
     "ServiceAccount": {
       "additionalProperties": false,
       "properties": {
+        "extension": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "type": "string"
         },

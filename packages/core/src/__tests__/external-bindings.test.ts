@@ -120,6 +120,7 @@ const bindings = [
   },
   { type: "postgres", service: "local-postgres", ...postgres, password: "demo-only" },
   { type: "ai", provider: "openai", apiKey: { secretRef: { name: "demo", key: "api-key" } } },
+  { type: "acme/dns-zone", service: "route53", zoneId: "Z0123" },
 ] satisfies ExternalBinding[]
 
 describe("StackSettings external bindings", () => {
@@ -156,6 +157,8 @@ describe("StackSettings external bindings", () => {
 
   it.each([
     { type: "unknown", service: "s3", bucketName: "demo" },
+    { type: "alien/dns-zone", service: "route53", zoneId: "Z0123" },
+    { type: "acme/dns-zone", zoneId: "Z0123" },
     { type: "storage", service: "unknown", bucketName: "demo" },
     { type: "storage", service: "s3" },
     { type: "storage", service: "s3", bucketName: "demo", forcePathStyle: "true" },

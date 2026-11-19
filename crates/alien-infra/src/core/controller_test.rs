@@ -324,6 +324,9 @@ pub const MAX_SUGGESTED_DELAY: Duration = Duration::from_secs(10 * 60);
 ///     assert_eq!(executor.status(), ResourceStatus::Deleted);
 /// }
 /// ```
+/// The deployment id the harness runs every controller under.
+pub const TEST_DEPLOYMENT_ID: &str = "dep_test";
+
 pub struct SingleControllerExecutor {
     // The controller being tested
     controller: Box<dyn ResourceController>,
@@ -341,6 +344,7 @@ pub struct SingleControllerExecutor {
     setup_run_id: Option<String>,
     // Platform management configuration
     management_config: Option<ManagementConfig>,
+    management_external_id: Option<alien_core::ManagementExternalId>,
     gcp_federation_scope: Option<alien_core::GcpFederationScope>,
     // Compute backend configuration for managed containers
     compute_backend: Option<ComputeBackend>,
@@ -446,7 +450,9 @@ impl SingleControllerExecutor {
                 .input_values(self.input_values.clone())
                 .setup_run(self.setup_run)
                 .maybe_setup_run_id(self.setup_run_id.clone())
+                .deployment_id(TEST_DEPLOYMENT_ID.to_string())
                 .maybe_management_config(self.management_config.clone())
+                .maybe_management_external_id(self.management_external_id.clone())
                 .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
                 .maybe_compute_backend(self.compute_backend.clone())
                 .environment_variables(self.environment_variables.clone())
@@ -699,23 +705,17 @@ impl SingleControllerExecutor {
     }
 
     /// Gets the current status of the controller.
-    /// Runs `f` with the controller context the next step would see, for
-    /// checks that are not steps (for example `needs_update`).
-    pub fn with_context<T>(&self, f: impl FnOnce(&ResourceControllerContext<'_>) -> T) -> T {
-        let desired_config = self
-            .desired_stack
-            .resources
-            .get(&self.resource_id)
-            .map(|entry| entry.config.clone())
-            .expect("the resource is in the desired stack");
-        let deployment_config = DeploymentConfig::builder()
+    fn context_deployment_config(&self) -> DeploymentConfig {
+        DeploymentConfig::builder()
             .stack_settings(self.stack_settings.clone())
             .maybe_release_statements(self.release_statements.clone())
             .maybe_signed_config(self.signed_config.clone())
             .input_values(self.input_values.clone())
             .setup_run(self.setup_run)
             .maybe_setup_run_id(self.setup_run_id.clone())
+            .deployment_id(TEST_DEPLOYMENT_ID.to_string())
             .maybe_management_config(self.management_config.clone())
+            .maybe_management_external_id(self.management_external_id.clone())
             .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
             .maybe_compute_backend(self.compute_backend.clone())
             .environment_variables(self.environment_variables.clone())
@@ -730,7 +730,45 @@ impl SingleControllerExecutor {
             .manager_url("https://test-manager.alien.dev".to_string())
             .deployment_token("test-deployment-token".to_string())
             .build()
-            .with_registry_hosts(&self.manager_url, &self.native_image_host);
+            .with_registry_hosts(&self.manager_url, &self.native_image_host)
+    }
+
+    /// Runs the controller's [`ResourceController::sync_membership`] with the context the
+    /// next step would see. It cannot change the controller.
+    pub async fn sync_membership(&self) -> Result<()> {
+        let desired_config = self
+            .desired_stack
+            .resources
+            .get(&self.resource_id)
+            .map(|entry| entry.config.clone())
+            .expect("the resource is in the desired stack");
+        let deployment_config = self.context_deployment_config();
+        let context = ResourceControllerContext {
+            desired_config: &desired_config,
+            platform: self.platform,
+            client_config: self.client_config.clone(),
+            state: &self.stack_state,
+            resource_prefix: &self.resource_prefix,
+            registry: &self.registry,
+            desired_stack: &self.desired_stack,
+            service_provider: &self.service_provider,
+            deployment_config: &deployment_config,
+            initial_setup_authority: self.initial_setup_authority,
+            heartbeat_collector: HeartbeatCollector::default(),
+        };
+        self.controller.sync_membership(&context).await
+    }
+
+    /// Runs `f` with the controller context the next step would see, for
+    /// checks that are not steps (for example `needs_update`).
+    pub fn with_context<T>(&self, f: impl FnOnce(&ResourceControllerContext<'_>) -> T) -> T {
+        let desired_config = self
+            .desired_stack
+            .resources
+            .get(&self.resource_id)
+            .map(|entry| entry.config.clone())
+            .expect("the resource is in the desired stack");
+        let deployment_config = self.context_deployment_config();
         let context = ResourceControllerContext {
             desired_config: &desired_config,
             platform: self.platform,
@@ -750,6 +788,11 @@ impl SingleControllerExecutor {
     /// Whether the controller asks for an update with an unchanged config.
     pub fn needs_update(&self) -> Result<bool> {
         self.with_context(|ctx| self.controller.needs_update(ctx))
+    }
+
+    /// Sets the ExternalId the next steps' deployment config carries.
+    pub fn set_management_external_id(&mut self, id: Option<alien_core::ManagementExternalId>) {
+        self.management_external_id = id;
     }
 
     /// The deletion policy the next steps run under, as deletion sets it from runtime metadata.
@@ -796,6 +839,18 @@ impl SingleControllerExecutor {
 
     /// The desired stack's configuration of another resource, to change after the stack
     /// mutations ran, as a later release would.
+    /// Adds a permission profile to the desired stack, as a stack edited between two setup runs.
+    pub fn add_permission_profile(
+        &mut self,
+        name: impl Into<String>,
+        profile: alien_core::permissions::PermissionProfile,
+    ) {
+        self.desired_stack
+            .permissions
+            .profiles
+            .insert(name.into(), profile);
+    }
+
     pub fn desired_resource_config_mut(&mut self, resource_id: &str) -> Option<&mut Resource> {
         self.desired_stack
             .resources
@@ -823,6 +878,7 @@ pub struct SingleControllerExecutorBuilder {
     input_values: std::collections::HashMap<String, serde_json::Value>,
     setup_run: bool,
     management_config: Option<ManagementConfig>,
+    management_external_id: Option<alien_core::ManagementExternalId>,
     gcp_federation_scope: Option<alien_core::GcpFederationScope>,
     compute_backend: Option<ComputeBackend>,
     environment_variables: EnvironmentVariablesSnapshot,
@@ -846,6 +902,8 @@ pub struct SingleControllerExecutorBuilder {
     initial_setup_authority: alien_core::InitialSetupAuthority,
     resource_prefix: String,
     permission_profiles: Vec<(String, alien_core::permissions::PermissionProfile)>,
+    remote_access: bool,
+    extensions: Vec<alien_core::ExtensionManifest>,
     delay_mode: DelayMode,
     manager_url: Option<String>,
     native_image_host: Option<String>,
@@ -864,6 +922,7 @@ impl SingleControllerExecutorBuilder {
             input_values: Default::default(),
             setup_run: true,
             management_config: None,
+            management_external_id: None,
             gcp_federation_scope: None,
             compute_backend: None,
             environment_variables: EnvironmentVariablesSnapshot {
@@ -890,6 +949,8 @@ impl SingleControllerExecutorBuilder {
             initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
             resource_prefix: "test".to_string(),
             permission_profiles: Vec::new(),
+            remote_access: false,
+            extensions: Vec::new(),
             delay_mode: DelayMode::default(),
             manager_url: None,
             native_image_host: None,
@@ -935,6 +996,12 @@ impl SingleControllerExecutorBuilder {
         self
     }
 
+    /// Declares the resource under test with remote access, as `add_with_remote_access` does.
+    pub fn remote_access(mut self, remote_access: bool) -> Self {
+        self.remote_access = remote_access;
+        self
+    }
+
     /// Adds a permission profile to the stack, next to the default one every test stack has.
     pub fn permission_profile(
         mut self,
@@ -942,6 +1009,12 @@ impl SingleControllerExecutorBuilder {
         profile: alien_core::permissions::PermissionProfile,
     ) -> Self {
         self.permission_profiles.push((name.into(), profile));
+        self
+    }
+
+    /// Adds an extension to the stack.
+    pub fn extension(mut self, manifest: alien_core::ExtensionManifest) -> Self {
+        self.extensions.push(manifest);
         self
     }
 
@@ -986,6 +1059,12 @@ impl SingleControllerExecutorBuilder {
 
     pub fn management_config(mut self, config: ManagementConfig) -> Self {
         self.management_config = Some(config);
+        self
+    }
+
+    /// Sets the ExternalId a setup run writes into managing-role trusts.
+    pub fn management_external_id(mut self, id: alien_core::ManagementExternalId) -> Self {
+        self.management_external_id = Some(id);
         self
     }
 
@@ -1391,7 +1470,7 @@ impl SingleControllerExecutorBuilder {
                     .collect(),
                 display_name: None,
                 description: None,
-                remote_access: false,
+                remote_access: self.remote_access,
                 enabled_when: None,
             },
         );
@@ -1448,7 +1527,9 @@ impl SingleControllerExecutorBuilder {
             inputs: self.stack_inputs.clone(),
             dynamic_container_repositories: vec![],
             dynamic_container_image_resources: vec![],
+            extensions: self.extensions.clone(),
             operations: None,
+            built_architectures: Default::default(),
         };
 
         // Set resource prefix in stack state
@@ -1469,7 +1550,9 @@ impl SingleControllerExecutorBuilder {
             .stack_settings(self.stack_settings.clone())
             .setup_run(self.setup_run)
             .maybe_setup_run_id(setup_run_id.clone())
+            .deployment_id(TEST_DEPLOYMENT_ID.to_string())
             .maybe_management_config(management_config.clone())
+            .maybe_management_external_id(self.management_external_id.clone())
             .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
             .maybe_compute_backend(self.compute_backend.clone())
             .environment_variables(self.environment_variables.clone())
@@ -1623,6 +1706,7 @@ impl SingleControllerExecutorBuilder {
             setup_run: self.setup_run,
             setup_run_id,
             management_config,
+            management_external_id: self.management_external_id,
             gcp_federation_scope: self.gcp_federation_scope,
             compute_backend: self.compute_backend,
             environment_variables: self.environment_variables,

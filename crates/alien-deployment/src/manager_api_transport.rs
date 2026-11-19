@@ -270,21 +270,130 @@ fn to_manager_api_observed_inventory_batches(
 
 /// Maximum number of acquire attempts (60 × 2s = 2 minutes).
 const MAX_ACQUIRE_ATTEMPTS: usize = 60;
-/// Maximum number of setup delete handoff attempts (1,350 × 2s = 45 minutes).
+/// Maximum number of setup delete handoff attempts (1,350 × 2s = 45 minutes): a cloud runtime
+/// cleanup can legitimately take that long.
 const MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS: usize = 1_350;
+/// The same for a Kubernetes pull deployment (450 × 2s = 15 minutes). Its runtime cleanup is a
+/// few Kubernetes deletes by the Operator; if that has not finished by then, the Operator is
+/// most likely not running.
+const MAX_KUBERNETES_SETUP_DELETE_ACQUIRE_ATTEMPTS: usize = 450;
+/// Seconds between acquire attempts.
+const ACQUIRE_POLL_SECONDS: u64 = 2;
 /// Delay between acquire attempts.
 #[cfg(not(test))]
-const ACQUIRE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+const ACQUIRE_RETRY_DELAY: std::time::Duration =
+    std::time::Duration::from_secs(ACQUIRE_POLL_SECONDS);
 // The mocked manager answers at once, so a unit test only pays for the attempts it counts.
 #[cfg(test)]
 const ACQUIRE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// The deletion policy a deployment record carries: `Some(true)` erase, `Some(false)` retain,
+/// `None` when the record carries no recognised `deletionPolicy` (the metadata is null, lacks the
+/// field, or the manager does not return it). Callers refuse only on a recorded policy that
+/// differs, never on `None`.
+pub fn recorded_deletion_policy(deployment: &serde_json::Value) -> Option<bool> {
+    match deployment
+        .pointer("/runtimeMetadata/deletionPolicy")
+        .and_then(|policy| policy.as_str())
+    {
+        Some("erase") => Some(true),
+        Some("retain") => Some(false),
+        _ => None,
+    }
+}
+
+/// What a rerun is told when its `--erase-data` differs from the policy the first delete request
+/// recorded. The teardown follows the record; nothing is deleted by the run that is refused.
+pub fn changed_policy_message(recorded_erase: bool) -> &'static str {
+    if recorded_erase {
+        "This deployment's delete was requested with data erase, which cannot be changed. Nothing was done. Run destroy again with --erase-data to continue."
+    } else {
+        "This deployment's delete was requested with data retained, which cannot be changed. Nothing was done. Run destroy again without --erase-data to finish it; once the deployment shows as retained, destroy --erase-data asks to erase the kept data."
+    }
+}
+
+/// Why the policy check under the lock did not hand the record back.
+enum PolicyUnderLock {
+    Refused(String),
+    ReadFailed(String),
+}
+
+/// With the lock held, read the record: a recorded policy that differs from this run's choice
+/// (another run changed it during the wait, or this command never read it) gives the lock back
+/// and nothing is deleted; the message is returned for the caller to show. A failed read does the
+/// same, failing: the policy is unknown. The record read is returned for the caller to reuse.
+async fn read_policy_under_lock(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+    execution_claim: Option<&ExecutionClaim>,
+    erase_data: bool,
+) -> Result<alien_manager_api::types::DeploymentResponse, PolicyUnderLock> {
+    let failure: String = match client.get_deployment().id(deployment_id).send().await {
+        Ok(record) => {
+            let record = record.into_inner();
+            match serde_json::to_value(&record) {
+                Ok(value) => match recorded_deletion_policy(&value) {
+                    Some(recorded_erase) if recorded_erase != erase_data => {
+                        release_quietly(client, deployment_id, session, execution_claim).await;
+                        return Err(PolicyUnderLock::Refused(
+                            changed_policy_message(recorded_erase).to_string(),
+                        ));
+                    }
+                    _ => return Ok(record),
+                },
+                Err(error) => format!(
+                    "Could not read the deletion policy under the setup teardown lock, so it is unknown. Nothing was deleted: {error}"
+                ),
+            }
+        }
+        Err(error) => format!(
+            "Failed to read the deployment under the setup teardown lock, so its deletion policy is unknown. Nothing was deleted: {error}"
+        ),
+    };
+    release_quietly(client, deployment_id, session, execution_claim).await;
+    Err(PolicyUnderLock::ReadFailed(failure))
+}
+
+async fn release_quietly(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+    execution_claim: Option<&ExecutionClaim>,
+) {
+    if let Err(error) = send_release(client, deployment_id, session, execution_claim).await {
+        warn!(
+            deployment_id = %deployment_id,
+            error = %error,
+            "Could not give the setup teardown lock back; it expires on its own"
+        );
+    }
+}
+
+/// The manager's answer for why it did not hand over a deployment.
+struct AcquireRefusal {
+    text: String,
+    /// The manager says another session holds it.
+    held: bool,
+    /// The manager says the status does not fit this acquire: nothing else moves it, waiting does
+    /// not change the answer. Any other reason (held, deferred, a limit) may pass.
+    final_answer: bool,
+}
 
 /// Result of waiting for setup-owned deletion work.
 pub enum SetupDeleteAcquireOutcome {
     /// The setup teardown lock was acquired and must be released.
     Acquired {
         execution_claim: Option<ExecutionClaim>,
+        /// The record as read with the lock held.
+        deployment: Box<alien_manager_api::types::DeploymentResponse>,
     },
+    /// This run's erase choice differs from the policy the first delete request recorded. The lock
+    /// is already given back and nothing was deleted; the message says what to run instead.
+    PolicyRefused { message: String },
+    /// The lock was taken, then the record could not be read to check the policy: the lock is given
+    /// back and nothing was deleted. The acquire itself succeeded.
+    LockedReadFailed { message: String },
     /// No setup cleanup remains: the record was removed or safely retained.
     AlreadyDeleted,
 }
@@ -513,6 +622,12 @@ fn setup_run_acquire_statuses() -> Vec<String> {
 /// manager that authenticates through the platform refuses `client` with 401
 /// rather than 404. Callers that requested the deletion with other credentials
 /// pass a client holding them; others pass `client`.
+///
+/// `erase_data` is whether THIS run asked to erase durable data. The teardown follows the policy the
+/// first delete request recorded, read after the lock is held: when that differs from this run's
+/// choice the lock is given back and the call returns `Ok(PolicyRefused)`, so nothing is deleted.
+/// A failed read under the lock gives the lock back and returns an error naming that read (not the
+/// acquire, which succeeded).
 pub async fn acquire_setup_delete_deployment(
     client: &ManagerClient,
     deletion_lookup: &ManagerClient,
@@ -520,6 +635,7 @@ pub async fn acquire_setup_delete_deployment(
     session: &str,
     deployment_model: DeploymentModel,
     setup_method: &str,
+    erase_data: bool,
 ) -> Result<SetupDeleteAcquireOutcome, AlienError> {
     let statuses = vec![
         "retention-required".to_string(),
@@ -527,7 +643,15 @@ pub async fn acquire_setup_delete_deployment(
         "teardown-failed".to_string(),
     ];
 
-    for attempt in 1..=MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS {
+    // The bound comes from the deployment's recorded platform once it is read, not from the
+    // caller's setup method or the stack settings (which default to push when missing, and
+    // `alien destroy` always passes "cli"). A Kubernetes deployment is always pulled: its
+    // Operator does the runtime cleanup, and if it is gone the wait cannot end.
+    let mut max_attempts = MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS;
+    let mut kubernetes_pull = false;
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
         let response = client
             .acquire()
             .body(alien_manager_api::types::AcquireRequest {
@@ -590,12 +714,32 @@ pub async fn acquire_setup_delete_deployment(
 
         let response = resp.into_inner();
         if let Some(acquired) = response.deployments.into_iter().next() {
-            return Ok(SetupDeleteAcquireOutcome::Acquired {
-                execution_claim: acquired.execution_claim.map(|claim| ExecutionClaim {
-                    operation_id: claim.operation_id,
-                    attempt_id: claim.attempt_id,
-                }),
+            let execution_claim = acquired.execution_claim.map(|claim| ExecutionClaim {
+                operation_id: claim.operation_id,
+                attempt_id: claim.attempt_id,
             });
+            return Ok(
+                match read_policy_under_lock(
+                    client,
+                    deployment_id,
+                    session,
+                    execution_claim.as_ref(),
+                    erase_data,
+                )
+                .await
+                {
+                    Ok(deployment) => SetupDeleteAcquireOutcome::Acquired {
+                        execution_claim,
+                        deployment: Box::new(deployment),
+                    },
+                    Err(PolicyUnderLock::Refused(message)) => {
+                        SetupDeleteAcquireOutcome::PolicyRefused { message }
+                    }
+                    Err(PolicyUnderLock::ReadFailed(message)) => {
+                        SetupDeleteAcquireOutcome::LockedReadFailed { message }
+                    }
+                },
+            );
         }
 
         reject_non_retryable_acquire_reason(deployment_id, &response.not_acquired, true)?;
@@ -615,10 +759,60 @@ pub async fn acquire_setup_delete_deployment(
             }
         };
 
-        match deployment.status.as_str() {
-            "retention-required" | "teardown-required" | "teardown-failed" => {}
-            "retained" | "deleted" => return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted),
-            "delete-failed" => {
+        // The acquire answer for this deployment: its reason, and whether a wait can still change it.
+        let refusal = response
+            .not_acquired
+            .iter()
+            .find(|outcome| outcome.deployment_id == deployment_id)
+            .map(|outcome| {
+                use alien_manager_api::types::DeploymentAcquireUnavailableReason as Reason;
+                AcquireRefusal {
+                    text: outcome.reason.to_string(),
+                    held: matches!(outcome.reason, Reason::Contended),
+                    final_answer: matches!(outcome.reason, Reason::StatusMismatch),
+                }
+            });
+
+        if matches!(
+            deployment.platform,
+            alien_manager_api::types::Platform::Kubernetes
+        ) {
+            kubernetes_pull = true;
+            max_attempts = MAX_KUBERNETES_SETUP_DELETE_ACQUIRE_ATTEMPTS;
+        }
+
+        // The reason that ends a failed teardown's wait: a positive answer only.
+        let final_reason = refusal
+            .as_ref()
+            .filter(|refusal| refusal.final_answer)
+            .map(|refusal| refusal.text.as_str());
+        match (deployment.status.as_str(), final_reason) {
+            // Waiting does not change a failed teardown: nothing else moves it. End the wait only
+            // on a positive answer from the manager (a reason for this deployment that is not
+            // "another session holds it" or "deferred") that agrees with the status just read. An
+            // older manager gives no reason, and a held lock may be about to be released: keep
+            // waiting for those, as before.
+            ("teardown-failed", Some(reason)) => {
+                let failed = alien_error::GenericError {
+                    message: format!(
+                        "Setup teardown failed earlier and the manager is not offering it for another attempt (reason: {reason}). A failed teardown is retried only after a new delete request for the deployment reaches the manager; if one was just sent and the status is still teardown-failed, fix the cause named below first, then run destroy again."
+                    ),
+                };
+                return Err(match deployment.error {
+                    Some(recorded) => {
+                        match serde_json::from_value::<AlienError>(recorded.clone()) {
+                            Ok(recorded) => recorded.context(failed),
+                            Err(_) => AlienError::new(alien_error::GenericError {
+                                message: format!("{} Recorded error: {recorded}", failed.message),
+                            }),
+                        }
+                    }
+                    None => AlienError::new(failed),
+                });
+            }
+            ("retention-required" | "teardown-required" | "teardown-failed", _) => {}
+            ("retained" | "deleted", _) => return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted),
+            ("delete-failed", _) => {
                 let failed = alien_error::GenericError {
                     message:
                         "Runtime deletion failed before setup teardown became available. Retry destroy after resolving the runtime cleanup failure."
@@ -638,23 +832,49 @@ pub async fn acquire_setup_delete_deployment(
             _ => {}
         }
 
-        if attempt == MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS {
-            return Err(AlienError::new(alien_error::GenericError {
-                message: "Timed out waiting for runtime cleanup to reach setup teardown handoff"
-                    .to_string(),
-            }));
+        if attempt >= max_attempts {
+            let minutes = max_attempts as u64 * ACQUIRE_POLL_SECONDS / 60;
+            let handed_off = matches!(
+                deployment.status.as_str(),
+                "retention-required" | "teardown-required" | "teardown-failed"
+            );
+            let message = if handed_off {
+                // The runtime cleanup is over, and the manager has not handed the deployment over.
+                let answer = refusal
+                    .as_ref()
+                    .map(|refusal| refusal.text.as_str())
+                    .unwrap_or("none given");
+                let cause = if refusal.as_ref().is_some_and(|refusal| refusal.held) {
+                    "Another session holds it, for example another destroy still running or an Operator that has not released it. Wait for it to finish or stop it, then run destroy again."
+                } else {
+                    "Run destroy again; if it happens again, look at the manager's log."
+                };
+                format!(
+                    "Timed out after {minutes} minutes waiting to take the deployment for setup teardown (deployment status: {}, last answer: {answer}). Runtime cleanup is over, but the manager did not grant the deployment to this command. {cause}",
+                    deployment.status
+                )
+            } else if kubernetes_pull {
+                format!(
+                    "Timed out after {minutes} minutes waiting for runtime cleanup to reach the setup teardown handoff (deployment status: {}). The Operator has not finished its cleanup. Runtime cleanup is done by the deployment's Operator. The deletion cannot be finished from this command yet. If the Operator is still installed, leave it running and run destroy again. If it was already removed (for example the Helm release was uninstalled), the deployment record stays as it is.",
+                    deployment.status
+                )
+            } else {
+                format!(
+                    "Timed out after {minutes} minutes waiting for runtime cleanup to reach the setup teardown handoff (deployment status: {}). Run destroy again to keep waiting.",
+                    deployment.status
+                )
+            };
+            return Err(AlienError::new(alien_error::GenericError { message }));
         }
 
         info!(
             attempt = attempt,
-            max = MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS,
+            max = max_attempts,
             status = %deployment.status,
             "Waiting for runtime cleanup handoff before setup teardown"
         );
         tokio::time::sleep(ACQUIRE_RETRY_DELAY).await;
     }
-
-    unreachable!()
 }
 
 async fn acquire_deployment_with_statuses(
@@ -917,6 +1137,13 @@ mod tests {
                 }));
             })
             .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(200)
+                    .json_body(deployment_in("retention-required", None));
+            })
+            .await;
         let client = ManagerClient::new(&server.base_url());
         let outcome = acquire_setup_delete_deployment(
             &client,
@@ -925,6 +1152,7 @@ mod tests {
             "setup",
             DeploymentModel::Push,
             "cli",
+            false,
         )
         .await
         .unwrap();
@@ -933,6 +1161,130 @@ mod tests {
             SetupDeleteAcquireOutcome::Acquired { .. }
         ));
         acquire.assert_async().await;
+    }
+
+    /// The acquire, then the record read under the lock, with a policy in it.
+    async fn acquire_with_recorded_policy(
+        policy: Option<&str>,
+        erase_data: bool,
+    ) -> (Result<SetupDeleteAcquireOutcome, AlienError>, usize, usize) {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(200).json_body(serde_json::json!({
+                    "deployments": [{"deployment": {"id": "deployment-1", "status": "teardown-required"}}],
+                    "notAcquired": []
+                }));
+            })
+            .await;
+        let mut record = deployment_in("teardown-required", None);
+        if let Some(policy) = policy {
+            record["runtimeMetadata"] = serde_json::json!({"deletionPolicy": policy});
+        }
+        let read = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(200).json_body(record);
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(200).json_body(serde_json::json!({}));
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+        let outcome = acquire_setup_delete_deployment(
+            &client,
+            &client,
+            "deployment-1",
+            "setup",
+            DeploymentModel::Pull,
+            "helm",
+            erase_data,
+        )
+        .await;
+        (outcome, read.hits_async().await, release.hits_async().await)
+    }
+
+    /// The policy is read with the lock held: when it differs from this run's choice (another run
+    /// changed it during the wait, or the caller never read it) the lock is given back and nothing
+    /// is deleted. A matching or absent policy goes on and keeps the lock.
+    #[tokio::test]
+    async fn setup_delete_acquire_refuses_a_policy_that_differs_under_the_lock() {
+        for (policy, erase_data, text) in [
+            (Some("erase"), false, "requested with data erase"),
+            (Some("retain"), true, "requested with data retained"),
+        ] {
+            let (outcome, reads, releases) = acquire_with_recorded_policy(policy, erase_data).await;
+            let Ok(SetupDeleteAcquireOutcome::PolicyRefused { message }) = outcome else {
+                panic!("{policy:?}: a changed policy is refused");
+            };
+            assert!(message.contains(text), "{policy:?}: {message}");
+            assert_eq!(
+                (reads, releases),
+                (1, 1),
+                "{policy:?}: read once, released once"
+            );
+        }
+        for (policy, erase_data) in [
+            (Some("erase"), true),
+            (Some("retain"), false),
+            (None, false),
+            (None, true),
+        ] {
+            let (outcome, _, releases) = acquire_with_recorded_policy(policy, erase_data).await;
+            assert!(
+                matches!(outcome, Ok(SetupDeleteAcquireOutcome::Acquired { .. })),
+                "{policy:?}/{erase_data}"
+            );
+            assert_eq!(releases, 0, "{policy:?}/{erase_data}: the lock is kept");
+        }
+    }
+
+    /// A failed read under the lock leaves the policy unknown: the lock is given back and the
+    /// acquire fails; it never goes on to delete.
+    #[tokio::test]
+    async fn setup_delete_acquire_fails_closed_when_the_record_cannot_be_read_under_the_lock() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(200).json_body(serde_json::json!({
+                    "deployments": [{"deployment": {"id": "deployment-1", "status": "teardown-required"}}],
+                    "notAcquired": []
+                }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(500).body("boom");
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(200).json_body(serde_json::json!({}));
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+        let outcome = acquire_setup_delete_deployment(
+            &client,
+            &client,
+            "deployment-1",
+            "setup",
+            DeploymentModel::Pull,
+            "helm",
+            false,
+        )
+        .await;
+        let Ok(SetupDeleteAcquireOutcome::LockedReadFailed { message }) = outcome else {
+            panic!("an unreadable record is its own outcome, not an acquire failure");
+        };
+        assert!(message.contains("policy is unknown"), "{message}");
+        release.assert_hits_async(1).await;
     }
 
     #[tokio::test]
@@ -958,6 +1310,7 @@ mod tests {
             "session-1",
             DeploymentModel::Push,
             "cli",
+            false,
         )
         .await
         .expect("confirmed removed record is completed deletion");
@@ -989,6 +1342,7 @@ mod tests {
             "session-1",
             DeploymentModel::Push,
             "cli",
+            false,
         )
         .await
         .err()
@@ -996,6 +1350,343 @@ mod tests {
         assert_eq!(error.http_status_code, Some(500));
         acquire.assert_async().await;
         lookup.assert_async().await;
+    }
+
+    /// The deployment record as the manager returns it, with the recorded error.
+    fn deployment_in(status: &str, error: Option<serde_json::Value>) -> serde_json::Value {
+        deployment_on(
+            alien_manager_api::types::Platform::Kubernetes,
+            status,
+            error,
+        )
+    }
+
+    fn deployment_on(
+        platform: alien_manager_api::types::Platform,
+        status: &str,
+        error: Option<serde_json::Value>,
+    ) -> serde_json::Value {
+        let record: alien_manager_api::types::DeploymentResponse =
+            alien_manager_api::types::DeploymentResponse::builder()
+                .id("deployment-1")
+                .name("example")
+                .status(status)
+                .platform(platform)
+                .deployment_group_id("dg_1")
+                .deployment_protocol_version(1u32)
+                .project_id("prj_1")
+                .workspace_id("ws_1")
+                .retry_requested(false)
+                .created_at("2026-07-16T00:00:00Z")
+                .try_into()
+                .expect("valid deployment response");
+        let mut record = serde_json::to_value(record).unwrap();
+        record["error"] = error.unwrap_or(serde_json::Value::Null);
+        record
+    }
+
+    async fn manager_that_refuses_the_acquire<'a>(
+        server: &'a MockServer,
+        reason: &str,
+        status: &str,
+        error: Option<serde_json::Value>,
+    ) -> httpmock::Mock<'a> {
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                // An empty reason is a manager from before acquire reasons existed.
+                let not_acquired = if reason.is_empty() {
+                    serde_json::json!([])
+                } else {
+                    serde_json::json!([{"deploymentId": "deployment-1", "reason": reason}])
+                };
+                then.status(200).json_body(serde_json::json!({
+                    "deployments": [],
+                    "notAcquired": not_acquired
+                }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(200).json_body(deployment_in(status, error));
+            })
+            .await;
+        acquire
+    }
+
+    /// A failed setup teardown stays failed however long the CLI waits: the wait ends at once
+    /// with the error the manager recorded.
+    #[tokio::test]
+    async fn setup_delete_wait_ends_at_once_for_a_failed_teardown() {
+        let server = MockServer::start_async().await;
+        let acquire = manager_that_refuses_the_acquire(
+            &server,
+            "statusMismatch",
+            "teardown-failed",
+            Some(serde_json::json!({
+                "code": "GENERIC_ERROR",
+                "message": "bucket is not empty",
+                "retryable": false,
+                "internal": false
+            })),
+        )
+        .await;
+        let client = ManagerClient::new(&server.base_url());
+        let error = acquire_setup_delete_deployment(
+            &client,
+            &client,
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Pull,
+            "helm",
+            false,
+        )
+        .await
+        .err()
+        .expect("a failed teardown ends the wait");
+        let chain = serde_json::to_string(&error).unwrap();
+        assert!(chain.contains("bucket is not empty"), "{chain}");
+        assert!(chain.contains("reason: statusMismatch"), "{chain}");
+        assert!(chain.contains("run destroy again"), "{chain}");
+        acquire.assert_hits_async(1).await;
+    }
+
+    /// While another session holds the lock a failed teardown may be about to be retried:
+    /// that is not the end of the wait.
+    #[tokio::test]
+    async fn setup_delete_wait_keeps_waiting_for_a_failed_teardown_that_is_locked() {
+        let server = MockServer::start_async().await;
+        let acquire =
+            manager_that_refuses_the_acquire(&server, "contended", "teardown-failed", None).await;
+        let client = ManagerClient::new(&server.base_url());
+        let _ = acquire_setup_delete_deployment(
+            &client,
+            &client,
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Pull,
+            "helm",
+            false,
+        )
+        .await
+        .err()
+        .expect("the wait is bounded");
+        acquire.assert_hits_async(450).await;
+    }
+
+    async fn failed_teardown_wait_with(reason: &str) -> (String, usize) {
+        let server = MockServer::start_async().await;
+        let acquire = manager_that_refuses_the_acquire(
+            &server,
+            reason,
+            "teardown-failed",
+            Some(serde_json::json!({
+                "code": "GENERIC_ERROR",
+                "message": "bucket is not empty",
+                "retryable": false,
+                "internal": false
+            })),
+        )
+        .await;
+        let client = ManagerClient::new(&server.base_url());
+        let error = acquire_setup_delete_deployment(
+            &client,
+            &client,
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Pull,
+            "helm",
+            false,
+        )
+        .await
+        .err()
+        .expect("the wait is bounded");
+        (
+            serde_json::to_string(&error).unwrap(),
+            acquire.hits_async().await,
+        )
+    }
+
+    /// Only a positive answer ends the wait early: a manager that gives no reason (from before
+    /// acquire reasons existed) or says "deferred" may be about to offer the deployment, so the
+    /// wait goes on as before.
+    #[tokio::test]
+    async fn setup_delete_wait_keeps_waiting_for_a_failed_teardown_without_a_final_reason() {
+        for reason in ["", "deferred", "contended"] {
+            let (chain, hits) = failed_teardown_wait_with(reason).await;
+            assert_eq!(hits, 450, "reason {reason:?}");
+            assert!(chain.contains("15 minutes"), "reason {reason:?}: {chain}");
+        }
+        // A final reason for this deployment ends it with the reason and the recorded error.
+        let (chain, hits) = failed_teardown_wait_with("statusMismatch").await;
+        assert_eq!(hits, 1);
+        assert!(chain.contains("reason: statusMismatch"), "{chain}");
+        assert!(chain.contains("bucket is not empty"), "{chain}");
+        // `limitReached` ends through the shared non-retryable check, also at once.
+        let (chain, hits) = failed_teardown_wait_with("limitReached").await;
+        assert_eq!(hits, 1);
+        assert!(chain.contains("limitReached"), "{chain}");
+    }
+
+    /// The runtime cleanup is over and the manager still does not hand the deployment over: the
+    /// message says what the manager answered, and names a holder only when the answer says one
+    /// holds it. It never says the Operator must be running.
+    #[tokio::test]
+    async fn setup_delete_wait_timeout_names_a_holder_only_when_the_answer_does() {
+        for (reason, answer, names_holder) in [
+            ("contended", "contended", true),
+            ("deferred", "deferred", false),
+            ("", "none given", false),
+        ] {
+            let server = MockServer::start_async().await;
+            let acquire =
+                manager_that_refuses_the_acquire(&server, reason, "teardown-required", None).await;
+            let client = ManagerClient::new(&server.base_url());
+            let error = acquire_setup_delete_deployment(
+                &client,
+                &client,
+                "deployment-1",
+                "session-1",
+                DeploymentModel::Pull,
+                "helm",
+                false,
+            )
+            .await
+            .err()
+            .expect("the wait is bounded");
+            let chain = serde_json::to_string(&error).unwrap();
+            assert!(
+                chain.contains(&format!("last answer: {answer}")),
+                "{reason:?}: {chain}"
+            );
+            assert_eq!(
+                chain.contains("session holds it"),
+                names_holder,
+                "{reason:?}: {chain}"
+            );
+            // Each case says its own next step: wait for the holder, or run again and look at
+            // the manager's log. Neither claims a reason the manager did not give.
+            assert_eq!(
+                chain.contains("Wait for it to finish or stop it"),
+                names_holder,
+                "{reason:?}: {chain}"
+            );
+            assert_eq!(
+                chain.contains("look at the manager's log"),
+                !names_holder,
+                "{reason:?}: {chain}"
+            );
+            assert!(!chain.contains("did not say why"), "{reason:?}: {chain}");
+            assert!(!chain.contains("--operator-removed"), "{reason:?}: {chain}");
+            assert!(!chain.contains("start it again"), "{reason:?}: {chain}");
+            acquire.assert_hits_async(450).await;
+        }
+    }
+
+    /// A deployment whose Operator is gone stays `delete-pending`: the wait ends after minutes,
+    /// not three quarters of an hour, and says what it was waiting for.
+    #[tokio::test]
+    async fn setup_delete_wait_is_bounded_and_names_the_operator() {
+        let server = MockServer::start_async().await;
+        let acquire =
+            manager_that_refuses_the_acquire(&server, "statusMismatch", "delete-pending", None)
+                .await;
+        let client = ManagerClient::new(&server.base_url());
+        let error = acquire_setup_delete_deployment(
+            &client,
+            &client,
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Pull,
+            "helm",
+            false,
+        )
+        .await
+        .err()
+        .expect("the wait is bounded");
+        let chain = serde_json::to_string(&error).unwrap();
+        assert!(chain.contains("15 minutes"), "{chain}");
+        assert!(
+            chain.contains("The Operator has not finished its cleanup"),
+            "{chain}"
+        );
+        assert!(chain.contains("delete-pending"), "{chain}");
+        assert!(chain.contains("leave it running and run destroy again"), "{chain}");
+        assert!(!chain.contains("start it again"), "{chain}");
+        acquire.assert_hits_async(450).await;
+    }
+
+    /// A cloud runtime cleanup can legitimately take long: the push deployment's wait keeps its
+    /// 45 minutes, and its message names neither the Operator nor Helm.
+    #[tokio::test]
+    async fn setup_delete_wait_for_a_push_deployment_keeps_forty_five_minutes() {
+        let server = MockServer::start_async().await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(200).json_body(serde_json::json!({
+                    "deployments": [],
+                    "notAcquired": [{"deploymentId": "deployment-1", "reason": "statusMismatch"}]
+                }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(200).json_body(deployment_on(
+                    alien_manager_api::types::Platform::Aws,
+                    "delete-pending",
+                    None,
+                ));
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+        let error = acquire_setup_delete_deployment(
+            &client,
+            &client,
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Push,
+            "cli",
+            false,
+        )
+        .await
+        .err()
+        .expect("the wait is bounded");
+        let chain = serde_json::to_string(&error).unwrap();
+        assert!(chain.contains("45 minutes"), "{chain}");
+        assert!(
+            !chain.contains("Operator") && !chain.contains("Helm"),
+            "{chain}"
+        );
+        acquire.assert_hits_async(1350).await;
+    }
+
+    /// `alien destroy` passes setup method "cli" and stack settings that may default to push, but
+    /// the record says Kubernetes: the bound and the message follow the record.
+    #[tokio::test]
+    async fn setup_delete_wait_for_a_kubernetes_record_is_bounded_whatever_the_caller_passes() {
+        let server = MockServer::start_async().await;
+        let acquire =
+            manager_that_refuses_the_acquire(&server, "statusMismatch", "delete-pending", None)
+                .await;
+        let client = ManagerClient::new(&server.base_url());
+        let error = acquire_setup_delete_deployment(
+            &client,
+            &client,
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Push,
+            "cli",
+            false,
+        )
+        .await
+        .err()
+        .expect("the wait is bounded");
+        let chain = serde_json::to_string(&error).unwrap();
+        assert!(chain.contains("15 minutes"), "{chain}");
+        acquire.assert_hits_async(450).await;
     }
 
     /// The body a manager returns for a deployment whose record is gone.
@@ -1033,6 +1724,7 @@ mod tests {
             "session-1",
             DeploymentModel::Push,
             "cli",
+            false,
         )
         .await
         .err()
@@ -1099,6 +1791,7 @@ mod tests {
             "session-1",
             DeploymentModel::Push,
             "cli",
+            false,
         )
         .await
         .expect("a removed record confirmed by the operator is a completed deletion");
@@ -1185,6 +1878,7 @@ mod tests {
             "session-1",
             DeploymentModel::Push,
             "cli",
+            false,
         )
         .await
         .err()

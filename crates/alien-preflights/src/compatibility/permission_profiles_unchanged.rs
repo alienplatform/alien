@@ -1,4 +1,4 @@
-use crate::compatibility::narrowing::management_narrowed;
+use crate::compatibility::narrowing::{management_narrowed, profile_narrowed};
 use crate::error::Result;
 use crate::mutations::management_permission_profile::{
     replica_secret_existence, secrets_guard, GATE_DERIVED_GLOBAL_SUFFIXES,
@@ -12,10 +12,12 @@ use std::collections::HashSet;
 
 /// Validates that permission profiles in the stack haven't been modified.
 ///
-/// A workload profile change, including one that only removes grants or the whole profile,
-/// requires setup: setup owns the identities and rewrites their grants. Management permissions
-/// may still narrow without setup: the update needs the broader installed grants to delete what
-/// the removed ones covered (see [`crate::compatibility::narrowing`]).
+/// A workload profile change requires setup: setup owns the identities and rewrites their
+/// grants. A change that only removes grants does not: the installed identity stays broader than
+/// the release needs until the next setup update trims it. Removing the whole profile still
+/// requires setup. Management permissions narrow the same way: the update needs the broader
+/// installed grants to delete what the removed ones covered (see
+/// [`crate::compatibility::narrowing`]).
 ///
 /// Permission profiles define the security model of the stack and changing them
 /// during updates could lead to security vulnerabilities or privilege escalation.
@@ -425,10 +427,19 @@ fn check_permission_profiles(
         if let Some(old_profile) = old_profiles.get(profile_name) {
             // Profile exists in both - check if it was modified
             if profiles_differ_outside_gates(old_profile, new_profile, &gated) {
-                errors.push(format!(
-                    "Permission profile '{}' was modified",
-                    profile_name
-                ));
+                if allow_narrowing && profile_narrowed(old_profile, new_profile) {
+                    // The installed identity keeps the grants this release no longer asks for
+                    // until the next setup update removes them.
+                    warnings.push(format!(
+                        "Permission profile '{}' grants less than the installed setup. The installed grants stay until the next setup update removes them.",
+                        profile_name
+                    ));
+                } else {
+                    errors.push(format!(
+                        "Permission profile '{}' was modified",
+                        profile_name
+                    ));
+                }
             }
         } else {
             // Profile is new
@@ -1130,9 +1141,10 @@ mod tests {
     }
 
     /// Management grants may narrow before setup: the update still needs the installed ones to
-    /// delete what they covered. A workload profile that is removed or loses grants needs setup.
+    /// delete what they covered. A workload profile that is removed needs setup; one that only
+    /// loses grants does not (see `workload_profiles_narrow_without_setup`).
     #[tokio::test]
-    async fn only_management_narrows_without_setup() {
+    async fn management_narrows_and_a_removed_profile_needs_setup() {
         let kv_stack = |grants: &[&str]| {
             Stack::new("s".to_string())
                 .management(ManagementPermissions::Extend(
@@ -1180,11 +1192,76 @@ mod tests {
             .check(&with_profile, &narrowed_profile)
             .await
             .expect("check should run");
-        assert!(!narrowed.success);
+        assert!(narrowed.success, "{:?}", narrowed.errors);
+        assert!(narrowed.warnings[0].contains("'worker' grants less"));
+    }
+
+    fn api_profile_stack(scopes: &[(&str, &[&str])]) -> Stack {
+        let mut profile = PermissionProfile::new();
+        for (scope, grants) in scopes {
+            profile = if *scope == "*" {
+                profile.global(grants.iter().copied())
+            } else {
+                profile.resource(*scope, grants.iter().copied())
+            };
+        }
+        let mut stack = Stack::new("s".to_string()).build();
+        stack
+            .permissions
+            .profiles
+            .insert("api".to_string(), profile);
+        stack
+    }
+
+    /// A release that drops grants from a workload profile proceeds and says why; one that gains
+    /// anything, or gains while dropping, still needs setup.
+    #[tokio::test]
+    async fn workload_profiles_narrow_without_setup() {
+        let installed = api_profile_stack(&[
+            ("*", &["sandbox/execute"]),
+            ("deployer-secrets", &["storage/data-read"]),
+            ("database", &["storage/data-write"]),
+        ]);
+        let check = |new: &Stack| check_permission_profiles(&installed, new, false, true).unwrap();
+
+        let dropped_scope = api_profile_stack(&[
+            ("*", &["sandbox/execute"]),
+            ("database", &["storage/data-write"]),
+        ]);
+        let result = check(&dropped_scope);
+        assert!(result.success, "{:?}", result.errors);
+        assert_eq!(result.warnings.len(), 1);
+
+        let dropped_grant = api_profile_stack(&[
+            ("*", &["sandbox/execute"]),
+            ("deployer-secrets", &["storage/data-read"]),
+            ("database", &[]),
+        ]);
+        assert!(check(&dropped_grant).success);
+
+        // Gains a grant in a scope the profile already has.
+        let gained = api_profile_stack(&[
+            ("*", &["sandbox/execute", "sandbox/management"]),
+            ("deployer-secrets", &["storage/data-read"]),
+            ("database", &["storage/data-write"]),
+        ]);
+        assert!(!check(&gained).success);
+
+        // Gains a new scope while dropping another.
+        let added_and_removed = api_profile_stack(&[
+            ("*", &["sandbox/execute"]),
+            ("workspaces", &["storage/data-read"]),
+            ("database", &["storage/data-write"]),
+        ]);
+        assert!(!check(&added_and_removed).success);
+
+        // Narrowing is judged against the whole profile, so the exact comparison setup uses
+        // to decide what it installs still reports it.
         assert!(
-            narrowed.errors[0].contains("'worker' was modified"),
-            "{:?}",
-            narrowed.errors
+            !PermissionProfilesUnchangedCheck
+                .check_exact(&installed, &dropped_scope)
+                .unwrap()
+                .success
         );
     }
 
@@ -1258,7 +1335,9 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "s".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -1271,7 +1350,9 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "s".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -1314,7 +1395,9 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: permissions_config.clone(),
@@ -1325,7 +1408,9 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: permissions_config,
@@ -1362,7 +1447,9 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -1376,7 +1463,9 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -1409,7 +1498,9 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -1423,7 +1514,9 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {

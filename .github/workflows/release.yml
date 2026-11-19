@@ -215,6 +215,13 @@ jobs:
         env:
           VERSION: ${{ steps.bump.outputs.version }}
 
+      # The pull-target compatibility table names the next unreleased version.
+      - name: Set next release in the pull-target compatibility table
+        if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
+        run: .github/scripts/bump-next-release.sh "$VERSION"
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+
       - name: Set JavaScript package versions
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
         run: |
@@ -1754,6 +1761,9 @@ jobs:
             -p alien-verifier \
             --features alien-egress-gateway/cloud,alien-egress-gateway/local \
             --target x86_64-unknown-linux-musl
+
+      - name: Gateway has the cloud providers compiled in
+        run: target/x86_64-unknown-linux-musl/release/alien-egress-gateway --self-check
 
       - name: Stage binaries for upload
         run: |

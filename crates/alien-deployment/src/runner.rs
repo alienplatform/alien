@@ -354,9 +354,11 @@ async fn run_step_loop_body(
     on_progress: Option<&ProgressCallback>,
     allow_initial_running_step: bool,
 ) -> Result<RunnerResult> {
+    // Controllers mark what they create with the deployment's own id; a stored or supplied
+    // configuration cannot choose it.
+    config.deployment_id = Some(deployment_id.to_string());
     if !state.has_desired() {
-        let service_provider = service_provider
-            .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
+        let service_provider = crate::helpers::service_provider_for(state, service_provider)?;
         let observe_report = run_observe_pass(
             state.platform,
             client_config,
@@ -389,6 +391,7 @@ async fn run_step_loop_body(
                         }
                         if let Some(updated_config) = reconciled.config {
                             *config = updated_config;
+                            config.deployment_id = Some(deployment_id.to_string());
                         }
                         break;
                     }
@@ -425,6 +428,7 @@ async fn run_step_loop_body(
     }
 
     for step_count in 1..=policy.max_steps {
+        let extensions_loaded_for = crate::helpers::extensions_loaded_for(state);
         // Pre-step terminal check
         if !should_step_retryable_failure(state) {
             let should_run_initial_running_refresh = allow_initial_running_step
@@ -490,6 +494,7 @@ async fn run_step_loop_body(
                             }
                             if let Some(updated_config) = reconciled.config {
                                 *config = updated_config;
+                                config.deployment_id = Some(deployment_id.to_string());
                             }
                             break;
                         }
@@ -596,6 +601,7 @@ async fn run_step_loop_body(
                     }
                     if let Some(updated_config) = reconciled.config {
                         *config = updated_config;
+                        config.deployment_id = Some(deployment_id.to_string());
                     }
                     break;
                 }
@@ -645,6 +651,25 @@ async fn run_step_loop_body(
         if let Some(result) = classify_status(&state.status, policy.operation) {
             return Ok(RunnerResult {
                 loop_result: result,
+                steps_executed: step_count,
+                state_persisted: true,
+            });
+        }
+
+        // The provider was loaded for the extensions the releases listed before this step. A step
+        // that changed them (an unfinished update that finished, then a newer target) needs a
+        // provider loaded for the new ones, which only the caller can load.
+        if crate::helpers::extensions_loaded_for(state) != extensions_loaded_for {
+            info!(
+                deployment_id = %deployment_id,
+                "The releases' extensions changed; yielding for the service provider to be loaded again"
+            );
+            return Ok(RunnerResult {
+                loop_result: LoopResult {
+                    stop_reason: LoopStopReason::Delayed,
+                    outcome: LoopOutcome::Neutral,
+                    final_status: state.status,
+                },
                 steps_executed: step_count,
                 state_persisted: true,
             });
@@ -1715,7 +1740,9 @@ mod tests {
             inputs: Vec::new(),
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
         }
     }
 
@@ -2150,6 +2177,7 @@ mod tests {
 
     fn test_config() -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             image_registry: None,
             image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
@@ -2173,6 +2201,7 @@ mod tests {
             allow_frozen_changes: false,
             setup_run: false,
             setup_run_id: None,
+            deployment_id: None,
             domain_metadata: None,
             public_endpoints: None,
             monitoring: None,

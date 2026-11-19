@@ -287,6 +287,11 @@ pub struct InitializeRequest {
     /// rendered Operator manifests or `helm` for generated Helm installs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub setup_method: Option<String>,
+    /// What the client's setup run can do, such as `create-keys`. A standalone manager
+    /// accepts and ignores it; embedded managers forward it to their control plane.
+    /// Older clients omit it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup_capabilities: Vec<String>,
     /// Helm release that installed this deployment, for `helm` setups. Lets
     /// the manager tell the deployment owner the exact `helm uninstall`
     /// command. Older clients omit it.
@@ -683,8 +688,10 @@ async fn acquired_deployment_response(
     let (held, _) = crate::values::with_generated_inputs(values, deployment_stack.as_ref(), held)
         .await
         .map_err(|e| e.into_generic())?;
+    // `false`: the config skips the management ExternalId when it serializes, so the runner
+    // never receives it, and looking it up here could only fail the acquire.
     let config = sources
-        .deployment_config(&held, deployment_stack.as_ref(), management_config)
+        .deployment_config(&held, deployment_stack.as_ref(), management_config, false)
         .await
         .context(GenericError {
             message: format!("Failed to build the config for deployment {}", record.id),
@@ -1093,7 +1100,7 @@ async fn release(
 }
 
 #[cfg(test)]
-pub(in crate::routes) mod tests {
+pub(crate) mod tests {
     use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
     use alien_commands::{
         dispatchers::NullCommandDispatcher,
@@ -1144,13 +1151,14 @@ pub(in crate::routes) mod tests {
 
     use super::{
         acquired_deployment_response, agent_needs_initial_state_hydration,
-        agent_report_completes_claim, build_target_deployment_config, deployment_needs_target,
-        deployment_state_from_record, deployment_target_release_id, management_platform,
-        may_deliver_agent_target, preserve_recorded_gate_answers,
-        preserve_setup_update_authorization, release_stack_platform,
-        should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_kubernetes_base_platform, AgentSyncRequest, AgentSyncWireRequest, HelmRelease,
-        InitialDesiredRelease, InitializeRequest, ReconcileRequest, RunnerConfigSources,
+        agent_report_completes_claim, agent_report_hands_off_runtime,
+        build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
+        deployment_target_release_id, management_platform, may_deliver_agent_target,
+        preserve_recorded_gate_answers, preserve_setup_update_authorization,
+        release_stack_platform, should_ignore_agent_state_report,
+        should_return_current_state_for_agent_sync, validate_kubernetes_base_platform,
+        AgentSyncRequest, AgentSyncWireRequest, HelmRelease, InitialDesiredRelease,
+        InitializeRequest, ReconcileRequest, RunnerConfigSources,
     };
 
     #[tokio::test]
@@ -1505,7 +1513,7 @@ pub(in crate::routes) mod tests {
     }
 
     /// The sync routes' state over `deployment_store`, with local command storage.
-    pub(in crate::routes) async fn test_app_state(
+    pub(crate) async fn test_app_state(
         directory: &std::path::Path,
         deployment_store: Arc<dyn crate::traits::DeploymentStore>,
         release_store: Arc<SqliteReleaseStore>,
@@ -1548,13 +1556,14 @@ pub(in crate::routes) mod tests {
             registry_routing_table: Arc::new(
                 RegistryRoutingTable::new(vec![]).expect("empty routing table"),
             ),
-            import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+            host_registrations: alien_infra::HostRegistrations::NONE,
             charts: None,
             runtime_identity: None,
             release_channels: None,
             signing: None,
             bundle_signing_key: None,
             bundle_sources: None,
+            extension_bundles: None,
             log_buffer: Arc::new(crate::dev::LogBuffer::new()),
             values: None,
             value_access: None,
@@ -1566,6 +1575,13 @@ pub(in crate::routes) mod tests {
 
     #[async_trait::async_trait]
     impl crate::traits::CredentialResolver for UnresolvableManagementIdentity {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -1596,6 +1612,13 @@ pub(in crate::routes) mod tests {
 
     #[async_trait::async_trait]
     impl crate::traits::CredentialResolver for ResolvedManagementIdentity {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -1659,6 +1682,16 @@ pub(in crate::routes) mod tests {
         desired_stack: Option<Stack>,
         /// Charts that update older Operators: the manager has an image to send.
         update_older_operators: bool,
+        /// The Operator's reported `currentState`, when the test is about the report.
+        current_state: Option<Value>,
+        /// The report carries the Operator's execution claim (it is mid-operation).
+        report_claim: bool,
+        /// The real store moves the record to the status a pull report carries (a forward move
+        /// in a deletion); a report it refuses (a reopened deletion) leaves the record alone.
+        store_follows_report: bool,
+        /// The first read of the stored record after the report was recorded fails (a transient
+        /// store error).
+        read_after_report_fails: bool,
     }
 
     impl Default for SyncOptions {
@@ -1671,6 +1704,10 @@ pub(in crate::routes) mod tests {
                 settings: None,
                 desired_stack: None,
                 update_older_operators: false,
+                current_state: None,
+                report_claim: false,
+                store_follows_report: false,
+                read_after_report_fails: false,
             }
         }
     }
@@ -1756,12 +1793,23 @@ pub(in crate::routes) mod tests {
         // The store remembers a saved failure, as a real one does.
         let stored = Arc::new(Mutex::new(record.clone()));
         let read = stored.clone();
-        store
-            .expect_get_deployment()
-            .returning(move |_, _| Ok(Some(read.lock().expect("stored record").clone())));
+        // The report is recorded (reconciled) before the read that decides the release.
+        let recorded = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fail_once = Arc::new(std::sync::atomic::AtomicBool::new(
+            options.read_after_report_fails,
+        ));
+        let (recorded_read, fail_read) = (recorded.clone(), fail_once.clone());
+        store.expect_get_deployment().returning(move |_, _| {
+            if recorded_read.load(std::sync::atomic::Ordering::SeqCst)
+                && fail_read.swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(crate::error::ErrorData::internal("read failed").into_generic());
+            }
+            Ok(Some(read.lock().expect("stored record").clone()))
+        });
         let acquired = record.clone();
         let granted = claim.clone();
-        if options.claims {
+        if options.claims && !options.report_claim {
             store
                 .expect_acquire()
                 .times(1)
@@ -1780,8 +1828,10 @@ pub(in crate::routes) mod tests {
             .expect_retarget_settled_deployment()
             .returning(|_, _, _, _, _| Ok(false));
         let writes = stored.clone();
+        let follows_report = options.store_follows_report;
+        let report_recorded = recorded.clone();
         store.expect_reconcile().returning(move |_, data| {
-            if !data.update_heartbeat {
+            if !data.update_heartbeat || follows_report {
                 let mut record = writes.lock().expect("stored record");
                 record.status = serde_json::to_value(data.state.status)
                     .ok()
@@ -1793,6 +1843,7 @@ pub(in crate::routes) mod tests {
                     .as_ref()
                     .and_then(|e| serde_json::to_value(e).ok());
             }
+            report_recorded.store(true, std::sync::atomic::Ordering::SeqCst);
             received.lock().expect("reconcile log").push(data);
             Ok(ReconcileOutcome {
                 record: reconciled_record.clone(),
@@ -1833,6 +1884,12 @@ pub(in crate::routes) mod tests {
         });
         if let Some(version) = options.operator_version {
             body["operatorVersion"] = json!(version);
+        }
+        if let Some(current_state) = options.current_state.clone() {
+            body["currentState"] = current_state;
+        }
+        if options.report_claim {
+            body["executionClaim"] = json!(claim);
         }
         let response = super::router()
             .with_state(state)
@@ -1905,6 +1962,195 @@ pub(in crate::routes) mod tests {
                 .map(|claim| claim.attempt_id.as_str()),
             Some("attempt_test")
         );
+    }
+
+    /// A store that grants no execution claims (the standalone manager) holds only the
+    /// Operator's session lock. When the Operator reports that runtime cleanup is over, the
+    /// lock is given back: the setup owner acquires next and must not find it "contended".
+    #[tokio::test]
+    async fn a_claimless_handoff_report_gives_the_session_lock_back() {
+        for status in ["teardown-required", "retention-required", "retained"] {
+            let sync = sync_with_options(
+                deployment_record_with_state("deleting", None),
+                Arc::new(ResolvedManagementIdentity),
+                None,
+                SyncOptions {
+                    claims: false,
+                    store_follows_report: true,
+                    current_state: Some(json!({
+                        "platform": "kubernetes",
+                        "status": status,
+                        "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    })),
+                    ..SyncOptions::default()
+                },
+            )
+            .await;
+            assert_eq!(sync.status, StatusCode::OK, "{status}: {}", sync.response);
+            assert_eq!(
+                sync.released.len(),
+                1,
+                "{status}: the session lock is given back"
+            );
+        }
+        // A report that is not a handoff keeps it.
+        let sync = sync_with_options(
+            deployment_record_with_state("deleting", None),
+            Arc::new(ResolvedManagementIdentity),
+            None,
+            SyncOptions {
+                claims: false,
+                current_state: Some(json!({
+                    "platform": "kubernetes",
+                    "status": "deleting",
+                    "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                })),
+                ..SyncOptions::default()
+            },
+        )
+        .await;
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        assert!(sync.released.is_empty(), "runtime cleanup is still running");
+    }
+
+    /// The record BEFORE the report must already be a deletion (or at the reported status): the
+    /// report's own reconcile moves a `running` record to a handoff status, and an Operator must
+    /// not be able to give its lock to the setup owner without any delete request.
+    #[tokio::test]
+    async fn a_handoff_report_from_a_running_record_releases_nothing() {
+        for before in ["running", "pending", "update-failed"] {
+            let sync = sync_with_options(
+                deployment_record_with_state(before, None),
+                Arc::new(ResolvedManagementIdentity),
+                None,
+                SyncOptions {
+                    claims: false,
+                    store_follows_report: true,
+                    current_state: Some(json!({
+                        "platform": "kubernetes",
+                        "status": "teardown-required",
+                        "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    })),
+                    ..SyncOptions::default()
+                },
+            )
+            .await;
+            assert_eq!(sync.status, StatusCode::OK, "{before}: {}", sync.response);
+            assert!(
+                sync.released.is_empty(),
+                "{before}: no delete request, nothing is given back"
+            );
+        }
+        // A record already at the reported status (a stale lock after the handoff) is released.
+        let sync = sync_with_options(
+            deployment_record_with_state("teardown-required", None),
+            Arc::new(ResolvedManagementIdentity),
+            None,
+            SyncOptions {
+                claims: false,
+                store_follows_report: true,
+                current_state: Some(json!({
+                    "platform": "kubernetes",
+                    "status": "teardown-required",
+                    "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                })),
+                ..SyncOptions::default()
+            },
+        )
+        .await;
+        assert_eq!(sync.released.len(), 1);
+    }
+
+    /// A retained deployment reopened for an erase is `delete-pending` again while the Operator
+    /// may still report `retained`: the lock the new deletion holds is not a leftover, and each
+    /// sync must not give it back.
+    #[tokio::test]
+    async fn a_handoff_report_does_not_release_a_deletion_that_was_reopened() {
+        let sync = sync_with_options(
+            deployment_record_with_state("delete-pending", None),
+            Arc::new(ResolvedManagementIdentity),
+            None,
+            SyncOptions {
+                claims: false,
+                current_state: Some(json!({
+                    "platform": "kubernetes",
+                    "status": "retained",
+                    "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                })),
+                ..SyncOptions::default()
+            },
+        )
+        .await;
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        assert!(
+            sync.released.is_empty(),
+            "the record is not at the reported status: nothing is given back"
+        );
+    }
+
+    /// The read that decides whether the handoff releases the lock fails after the report was
+    /// recorded: the sync still succeeds, the release is skipped (the lock goes stale as before).
+    #[tokio::test]
+    async fn a_failed_read_does_not_fail_a_sync_whose_report_was_recorded() {
+        let sync = sync_with_options(
+            deployment_record_with_state("deleting", None),
+            Arc::new(ResolvedManagementIdentity),
+            None,
+            SyncOptions {
+                claims: false,
+                store_follows_report: true,
+                read_after_report_fails: true,
+                current_state: Some(json!({
+                    "platform": "kubernetes",
+                    "status": "teardown-required",
+                    "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                })),
+                ..SyncOptions::default()
+            },
+        )
+        .await;
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        assert!(sync.released.is_empty(), "no release without the read");
+    }
+
+    /// Neither a store that grants execution claims nor a report that carries one may release at a
+    /// handoff status: the same operation may be followed by another attempt. Each guard is needed
+    /// alone: claims granted without a claim in the report (a deletion has no desired release, so
+    /// the report is accepted), and a claim in the report without claims granted.
+    #[tokio::test]
+    async fn a_handoff_report_with_claims_in_play_is_not_released() {
+        for (claims, report_claim) in [(true, true), (true, false), (false, true)] {
+            for status in ["teardown-required", "retention-required", "retained"] {
+                let sync = sync_with_options(
+                    deployment_record_with_state("delete-pending", None),
+                    Arc::new(ResolvedManagementIdentity),
+                    None,
+                    SyncOptions {
+                        claims,
+                        report_claim,
+                        // The record is at the reported status: only the claims keep the lock.
+                        store_follows_report: true,
+                        current_state: Some(json!({
+                            "platform": "kubernetes",
+                            "status": status,
+                            "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        })),
+                        ..SyncOptions::default()
+                    },
+                )
+                .await;
+                assert_eq!(
+                    sync.status,
+                    StatusCode::OK,
+                    "{claims}/{report_claim}/{status}: {}",
+                    sync.response
+                );
+                assert!(
+                    sync.released.is_empty(),
+                    "{claims}/{report_claim}/{status}: nothing is released"
+                );
+            }
+        }
     }
 
     fn stack_with_egress() -> Stack {
@@ -2395,6 +2641,47 @@ pub(in crate::routes) mod tests {
                 "Failed to resolve the azure management identity for deployment dep_test"
             );
             assert_eq!(sync.released.len(), 1, "{status}: the claim is given back");
+        }
+    }
+
+    /// The sync response of a running pull deployment without extensions. With
+    /// `ALIEN_PARITY_DIR` set it is written there, with its times and release id replaced, so a
+    /// run on another revision of the manager can be compared byte for byte.
+    #[tokio::test]
+    async fn a_pull_sync_without_extensions_is_written_for_comparison() {
+        let sync = sync_with_management_resolver(
+            deployment_record_with_state("running", None),
+            Arc::new(ResolvedManagementIdentity),
+        )
+        .await;
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        fn timeless(value: Value) -> Value {
+            match value {
+                Value::String(text) if chrono::DateTime::parse_from_rfc3339(&text).is_ok() => {
+                    Value::String("<time>".into())
+                }
+                // Each run creates its release with a new id.
+                Value::String(text) if text.starts_with("rel_") => {
+                    Value::String("<release>".into())
+                }
+                Value::Array(items) => Value::Array(items.into_iter().map(timeless).collect()),
+                Value::Object(fields) => Value::Object(
+                    fields
+                        .into_iter()
+                        .map(|(key, value)| (key, timeless(value)))
+                        .collect(),
+                ),
+                other => other,
+            }
+        }
+        let response = timeless(sync.response);
+        assert!(response["target"].get("extensions").is_none(), "{response}");
+        if let Ok(dir) = std::env::var("ALIEN_PARITY_DIR") {
+            std::fs::write(
+                std::path::Path::new(&dir).join("sync.json"),
+                serde_json::to_vec_pretty(&response).unwrap(),
+            )
+            .unwrap();
         }
     }
 
@@ -4488,6 +4775,28 @@ pub(in crate::routes) mod tests {
     }
 
     #[test]
+    fn ignores_a_handoff_report_for_a_record_that_is_not_being_deleted() {
+        for status in ["running", "update-failed", "pending"] {
+            for reported in [
+                DeploymentStatus::TeardownRequired,
+                DeploymentStatus::RetentionRequired,
+                DeploymentStatus::Retained,
+            ] {
+                let deployment =
+                    deployment_record_with_state(status, Some(StackState::new(Platform::Local)));
+                let mut agent_state = uninitialized_state();
+                agent_state.status = reported;
+                assert!(should_ignore_agent_state_report(&deployment, &agent_state));
+            }
+        }
+        let deployment =
+            deployment_record_with_state("deleting", Some(StackState::new(Platform::Local)));
+        let mut agent_state = uninitialized_state();
+        agent_state.status = DeploymentStatus::TeardownRequired;
+        assert!(!should_ignore_agent_state_report(&deployment, &agent_state));
+    }
+
+    #[test]
     fn accepts_agent_delete_progress_after_delete_was_requested() {
         let deployment =
             deployment_record_with_state("delete-pending", Some(StackState::new(Platform::Local)));
@@ -4699,6 +5008,84 @@ pub(in crate::routes) mod tests {
         assert!(may_deliver_agent_target(&deployment, true, true));
     }
 
+    /// A release posted while a pull deployment is updating reaches its Operator as the
+    /// target on the next sync: the self-hosted store keeps no execution claims, so
+    /// delivery depends only on the record. The Operator then prepares it when the
+    /// running update fails.
+    #[tokio::test]
+    async fn release_posted_mid_update_is_delivered_to_the_operator_as_its_target() {
+        use crate::traits::deployment_store::{
+            CreateDeploymentGroupParams, CreateDeploymentParams,
+        };
+        use crate::traits::DeploymentStore;
+
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        let store = crate::stores::sqlite::SqliteDeploymentStore::new(db.clone());
+        assert!(!store.requires_execution_claims());
+        let system = crate::auth::Subject::system();
+        let group = store
+            .create_deployment_group(
+                &system,
+                CreateDeploymentGroupParams {
+                    name: "group".to_string(),
+                    max_deployments: 10,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .expect("group");
+        for status in ["updating", "update-pending"] {
+            let deployment = store
+                .create_deployment(
+                    &system,
+                    CreateDeploymentParams {
+                        deployment_protocol_version:
+                            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        name: format!("d-{status}"),
+                        deployment_group_id: group.id.clone(),
+                        platform: Platform::Kubernetes,
+                        base_platform: None,
+                        stack_settings: Default::default(),
+                        stack_state: None,
+                        environment_variables: None,
+                        public_subdomain: None,
+                        input_values: Default::default(),
+                        setup_item: None,
+                        deployment_token: None,
+                    },
+                )
+                .await
+                .expect("deployment");
+            {
+                let conn = db.conn().lock().await;
+                conn.execute(
+                    "UPDATE deployments SET status = ?1, current_release_id = 'rel_a', desired_release_id = 'rel_b' WHERE id = ?2",
+                    (status, deployment.id.as_str()),
+                )
+                .await
+                .expect("set status");
+            }
+            // Release B is updating; release C is posted.
+            store
+                .set_desired_release(&system, "rel_c", Some(Platform::Kubernetes))
+                .await
+                .expect("set desired");
+            let record = store
+                .get_deployment(&system, &deployment.id)
+                .await
+                .expect("get")
+                .expect("record");
+            assert_eq!(record.status, status);
+            assert_eq!(deployment_target_release_id(&record), Some("rel_c"));
+            assert!(may_deliver_agent_target(&record, false, false), "{status}");
+        }
+    }
+
     #[test]
     fn standalone_pull_target_does_not_require_a_control_plane_claim() {
         let mut deployment = deployment_record_with_state("update-pending", None);
@@ -4729,6 +5116,24 @@ pub(in crate::routes) mod tests {
 
         state.status = DeploymentStatus::UpdateFailed;
         assert!(agent_report_completes_claim(&deployment, &state));
+    }
+
+    #[test]
+    fn a_handoff_status_does_not_complete_a_claim_that_may_be_followed_by_another() {
+        let deployment = deployment_record_with_state("deleting", None);
+        for status in [
+            DeploymentStatus::TeardownRequired,
+            DeploymentStatus::RetentionRequired,
+            DeploymentStatus::Retained,
+        ] {
+            let mut state = uninitialized_state();
+            state.status = status;
+            assert!(
+                !agent_report_completes_claim(&deployment, &state),
+                "{status:?}"
+            );
+            assert!(agent_report_hands_off_runtime(&state), "{status:?}");
+        }
     }
 
     #[test]
@@ -5132,6 +5537,7 @@ pub(in crate::routes) mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             image_registry: None,
             image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
@@ -5149,6 +5555,7 @@ pub(in crate::routes) mod tests {
             allow_frozen_changes: false,
             setup_run: false,
             setup_run_id: None,
+            deployment_id: None,
             compute_backend: None,
             external_bindings: ExternalBindings::default(),
             base_platform: None,
@@ -5324,7 +5731,7 @@ pub(in crate::routes) mod tests {
         .await
         .expect("acquire response");
         let loop_config = sources
-            .deployment_config(&record, Some(&stack), None)
+            .deployment_config(&record, Some(&stack), None, false)
             .await
             .expect("loop config");
 
@@ -5356,6 +5763,77 @@ pub(in crate::routes) mod tests {
                 "LOG_LEVEL",
             ]
         );
+    }
+
+    /// A resolver whose management ExternalId lookup fails.
+    struct NoExternalId;
+
+    #[async_trait::async_trait]
+    impl crate::traits::CredentialResolver for NoExternalId {
+        async fn management_external_id(
+            &self,
+            deployment: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Err(AlienError::new(GenericError {
+                message: format!("no ExternalId for {}", deployment.id),
+            }))
+        }
+
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+    }
+
+    /// The runner never receives the management ExternalId, so acquiring a deployment whose
+    /// release lists an extension does not depend on looking it up.
+    #[tokio::test]
+    async fn acquiring_a_deployment_with_extensions_needs_no_external_id() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let mut stack = Stack::new("app".to_string()).build();
+        stack.extensions = vec![
+            alien_infra::extension_bundle::testing::TestBundle::new("acme", "1.0.0", &[]).manifest,
+        ];
+        let mut record = deployment_record_with_state("update-pending", None);
+        record.desired_release_id = Some("rel_next".to_string());
+        record.supplied_stacks = Some(crate::traits::deployment_store::SuppliedStacks {
+            current: None,
+            desired: Some(stack),
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = std::sync::Arc::new(
+            crate::stores::sqlite::SqliteDatabase::new(
+                &dir.path().join("manager.db").to_string_lossy(),
+            )
+            .await
+            .expect("database"),
+        );
+        let release_store = crate::stores::sqlite::SqliteReleaseStore::new(db);
+        let manager_config = crate::config::ManagerConfig {
+            base_url: Some("https://manager.example.test".to_string()),
+            ..Default::default()
+        };
+        let sources = RunnerConfigSources {
+            config: &manager_config,
+            credential_resolver: &NoExternalId,
+            bindings_provider: &None,
+            target_bindings_providers: &HashMap::new(),
+            commands_keys: None,
+        };
+
+        acquired_deployment_response(
+            &release_store,
+            None,
+            &sources,
+            &crate::traits::deployment_store::AcquiredDeployment {
+                deployment: record,
+                execution_claim: None,
+            },
+        )
+        .await
+        .expect("acquire response");
     }
 
     /// A runner that acquires a deployment runs with its generated secret
@@ -5934,6 +6412,9 @@ async fn agent_sync(
     // back to the manager so that API consumers can observe deployment progress.
     let mut ignored_agent_state_report = false;
     let mut reported_claim_is_terminal = false;
+    // The report says runtime cleanup is over and a store that grants no execution claims
+    // holds only the session lock for it (see `agent_report_completes_claim`).
+    let mut reported_runtime_handoff = None;
     let mut target_operations_bundle_set = None;
     let mut target_dynamic_containers = None;
     let mut reconciled_operator_image = None;
@@ -5958,6 +6439,14 @@ async fn agent_sync(
             Ok(mut agent_state) => {
                 reported_claim_is_terminal =
                     report_has_claim && agent_report_completes_claim(&deployment, &agent_state);
+                // The record before this report must already be a deletion (or at the reported
+                // status): the report's own reconcile below can move a `running` record to a
+                // handoff status, and that must not hand the lock over without a delete request.
+                reported_runtime_handoff = (!requires_execution_claims
+                    && !report_has_claim
+                    && agent_report_hands_off_runtime(&agent_state)
+                    && record_allows_runtime_handoff(&deployment.status, &agent_state.status))
+                .then(|| agent_state.status);
                 if should_ignore_agent_state_report(&deployment, &agent_state) {
                     ignored_agent_state_report = true;
                     tracing::info!(
@@ -6103,7 +6592,42 @@ async fn agent_sync(
         }
     }
 
-    if reported_claim_is_terminal {
+    // The runtime handoff releases the session lock only when the record itself is now at that
+    // status. A retained deployment reopened for an erase is `delete-pending` again while the
+    // Operator may still report `retained`: its lock is then the new deletion's, not a leftover.
+    // One read serves the decision and, when nothing is released, the rest of the sync. A failed
+    // read must not fail a sync whose report is already recorded: skip the release (the lock goes
+    // stale as before) and let the read below report the failure if it persists.
+    let stored_before_release = match reported_runtime_handoff {
+        Some(_) => match state
+            .deployment_store
+            .get_deployment(&subject, &req.deployment_id)
+            .await
+        {
+            Ok(stored) => stored,
+            Err(error) => {
+                tracing::warn!(
+                    deployment_id = %req.deployment_id,
+                    error = %error,
+                    "Could not read the deployment to decide whether the runtime handoff releases its lock"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+    let handed_off = match (&reported_runtime_handoff, &stored_before_release) {
+        (Some(reported), Some(stored)) => {
+            serde_json::to_value(reported)
+                .ok()
+                .as_ref()
+                .and_then(|v| v.as_str())
+                == Some(stored.status.as_str())
+        }
+        _ => false,
+    };
+    let released = reported_claim_is_terminal || handed_off;
+    if released {
         if let Err(error) = state
             .deployment_store
             .release(
@@ -6118,14 +6642,17 @@ async fn agent_sync(
         }
     }
 
-    let mut deployment = match state
-        .deployment_store
-        .get_deployment(&subject, &req.deployment_id)
-        .await
-    {
-        Ok(Some(d)) => d,
-        Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
-        Err(e) => return e.into_response(),
+    let mut deployment = match stored_before_release.filter(|_| !released) {
+        Some(stored) => stored,
+        None => match state
+            .deployment_store
+            .get_deployment(&subject, &req.deployment_id)
+            .await
+        {
+            Ok(Some(d)) => d,
+            Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
+            Err(e) => return e.into_response(),
+        },
     };
 
     // A nonterminal claim remains attached to the same agent session across
@@ -6656,6 +7183,11 @@ fn compat_refusals(
     if signed && !supports_pod_security && downgrade_container_security(&mut stack) {
         refused.push(&super::pull_compat::UNREADABLE_SECURITY);
     }
+    if let Some(feature) = super::pull_compat::refuse_for_platform(&stack, platform, operator) {
+        if !refused.contains(&feature) {
+            refused.push(feature);
+        }
+    }
     refused
 }
 
@@ -7161,6 +7693,12 @@ fn should_ignore_agent_state_report(
     if deployment_is_deleting(deployment) && !agent_state_is_delete_progress(agent_state) {
         return true;
     }
+    // A handoff status is the end of a deletion the manager already recorded. A record that is
+    // not being deleted must not be moved to it by an Operator report alone: the next sync would
+    // then find the stored status equal to the reported one and release the lock.
+    if agent_report_hands_off_runtime(agent_state) && !deployment_is_deleting(deployment) {
+        return true;
+    }
 
     agent_state_is_uninitialized(agent_state) && deployment_has_authoritative_state(deployment)
 }
@@ -7231,7 +7769,30 @@ fn agent_state_is_delete_progress(state: &DeploymentState) -> bool {
     )
 }
 
+/// Whether the stored record, read before the report was applied, is a deletion in progress or
+/// already at the reported handoff status.
+fn record_allows_runtime_handoff(stored: &str, reported: &DeploymentStatus) -> bool {
+    let reported = serde_json::to_value(reported).ok();
+    matches!(stored, "delete-pending" | "deleting")
+        || reported.as_ref().and_then(|v| v.as_str()) == Some(stored)
+}
+
+/// Runtime cleanup is over: what remains of a delete belongs to the setup owner, which
+/// acquires the deployment next. The Operator's session must not keep the lock.
+fn agent_report_hands_off_runtime(state: &DeploymentState) -> bool {
+    matches!(
+        state.status,
+        DeploymentStatus::TeardownRequired
+            | DeploymentStatus::RetentionRequired
+            | DeploymentStatus::Retained
+    )
+}
+
 fn agent_report_completes_claim(_deployment: &DeploymentRecord, state: &DeploymentState) -> bool {
+    // The handoff statuses are deliberately not listed: a store that grants execution claims
+    // may grant a new claim for one of them (an erase of retained data), and
+    // completing the claim on every report of that status would release and re-acquire on
+    // every sync. Only a claim-less report releases (`agent_report_hands_off_runtime`).
     if matches!(
         state.status,
         DeploymentStatus::PreflightsFailed

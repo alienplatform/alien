@@ -46,6 +46,8 @@ pub struct ServiceUsageQuotasClient {
     project_id: String,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(ServiceUsageQuotasClient);
+
 impl ServiceUsageQuotasClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         Self {

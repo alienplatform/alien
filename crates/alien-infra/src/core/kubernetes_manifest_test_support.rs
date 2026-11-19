@@ -105,6 +105,8 @@ pub(crate) struct KubernetesManifestTestHarness {
     deployment_config: DeploymentConfig,
     /// The cloud the cluster runs in, for controllers that also call that cloud's APIs.
     cloud: Option<ClientConfig>,
+    /// The API server to talk to; an address that does not resolve when unset.
+    server_url: Option<String>,
 }
 
 impl KubernetesManifestTestHarness {
@@ -128,7 +130,9 @@ impl KubernetesManifestTestHarness {
             inputs: Vec::new(),
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
         };
 
         Self {
@@ -144,7 +148,13 @@ impl KubernetesManifestTestHarness {
                 .external_bindings(ExternalBindings::default())
                 .build(),
             cloud: None,
+            server_url: None,
         }
+    }
+
+    pub(crate) fn with_server_url(mut self, url: String) -> Self {
+        self.server_url = Some(url);
+        self
     }
 
     /// Pulls every workload image from the site registry `registry`.
@@ -224,7 +234,10 @@ impl KubernetesManifestTestHarness {
 
     pub(crate) fn ctx(&self) -> ResourceControllerContext<'_> {
         let kubernetes = Box::new(KubernetesClientConfig::Manual {
-            server_url: "https://kubernetes.test".to_string(),
+            server_url: self
+                .server_url
+                .clone()
+                .unwrap_or_else(|| "https://kubernetes.test".to_string()),
             certificate_authority_data: None,
             insecure_skip_tls_verify: Some(true),
             client_certificate_data: None,
@@ -256,4 +269,141 @@ impl KubernetesManifestTestHarness {
             heartbeat_collector: HeartbeatCollector::default(),
         }
     }
+}
+
+/// Generated Kubernetes exposure (Ingress, managed TLS secret) with domain metadata for
+/// `resource_id`, at the given certificate status. The metadata carries certificate material
+/// only when `material` is set, as the manager does for an issued certificate.
+pub(crate) fn managed_certificate_config(
+    config: &mut DeploymentConfig,
+    resource_id: &str,
+    status: alien_core::CertificateStatus,
+    material: bool,
+) {
+    use alien_core::{
+        DnsRecordStatus, DomainMetadata, KubernetesCertificateMode, KubernetesExposureSettings,
+        KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesSettings,
+        ResourceDomainInfo,
+    };
+    config.stack_settings.kubernetes = Some(KubernetesSettings {
+        cluster: None,
+        exposure: Some(KubernetesExposureSettings::Generated {
+            route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                ingress_class_name: "traefik".into(),
+                ..Default::default()
+            }),
+            certificate: KubernetesCertificateMode::ManagedTlsSecret {
+                secret_name_template: "{resource}-tls".into(),
+            },
+        }),
+    });
+    config.domain_metadata = Some(DomainMetadata {
+        base_domain: "example.com".into(),
+        public_subdomain: "app".into(),
+        hosted_zone_id: "Z1".into(),
+        resources: std::collections::HashMap::from([(
+            resource_id.to_string(),
+            ResourceDomainInfo {
+                fqdn: format!("{resource_id}.example.com"),
+                certificate_id: "cert-1".into(),
+                certificate_status: status,
+                dns_status: DnsRecordStatus::Pending,
+                dns_error: None,
+                certificate_chain: material.then(|| "chain".to_string()),
+                private_key: material.then(|| "key".to_string()),
+                issued_at: material.then(|| "2026-01-01T00:00:00Z".to_string()),
+                endpoints: Default::default(),
+                aliases: Vec::new(),
+            },
+        )]),
+    });
+}
+
+/// Drives a controller that is in its public endpoint state (`controller`) through a managed
+/// certificate that is still being issued, as every Kubernetes workload controller must:
+/// it waits past the 60 polls other endpoint waits get, still waits well inside the saved
+/// 30-minute bound, fails with a timeout once the bound passes, and keeps waiting on a status the issuer
+/// reports as failed (it retries). `backdate` moves the saved start of the certificate wait to a unix time.
+pub(crate) async fn check_certificate_wait<C>(
+    harness: &mut KubernetesManifestTestHarness,
+    controller: C,
+    resource_id: &str,
+    status: alien_core::ResourceStatus,
+    backdate: impl Fn(&mut C, i64),
+) where
+    C: crate::core::ResourceController + Clone,
+{
+    use alien_core::CertificateStatus;
+    managed_certificate_config(
+        harness.deployment_config_mut(),
+        resource_id,
+        CertificateStatus::Pending,
+        false,
+    );
+    let mut controller = controller;
+    for poll in 0..80 {
+        controller
+            .step(&harness.ctx())
+            .await
+            .unwrap_or_else(|error| panic!("poll {poll} of a pending certificate: {error}"));
+        assert_eq!(controller.get_status(), status);
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    backdate(&mut controller, now - 5 * 60);
+    controller
+        .step(&harness.ctx())
+        .await
+        .expect("still inside the certificate bound");
+    assert_eq!(controller.get_status(), status);
+
+    backdate(&mut controller, now - 11 * 60);
+    let error = controller
+        .step(&harness.ctx())
+        .await
+        .expect_err("the saved bound has passed");
+    // The error the 60-poll limit gave before: the deployment retries automatically after it.
+    assert_eq!(error.code, "RESOURCE_POLLING_TIMEOUT", "{error}");
+    assert!(!error.retryable, "{error}");
+
+    // A status the issuer reports as failed is retried by the issuer: it still waits.
+    managed_certificate_config(
+        harness.deployment_config_mut(),
+        resource_id,
+        CertificateStatus::Failed,
+        false,
+    );
+    controller
+        .step(&harness.ctx())
+        .await
+        .expect("a failed status waits like pending");
+    assert_eq!(controller.get_status(), status);
+}
+
+/// Add a compute cluster whose capacity group pins an architecture, so the stack gives every
+/// workload a pool/stack `kubernetes.io/arch` node selector of its own.
+pub(crate) fn add_x86_64_pool(stack: &mut alien_core::Stack) {
+    let compute = alien_core::ComputeCluster::new("compute".to_string())
+        .capacity_group(alien_core::CapacityGroup {
+            group_id: "apps".to_string(),
+            instance_type: None,
+            profile: Some(alien_core::MachineProfile {
+                cpu: "2".to_string(),
+                memory_bytes: 4 << 30,
+                ephemeral_storage_bytes: 20 << 30,
+                architecture: Some(alien_core::instance_catalog::Architecture::X86_64),
+                gpu: None,
+                data_disk: None,
+            }),
+            min_size: 1,
+            max_size: 3,
+            scale_policy: None,
+            nested_virtualization: None,
+            data_disk_gib_range: None,
+        })
+        .build();
+    let pool_stack = alien_core::Stack::new("pool".to_string())
+        .add(compute, alien_core::ResourceLifecycle::Frozen)
+        .build();
+    stack.resources.extend(pool_stack.resources);
 }

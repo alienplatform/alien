@@ -853,7 +853,7 @@ impl SeenLogKeys {
 const LOG_COLLECTOR_OFF_MESSAGE: &str = "\
 No logs. This installation doesn't send logs: its log collector is off.
 Turn the log collector on in the deployment's Helm release:
-  helm upgrade <release> <chart> --reuse-values \\
+  helm upgrade <release> <chart> --reuse-values --timeout 15m \\
     --set logCollector.enabled=true --set-string logCollector.mode=podApi
 Logs need telemetry. If the release sets management.telemetry or \
 stackSettings.telemetry to off, set it to auto in the same upgrade, \

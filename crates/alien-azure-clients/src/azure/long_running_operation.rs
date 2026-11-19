@@ -1,5 +1,6 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::token_cache::AzureTokenCache;
+use alien_client_core::interceptor::apply_response_hook;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -219,7 +220,8 @@ impl LongRunningOperationClient {
             .await?;
 
         let req = AzureRequestBuilder::new(Method::GET, location_url.clone()).build()?;
-        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let mut signed = self.base.sign_request(req, &bearer_token).await?;
+        let response_hook = self.base.intercept(&mut signed)?;
         let resp = self
             .base
             .client
@@ -231,6 +233,7 @@ impl LongRunningOperationClient {
                     "Azure {operation_name}: failed to fetch result from Location URL"
                 ),
             })?;
+        let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
 
         let status = resp.status();
         let body = resp

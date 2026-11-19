@@ -4,6 +4,7 @@
 // -----------------------------------------------------------------------------
 
 use crate::azure::{AzureClientConfig, AzureClientConfigExt};
+use alien_client_core::interceptor::{apply_response_hook, Cloud, InterceptorChain, ResponseHook};
 use alien_client_core::{Error, ErrorData, Result};
 
 use crate::azure::long_running_operation::{LongRunningOperation, OperationResult};
@@ -30,7 +31,31 @@ pub struct AzureClientBase {
     pub endpoint: String,
     /// Platform configuration for endpoint overrides and other settings
     pub client_config: Option<AzureClientConfig>,
+    /// The deployment's interceptors. Calls to Key Vault, Service Bus and Table Storage are
+    /// not intercepted, so only Azure Resource Manager clients carry them.
+    pub interceptors: InterceptorChain,
 }
+
+/// Gives an Azure Resource Manager client that keeps its `AzureClientBase` in a private `base`
+/// field a `with_interceptors`, the one way a deployment's chain reaches it.
+macro_rules! impl_with_interceptors {
+    ($client:ty) => {
+        impl $client {
+            /// The same client, with the deployment's interceptors.
+            pub fn with_interceptors(
+                mut self,
+                interceptors: alien_client_core::interceptor::InterceptorChain,
+            ) -> Self {
+                self.base.interceptors = interceptors;
+                self
+            }
+        }
+    };
+}
+pub(crate) use impl_with_interceptors;
+
+/// The service an Azure Resource Manager call is signed for, as interceptors match it.
+const ARM_SERVICE: &str = "management";
 
 impl AzureClientBase {
     pub fn new(client: Client, endpoint: String) -> Self {
@@ -39,6 +64,7 @@ impl AzureClientBase {
             api_version: "2023-11-03".into(),
             endpoint,
             client_config: None,
+            interceptors: InterceptorChain::default(),
         }
     }
 
@@ -53,6 +79,7 @@ impl AzureClientBase {
             api_version: "2023-11-03".into(),
             endpoint,
             client_config: Some(client_config),
+            interceptors: InterceptorChain::default(),
         }
     }
 
@@ -148,12 +175,25 @@ impl AzureClientBase {
             );
         }
 
-        req.try_into()
-            .into_alien_error()
-            .context(ErrorData::RequestSignError {
-                message: "Failed to convert HTTP request for Azure Bearer Token authentication"
-                    .to_string(),
-            })
+        let req: reqwest::Request =
+            req.try_into()
+                .into_alien_error()
+                .context(ErrorData::RequestSignError {
+                    message: "Failed to convert HTTP request for Azure Bearer Token authentication"
+                        .to_string(),
+                })?;
+        // Long-running operations and next pages send the token to URLs a response named, and
+        // an interceptor can rewrite a response.
+        self.interceptors
+            .check_destination(req.url(), &self.endpoint)?;
+        Ok(req)
+    }
+
+    /// Runs the deployment's interceptors on a signed request, once, before any attempt is
+    /// sent. They see it without the bearer token and may not change it, and nothing else in
+    /// an Azure Resource Manager request is signed.
+    pub fn intercept(&self, req: &mut reqwest::Request) -> Result<Option<ResponseHook>> {
+        self.interceptors.intercept(Cloud::Azure, ARM_SERVICE, req)
     }
 
     // ------------- URL builder -------------
@@ -182,16 +222,18 @@ impl AzureClientBase {
     /// repeat exec may re-run a command that already started. Neither carries an idempotency key.
     pub async fn execute_request_once(
         &self,
-        req: reqwest::Request,
+        mut req: reqwest::Request,
         op: &str,
         res_name: &str,
     ) -> Result<reqwest::Response> {
-        Self::send_once(&self.client, req, op, res_name).await
+        let response_hook = self.intercept(&mut req)?;
+        Self::send_once(&self.client, req, response_hook.as_ref(), op, res_name).await
     }
 
     async fn send_once(
         client: &reqwest::Client,
         req: reqwest::Request,
+        response_hook: Option<&ResponseHook>,
         op: &str,
         res_name: &str,
     ) -> Result<reqwest::Response> {
@@ -209,6 +251,7 @@ impl AzureClientBase {
                 .context(ErrorData::HttpRequestFailed {
                     message: format!("Azure {}: HTTP error for {}", op, res_name),
                 })?;
+        let resp = apply_response_hook(response_hook, resp).await?;
         let status = resp.status();
         if status.is_success() || status == StatusCode::CREATED || status == StatusCode::ACCEPTED {
             return Ok(resp);
@@ -230,16 +273,18 @@ impl AzureClientBase {
     #[cfg(target_arch = "wasm32")]
     pub async fn execute_request(
         &self,
-        req: reqwest::Request,
+        mut req: reqwest::Request,
         op: &str,
         res_name: &str,
     ) -> Result<reqwest::Response> {
         let op = op.to_string();
         let res_name = res_name.to_string();
         let client = self.client.clone();
+        let response_hook = self.intercept(&mut req)?;
         let retryable = move || {
             let req_clone = req.try_clone();
             let client = client.clone();
+            let response_hook = response_hook.clone();
             let op = op.clone();
             let res_name = res_name.clone();
             async move {
@@ -249,7 +294,7 @@ impl AzureClientBase {
                     })
                 })?;
 
-                Self::send_once(&client, req_clone, &op, &res_name).await
+                Self::send_once(&client, req_clone, response_hook.as_ref(), &op, &res_name).await
             }
         };
         self.with_retry(retryable).await
@@ -259,16 +304,18 @@ impl AzureClientBase {
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn execute_request(
         &self,
-        req: reqwest::Request,
+        mut req: reqwest::Request,
         op: &str,
         res_name: &str,
     ) -> Result<reqwest::Response> {
         let op = op.to_string();
         let res_name = res_name.to_string();
         let client = self.client.clone();
+        let response_hook = self.intercept(&mut req)?;
         let retryable = move || {
             let req_clone = req.try_clone();
             let client = client.clone();
+            let response_hook = response_hook.clone();
             let op = op.clone();
             let res_name = res_name.clone();
             async move {
@@ -278,7 +325,7 @@ impl AzureClientBase {
                     })
                 })?;
 
-                Self::send_once(&client, req_clone, &op, &res_name).await
+                Self::send_once(&client, req_clone, response_hook.as_ref(), &op, &res_name).await
             }
         };
         self.with_retry(retryable).await
@@ -294,7 +341,7 @@ impl AzureClientBase {
     #[cfg(target_arch = "wasm32")]
     pub async fn execute_request_with_long_running_support<T>(
         &self,
-        req: reqwest::Request,
+        mut req: reqwest::Request,
         op: &str,
         res_name: &str,
     ) -> Result<OperationResult<T>>
@@ -304,10 +351,12 @@ impl AzureClientBase {
         let op = op.to_string();
         let res_name = res_name.to_string();
         let client = self.client.clone();
+        let response_hook = self.intercept(&mut req)?;
 
         let retryable = move || {
             let req_clone = req.try_clone();
             let client = client.clone();
+            let response_hook = response_hook.clone();
             let op = op.clone();
             let res_name = res_name.clone();
             async move {
@@ -328,6 +377,7 @@ impl AzureClientBase {
                         message: format!("Azure {}: HTTP error for {}", op, res_name),
                     },
                 )?;
+                let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
                 let status = resp.status();
 
                 match status {
@@ -449,7 +499,7 @@ impl AzureClientBase {
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn execute_request_with_long_running_support<T>(
         &self,
-        req: reqwest::Request,
+        mut req: reqwest::Request,
         op: &str,
         res_name: &str,
     ) -> Result<OperationResult<T>>
@@ -459,10 +509,12 @@ impl AzureClientBase {
         let op = op.to_string();
         let res_name = res_name.to_string();
         let client = self.client.clone();
+        let response_hook = self.intercept(&mut req)?;
 
         let retryable = move || {
             let req_clone = req.try_clone();
             let client = client.clone();
+            let response_hook = response_hook.clone();
             let op = op.clone();
             let res_name = res_name.clone();
             async move {
@@ -483,6 +535,7 @@ impl AzureClientBase {
                         message: format!("Azure {}: HTTP error for {}", op, res_name),
                     },
                 )?;
+                let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
                 let status = resp.status();
 
                 match status {

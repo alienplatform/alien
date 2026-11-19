@@ -67,7 +67,7 @@ impl StackMutation for SigningVerifierMutation {
                 mutation_name: self.description().to_string(),
                 message: format!(
                     "resource ID '{id}' is reserved for the install's verifier, but is already used by resource type '{}'",
-                    existing.config.resource_type()
+                    crate::escape_control_characters(existing.config.resource_type().as_ref())
                 ),
                 resource_id: Some(id.to_string()),
             }));

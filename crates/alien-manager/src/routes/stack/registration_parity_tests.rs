@@ -205,8 +205,14 @@ fn terraform_registration(
     target: TerraformTarget,
     settings: &StackSettings,
     mode: KubernetesClusterOwnership,
+    inputs: &[(&str, bool)],
 ) -> TerraformRegistration {
-    let registry = TfRegistry::built_in();
+    let mut registry = TfRegistry::built_in();
+    registry.register(
+        NETWORK_EXTENSION_TYPE,
+        target.cloud_platform(),
+        EmbedderDatabase,
+    );
     let module = alien_terraform::generate_terraform_module(
         prepared,
         target,
@@ -234,7 +240,7 @@ fn terraform_registration(
             .find(|attribute| attribute.key() == name)
             .unwrap_or_else(|| panic!("the module has no `local.{name}`"))
     };
-    let env = Env { mode };
+    let env = Env { mode, inputs };
     let mut resources = Vec::new();
     collect_hcl_entries(local("deployment_resources").expr(), &env, &mut resources);
     let mut settings_network = false;
@@ -251,8 +257,22 @@ fn terraform_registration(
 
 /// The values a deployer's inputs take for one cell. Anything a condition reads beyond these is
 /// a new gate this test does not understand yet, which must fail loudly rather than be guessed.
-struct Env {
+struct Env<'a> {
     mode: KubernetesClusterOwnership,
+    /// The deployer's answers to the stack's boolean inputs, by input id.
+    inputs: &'a [(&'a str, bool)],
+}
+
+/// The Terraform variable a stack input becomes: `zoneEnabled` is `input_zone_enabled`.
+fn input_variable(input_id: &str) -> String {
+    let mut name = "input_".to_string();
+    for character in input_id.chars() {
+        if character.is_ascii_uppercase() {
+            name.push('_');
+        }
+        name.push(character.to_ascii_lowercase());
+    }
+    name
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -294,6 +314,15 @@ fn evaluate(expression: &hcl::Expression, env: &Env) -> Value {
                 ("var", [name]) if name == "network_mode" => Value::Text("create-new".to_string()),
                 // The deployer asked for no network of their own in advanced settings.
                 ("local", [name]) if name == "deployment_requests_network" => Value::Bool(false),
+                ("var", [name]) if env.inputs.iter().any(|(id, _)| input_variable(id) == *name) => {
+                    Value::Bool(
+                        env.inputs
+                            .iter()
+                            .find(|(id, _)| input_variable(id) == *name)
+                            .map(|(_, answer)| *answer)
+                            .unwrap(),
+                    )
+                }
                 _ => panic!(
                     "the module gates on `{root}.{}`, which this parity test does not evaluate; teach it how that input is applied",
                     path.join(".")
@@ -409,7 +438,8 @@ fn cloudformation_registration(
     source: &Stack,
     settings: &StackSettings,
 ) -> Vec<(String, String)> {
-    let registry = alien_cloudformation::CfRegistry::built_in();
+    let mut registry = alien_cloudformation::CfRegistry::built_in();
+    registry.register(NETWORK_EXTENSION_TYPE, Platform::Aws, EmbedderDatabase);
     let template = alien_cloudformation::generate_cloudformation_template(
         prepared,
         alien_cloudformation::CloudFormationOptions {
@@ -466,12 +496,24 @@ async fn register(
     format: Format,
     ownership: KubernetesClusterOwnership,
 ) -> (BTreeSet<String>, crate::error::Result<()>) {
-    let source = source_stack();
+    register_source(source_stack(), format, ownership, &[]).await
+}
+
+/// [`register`] for a given source stack, with the deployer's answers to its boolean inputs.
+/// Before preparing the expected stack the manager drops what a declined frozen gate removes,
+/// exactly as the registration route does.
+async fn register_source(
+    source: Stack,
+    format: Format,
+    ownership: KubernetesClusterOwnership,
+    inputs: &[(&str, bool)],
+) -> (BTreeSet<String>, crate::error::Result<()>) {
     let settings = settings(ownership);
     let prepared = prepared_for_render(&source, format, &settings).await;
     let (registered, registered_network) = match format {
         Format::Terraform(target) => {
-            let registration = terraform_registration(&prepared, target, &settings, ownership);
+            let registration =
+                terraform_registration(&prepared, target, &settings, ownership, inputs);
             (registration.resources, Some(registration.settings_network))
         }
         Format::CloudFormation => (
@@ -492,7 +534,27 @@ async fn register(
             availability_zones: 2,
         });
     }
-    let req = registration_request(&registered, format, &sent_settings);
+    let mut req = registration_request(&registered, format, &sent_settings);
+    req.input_values = inputs
+        .iter()
+        .map(|(id, answer)| (id.to_string(), serde_json::Value::Bool(*answer)))
+        .collect();
+    let delivered: std::collections::HashSet<String> = ids.iter().cloned().collect();
+    let answers = alien_deployment::resolve_frozen_gate_answers_from_presence(
+        &source,
+        &delivered,
+        &req.input_values,
+        req.platform,
+    )
+    .expect("the registration answers every frozen gate");
+    let frozen_gating = alien_deployment::frozen_gating_inputs(&source, req.platform);
+    let source = alien_deployment::strip_frozen_declines_with_compute_settings(
+        source,
+        &answers,
+        &frozen_gating,
+        None,
+        req.platform,
+    );
     let expected_stack = prepare_import_stack(source, &req, &req.stack_settings)
         .await
         .expect("the manager prepares the stack");
@@ -533,6 +595,241 @@ async fn every_kubernetes_setup_registers_what_the_manager_expects() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// An extension type that requires the network. Its setup comes from the extension's template
+/// modifier, which these renders stand in for with the embedder's emitter.
+const NETWORK_EXTENSION_TYPE: &str = "acme/dns-zone";
+
+/// How a stack holds a zone whose extension type requires the network.
+#[derive(Debug, Clone, Copy)]
+enum NetworkExtension {
+    /// Frozen, with no gate.
+    Frozen,
+    /// Frozen, behind an input of its own.
+    FrozenOwnInput,
+    /// Live, behind an input that gates nothing frozen.
+    LiveOwnInput,
+    /// Live, behind an input that also gates a frozen bucket.
+    LiveSharedInput,
+}
+
+/// [`source_stack`] plus a zone whose extension type requires the network.
+fn with_network_extension(case: NetworkExtension) -> Stack {
+    let mut source = source_stack();
+    let zone = alien_core::CustomResource::from_untagged(
+        NETWORK_EXTENSION_TYPE,
+        serde_json::json!({ "id": "zone", "domain": "internal.acme.dev" }),
+    )
+    .unwrap();
+    let gated =
+        |config: alien_core::Resource, lifecycle, gate: Option<&str>| alien_core::ResourceEntry {
+            config,
+            lifecycle,
+            dependencies: Vec::new(),
+            display_name: None,
+            description: None,
+            remote_access: false,
+            enabled_when: gate.map(str::to_string),
+        };
+    let entry = match case {
+        NetworkExtension::Frozen => gated(
+            alien_core::Resource::new(zone),
+            ResourceLifecycle::Frozen,
+            None,
+        ),
+        NetworkExtension::FrozenOwnInput => gated(
+            alien_core::Resource::new(zone),
+            ResourceLifecycle::Frozen,
+            Some("zoneEnabled"),
+        ),
+        NetworkExtension::LiveOwnInput | NetworkExtension::LiveSharedInput => gated(
+            alien_core::Resource::new(zone),
+            ResourceLifecycle::Live,
+            Some("zoneEnabled"),
+        ),
+    };
+    if !matches!(case, NetworkExtension::Frozen) {
+        source
+            .inputs
+            .push(alien_core::StackInputDefinition::deployer_boolean(
+                "zoneEnabled",
+                "Enable the zone",
+                "Whether to create the zone.",
+                Some(false),
+            ));
+    }
+    if matches!(case, NetworkExtension::LiveSharedInput) {
+        source.resources.insert(
+            "zone-logs".to_string(),
+            gated(
+                alien_core::Resource::new(Storage::new("zone-logs".to_string()).build()),
+                ResourceLifecycle::Frozen,
+                Some("zoneEnabled"),
+            ),
+        );
+    }
+    source.resources.insert("zone".to_string(), entry);
+    source.extensions = vec![serde_json::from_value(serde_json::json!({
+        "name": "acme",
+        "version": "0.1.0",
+        "digest": "sha256:4ff931a2",
+        "resourceTypes": { "acme/dns-zone": {
+            "lifecycles": ["frozen", "live"],
+            "holdsData": false,
+            "requiresNetwork": true,
+            "setup": {
+                "cloudformation": ["aws"],
+                "terraform": ["aws", "gcp", "azure"],
+                "helm": ["kubernetes"],
+                "importers": ["aws", "gcp", "azure"]
+            },
+            "controllerPlatforms": ["aws", "gcp", "azure"],
+            "permissionSets": [],
+            "link": { "permissionSets": [] },
+            "schemas": {
+                "config": { "type": "object", "required": ["id", "domain"] },
+                "outputs": { "type": "object" }
+            }
+        } }
+    }))
+    .unwrap()];
+    source
+}
+
+/// The manager keeps a network for an extension type that requires it in every cluster mode, as
+/// it does for a cloud database, so every setup registers that network too.
+#[tokio::test]
+async fn a_type_that_requires_the_network_registers_it_in_every_cluster_mode() {
+    let mut failures = Vec::new();
+    for format in MATRIX {
+        for ownership in [
+            KubernetesClusterOwnership::Existing,
+            KubernetesClusterOwnership::Managed,
+        ] {
+            let (ids, result) = register_source(
+                with_network_extension(NetworkExtension::Frozen),
+                format,
+                ownership,
+                &[],
+            )
+            .await;
+            assert!(
+                ids.contains("default-network") && ids.contains("zone"),
+                "{format:?} {ownership:?} registers {ids:?}"
+            );
+            if let Err(error) = result {
+                failures.push(format!("{format:?} {ownership:?}: {}", error.message));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A declined live resource that requires the network keeps it while its input gates nothing
+/// frozen, because the manager drops such a resource only after it prepares the stack. When the
+/// input also gates a frozen resource, the manager drops both before, so an existing cluster then
+/// gets no network. (The Terraform module evaluates these gates per cluster mode; the
+/// CloudFormation template's own conditions are outside what this test evaluates.)
+#[tokio::test]
+async fn a_declined_live_type_keeps_the_network_unless_its_input_gates_a_frozen_resource() {
+    let mut failures = Vec::new();
+    for target in [
+        TerraformTarget::Eks,
+        TerraformTarget::Gke,
+        TerraformTarget::Aks,
+    ] {
+        for ownership in [
+            KubernetesClusterOwnership::Existing,
+            KubernetesClusterOwnership::Managed,
+        ] {
+            for (case, answer, network) in [
+                (NetworkExtension::LiveOwnInput, false, true),
+                (NetworkExtension::LiveOwnInput, true, true),
+                (
+                    NetworkExtension::LiveSharedInput,
+                    false,
+                    ownership == KubernetesClusterOwnership::Managed,
+                ),
+                (NetworkExtension::LiveSharedInput, true, true),
+            ] {
+                let (ids, result) = register_source(
+                    with_network_extension(case),
+                    Format::Terraform(target),
+                    ownership,
+                    &[("zoneEnabled", answer)],
+                )
+                .await;
+                let cell = format!("{target:?} {ownership:?} {case:?} zoneEnabled={answer}");
+                assert_eq!(
+                    ids.contains("default-network"),
+                    network,
+                    "{cell} registers {ids:?}"
+                );
+                assert!(
+                    !ids.contains("zone"),
+                    "{cell}: a live zone is the runtime's"
+                );
+                if let Err(error) = result {
+                    failures.push(format!("{cell}: {}", error.message));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// CloudFormation fixes the network when the template is rendered, so on an existing cluster it
+/// cannot follow an input that drops a network-requiring type before the manager prepares the
+/// stack. It refuses that shape, as it refuses a database the cluster could not reach, and keeps
+/// rendering the shapes whose network stays whatever the deployer answers.
+#[tokio::test]
+async fn cloudformation_refuses_a_declinable_network_type_on_an_existing_cluster() {
+    use KubernetesClusterOwnership::{Existing, Managed};
+    use NetworkExtension::{FrozenOwnInput, LiveOwnInput, LiveSharedInput};
+    // (case, cluster, a second zone with no gate, refused)
+    let cells = [
+        (LiveSharedInput, Existing, false, true),
+        (FrozenOwnInput, Existing, false, true),
+        (LiveSharedInput, Managed, false, false),
+        (LiveOwnInput, Existing, false, false),
+        (LiveSharedInput, Existing, true, false),
+    ];
+    for (case, ownership, second_zone, refused) in cells {
+        let cell = format!("{case:?} {ownership:?} second_zone={second_zone}");
+        let mut source = with_network_extension(case);
+        if second_zone {
+            let mut entry =
+                with_network_extension(NetworkExtension::Frozen).resources["zone"].clone();
+            entry.config = alien_core::Resource::new(
+                alien_core::CustomResource::from_untagged(
+                    NETWORK_EXTENSION_TYPE,
+                    serde_json::json!({ "id": "zone-2", "domain": "other.acme.dev" }),
+                )
+                .unwrap(),
+            );
+            source.resources.insert("zone-2".to_string(), entry);
+        }
+        let settings = settings(ownership);
+        let prepared = prepared_for_render(&source, Format::CloudFormation, &settings).await;
+        let result =
+            render_with_database_emitters(&prepared, &source, Format::CloudFormation, &settings);
+        if refused {
+            let error = result.expect_err(&format!("{cell} is refused"));
+            assert_eq!(error.code, "SETUP_PLACEMENT_UNSUPPORTED", "{cell}");
+            assert!(
+                error.message.contains("'zone'")
+                    && error
+                        .message
+                        .contains("'zoneEnabled' also turns off a resource setup creates")
+                    && error.message.contains("Use a cluster that setup creates"),
+                "{cell}: {}",
+                error.message
+            );
+        } else {
+            result.unwrap_or_else(|error| panic!("{cell}: {error:?}"));
+        }
+    }
 }
 
 /// What an embedder registers for a database or cache: a resource setup creates.
@@ -614,6 +911,7 @@ fn render_with_database_emitters(
             ] {
                 registry.register(resource_type, Platform::Aws, EmbedderDatabase);
             }
+            registry.register(NETWORK_EXTENSION_TYPE, Platform::Aws, EmbedderDatabase);
             alien_cloudformation::generate_cloudformation_template(
                 prepared,
                 alien_cloudformation::CloudFormationOptions {

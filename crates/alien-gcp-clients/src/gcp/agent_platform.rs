@@ -11,6 +11,7 @@
 //! produced. `get_*`/`list_*` retry; `delete_*` retries and treats a not-found as done.
 
 use crate::gcp::api_client::{GcpClientBase, GcpServiceConfig};
+use crate::gcp::iam::{Binding, IamPolicy};
 use crate::gcp::longrunning::{Operation, OperationResult};
 use crate::gcp::{GcpClientConfig, ServiceOverrides};
 use alien_client_core::redact_request_body;
@@ -192,6 +193,9 @@ pub struct ReasoningEngine {
     /// Human-readable display name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    /// Free text set at creation; setup writes its ownership marker here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Preview fields not modelled above, kept rather than dropped.
     #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, serde_json::Value>,
@@ -428,14 +432,128 @@ struct ListEnginesResponse {
 // API
 // =================================================================================================
 
+// =================================================================================================
+// Engine IAM
+// =================================================================================================
+
+/// Adds `member` to `role` on `policy` unless it already holds it, and says whether anything
+/// changed. A binding with a condition is a different grant and is never extended, so a
+/// read-modify-write keeps whoever else holds the engine.
+pub fn bind_member(policy: &mut IamPolicy, role: &str, member: &str) -> bool {
+    if let Some(binding) = policy
+        .bindings
+        .iter_mut()
+        .find(|binding| binding.role == role && binding.condition.is_none())
+    {
+        if binding.members.iter().any(|existing| existing == member) {
+            return false;
+        }
+        binding.members.push(member.to_string());
+        return true;
+    }
+    policy.bindings.push(Binding {
+        role: role.to_string(),
+        members: vec![member.to_string()],
+        condition: None,
+    });
+    true
+}
+
+/// Removes `member` from `role` on `policy`, dropping a binding left with no members, and says
+/// whether anything changed.
+pub fn unbind_member(policy: &mut IamPolicy, role: &str, member: &str) -> bool {
+    let mut changed = false;
+    for binding in policy
+        .bindings
+        .iter_mut()
+        .filter(|binding| binding.role == role && binding.condition.is_none())
+    {
+        let before = binding.members.len();
+        binding.members.retain(|existing| existing != member);
+        changed |= binding.members.len() != before;
+    }
+    policy
+        .bindings
+        .retain(|binding| !binding.members.is_empty());
+    changed
+}
+
+/// Whether an error, or any cause it wraps, is the cloud's not-found. The client wraps every
+/// failure in its own `RequestFailed`, which answers 500, so the status alone hides it.
+fn is_not_found(error: &AlienError<AgentPlatformErrorData>) -> bool {
+    let mut source = error.source.as_deref();
+    while let Some(cause) = source {
+        if cause.code == "REMOTE_RESOURCE_NOT_FOUND" {
+            return true;
+        }
+        source = cause.source.as_deref();
+    }
+    false
+}
+
+/// Grants each `(role, member)` on one engine, writing only when the policy changes. Reads the
+/// policy first and writes it back with its etag, so it adds to what the engine already grants
+/// rather than replacing it. Safe to repeat: a second run finds every member bound and writes
+/// nothing.
+pub async fn grant_on_engine(
+    client: &dyn AgentPlatformApi,
+    engine: &str,
+    grants: &[(String, String)],
+) -> Result<()> {
+    let mut policy = client.get_engine_iam_policy(engine).await?;
+    let mut changed = false;
+    for (role, member) in grants {
+        changed |= bind_member(&mut policy, role, member);
+    }
+    if changed {
+        policy.version = Some(3);
+        client.set_engine_iam_policy(engine, policy).await?;
+    }
+    Ok(())
+}
+
+/// Removes each `(role, member)` from one engine, writing only when the policy changes. An engine
+/// that is already gone has no policy to clean, so a not-found is success.
+pub async fn revoke_on_engine(
+    client: &dyn AgentPlatformApi,
+    engine: &str,
+    grants: &[(String, String)],
+) -> Result<()> {
+    let mut policy = match client.get_engine_iam_policy(engine).await {
+        Ok(policy) => policy,
+        Err(error) if is_not_found(&error) => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let mut changed = false;
+    for (role, member) in grants {
+        changed |= unbind_member(&mut policy, role, member);
+    }
+    if changed {
+        policy.version = Some(3);
+        client.set_engine_iam_policy(engine, policy).await?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(feature = "test-utils", automock)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait AgentPlatformApi: Send + Sync + Debug {
     /// Create a reasoning engine. Single-attempt; returns the operation to poll.
-    async fn create_engine(&self, display_name: &str) -> Result<Operation>;
+    async fn create_engine(
+        &self,
+        display_name: &str,
+        description: Option<String>,
+    ) -> Result<Operation>;
     /// Delete a reasoning engine. Retries; a not-found is success.
     async fn delete_engine(&self, engine: &str) -> Result<()>;
+    /// Read the IAM policy of one reasoning engine, at policy version 3 so conditional bindings
+    /// survive a read-modify-write. Retries.
+    async fn get_engine_iam_policy(&self, engine: &str) -> Result<IamPolicy>;
+    /// Replace the IAM policy of one reasoning engine. The policy carries the etag read, so a
+    /// concurrent writer makes this fail rather than be overwritten. Retries.
+    async fn set_engine_iam_policy(&self, engine: &str, policy: IamPolicy) -> Result<IamPolicy>;
+
     /// List reasoning engines under the project, following pagination. Retries. Lets the orphan
     /// sweep find engines a failed run abandoned, not only those a scratch log recorded.
     async fn list_engines(&self) -> Result<Vec<ReasoningEngine>>;
@@ -468,13 +586,13 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
     async fn get_sandbox(&self, engine: &str, sandbox: &str) -> Result<SandboxEnvironment>;
     /// List sandboxes under an engine, following pagination. Retries.
     async fn list_sandboxes(&self, engine: &str) -> Result<Vec<SandboxEnvironment>>;
-    /// List the sandboxes under an engine whose display name is exactly `display_name`, following
-    /// pagination. Retries. The match is made by the service (`display_name="…"`, AIP-160), so an
-    /// engine holding many sandboxes is not read in full to find one caller's.
-    async fn list_sandboxes_by_display_name(
+    /// List the sandboxes under an engine whose display name is exactly one of `display_names`,
+    /// following pagination. Retries. The match is made by the service (`display_name="…" OR …`,
+    /// AIP-160), so an engine holding many sandboxes is not read in full to find one caller's.
+    async fn list_sandboxes_by_display_names(
         &self,
         engine: &str,
-        display_name: &str,
+        display_names: &[String],
     ) -> Result<Vec<SandboxEnvironment>>;
     /// Delete a sandbox. Retries; a not-found is success.
     async fn delete_sandbox(&self, engine: &str, sandbox: &str) -> Result<()>;
@@ -482,6 +600,12 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
     /// Run one request inside a sandbox through the `:execute` proxy. Single-attempt; the request
     /// body is redacted out of any error. `input` is opaque JSON bytes; the decoded reply is returned.
     async fn execute(&self, engine: &str, sandbox: &str, input: &[u8]) -> Result<Vec<u8>>;
+
+    /// Pause a sandbox (`:pause`). Single-attempt state transition; returns the operation to poll.
+    async fn pause_sandbox(&self, engine: &str, sandbox: &str) -> Result<Operation>;
+    /// Resume a paused sandbox (`:resume`). Single-attempt state transition; returns the operation
+    /// to poll. The service refuses it with a 400 while the sandbox is still `STATE_PAUSING`.
+    async fn resume_sandbox(&self, engine: &str, sandbox: &str) -> Result<Operation>;
 
     /// Snapshot a sandbox. Single-attempt state transition; returns the operation to poll.
     async fn snapshot(&self, engine: &str, sandbox: &str, display_name: &str) -> Result<Operation>;
@@ -495,6 +619,8 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
 pub struct AgentPlatformClient {
     base: GcpClientBase,
 }
+
+crate::gcp::api_client::impl_with_interceptors!(AgentPlatformClient);
 
 impl AgentPlatformClient {
     /// Build a client against the region's `aiplatform` host. The regional endpoint is injected as a
@@ -534,6 +660,30 @@ impl AgentPlatformClient {
 
     fn sandboxes_path(&self, engine: &str) -> String {
         format!("{}/sandboxEnvironments", self.engine_path(engine))
+    }
+
+    /// A `:pause` or `:resume` call. Sent once, because a repeat of a state transition that already
+    /// started is refused or ignored, and the caller decides what a refusal means.
+    async fn sandbox_transition(
+        &self,
+        engine: &str,
+        sandbox: &str,
+        verb: &str,
+    ) -> Result<Operation> {
+        let path = format!("{}:{verb}", self.sandbox_path(engine, sandbox));
+        self.base
+            .execute_request_once(
+                Method::POST,
+                &path,
+                None,
+                Some(serde_json::json!({})),
+                sandbox,
+            )
+            .await
+            .context(AgentPlatformErrorData::RequestFailed {
+                operation: format!("{verb} sandbox"),
+                message: sandbox.to_string(),
+            })
     }
 
     fn sandbox_path(&self, engine: &str, sandbox: &str) -> String {
@@ -704,16 +854,18 @@ fn tolerate_not_found(result: alien_client_core::Result<Operation>, operation: &
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl AgentPlatformApi for AgentPlatformClient {
-    async fn create_engine(&self, display_name: &str) -> Result<Operation> {
+    async fn create_engine(
+        &self,
+        display_name: &str,
+        description: Option<String>,
+    ) -> Result<Operation> {
         let path = self.engines_path();
+        let mut body = serde_json::json!({ "displayName": display_name });
+        if let Some(description) = description {
+            body["description"] = serde_json::Value::String(description);
+        }
         self.base
-            .execute_request_once(
-                Method::POST,
-                &path,
-                None,
-                Some(serde_json::json!({ "displayName": display_name })),
-                display_name,
-            )
+            .execute_request_once(Method::POST, &path, None, Some(body), display_name)
             .await
             .context(AgentPlatformErrorData::RequestFailed {
                 operation: "create engine".to_string(),
@@ -787,6 +939,40 @@ impl AgentPlatformApi for AgentPlatformClient {
         Ok(templates)
     }
 
+    async fn get_engine_iam_policy(&self, engine: &str) -> Result<IamPolicy> {
+        let path = format!("{}:getIamPolicy", self.engine_path(engine));
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(serde_json::json!({ "options": { "requestedPolicyVersion": 3 } })),
+                engine,
+            )
+            .await
+            .context(AgentPlatformErrorData::RequestFailed {
+                operation: "get engine IAM policy".to_string(),
+                message: engine.to_string(),
+            })
+    }
+
+    async fn set_engine_iam_policy(&self, engine: &str, policy: IamPolicy) -> Result<IamPolicy> {
+        let path = format!("{}:setIamPolicy", self.engine_path(engine));
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(serde_json::json!({ "policy": policy })),
+                engine,
+            )
+            .await
+            .context(AgentPlatformErrorData::RequestFailed {
+                operation: "set engine IAM policy".to_string(),
+                message: engine.to_string(),
+            })
+    }
+
     async fn list_engines(&self) -> Result<Vec<ReasoningEngine>> {
         let path = self.engines_path();
         let mut engines = Vec::new();
@@ -853,16 +1039,23 @@ impl AgentPlatformApi for AgentPlatformClient {
         self.list_sandboxes_filtered(engine, None).await
     }
 
-    async fn list_sandboxes_by_display_name(
+    async fn list_sandboxes_by_display_names(
         &self,
         engine: &str,
-        display_name: &str,
+        display_names: &[String],
     ) -> Result<Vec<SandboxEnvironment>> {
-        // A string literal in the filter grammar: `\` and `"` are the only characters that can
-        // end it early, so they are escaped and nothing a caller supplies can add a clause.
-        let literal = display_name.replace('\\', "\\\\").replace('"', "\\\"");
-        self.list_sandboxes_filtered(engine, Some(format!("display_name=\"{literal}\"")))
-            .await
+        // Each name is a string literal in the filter grammar: `\` and `"` are the only characters
+        // that can end it early, so they are escaped and nothing a caller supplies can add a
+        // clause.
+        let filter = display_names
+            .iter()
+            .map(|name| {
+                let literal = name.replace('\\', "\\\\").replace('"', "\\\"");
+                format!("display_name=\"{literal}\"")
+            })
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        self.list_sandboxes_filtered(engine, Some(filter)).await
     }
 
     async fn delete_sandbox(&self, engine: &str, sandbox: &str) -> Result<()> {
@@ -909,6 +1102,14 @@ impl AgentPlatformApi for AgentPlatformClient {
                 sandbox: sandbox.to_string(),
                 message: "output data was not valid base64".to_string(),
             })
+    }
+
+    async fn pause_sandbox(&self, engine: &str, sandbox: &str) -> Result<Operation> {
+        self.sandbox_transition(engine, sandbox, "pause").await
+    }
+
+    async fn resume_sandbox(&self, engine: &str, sandbox: &str) -> Result<Operation> {
+        self.sandbox_transition(engine, sandbox, "resume").await
     }
 
     async fn snapshot(&self, engine: &str, sandbox: &str, display_name: &str) -> Result<Operation> {
@@ -1027,7 +1228,7 @@ mod tests {
             })
             .await;
         client(&server)
-            .create_engine("engine-display")
+            .create_engine("engine-display", None)
             .await
             .expect_err("create should surface the failure");
         assert_eq!(
@@ -1115,6 +1316,34 @@ mod tests {
             .await
             .expect_err("snapshot should surface the failure");
         assert_eq!(snapshot.hits_async().await, 1, "snapshot must be sent once");
+    }
+
+    #[tokio::test]
+    async fn pause_and_resume_are_sent_once_to_their_verbs() {
+        let server = MockServer::start_async().await;
+        let pause = server
+            .mock_async(|when, then| {
+                when.method(POST).path(format!("{SANDBOX_PATH}:pause"));
+                then.status(503);
+            })
+            .await;
+        let resume = server
+            .mock_async(|when, then| {
+                when.method(POST).path(format!("{SANDBOX_PATH}:resume"));
+                then.status(400);
+            })
+            .await;
+        let client = client(&server);
+        client
+            .pause_sandbox(ENGINE, SANDBOX)
+            .await
+            .expect_err("pause should surface the failure");
+        client
+            .resume_sandbox(ENGINE, SANDBOX)
+            .await
+            .expect_err("resume should surface the failure");
+        assert_eq!(pause.hits_async().await, 1, "pause must be sent once");
+        assert_eq!(resume.hits_async().await, 1, "resume must be sent once");
     }
 
     // ---- Redaction: an execute request body never reaches a serialized error. ----------------
@@ -1403,7 +1632,7 @@ mod tests {
     /// A key's sandboxes are asked for by display name, the service does the matching, and a
     /// result that spans pages is read to its end: a first page alone would hide an older sandbox.
     #[tokio::test]
-    async fn list_sandboxes_by_display_name_filters_and_follows_pagination() {
+    async fn list_sandboxes_by_display_names_filters_and_follows_pagination() {
         let server = MockServer::start_async().await;
         server
             .mock_async(|when, then| {
@@ -1434,7 +1663,7 @@ mod tests {
             .await;
 
         let sandboxes = client(&server)
-            .list_sandboxes_by_display_name(ENGINE, "alienRequestKey-abc")
+            .list_sandboxes_by_display_names(ENGINE, &["alienRequestKey-abc".to_string()])
             .await
             .expect("both pages should list");
         let names: Vec<_> = sandboxes.iter().filter_map(|s| s.name.as_deref()).collect();
@@ -1458,9 +1687,28 @@ mod tests {
             })
             .await;
         client(&server)
-            .list_sandboxes_by_display_name(ENGINE, "a\" OR display_name:* \\")
+            .list_sandboxes_by_display_names(ENGINE, &["a\" OR display_name:* \\".to_string()])
             .await
             .expect("an escaped literal is a valid filter");
+        mock.assert_async().await;
+    }
+
+    /// Two names are matched by one request: a key's old and tagged display names.
+    #[tokio::test]
+    async fn two_display_names_are_one_or_filter() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(SANDBOXES_PATH)
+                    .query_param("filter", "display_name=\"k-1\" OR display_name=\"k-1-pm1\"");
+                then.status(200).json_body_obj(&serde_json::json!({}));
+            })
+            .await;
+        client(&server)
+            .list_sandboxes_by_display_names(ENGINE, &["k-1".to_string(), "k-1-pm1".to_string()])
+            .await
+            .expect("an OR filter lists");
         mock.assert_async().await;
     }
 
@@ -1606,5 +1854,139 @@ mod tests {
                 extra: serde_json::Map::new(),
             }
         }
+    }
+
+    // ---- Engine IAM: read-modify-write that adds to a policy and never replaces it. -------------
+
+    const ENGINE_PATH: &str = "/projects/test-project/locations/us-central1/reasoningEngines/eng1";
+
+    #[tokio::test]
+    async fn engine_policy_is_read_at_version_3_and_written_with_its_etag() {
+        let server = MockServer::start();
+        let get = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("{ENGINE_PATH}:getIamPolicy"))
+                .json_body(serde_json::json!({"options": {"requestedPolicyVersion": 3}}));
+            then.status(200).json_body(serde_json::json!({
+                "version": 3,
+                "etag": "BwX",
+                "bindings": [{"role": "roles/other", "members": ["user:a@example.com"]}]
+            }));
+        });
+        let set = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("{ENGINE_PATH}:setIamPolicy"))
+                .json_body_partial(
+                    r#"{"policy": {"etag": "BwX", "bindings": [
+                        {"role": "roles/other", "members": ["user:a@example.com"]},
+                        {"role": "roles/new", "members": ["serviceAccount:s@p.iam.gserviceaccount.com"]}
+                    ]}}"#,
+                );
+            then.status(200).json_body(serde_json::json!({"etag": "BwY"}));
+        });
+
+        grant_on_engine(
+            &client(&server),
+            ENGINE,
+            &[(
+                "roles/new".to_string(),
+                "serviceAccount:s@p.iam.gserviceaccount.com".to_string(),
+            )],
+        )
+        .await
+        .expect("grant succeeds");
+        get.assert();
+        set.assert();
+    }
+
+    #[tokio::test]
+    async fn a_member_already_bound_writes_nothing() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(POST).path(format!("{ENGINE_PATH}:getIamPolicy"));
+            then.status(200).json_body(serde_json::json!({
+                "etag": "BwX",
+                "bindings": [{"role": "roles/new", "members": ["serviceAccount:s@p.iam.gserviceaccount.com"]}]
+            }));
+        });
+        let set = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("{ENGINE_PATH}:setIamPolicy"));
+            then.status(200).json_body(serde_json::json!({}));
+        });
+
+        grant_on_engine(
+            &client(&server),
+            ENGINE,
+            &[(
+                "roles/new".to_string(),
+                "serviceAccount:s@p.iam.gserviceaccount.com".to_string(),
+            )],
+        )
+        .await
+        .expect("grant succeeds");
+        set.assert_hits(0);
+    }
+
+    #[tokio::test]
+    async fn revoking_on_an_engine_that_is_gone_succeeds() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("{ENGINE_PATH}:getIamPolicy"));
+            then.status(404).json_body(serde_json::json!({
+                "error": {"code": 404, "message": "not found", "status": "NOT_FOUND"}
+            }));
+        });
+        revoke_on_engine(
+            &client(&server),
+            ENGINE,
+            &[("roles/new".to_string(), "serviceAccount:s@p".to_string())],
+        )
+        .await
+        .expect("an engine that is gone has no policy to clean");
+    }
+
+    #[test]
+    fn bind_and_unbind_touch_only_the_named_member_and_leave_conditions_alone() {
+        let mut policy = IamPolicy {
+            bindings: vec![
+                Binding {
+                    role: "roles/r".into(),
+                    members: vec!["a".into()],
+                    condition: Some(crate::gcp::iam::Expr {
+                        expression: "true".into(),
+                        title: None,
+                        description: None,
+                        location: None,
+                    }),
+                },
+                Binding {
+                    role: "roles/r".into(),
+                    members: vec!["b".into()],
+                    condition: None,
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(bind_member(&mut policy, "roles/r", "c"));
+        assert!(
+            !bind_member(&mut policy, "roles/r", "c"),
+            "second bind is a no-op"
+        );
+        assert_eq!(
+            policy.bindings[0].members,
+            vec!["a"],
+            "a conditional binding is never extended"
+        );
+        assert_eq!(policy.bindings[1].members, vec!["b", "c"]);
+        assert!(unbind_member(&mut policy, "roles/r", "b"));
+        assert!(unbind_member(&mut policy, "roles/r", "c"));
+        assert!(!unbind_member(&mut policy, "roles/r", "c"));
+        assert_eq!(
+            policy.bindings.len(),
+            1,
+            "an emptied binding is dropped, the conditional one stays"
+        );
     }
 }

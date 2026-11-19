@@ -3,7 +3,8 @@
 //! Each backend creates a P-256 key that can't leave the hardware and needs
 //! the person at the keyboard for every signature: Touch ID or the login
 //! password on macOS, a PIN on a TPM, a touch on a YubiKey. A machine with
-//! none of them has no device key, and releases from it go out unsigned.
+//! none of them keeps a software key: a P-256 key in a file only its owner
+//! can read, which anyone who can read it can sign with.
 //!
 //! The hardware backends drive the platform's own tools (`swift` with
 //! CryptoKit, `tpm2-tools`, `yubico-piv-tool`), so the CLI links no hardware
@@ -56,14 +57,21 @@ pub enum Backend {
     Tpm,
     /// A YubiKey's PIV applet, slot 9c.
     Yubikey,
+    /// A key in a file in the signing home.
+    Software,
 }
 
 impl Backend {
     /// Every backend, in the order they are tried.
     pub const ALL: [Backend; 3] = [Backend::SecureEnclave, Backend::Tpm, Backend::Yubikey];
 
-    /// The first backend this machine has, if any.
+    /// The first hardware backend this machine has, if any.
     pub fn detect() -> Option<Backend> {
+        // Test builds can ask for a software key on a machine that has a TPM.
+        #[cfg(any(test, feature = "test-device-env"))]
+        if std::env::var("ALIEN_DEVICE_KEY_BACKEND").is_ok_and(|backend| backend == "software") {
+            return None;
+        }
         Self::ALL.into_iter().find(|backend| backend.available())
     }
 
@@ -73,6 +81,7 @@ impl Backend {
             Backend::SecureEnclave => "secure-enclave",
             Backend::Tpm => "tpm",
             Backend::Yubikey => "yubikey",
+            Backend::Software => "software",
         }
     }
 
@@ -84,21 +93,36 @@ impl Backend {
             Backend::Tpm if tpm_tcti() != MACHINE_TPM => "TPM simulator (test build)",
             Backend::Tpm => "TPM",
             Backend::Yubikey => "YubiKey",
+            Backend::Software => "software key",
         }
     }
 
-    /// What the person does to sign, as the prompt names it.
-    pub fn gesture(self) -> &'static str {
+    /// What the person does to sign, as the prompt names it; `None` for a
+    /// software key, which signs without asking.
+    pub fn gesture(self) -> Option<&'static str> {
         match self {
-            Backend::SecureEnclave => "Touch ID",
-            Backend::Tpm => "TPM PIN",
-            Backend::Yubikey => "YubiKey touch",
+            Backend::SecureEnclave => Some("Touch ID"),
+            Backend::Tpm => Some("TPM PIN"),
+            Backend::Yubikey => Some("YubiKey touch"),
+            Backend::Software => None,
+        }
+    }
+
+    /// The name `alien_signing` records on the signer list.
+    pub fn key_backend(self) -> alien_signing::signer_list::KeyBackend {
+        use alien_signing::signer_list::KeyBackend;
+        match self {
+            Backend::SecureEnclave => KeyBackend::SecureEnclave,
+            Backend::Tpm => KeyBackend::Tpm,
+            Backend::Yubikey => KeyBackend::Yubikey,
+            Backend::Software => KeyBackend::Software,
         }
     }
 
     /// Whether this machine has what the backend needs.
     pub fn available(self) -> bool {
         match self {
+            Backend::Software => true,
             Backend::SecureEnclave => cfg!(target_os = "macos") && which::which("swift").is_ok(),
             Backend::Tpm => {
                 which::which("tpm2_create").is_ok()
@@ -139,6 +163,7 @@ impl DeviceKey {
             Backend::Tpm => tpm::create(dir)?,
             Backend::Yubikey => yubikey::create(dir)?,
             Backend::SecureEnclave => secure_enclave::create(dir)?,
+            Backend::Software => software::create(dir)?,
         };
         std::fs::write(dir.join("public.txt"), public_key.as_str())
             .into_alien_error()
@@ -187,6 +212,7 @@ impl DeviceKey {
                 .map(|message| yubikey::sign(&self.dir, message))
                 .collect::<Result<Vec<_>>>()?,
             Backend::SecureEnclave => secure_enclave::sign_all(&self.dir, messages)?,
+            Backend::Software => software::sign_all(&self.dir, messages)?,
         };
         if signatures.len() != messages.len() {
             return Err(AlienError::new(ErrorData::SigningFailed {
@@ -207,6 +233,35 @@ impl DeviceKey {
                 )))?;
         }
         Ok(signatures)
+    }
+}
+
+pub(crate) mod software {
+    //! A P-256 key in `software.pem`, readable by its owner only.
+
+    use super::*;
+    use alien_signing::SecretKey;
+
+    /// The key file inside the device directory.
+    pub const KEY_FILE: &str = "software.pem";
+
+    pub(super) fn create(dir: &Path) -> Result<PublicKey> {
+        let key = SecretKey::generate().context(signing_failed("create the software key"))?;
+        let pem = key
+            .to_pkcs8_pem()
+            .context(signing_failed("encode the software key"))?;
+        write_private(&dir.join(KEY_FILE), &pem)?;
+        Ok(key.public_key())
+    }
+
+    pub(super) fn sign_all(dir: &Path, messages: &[Vec<u8>]) -> Result<Vec<String>> {
+        let path = dir.join(KEY_FILE);
+        let pem = std::fs::read_to_string(&path)
+            .into_alien_error()
+            .context(file_failed(&path, "read the software key"))?;
+        let key =
+            SecretKey::from_pkcs8_pem(&pem).context(signing_failed("read the software key"))?;
+        Ok(messages.iter().map(|message| key.sign(message)).collect())
     }
 }
 

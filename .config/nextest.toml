@@ -54,3 +54,9 @@ test-group = 'deploy-cli-tracking-tests'
 # processes. Reserve that many test threads so the runner isn't oversubscribed.
 filter = 'package(alien-terraform) and test(=generator::aws_iam_coverage_tests::every_aws_emitter_renders_every_permission_set_it_supports)'
 threads-required = 4
+
+[[profile.default.overrides]]
+# Each test builds an extension example with cargo (its hooks module, and for some a controller)
+# or runs `alien dev` on one. Reserve threads so these builds don't starve one another.
+filter = 'binary_id(alien-cli::extensions)'
+threads-required = 4

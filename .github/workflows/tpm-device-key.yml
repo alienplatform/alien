@@ -100,4 +100,4 @@ jobs:
       - name: Test the signing flow
         run: |
           cargo test --locked -p alien-cli --features test-device-env --test signing_flow -- --ignored | tee "$RUNNER_TEMP/flow-test.log"
-          grep -q "test result: ok. 1 passed" "$RUNNER_TEMP/flow-test.log"
+          grep -q "test result: ok. 2 passed" "$RUNNER_TEMP/flow-test.log"

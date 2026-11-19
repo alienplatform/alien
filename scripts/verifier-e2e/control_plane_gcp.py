@@ -76,8 +76,7 @@ class Run:
         self.work = pathlib.Path(tempfile.mkdtemp(prefix="control-plane-gcp-"))
         self.registry_host = f"{self.region}-docker.pkg.dev"
         self.repo = f"{self.registry_host}/{self.project}/{self.prefix}"
-        self.not_after = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)) \
-            .replace(microsecond=0).isoformat()
+        self.list_label = "setup"
         self.sa = {name: f"{self.prefix}-{name}@{self.project}.iam.gserviceaccount.com"
                    for name in ("verifier", "mgmt")}
         self.sa["execution-sa"] = f"{setup_account_id(self.prefix, 'execution-sa')}@{self.project}.iam.gserviceaccount.com"
@@ -137,7 +136,7 @@ class Run:
         return str(path)
 
     def driver(self, command, env=None, check=True):
-        variables = {**os.environ, "PREFIX": self.prefix, "NOT_AFTER": self.not_after, "CLOUD": "gcp",
+        variables = {**os.environ, "PREFIX": self.prefix, "LIST_LABEL": self.list_label, "CLOUD": "gcp",
                      "GCP_PROJECT": self.project, "GCP_REGION": self.region,
                      "GCP_PROJECT_NUMBER": self.project_number, "GCP_TOKEN_FILE": self.token_copy(),
                      "MANAGEMENT_SA": self.sa["mgmt"], "EXECUTION_SA_UNIQUE_ID": getattr(self, "exec_id", ""),
@@ -330,10 +329,8 @@ class Run:
                     f"driver={outcome} image={image[-19:]} egress={egress} ingress={ingress} "
                     f"direct={direct.stderr.strip()[-300:]}")
 
-        foreign_after = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=20)) \
-            .replace(microsecond=0).isoformat()
         result = self.driver("update", {"FROM_IMAGE": self.images["b"], "TO_IMAGE": self.images["a"],
-                                        "PROTECTED": "1", "SEQUENCE": "3", "NOT_AFTER": foreign_after},
+                                        "PROTECTED": "1", "SEQUENCE": "3", "LIST_LABEL": "foreign"},
                              check=False)
         outcome = self.outcome(result)
         self.record("2 a release under a signer list setup didn't pin is refused with the reason",

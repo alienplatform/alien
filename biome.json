@@ -18,6 +18,8 @@
       "!**/generated",
       "!crates/alien-stack-toml/schema/alien.toml.json",
       "!crates/alien-stack-toml/schema/canonical.json",
+      "!crates/alien-infra/src/step_protocol/wasm/aws_endpoints.json",
+      "!crates/alien-infra/src/step_protocol/wasm/gcp_apis.json",
       "!crates/alien-stack-toml/tests/fixtures/*/expected.json",
       "!examples/custom-operations/metadata.json",
       "!**/shim.mjs",

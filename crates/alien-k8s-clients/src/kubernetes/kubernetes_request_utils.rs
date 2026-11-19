@@ -1,4 +1,5 @@
 use crate::kubernetes::ResolvedKubernetesConfig;
+use alien_client_core::interceptor::{apply_response_hook, Cloud, InterceptorChain, ResponseHook};
 use alien_client_core::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
@@ -129,6 +130,8 @@ pub struct KubernetesAuthConfig {
     pub insecure_skip_tls_verify: bool,
     /// Additional headers to include in requests
     pub additional_headers: HashMap<String, String>,
+    /// The deployment's interceptors.
+    pub interceptors: InterceptorChain,
 }
 
 impl From<&ResolvedKubernetesConfig> for KubernetesAuthConfig {
@@ -141,8 +144,31 @@ impl From<&ResolvedKubernetesConfig> for KubernetesAuthConfig {
             certificate_authority_data: config.certificate_authority_data.clone(),
             insecure_skip_tls_verify: config.insecure_skip_tls_verify,
             additional_headers: config.additional_headers.clone(),
+            interceptors: InterceptorChain::default(),
         }
     }
+}
+
+/// Runs the deployment's interceptors on the request the client is about to send. The
+/// credentials are attached after, so no interceptor sees them.
+fn intercept(
+    builder: RequestBuilder,
+    config: &KubernetesAuthConfig,
+) -> Result<(RequestBuilder, Option<ResponseHook>)> {
+    if config.interceptors.is_empty() {
+        return Ok((builder, None));
+    }
+    let (client, request) = builder.build_split();
+    let mut request = request
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: "Unable to build the Kubernetes request".to_string(),
+        })?;
+    let response_hook =
+        config
+            .interceptors
+            .intercept(Cloud::Kubernetes, "kubernetes", &mut request)?;
+    Ok((RequestBuilder::from_parts(client, request), response_hook))
 }
 
 /// Extension trait that enables Kubernetes authentication on request builders
@@ -202,6 +228,8 @@ pub trait KubernetesRequestBuilderExt {
 pub struct RetriableKubernetesRequestBuilder {
     inner: reqwest::RequestBuilder,
     backoff: ExponentialBuilder,
+    /// Runs on every response before it is read, for a request an interceptor matched.
+    response_hook: Option<ResponseHook>,
 }
 
 impl RetriableKubernetesRequestBuilder {
@@ -233,9 +261,11 @@ impl RetriableKubernetesRequestBuilder {
     pub async fn send_json<T: DeserializeOwned + Send + 'static>(self) -> Result<T> {
         let backoff = self.backoff;
         let builder = self.inner;
+        let response_hook = self.response_hook;
 
         let retryable = move || {
             let attempt_builder = builder.try_clone();
+            let response_hook = response_hook.clone();
             async move {
                 let attempt_builder = attempt_builder.ok_or_else(|| {
                     AlienError::new(ErrorData::GenericError {
@@ -256,6 +286,7 @@ impl RetriableKubernetesRequestBuilder {
                         .context(ErrorData::HttpRequestFailed {
                             message: "Network error during HTTP request".to_string(),
                         })?;
+                    let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
                     handle_kubernetes_json_response(resp).await
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -265,6 +296,7 @@ impl RetriableKubernetesRequestBuilder {
                             message: "Network error during HTTP request".to_string(),
                         },
                     )?;
+                    let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
                     handle_kubernetes_json_response(resp).await
                 }
             }
@@ -298,9 +330,11 @@ impl RetriableKubernetesRequestBuilder {
     pub async fn send_no_response(self) -> Result<()> {
         let backoff = self.backoff;
         let builder = self.inner;
+        let response_hook = self.response_hook;
 
         let retryable = move || {
             let attempt_builder = builder.try_clone();
+            let response_hook = response_hook.clone();
             async move {
                 let attempt_builder = attempt_builder.ok_or_else(|| {
                     AlienError::new(ErrorData::GenericError {
@@ -321,6 +355,7 @@ impl RetriableKubernetesRequestBuilder {
                         .context(ErrorData::HttpRequestFailed {
                             message: "Network error during HTTP request".to_string(),
                         })?;
+                    let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
                     handle_kubernetes_no_response(resp).await
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -330,6 +365,7 @@ impl RetriableKubernetesRequestBuilder {
                             message: "Network error during HTTP request".to_string(),
                         },
                     )?;
+                    let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
                     handle_kubernetes_no_response(resp).await
                 }
             }
@@ -367,6 +403,7 @@ impl KubernetesRequestBuilderExt for reqwest::RequestBuilder {
         RetriableKubernetesRequestBuilder {
             inner: self,
             backoff: alien_client_core::request_utils::default_retry_backoff(),
+            response_hook: None,
         }
     }
 
@@ -505,11 +542,10 @@ pub async fn sign_send_json<T: DeserializeOwned + Send + 'static>(
     builder: RequestBuilder,
     config: &KubernetesAuthConfig,
 ) -> Result<T> {
-    builder
-        .sign_kubernetes_request(config)?
-        .with_retry()
-        .send_json::<T>()
-        .await
+    let (builder, response_hook) = intercept(builder, config)?;
+    let mut retriable = builder.sign_kubernetes_request(config)?.with_retry();
+    retriable.response_hook = response_hook;
+    retriable.send_json::<T>().await
 }
 
 /// Sign the request, retry, and expect no body (return `()` on HTTP success).
@@ -517,11 +553,10 @@ pub async fn sign_send_no_response(
     builder: RequestBuilder,
     config: &KubernetesAuthConfig,
 ) -> Result<()> {
-    builder
-        .sign_kubernetes_request(config)?
-        .with_retry()
-        .send_no_response()
-        .await
+    let (builder, response_hook) = intercept(builder, config)?;
+    let mut retriable = builder.sign_kubernetes_request(config)?.with_retry();
+    retriable.response_hook = response_hook;
+    retriable.send_no_response().await
 }
 
 #[cfg(test)]
@@ -642,6 +677,7 @@ mod tests {
             certificate_authority_data: None,
             insecure_skip_tls_verify: false,
             additional_headers: HashMap::new(),
+            interceptors: InterceptorChain::default(),
         }
     }
 

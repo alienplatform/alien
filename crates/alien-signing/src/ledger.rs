@@ -4,12 +4,18 @@
 //! it accepted state under and the highest signer list version. Setup creates the install's copy in the
 //! customer's cloud non-empty, so a missing ledger is an error and never a
 //! fresh start. Enforcers load it at start, take the maximum of it and their
-//! own copy, and write the result back. Values only rise. An older signed
-//! release or config may run again: what the ledger holds is trust, not a version floor.
+//! own copy, and write the result back. Values only rise.
 //!
-//! Each entry is the `(sequence, digest)` of a statement the enforcer can
-//! verify again, so a ledger written by someone without a signing key can
-//! cause refusals, but can't make anything unsigned run.
+//! The ledger is a trust anchor and a version floor, not a permission. What
+//! keeps a release or config running after its signer leaves the list is the
+//! signer list's `keep`, which the admins sign; the ledger never makes a
+//! statement verify. Only enforcers write it; management has no access to it
+//! (it is denied `/signed/*`).
+//!
+//! The ledger has to fit the smallest store an install uses (AWS SSM
+//! Standard parameters hold 4 KB), so it is size-capped: it holds a fixed
+//! set of small fields, and one that would pass [`MAX_LEDGER_BYTES`] is
+//! refused.
 
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
@@ -28,6 +34,10 @@ pub struct Entry {
     /// `sha256:<hex>` of its payload.
     pub digest: String,
 }
+
+/// The most bytes a ledger's JSON may take: AWS SSM Standard's parameter limit,
+/// the smallest store an install keeps its ledger in.
+pub const MAX_LEDGER_BYTES: usize = 4096;
 
 /// The ledger of one install.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +96,12 @@ impl Ledger {
                 return Err(refused(format!("'{}' is not a digest", entry.digest)));
             }
         }
+        if bytes.len() > MAX_LEDGER_BYTES {
+            return Err(refused(format!(
+                "it is {} bytes, over the {MAX_LEDGER_BYTES} its store holds",
+                bytes.len()
+            )));
+        }
         Ok(ledger)
     }
 
@@ -107,7 +123,7 @@ impl Ledger {
         merge_root(&mut self.fingerprint, &other.fingerprint)?;
         merge_root(&mut self.install, &other.install)?;
         merge_entry(&mut self.signer_list, &other.signer_list)?;
-        Ok(())
+        self.check_size()
     }
 
     /// Refuse a trust root other than the one the install accepted state
@@ -133,6 +149,21 @@ impl Ledger {
                     found: format!("install {install}"),
                 }));
             }
+        }
+        Ok(())
+    }
+
+    fn json_len(&self) -> usize {
+        self.to_json().len()
+    }
+
+    /// Refuse a ledger that doesn't fit its store.
+    pub fn check_size(&self) -> Result<()> {
+        let len = self.json_len();
+        if len > MAX_LEDGER_BYTES {
+            return Err(refused(format!(
+                "it would take {len} bytes, over the {MAX_LEDGER_BYTES} its store holds"
+            )));
         }
         Ok(())
     }
@@ -226,4 +257,45 @@ fn refused(reason: impl Into<String>) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::LedgerRefused {
         reason: reason.into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn digest(n: usize) -> String {
+        format!("sha256:{n:064x}")
+    }
+
+    /// A fully populated ledger, as the largest root fields make it.
+    fn full_root() -> Ledger {
+        let mut ledger = Ledger::new(&"p".repeat(40));
+        ledger.fingerprint = Some(format!("SHA256:{}", "a".repeat(64)));
+        ledger.install = Some("aws:111122223333:us-east-1:acme-prod".to_string());
+        ledger.signer_list = Some(Entry {
+            sequence: u64::MAX,
+            digest: digest(7),
+        });
+        ledger
+    }
+
+    #[test]
+    fn a_full_ledger_fits_its_store() {
+        let ledger = full_root();
+        assert!(ledger.to_json().len() <= MAX_LEDGER_BYTES);
+        ledger.check_size().unwrap();
+        Ledger::parse(ledger.to_json().as_bytes(), &"p".repeat(40)).unwrap();
+    }
+
+    #[test]
+    fn a_stored_ledger_over_the_cap_is_refused() {
+        // Every field is valid; only the prefix makes it too big.
+        let prefix = "p".repeat(MAX_LEDGER_BYTES);
+        let mut ledger = full_root();
+        ledger.prefix = prefix.clone();
+        let text = ledger.to_json();
+        assert!(text.len() > MAX_LEDGER_BYTES);
+        let error = Ledger::parse(text.as_bytes(), &prefix).unwrap_err();
+        assert!(format!("{error}").contains("bytes"), "{error}");
+    }
 }

@@ -7,7 +7,7 @@
 
 use crate::{
     commands::destroy::DestroyArgs,
-    config::load_configuration,
+    config::load_configuration_and_extension_modules,
     error::{ErrorData, Result},
     get_current_dir,
     output::write_json_file,
@@ -43,7 +43,7 @@ use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::{sync::oneshot, task::JoinHandle, time::Duration};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Parsed CLI environment variable.
 #[derive(Clone)]
@@ -394,6 +394,121 @@ fn ensure_dev_port_available(port: u16) -> Result<()> {
     }
 }
 
+/// The file, under the dev state directory, that holds the folders of the extension modules the
+/// last `alien dev` release found its bundles beside. The release may run in another process
+/// than the manager (`alien dev release`), and the manager's controller lookup is built before
+/// alien.ts is evaluated, so the folders pass through this file.
+const RELEASED_MODULE_DIRS: &str = "extension-module-dirs.json";
+
+/// The folders the last release recorded under `state_dir`: none when nothing was recorded, or
+/// why the record could not be read.
+fn released_module_dirs(state_dir: &Path) -> Result<Vec<PathBuf>> {
+    let path = state_dir.join(RELEASED_MODULE_DIRS);
+    let failed = |reason: &str| ErrorData::FileOperationFailed {
+        operation: "read".to_string(),
+        file_path: path.display().to_string(),
+        reason: reason.to_string(),
+    };
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes)
+                .into_alien_error()
+                .context(ErrorData::JsonError {
+                    operation: "deserialize".to_string(),
+                    reason: format!("{} is not a list of folders", path.display()),
+                })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error)
+            .into_alien_error()
+            .context(failed("Failed to read the extension module folders")),
+    }
+}
+
+/// Records `dirs` for the manager's controller lookup, written whole to a file of its own and
+/// then renamed, so releases that overlap never share the file one of them renames.
+pub(crate) fn record_released_module_dirs(state_dir: &Path, dirs: &[PathBuf]) -> Result<()> {
+    let path = state_dir.join(RELEASED_MODULE_DIRS);
+    let failed = |reason: &str| ErrorData::FileOperationFailed {
+        operation: "write".to_string(),
+        file_path: path.display().to_string(),
+        reason: reason.to_string(),
+    };
+    std::fs::create_dir_all(state_dir)
+        .into_alien_error()
+        .context(failed("Failed to create the dev state directory"))?;
+    let bytes = serde_json::to_vec(dirs)
+        .into_alien_error()
+        .context(failed("Failed to encode the extension module folders"))?;
+    let mut staged = tempfile::NamedTempFile::new_in(state_dir)
+        .into_alien_error()
+        .context(failed(
+            "Failed to create a file for the extension module folders",
+        ))?;
+    std::io::Write::write_all(&mut staged, &bytes)
+        .into_alien_error()
+        .context(failed("Failed to write the extension module folders"))?;
+    staged
+        .persist(&path)
+        .into_alien_error()
+        .context(failed("Failed to store the extension module folders"))?;
+    Ok(())
+}
+
+/// The folder, under the dev state directory, that keeps each controller binary a dev release
+/// uploaded, named by its sha256. `alien extensions build` replaces the binaries beside a
+/// bundle, and a deployment still on an earlier release needs that release's binary.
+const RELEASED_CONTROLLERS: &str = "released-controllers";
+
+/// Keeps a copy of each controller binary in `uploads` under `state_dir`, by its sha256. A
+/// binary already kept is left as it is.
+pub(crate) fn keep_released_controllers(
+    state_dir: &Path,
+    uploads: &[crate::commands::extensions::release::Upload],
+) -> Result<()> {
+    let kept = state_dir.join(RELEASED_CONTROLLERS);
+    for upload in uploads.iter().filter(|upload| upload.object != "core") {
+        let path = kept.join(upload.sha256.to_ascii_lowercase());
+        if path.is_file() {
+            continue;
+        }
+        let failed = |reason: &str| ErrorData::FileOperationFailed {
+            operation: "write".to_string(),
+            file_path: path.display().to_string(),
+            reason: reason.to_string(),
+        };
+        std::fs::create_dir_all(&kept)
+            .into_alien_error()
+            .context(failed(
+                "Failed to create the folder of released controllers",
+            ))?;
+        // A file of its own per release, so overlapping releases never rename each other's.
+        // `copy` gives it the binary's permissions, which the manager runs it with.
+        let staged = tempfile::NamedTempFile::new_in(&kept)
+            .into_alien_error()
+            .context(failed("Failed to create a file for a released controller"))?;
+        std::fs::copy(&upload.path, staged.path())
+            .into_alien_error()
+            .context(failed("Failed to copy a released controller"))?;
+        staged
+            .persist(&path)
+            .into_alien_error()
+            .context(failed("Failed to keep a released controller"))?;
+    }
+    Ok(())
+}
+
+/// The kept binary with `sha256` under `state_dir`, if a dev release kept one. The manager checks
+/// its sha256 before it runs it.
+fn released_controller(state_dir: &Path, sha256: &str) -> Option<PathBuf> {
+    Some(
+        state_dir
+            .join(RELEASED_CONTROLLERS)
+            .join(sha256.to_ascii_lowercase()),
+    )
+    .filter(|path| path.is_file())
+}
+
 /// Build the embedded dev manager instance used by `alien dev`.
 ///
 /// This is a standalone manager with dev-friendly defaults:
@@ -427,8 +542,33 @@ pub async fn build_embedded_dev_manager(
     let toml_config = ManagerTomlConfig::default();
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let project_dir = get_current_dir()?;
+    // Under the state directory, since `alien extensions build` empties the folder it builds
+    // controllers into.
+    let controller_copies = state_dir.join("extension-controllers");
+    let lookup_state_dir = state_dir.clone();
     let server = alien_manager::AlienManager::builder(config)
         .credential_resolver(Arc::new(LocalCredentialResolver::new(state_dir)))
+        // The controllers run with the developer's environment, as the rest of `alien dev`
+        // does.
+        .local_extension_controllers(alien_manager::extension_bundles::LocalControllers::new(
+            Arc::new(move |name: &str, sha256: &str| {
+                if let Some(kept) = released_controller(&lookup_state_dir, sha256) {
+                    return Ok(Some(kept));
+                }
+                let module_dirs =
+                    released_module_dirs(&lookup_state_dir).map_err(AlienError::into_generic)?;
+                crate::commands::extensions::release::local_controller(
+                    &module_dirs,
+                    &project_dir,
+                    name,
+                    sha256,
+                )
+                .map_err(AlienError::into_generic)
+            }),
+            std::env::vars().collect(),
+            controller_copies,
+        ))
         .telemetry_backend(Arc::new(InMemoryTelemetryBackend::new(log_buffer.clone())))
         .auth_validator(Arc::new(PermissiveAuthValidator::new()))
         .log_buffer(log_buffer)
@@ -618,6 +758,8 @@ pub async fn build_and_post_release_simple(
     config_file: Option<&PathBuf>,
 ) -> Result<String> {
     let output_dir = current_dir.join(".alien");
+    // The folders of the extension modules alien.ts imports, when it is evaluated here.
+    let mut extension_module_dirs = None;
 
     // Build if needed
     if !skip_build {
@@ -627,12 +769,23 @@ pub async fn build_and_post_release_simple(
             Some(cf) => cf.clone(),
             None => current_dir.clone(),
         };
-        let stack =
-            load_configuration(config_path)
-                .await
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to load configuration".to_string(),
-                })?;
+        // The extensions the stack lists build first, for this machine only, so the stack pins
+        // the bundles they write. A machine no bundle has a controller for builds every target
+        // it can, and the manager then refuses the extension naming the machine.
+        let configuration = crate::commands::extensions::release::evaluate_building_extensions(
+            current_dir,
+            &alien_infra::extension_bundle::host_target()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            || async {
+                load_configuration_and_extension_modules(config_path.clone())
+                    .await
+                    .context(ErrorData::ConfigurationError {
+                        message: "Failed to load configuration".to_string(),
+                    })
+            },
+        )
+        .await?;
 
         let settings = BuildSettings {
             output_directory: output_dir.to_str().unwrap().to_string(),
@@ -651,7 +804,11 @@ pub async fn build_and_post_release_simple(
             require_pinned_base_images: false,
         };
 
-        alien_build::build_stack(stack, &settings)
+        extension_module_dirs = Some(crate::commands::extensions::release::imported_module_dirs(
+            &configuration,
+            current_dir,
+        )?);
+        alien_build::build_stack(configuration.stack, &settings)
             .await
             .context(ErrorData::BuildFailed)?;
     }
@@ -674,9 +831,28 @@ pub async fn build_and_post_release_simple(
     })?;
 
     validate_local_release_artifacts(&stack)?;
+    validate_local_controllers(&stack)?;
 
     // Post release to dev server
-    let client = AlienManagerClient::new(&format!("http://localhost:{}", port));
+    let manager_url = format!("http://localhost:{}", port);
+    let client = AlienManagerClient::new(&manager_url);
+    if !stack.extensions.is_empty() {
+        let module_dirs = extension_module_dirs.unwrap_or_else(|| {
+            crate::commands::extensions::release::local_module_dirs(current_dir)
+        });
+        let uploads =
+            crate::commands::extensions::release::check_listed(&stack.extensions, &module_dirs)
+                .await?;
+        record_released_module_dirs(&output_dir, &module_dirs)?;
+        keep_released_controllers(&output_dir, &uploads)?;
+        crate::commands::extensions::upload::upload_to_manager(
+            &reqwest::Client::new(),
+            &manager_url,
+            DEV_PROJECT_ID,
+            &uploads,
+        )
+        .await?;
+    }
 
     let stack_json =
         serde_json::to_value(&stack)
@@ -701,9 +877,7 @@ pub async fn build_and_post_release_simple(
         .body(CreateReleaseRequest {
             stack: stack_by_platform,
             git_metadata: None,
-            // dev mode is single-project; "default" is the canonical
-            // sentinel and is required by the wire schema.
-            project_id: "default".to_string(),
+            project_id: DEV_PROJECT_ID.to_string(),
             channel: None,
             signed_stacks: Default::default(),
             setup_templates: Default::default(),
@@ -718,6 +892,33 @@ pub async fn build_and_post_release_simple(
         })?;
 
     Ok(response.id.clone())
+}
+
+/// Dev mode is single-project; "default" is the canonical sentinel, which the wire schema
+/// requires.
+const DEV_PROJECT_ID: &str = "default";
+
+/// Refuses a custom resource whose extension registers no controller for the local platform,
+/// since `alien dev` has nothing to run it with.
+fn validate_local_controllers(stack: &Stack) -> Result<()> {
+    for (id, entry) in stack.resources() {
+        let resource_type = entry.config.resource_type();
+        let Some(descriptor) = stack.descriptor(&resource_type) else {
+            continue;
+        };
+        if !descriptor
+            .controller_platforms
+            .contains(&alien_core::Platform::Local)
+        {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "resources".to_string(),
+                message: format!(
+                    "Resource '{id}' ({resource_type}) can't run in `alien dev`: its extension registers no controller for Platform::Local. Register one in the extension's controller main.rs"
+                ),
+            }));
+        }
+    }
+    Ok(())
 }
 
 fn validate_local_release_artifacts(stack: &Stack) -> Result<()> {
@@ -1439,6 +1640,130 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The folders a release records are read back from the state directory, and an unreadable
+    /// record is an error rather than "nothing recorded".
+    #[test]
+    fn recorded_module_folders_are_read_back_from_the_state_directory() {
+        let state = tempfile::tempdir().unwrap();
+        assert!(released_module_dirs(state.path()).unwrap().is_empty());
+        let dirs = vec![PathBuf::from("/work/acme/generated")];
+        record_released_module_dirs(state.path(), &dirs).unwrap();
+        assert_eq!(released_module_dirs(state.path()).unwrap(), dirs);
+        std::fs::write(state.path().join(RELEASED_MODULE_DIRS), b"not json").unwrap();
+        assert!(released_module_dirs(state.path()).is_err());
+    }
+
+    /// A controller a dev release uploaded is kept by its sha256, so the manager still finds it
+    /// once `alien extensions build` replaces the binary beside the bundle.
+    #[test]
+    fn a_released_controller_outlives_a_rebuild() {
+        let state = tempfile::tempdir().unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        let binary = bundle.path().join("acme-controller-darwin-arm64");
+        std::fs::write(&binary, b"first build").unwrap();
+        let upload = |sha256: &str, object: &str| crate::commands::extensions::release::Upload {
+            extension: "acme".to_string(),
+            object: object.to_string(),
+            path: binary.clone(),
+            sha256: sha256.to_string(),
+            size: 11,
+        };
+        keep_released_controllers(
+            state.path(),
+            &[upload("AB12", "darwin-arm64"), upload("cd34", "core")],
+        )
+        .unwrap();
+
+        std::fs::write(&binary, b"second build").unwrap();
+        let kept = released_controller(state.path(), "ab12").unwrap();
+        assert_eq!(std::fs::read(&kept).unwrap(), b"first build");
+        // The bundle's zip is not a controller, so it isn't kept.
+        assert!(released_controller(state.path(), "cd34").is_none());
+    }
+
+    /// A stack without extensions posts its release and asks the manager for no bundle object.
+    #[tokio::test]
+    async fn a_dev_release_without_extensions_uploads_nothing() {
+        let server = httpmock::MockServer::start_async().await;
+        let stack = Stack::new("app".to_string()).build();
+        let release = server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .path("/v1/releases")
+                    .json_body_partial(
+                        serde_json::json!({
+                            "stack": { "local": serde_json::to_value(&stack).unwrap() },
+                            "projectId": "default"
+                        })
+                        .to_string(),
+                    );
+                then.status(201).json_body(serde_json::json!({"id":"rel_dev", "workspaceId":"default",
+                    "projectId":"default", "stack":{}, "createdAt":"2026-01-01T00:00:00Z", "setupFingerprints":{}}));
+            })
+            .await;
+        let bundles = server
+            .mock_async(|when, then| {
+                when.path_contains("/v1/extensions/");
+                then.status(500);
+            })
+            .await;
+        let directory = TempDir::new().unwrap();
+        let artifacts = directory.path().join(".alien/build/local");
+        fs::create_dir_all(&artifacts).unwrap();
+        fs::write(
+            artifacts.join("stack.json"),
+            serde_json::to_vec(&stack).unwrap(),
+        )
+        .unwrap();
+
+        let id = build_and_post_release_simple(
+            &directory.path().to_path_buf(),
+            server.address().port(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(id, "rel_dev");
+        release.assert_hits_async(1).await;
+        bundles.assert_hits_async(0).await;
+    }
+
+    /// The docs' rule: a custom type with no local controller stops `alien dev`, naming it.
+    #[test]
+    fn a_custom_type_without_a_local_controller_is_refused_naming_it() {
+        let stack = |platforms: &[&str]| -> Stack {
+            serde_json::from_value(serde_json::json!({
+                "id": "my-app",
+                "resources": { "zone": {
+                    "config": { "type": "acme/dns-zone", "id": "zone", "domain": "a.acme.dev" },
+                    "lifecycle": "live", "dependencies": []
+                }},
+                "permissions": { "profiles": {}, "management": "auto" },
+                "extensions": [{
+                    "name": "acme", "version": "1.0.0", "digest": "sha256:0",
+                    "resourceTypes": { "acme/dns-zone": {
+                        "lifecycles": ["live"], "holdsData": false,
+                        "setup": { "cloudformation": [], "terraform": [], "helm": [], "importers": [] },
+                        "controllerPlatforms": platforms, "permissionSets": [],
+                        "link": { "permissionSets": [] }, "schemas": { "config": {}, "outputs": {} }
+                    }}
+                }]
+            }))
+            .unwrap()
+        };
+
+        validate_local_controllers(&stack(&["aws", "local"])).unwrap();
+        let error = validate_local_controllers(&stack(&["aws"])).unwrap_err();
+        assert!(
+            error.message.contains("Resource 'zone' (acme/dns-zone)")
+                && error.message.contains("no controller for Platform::Local"),
+            "{}",
+            error.message
+        );
+    }
     use alien_core::ResourceLifecycle;
     use alien_manager::traits::deployment_store::{
         CreateDeploymentGroupParams, CreateDeploymentParams,

@@ -89,6 +89,21 @@ pub struct DurableSyncExecution {
     pub target: Option<TargetDeployment>,
 }
 
+/// A target whose extension bundle failed its check. The Operator never accepts it, and reports
+/// it to the manager as a failed update while the manager sends this target under this claim.
+/// A new claim for the same target is a new attempt, which downloads the bundle again; a manager
+/// that issues no claims gets the refusal until it sends another target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefusedTarget {
+    /// The target's approved-target hash, as `approved_target_hash` computes it
+    pub target_hash: String,
+    /// The claim the target came with, if the manager issues claims
+    pub claim: Option<SyncExecutionClaim>,
+    /// The refusal
+    pub error: alien_error::AlienError,
+}
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -152,6 +167,9 @@ pub struct Approval {
 pub struct OperatorDb {
     conn: Arc<Mutex<Connection>>,
     sync_requested: tokio::sync::Notify,
+    /// Wakes the deployment loop when something other than that loop changed
+    /// what it has to do.
+    deployment_requested: tokio::sync::Notify,
     pub(crate) daily_identity_operation: Arc<Mutex<()>>,
     pub(crate) published_runtime_credentials:
         Mutex<std::collections::HashMap<String, crate::daily_identity::PublishedCapability>>,
@@ -366,6 +384,7 @@ impl OperatorDb {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             sync_requested: tokio::sync::Notify::new(),
+            deployment_requested: tokio::sync::Notify::new(),
             daily_identity_operation: Arc::new(Mutex::new(())),
             published_runtime_credentials: Mutex::new(std::collections::HashMap::new()),
             runtime_credentials: Mutex::new(std::collections::HashMap::new()),
@@ -589,6 +608,16 @@ impl OperatorDb {
 
     pub(crate) async fn wait_for_sync(&self) {
         self.sync_requested.notified().await;
+    }
+
+    /// Wake the deployment loop: a target, an approval decision or a retry
+    /// request arrived, so it must not wait out its hold interval.
+    pub(crate) fn request_deployment(&self) {
+        self.deployment_requested.notify_one();
+    }
+
+    pub(crate) async fn wait_for_deployment(&self) {
+        self.deployment_requested.notified().await;
     }
 
     /// Save an observation only if no deployment step changed its source state.
@@ -1161,6 +1190,82 @@ impl OperatorDb {
     }
 
     // =========================================================================
+    // Refused Target
+    // =========================================================================
+
+    const KEY_REFUSED_TARGET: &str = "refused_target";
+
+    /// The last target whose extension bundle failed its check.
+    pub async fn get_refused_target(&self) -> Result<Option<RefusedTarget>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = ?",
+                (Self::KEY_REFUSED_TARGET,),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query refused_target".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch refused_target row".to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        let value: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read refused_target value".to_string(),
+            })?;
+        serde_json::from_str(&value)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to parse refused_target".to_string(),
+            })
+            .map(Some)
+    }
+
+    /// Records `refused`, or forgets the last refused target when it is `None`.
+    pub async fn set_refused_target(&self, refused: Option<&RefusedTarget>) -> Result<()> {
+        let conn = self.conn.lock().await;
+        let result = match refused {
+            Some(refused) => {
+                let value = serde_json::to_string(refused).into_alien_error().context(
+                    ErrorData::DatabaseError {
+                        message: "Failed to serialize refused_target".to_string(),
+                    },
+                )?;
+                conn.execute(
+                    "INSERT INTO state (key, value, updated_at) VALUES (?, ?, datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    (Self::KEY_REFUSED_TARGET, value),
+                )
+                .await
+            }
+            None => {
+                conn.execute(
+                    "DELETE FROM state WHERE key = ?",
+                    (Self::KEY_REFUSED_TARGET,),
+                )
+                .await
+            }
+        };
+        result
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to set refused_target".to_string(),
+            })?;
+        Ok(())
+    }
+
+    // =========================================================================
     // Deployment Config
     // =========================================================================
 
@@ -1317,56 +1422,63 @@ impl OperatorDb {
                     message: "Failed to fetch approval row".to_string(),
                 })?
         {
-            let id: String = row
-                .get(0)
-                .into_alien_error()
-                .context(ErrorData::DatabaseError {
-                    message: "Failed to read approval id".to_string(),
-                })?;
-            let release_info_json: Option<String> = row.get(1).ok();
-            let config_json: String =
-                row.get(2)
-                    .into_alien_error()
-                    .context(ErrorData::DatabaseError {
-                        message: "Failed to read approval deployment_config".to_string(),
-                    })?;
-            let status_str: String = row.get(3).unwrap_or_else(|_| "pending".to_string());
-            let reason: Option<String> = row.get(4).ok();
-            let created_at: String =
-                row.get(5)
-                    .into_alien_error()
-                    .context(ErrorData::DatabaseError {
-                        message: "Failed to read approval created_at".to_string(),
-                    })?;
-            let decided_at: Option<String> = row.get(6).ok();
-            let decided_by: Option<String> = row.get(7).ok();
-
-            let release_info = release_info_json
-                .map(|json| serde_json::from_str(&json))
-                .transpose()
-                .into_alien_error()
-                .context(ErrorData::DatabaseError {
-                    message: "Failed to parse approval release_info".to_string(),
-                })?;
-            let deployment_config = serde_json::from_str(&config_json)
-                .into_alien_error()
-                .context(ErrorData::DatabaseError {
-                    message: "Failed to parse approval deployment_config".to_string(),
-                })?;
-
-            approvals.push(Approval {
-                id,
-                release_info,
-                deployment_config,
-                status: ApprovalStatus::from_str(&status_str),
-                reason,
-                created_at,
-                decided_at,
-                decided_by,
-            });
+            approvals.push(approval_from_row(&row)?);
         }
 
         Ok(approvals)
+    }
+
+    /// Number of approval records for a release, whatever their status.
+    #[cfg(test)]
+    pub(crate) async fn count_approvals_for_release(&self, release_id: &str) -> Result<usize> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM approvals WHERE json_extract(release_info, '$.releaseId') = ?",
+                (release_id.to_string(),),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to count approvals".to_string(),
+            })?;
+        let row = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch approval count".to_string(),
+            })?;
+        let count: i64 = match row {
+            Some(row) => row.get(0).unwrap_or(0),
+            None => 0,
+        };
+        Ok(count as usize)
+    }
+
+    /// The newest approval record, whatever its release or status.
+    pub async fn get_latest_approval(&self) -> Result<Option<Approval>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, release_info, deployment_config, status, reason, created_at, decided_at, decided_by FROM approvals ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query approval".to_string(),
+            })?;
+        match rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch approval row".to_string(),
+            })? {
+            Some(row) => Ok(Some(approval_from_row(&row)?)),
+            None => Ok(None),
+        }
     }
 
     /// Get approval status for a specific release
@@ -1431,6 +1543,8 @@ impl OperatorDb {
         .context(ErrorData::DatabaseError {
             message: "Failed to update approval".to_string(),
         })?;
+        drop(conn);
+        self.request_deployment();
 
         Ok(())
     }
@@ -2617,6 +2731,56 @@ impl OperatorDb {
         })?;
         Ok(())
     }
+}
+
+fn approval_from_row(row: &turso::Row) -> Result<Approval> {
+    let id: String = row
+        .get(0)
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to read approval id".to_string(),
+        })?;
+    let release_info_json: Option<String> = row.get(1).ok();
+    let config_json: String = row
+        .get(2)
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to read approval deployment_config".to_string(),
+        })?;
+    let status_str: String = row.get(3).unwrap_or_else(|_| "pending".to_string());
+    let reason: Option<String> = row.get(4).ok();
+    let created_at: String = row
+        .get(5)
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to read approval created_at".to_string(),
+        })?;
+    let decided_at: Option<String> = row.get(6).ok();
+    let decided_by: Option<String> = row.get(7).ok();
+
+    let release_info = release_info_json
+        .map(|json| serde_json::from_str(&json))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to parse approval release_info".to_string(),
+        })?;
+    let deployment_config = serde_json::from_str(&config_json)
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to parse approval deployment_config".to_string(),
+        })?;
+
+    Ok(Approval {
+        id,
+        release_info,
+        deployment_config,
+        status: ApprovalStatus::from_str(&status_str),
+        reason,
+        created_at,
+        decided_at,
+        decided_by,
+    })
 }
 
 #[cfg(test)]

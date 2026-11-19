@@ -107,3 +107,91 @@ fn plugin_emitter_extends_infrastructure_yaml() {
         "plugin emitter should set service: {onprem}"
     );
 }
+
+/// A stack whose custom type comes from an extension with the given Helm platforms.
+fn stack_with_extension(helm: &[&str]) -> Stack {
+    serde_json::from_value(serde_json::json!({
+        "id": "acme-chart",
+        "resources": {
+            "zone": {
+                "config": { "type": "acme/dns-zone", "id": "zone", "domain": "internal.acme.dev" },
+                "lifecycle": "frozen",
+                "dependencies": []
+            }
+        },
+        "extensions": [{
+            "name": "acme",
+            "version": "1.0.0",
+            "digest": "sha256:0",
+            "resourceTypes": {
+                "acme/dns-zone": {
+                    "lifecycles": ["frozen"],
+                    "holdsData": false,
+                    "setup": { "cloudformation": ["aws"], "terraform": ["aws"], "helm": helm, "importers": ["aws"] },
+                    "controllerPlatforms": [],
+                    "permissionSets": [],
+                    "link": { "permissionSets": [] },
+                    "schemas": { "config": {}, "outputs": {} }
+                }
+            }
+        }]
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_custom_type_without_a_helm_emitter_turns_helm_off_with_the_reason() {
+    let error = super::helpers::try_render(&stack_with_extension(&[]), StackSettings::default())
+        .expect_err("Helm is off for the stack");
+    insta::assert_snapshot!(error.to_string());
+}
+
+#[test]
+fn a_custom_type_whose_descriptor_lists_helm_needs_its_emitter() {
+    // The descriptor lists Helm and the registry has no emitter for the type.
+    let error = super::helpers::try_render(
+        &stack_with_extension(&["kubernetes"]),
+        StackSettings::default(),
+    )
+    .expect_err("the type's Helm emitter is missing");
+    assert_eq!(error.code, "IMPORT_REGISTRATION_MISSING", "{error}");
+}
+
+/// The chart's README lists each extension the stack uses and the origins its controllers may
+/// call outside the cluster; a stack with no extensions gets no such section.
+#[test]
+fn the_readme_lists_the_stacks_extensions() {
+    let mut registry = HelmRegistry::built_in();
+    registry.register(
+        ResourceType::from("acme/dns-zone"),
+        Platform::Kubernetes,
+        PluginCacheEmitter,
+    );
+    let mut stack = stack_with_extension(&["kubernetes"]);
+    stack.extensions[0].egress = vec!["https://api.acme.example".to_string()];
+    let render = |stack: &Stack| {
+        generate_helm_chart(
+            stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "acme-chart".to_string(),
+            },
+        )
+        .expect("chart should render")
+        .files["README.md"]
+            .clone()
+    };
+    let readme = render(&stack);
+    assert!(
+        readme.contains(
+            "## Extensions\n\nThis deployment uses these extensions.\n\n- `acme` version 1.0.0. Its controllers may also call, with none of this deployment's credentials: https://api.acme.example.\n"
+        ),
+        "{readme}"
+    );
+
+    stack.extensions.clear();
+    stack.resources.clear();
+    let readme = render(&stack);
+    assert!(!readme.contains("## Extensions"), "{readme}");
+}

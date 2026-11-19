@@ -34,7 +34,7 @@ use alien_permissions::{
         AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator, AzureRuntimeRoles,
         AzureScopedCustomRole, AzureWorkloadPrincipals,
     },
-    get_permission_set, BindingTarget, PermissionContext,
+    BindingTarget, PermissionContext,
 };
 use chrono::Utc;
 use sha2::{Digest, Sha256};
@@ -1697,6 +1697,29 @@ mod tests {
         }
     }
 
+    /// The management roles never hold an extension's set: a stack-wide grant of one is refused
+    /// rather than resolved from the stack.
+    #[test]
+    fn a_management_grant_of_an_extensions_set_is_refused() {
+        let (extension, profile) = crate::service_account::extension_with_a_stack_wide_set();
+        let mut stack = alien_core::Stack::new("test".to_string()).build();
+        stack.extensions.push(extension);
+        let error = generate_stack_management_grant_plan(
+            &profile,
+            &stack,
+            &permission_context(),
+            &Default::default(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+        assert!(
+            error
+                .message
+                .contains("granted only to the extension's own identity"),
+            "{error:?}"
+        );
+    }
+
     #[test]
     fn management_roles_hold_only_the_grants_bound_at_their_scope() {
         let profile = PermissionProfile::new().global([
@@ -1705,7 +1728,7 @@ mod tests {
         ]);
         let grant_plan = generate_stack_management_grant_plan(
             &profile,
-            std::iter::empty(),
+            &alien_core::Stack::new("test".to_string()).build(),
             &permission_context(),
             &Default::default(),
         )
@@ -1817,7 +1840,7 @@ mod tests {
 
         let grant_plan = generate_stack_management_grant_plan(
             &profile,
-            std::iter::empty(),
+            &alien_core::Stack::new("test".to_string()).build(),
             &permission_context(),
             &Default::default(),
         )
@@ -1894,7 +1917,7 @@ mod tests {
 
         let granted = generate_stack_management_grant_plan(
             &profile,
-            stack.resources.values(),
+            &stack,
             &permission_context(),
             &Default::default(),
         )
@@ -1923,7 +1946,7 @@ mod tests {
             .build();
         let kept = generate_stack_management_grant_plan(
             &profile,
-            own.resources.values(),
+            &own,
             &permission_context(),
             &Default::default(),
         )
@@ -1964,7 +1987,7 @@ mod tests {
             ]);
             let grant_plan = generate_stack_management_grant_plan(
                 &profile,
-                std::iter::empty(),
+                &alien_core::Stack::new("test".to_string()).build(),
                 &permission_context(),
                 &Default::default(),
             )
@@ -2033,7 +2056,7 @@ mod tests {
             ]);
             let grant_plan = generate_stack_management_grant_plan(
                 &profile,
-                std::iter::empty(),
+                &alien_core::Stack::new("test".to_string()).build(),
                 &permission_context(),
                 &Default::default(),
             )
@@ -2107,7 +2130,7 @@ mod tests {
         ]);
         let grant_plan = generate_stack_management_grant_plan(
             &profile,
-            std::iter::empty(),
+            &alien_core::Stack::new("test".to_string()).build(),
             &permission_context(),
             &Default::default(),
         )
@@ -2173,7 +2196,7 @@ mod tests {
             .collect();
         let grant_plan = generate_stack_management_grant_plan(
             &profile,
-            std::iter::empty(),
+            &alien_core::Stack::new("test".to_string()).build(),
             &permission_context(),
             &live,
         )
@@ -2203,7 +2226,7 @@ mod tests {
 
         let grant_plan = generate_stack_management_grant_plan(
             &profile,
-            std::iter::empty(),
+            &alien_core::Stack::new("test".to_string()).build(),
             &permission_context(),
             &Default::default(),
         )
@@ -2288,33 +2311,25 @@ fn existing_azure_vnet_resource_id(ctx: &ResourceControllerContext<'_>) -> Optio
 /// resource the deployer declined. Absence from the desired stack is that
 /// decline, and the grant has to go with it — the setup template withholds it
 /// the same way, and the two must agree.
-fn generate_stack_management_grant_plan<'r, I>(
+fn generate_stack_management_grant_plan(
     management_profile: &PermissionProfile,
-    resources: I,
+    stack: &alien_core::Stack,
     permission_context: &PermissionContext,
     live_resource_ids: &std::collections::HashSet<String>,
-) -> Result<AzureGrantPlan>
-where
-    I: IntoIterator<Item = &'r alien_core::ResourceEntry> + Clone,
-{
+) -> Result<AzureGrantPlan> {
     let mut custom_roles = Vec::new();
     let mut bindings = Vec::new();
     let generator = AzureRuntimePermissionsGenerator::new();
 
     // Setup and runtime have to answer the same way; see
     // `alien_permissions::management_identity_global_refs`.
-    let global_refs =
-        alien_permissions::management_identity_global_refs(resources, management_profile);
+    let global_refs = alien_permissions::management_identity_global_refs(
+        stack.resources.values(),
+        management_profile,
+    );
     for permission_set_ref in global_refs {
-        let Some(permission_set) =
-            permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-        else {
-            tracing::warn!(
-                permission_set_id = %permission_set_ref.id(),
-                "Management permission set not found, skipping"
-            );
-            continue;
-        };
+        let permission_set =
+            super::resolve_management_permission_set(stack, permission_set_ref, "management")?;
         // Skipped on the same condition the Terraform emitter uses, so push and runtime agree.
         // A set can decline the stack target deliberately — `sandbox/execute` does, because at
         // the only stack-level scope Azure RBAC can express, the resource group, its Data Owner
@@ -2360,15 +2375,8 @@ where
             )
         })
     {
-        let Some(permission_set) =
-            permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-        else {
-            tracing::warn!(
-                permission_set_id = %permission_set_ref.id(),
-                "Management permission set not found, skipping"
-            );
-            continue;
-        };
+        let permission_set =
+            super::resolve_management_permission_set(stack, permission_set_ref, "management")?;
         if !seen_stack_management_refs.insert(permission_set.id.clone()) {
             continue;
         }
@@ -2889,7 +2897,7 @@ impl AzureRemoteStackManagementController {
         let generator = AzureRuntimePermissionsGenerator::new();
         let grant_plan = generate_stack_management_grant_plan(
             management_profile,
-            ctx.desired_stack.resources.values(),
+            ctx.desired_stack,
             &permission_context,
             &ctx.desired_stack.resources.keys().cloned().collect(),
         )?;
@@ -2913,15 +2921,11 @@ impl AzureRemoteStackManagementController {
                 )?;
 
             for permission_set_ref in permission_set_refs {
-                let Some(permission_set) =
-                    permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-                else {
-                    tracing::warn!(
-                        permission_set_id = %permission_set_ref.id(),
-                        "Management permission set not found, skipping"
-                    );
-                    continue;
-                };
+                let permission_set = super::resolve_management_permission_set(
+                    ctx.desired_stack,
+                    permission_set_ref,
+                    &resource_id,
+                )?;
                 if permission_set.platforms.azure.is_none() {
                     continue;
                 }

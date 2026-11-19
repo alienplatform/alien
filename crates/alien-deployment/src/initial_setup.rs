@@ -9,7 +9,9 @@ use alien_error::{AlienError, Context};
 use alien_infra::setup_scaffolding::{
     self, ScaffoldingProgress, SeedContext, SetupScaffoldingContext,
 };
-use alien_infra::{ImporterRegistry, RunningResourcePolicy, StackExecutor, StackStateExt};
+use alien_infra::{
+    DeploymentRegistries, HostRegistrations, RunningResourcePolicy, StackExecutor, StackStateExt,
+};
 use tracing::{debug, info, warn};
 
 /// Handle InitialSetup status (deploy setup-owned Frozen resources)
@@ -199,7 +201,9 @@ pub async fn handle_initial_setup(
             &client_config_for_scaffolding,
             service_provider.as_ref(),
             &runtime_metadata,
-        ) {
+        )
+        .await
+        {
             return Ok(failed_keeping_record(
                 current_cloned,
                 step_result.next_state,
@@ -399,8 +403,9 @@ fn take_first_setup_selection(
 
 /// The imported state registers each cluster with the machines the stack was prepared with, and
 /// the next step refuses state that differs from the stack it plans from. A pick therefore also
-/// goes into the registered cluster, for the groups that have no machines yet.
-fn carry_selection_into_imported_state(stack_state: &mut StackState, selected: &Stack) {
+/// goes into the registered cluster, for the groups that have no machines yet: the whole
+/// group (machine, profile, counts), as the pick wrote it.
+pub fn carry_selection_into_imported_state(stack_state: &mut StackState, selected: &Stack) {
     use alien_core::ComputeCluster;
     for (id, entry) in &selected.resources {
         let Some(chosen) = entry.config.downcast_ref::<ComputeCluster>() else {
@@ -424,7 +429,7 @@ fn carry_selection_into_imported_state(stack_state: &mut StackState, selected: &
                 .iter()
                 .find(|pick| pick.group_id == group.group_id)
             {
-                group.instance_type = pick.instance_type.clone();
+                *group = pick.clone();
             }
         }
     }
@@ -497,7 +502,7 @@ async fn reconcile_setup_scaffolding(
 }
 
 /// Hands each scaffolded resource the facts a template setup would have registered for it.
-fn seed_setup_scaffolding(
+async fn seed_setup_scaffolding(
     target_stack: &Stack,
     stack_state: &mut StackState,
     config: &DeploymentConfig,
@@ -518,20 +523,37 @@ fn seed_setup_scaffolding(
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to resolve setup scaffolding seeds".to_string(),
     })?;
-    let registry = ImporterRegistry::built_in();
-    setup_scaffolding::apply_seeds(
-        &SeedContext {
-            registry: &registry,
-            stack_settings: &config.stack_settings,
-            management_config: config.management_config.as_ref(),
-        },
-        target_stack,
-        stack_state,
-        seeds,
-    )
+    let extensions = alien_infra::LoadedExtensions::from_provider(target_stack, service_provider)
+        .context(ErrorData::StackExecutionFailed {
+        message: "Failed to load the stack's extensions for setup scaffolding".to_string(),
+    })?;
+    let (stack, settings, management_config, mut seeded) = (
+        target_stack.clone(),
+        config.stack_settings.clone(),
+        config.management_config.clone(),
+        stack_state.clone(),
+    );
+    *stack_state = alien_infra::run_hooks(move || {
+        let registries =
+            DeploymentRegistries::for_stack(&stack, &HostRegistrations::NONE, &extensions);
+        setup_scaffolding::apply_seeds(
+            &SeedContext {
+                registry: &registries.importers,
+                stack_settings: &settings,
+                management_config: management_config.as_ref(),
+            },
+            &stack,
+            &mut seeded,
+            seeds,
+        )
+        .map(|()| seeded)
+    })
+    .await
+    .and_then(|seeded| seeded)
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to seed resources from setup scaffolding".to_string(),
-    })
+    })?;
+    Ok(())
 }
 
 fn compute_lifecycle_status(
@@ -742,11 +764,11 @@ pub async fn handle_initial_setup_failed(
         })
     })?;
 
-    if current.platform == alien_core::Platform::Local
-        && next.runtime_metadata.as_ref().is_some_and(|metadata| {
-            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
-        })
-    {
+    // A direct setup retries against the release the deployment now wants, so a
+    // corrective release replaces the one whose setup failed.
+    if next.runtime_metadata.as_ref().is_some_and(|metadata| {
+        metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+    }) {
         let metadata = next.runtime_metadata.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::MissingConfiguration {
                 message: "Direct local setup metadata is required for retry".to_string(),
@@ -763,15 +785,13 @@ pub async fn handle_initial_setup_failed(
             .await?,
         );
     }
-    if current.platform == alien_core::Platform::Local {
-        if let Some(metadata) = next.runtime_metadata.as_mut().filter(|metadata| {
-            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
-        }) {
-            metadata.pending_prepared_release_id = next
-                .target_release
-                .as_ref()
-                .and_then(|release| release.release_id.clone());
-        }
+    if let Some(metadata) = next.runtime_metadata.as_mut().filter(|metadata| {
+        metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+    }) {
+        metadata.pending_prepared_release_id = next
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.clone());
     }
     let runtime_metadata = next.runtime_metadata.as_ref().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
@@ -1006,7 +1026,7 @@ mod tests {
         registered.platform = Platform::Aws;
         registered.resources.insert(
             "key".to_string(),
-            ImporterRegistry::built_in()
+            alien_infra::ImporterRegistry::built_in()
                 .run(
                     &alien_core::Key::RESOURCE_TYPE,
                     Platform::Aws,
@@ -2658,14 +2678,21 @@ mod tests {
     #[test]
     fn a_pick_goes_into_the_registered_cluster_so_the_next_step_accepts_the_state() {
         use alien_core::{CapacityGroup, ComputeCluster};
-        let cluster = |machine: &str| {
+        let cluster = |machine: &str, memory: u64, min: u32, max: u32| {
             ComputeCluster::new("compute".to_string())
                 .capacity_group(CapacityGroup {
                     group_id: "general".to_string(),
                     instance_type: Some(machine.to_string()),
-                    profile: None,
-                    min_size: 1,
-                    max_size: 1,
+                    profile: Some(alien_core::MachineProfile {
+                        cpu: "2.0".to_string(),
+                        memory_bytes: memory,
+                        ephemeral_storage_bytes: 20 << 30,
+                        architecture: None,
+                        gpu: None,
+                        data_disk: None,
+                    }),
+                    min_size: min,
+                    max_size: max,
                     scale_policy: None,
                     nested_virtualization: None,
                     data_disk_gib_range: None,
@@ -2674,7 +2701,7 @@ mod tests {
         };
         let mut registered = alien_core::StackResourceState::new_pending(
             "compute-cluster".to_string(),
-            alien_core::Resource::new(cluster("Standard_D8s_v5")),
+            alien_core::Resource::new(cluster("Standard_D8s_v5", 32 << 30, 1, 1)),
             Some(ResourceLifecycle::Frozen),
             Vec::new(),
         );
@@ -2684,15 +2711,18 @@ mod tests {
             .resources
             .insert("compute".to_string(), registered);
         let selected = Stack::new("azure".to_string())
-            .add(cluster("Standard_D8s_v6"), ResourceLifecycle::Frozen)
+            .add(
+                cluster("Standard_D2s_v6", 8 << 30, 2, 5),
+                ResourceLifecycle::Frozen,
+            )
             .build();
 
         carry_selection_into_imported_state(&mut stack_state, &selected);
 
-        // What continue_imported compares: the registered config equals the picked one.
+        // What continue_imported compares: the registered config equals the picked one: machine, profile and counts.
         assert_eq!(
             stack_state.resources["compute"].config,
-            alien_core::Resource::new(cluster("Standard_D8s_v6"))
+            alien_core::Resource::new(cluster("Standard_D2s_v6", 8 << 30, 2, 5))
         );
     }
 
@@ -3138,6 +3168,51 @@ mod tests {
             state.stack_state.unwrap().resources["removed"].status,
             ResourceStatus::Deleted
         );
+    }
+
+    #[tokio::test]
+    async fn a_direct_setup_retry_prepares_the_current_release_not_the_failed_one() {
+        let failed_release = Stack::new("test".to_string())
+            .add(
+                Storage::new("removed".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut stack_state = deployed_test_stack(&failed_release).await;
+        let resource = stack_state.resources.get_mut("removed").unwrap();
+        let mut controller = resource.get_internal_controller().unwrap().unwrap();
+        controller.transition_to_delete_start().unwrap();
+        controller.transition_to_failure();
+        resource.status = controller.get_status();
+        resource.last_failed_state = resource.internal_state.clone();
+        resource.set_internal_controller(Some(controller)).unwrap();
+
+        let mut state = resumed_test_setup(stack_state, failed_release);
+        state.status = DeploymentStatus::InitialSetupFailed;
+        state.retry_requested = true;
+        // Direct setup, not an automatic grant, on a platform other than Local.
+        assert!(!state.runtime_metadata.as_ref().unwrap().automatic_setup);
+        let fixed_release = Stack::new("test".to_string()).build();
+        let state = handle_initial_setup_failed(
+            state,
+            fixed_release,
+            config(),
+            ClientConfig::Test,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .expect("retry against the new release")
+        .state;
+        assert_eq!(state.status, DeploymentStatus::InitialSetup);
+        assert!(!state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .as_ref()
+            .unwrap()
+            .resources
+            .contains_key("removed"));
     }
 
     #[tokio::test]

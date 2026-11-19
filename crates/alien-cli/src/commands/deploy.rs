@@ -1355,10 +1355,7 @@ pub(crate) fn deployment_manager_http_client(
     }
 }
 
-/// What this CLI's direct setup can do, sent with every setup request. `create-keys`: it creates
-/// the stack's encryption keys (AWS KMS, Cloud KMS, Key Vault) with the admin's own credentials.
-/// A platform that does not know the field refuses a stack with keys instead.
-pub(super) const SETUP_CAPABILITIES: [&str; 1] = ["create-keys"];
+pub(super) use alien_cli_common::SETUP_CAPABILITIES;
 
 fn deployment_create_request_body(
     resolved_args: &ResolvedDeployArgs,
@@ -2502,9 +2499,31 @@ async fn deploy_task_with_environment(
     // one whose update waits for setup needs setup authority this run must
     // bring: say so now instead of waiting for a lock nobody grants.
     let has_installed_release = deployment.current_release_id.is_some();
-    let initial_setup =
-        existing_deployment_plan(&status, None, ctx.is_platform(), has_installed_release)
-            == ExistingDeploymentPlan::InitialSetup;
+    // Read through the typed record, as the rest of this command does: a renamed field fails to
+    // compile instead of silently reading as "not a direct setup".
+    let direct_setup = match deployment.runtime_metadata.as_ref() {
+        None => false,
+        Some(metadata) => match serde_json::to_value(metadata)
+            .and_then(serde_json::from_value::<alien_core::RuntimeMetadata>)
+        {
+            Ok(metadata) => {
+                metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+            }
+            Err(error) => {
+                // Treated as "not a direct setup", but said out loud: a record this CLI cannot
+                // read would otherwise send a direct install down the wrong path in silence.
+                tracing::warn!(error = %error, "could not read the deployment's runtime metadata; treating it as not a direct setup");
+                false
+            }
+        },
+    };
+    let initial_setup = existing_deployment_plan(
+        &status,
+        None,
+        ctx.is_platform(),
+        has_installed_release,
+        direct_setup,
+    ) == ExistingDeploymentPlan::InitialSetup;
     let initial_automatic_setup = initial_setup
         && deployment.stack_settings.as_ref().is_some_and(|settings| {
             settings
@@ -2529,6 +2548,7 @@ async fn deploy_task_with_environment(
         active_update,
         ctx.is_platform(),
         has_installed_release,
+        direct_setup,
     );
     if plan == ExistingDeploymentPlan::WaitForManager {
         return Err(AlienError::new(ErrorData::DeploymentFailed {
@@ -3421,7 +3441,7 @@ async fn load_release(
 }
 
 /// Loads the target and installed releases a run starts from. The target is
-/// the desired release. A setup update also needs the installed release: it
+/// the desired release. Every run also needs the installed release: it
 /// reconciles state with the manager at every step, and without the installed
 /// release that would clear it. A failed refresh has no update in flight, so
 /// the deployment has no desired release; its setup retry applies the
@@ -3443,14 +3463,19 @@ where
         Some(release_id) => Some(load(release_id.to_string()).await?),
         None => None,
     };
-    if !setup_update {
-        return Ok((target, None));
-    }
+    // Every run reports the installed release with its state. A run that left it out would
+    // clear the deployment's installed release when it reported a failed update, and a
+    // later `alien deploy` could no longer tell that an installed deployment needs a setup
+    // update rather than a runtime run.
     let installed = match current_release_id {
         Some(release_id) => Some(load(release_id.to_string()).await?),
         None => None,
     };
-    let target = target.or_else(|| installed.clone());
+    let target = if setup_update {
+        target.or_else(|| installed.clone())
+    } else {
+        target
+    };
     Ok((target, installed))
 }
 
@@ -3547,6 +3572,7 @@ fn existing_deployment_plan(
     active_update: Option<ActiveUpdate>,
     platform_mode: bool,
     has_installed_release: bool,
+    direct_setup: bool,
 ) -> ExistingDeploymentPlan {
     // Setup can fail after a release is installed. Status alone cannot grant
     // the deployment token authority to resume setup on that installation.
@@ -3569,6 +3595,21 @@ fn existing_deployment_plan(
             | DeploymentStatus::InitialSetupFailed
     ) {
         return ExistingDeploymentPlan::InitialSetup;
+    }
+    // A deployment this CLI set up directly has no setup package and no platform to grant setup
+    // authority: running `alien deploy` again is its setup update. A runtime run would repeat
+    // the refusal that asked for setup, so a failed installed deployment re-runs setup instead.
+    if !platform_mode
+        && direct_setup
+        && has_installed_release
+        && matches!(
+            status,
+            DeploymentStatus::UpdateFailed
+                | DeploymentStatus::RefreshFailed
+                | DeploymentStatus::ProvisioningFailed
+        )
+    {
+        return ExistingDeploymentPlan::SetupUpdate { retry: true };
     }
     if platform_mode {
         if matches!(
@@ -4790,6 +4831,39 @@ mod tests {
         }
     }
 
+    /// A registered direct deployment whose update or refresh failed, for example with
+    /// DEPLOYMENT_SETUP_REQUIRED, is re-run through setup by `alien deploy`; before, only a
+    /// platform deployment was, so the runtime run repeated the refusal until destroy.
+    #[test]
+    fn a_failed_direct_deployment_without_a_platform_reruns_setup() {
+        for status in [
+            DeploymentStatus::UpdateFailed,
+            DeploymentStatus::RefreshFailed,
+            DeploymentStatus::ProvisioningFailed,
+        ] {
+            assert_eq!(
+                existing_deployment_plan(&status, None, false, true, true),
+                ExistingDeploymentPlan::SetupUpdate { retry: true },
+                "{status:?}"
+            );
+            // Not a direct install, or nothing installed yet: unchanged.
+            assert_eq!(
+                existing_deployment_plan(&status, None, false, true, false),
+                ExistingDeploymentPlan::Runtime,
+                "{status:?}"
+            );
+            assert_ne!(
+                existing_deployment_plan(&status, None, false, false, true),
+                ExistingDeploymentPlan::SetupUpdate { retry: true },
+                "{status:?}"
+            );
+        }
+        assert_eq!(
+            existing_deployment_plan(&DeploymentStatus::Running, None, false, true, true),
+            ExistingDeploymentPlan::NothingToDo
+        );
+    }
+
     #[test]
     fn existing_deployment_plan_routes_each_state_to_the_lock_that_can_take_it() {
         use ExistingDeploymentPlan::*;
@@ -4802,7 +4876,7 @@ mod tests {
         ] {
             for platform_mode in [true, false] {
                 assert_eq!(
-                    existing_deployment_plan(&status, None, platform_mode, false),
+                    existing_deployment_plan(&status, None, platform_mode, false, false),
                     InitialSetup,
                     "{status:?} is still in initial setup"
                 );
@@ -4863,7 +4937,7 @@ mod tests {
         ];
         for (status, active_update, platform_mode, expected) in cases {
             assert_eq!(
-                existing_deployment_plan(&status, active_update, platform_mode, true),
+                existing_deployment_plan(&status, active_update, platform_mode, true, false),
                 expected,
                 "{status:?} with {active_update:?} (platform: {platform_mode})"
             );
@@ -4888,15 +4962,15 @@ mod tests {
                 ),
             ] {
                 assert_eq!(
-                    existing_deployment_plan(&status, active, true, true),
+                    existing_deployment_plan(&status, active, true, true, false),
                     expected
                 );
                 assert_eq!(
-                    existing_deployment_plan(&status, active, true, false),
+                    existing_deployment_plan(&status, active, true, false, false),
                     ExistingDeploymentPlan::InitialSetup
                 );
                 assert_eq!(
-                    existing_deployment_plan(&status, active, false, true),
+                    existing_deployment_plan(&status, active, false, true, false),
                     ExistingDeploymentPlan::InitialSetup
                 );
             }
@@ -5216,16 +5290,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_runs_load_only_the_desired_release() {
+    async fn runtime_runs_keep_the_installed_release_and_target_only_the_desired_one() {
         let (target, current, loaded) =
             run_releases(Some("rel_new"), Some("rel_installed"), false).await;
         assert_eq!(target.as_deref(), Some("rel_new"));
-        assert_eq!(current, None);
-        assert_eq!(loaded, ["rel_new"]);
+        assert_eq!(current.as_deref(), Some("rel_installed"));
+        assert_eq!(loaded, ["rel_new", "rel_installed"]);
 
+        // No desired release: a runtime run has no target, but still reports what is installed.
         let (target, current, loaded) = run_releases(None, Some("rel_installed"), false).await;
-        assert_eq!((target, current), (None, None));
-        assert!(loaded.is_empty());
+        assert_eq!((target, current.as_deref()), (None, Some("rel_installed")));
+        assert_eq!(loaded, ["rel_installed"]);
     }
 
     fn compute(mode: &str, machines: u32) -> ComputeSettings {

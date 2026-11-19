@@ -33,6 +33,10 @@ export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
  *
  * Limits are enforced ceilings, not scheduling hints, and are validated when the stack is
  * planned. A platform that cannot enforce them rejects the sandbox rather than ignoring them.
+ *
+ * The same declaration works on AWS, Azure and Google Cloud. On AWS a `"live"` sandbox is created
+ * and updated at runtime. On Azure and Google Cloud a `"live"` sandbox is created by setup, like a
+ * `"frozen"` one, and changes to it go through setup; the build says so.
  */
 export class Sandbox extends ResourceBuilder {
   private _config: Partial<SandboxConfig> = {}

@@ -898,3 +898,37 @@ async fn internet_sandbox_key_dependencies_respect_setup_ownership() {
         }
     }
 }
+
+/// Azure hosts the egress gateway as VMs that setup creates, so preparing an internet sandbox
+/// declares the gateway image as a Container but adds no compute cluster for it to run on.
+#[tokio::test]
+async fn azure_internet_sandbox_declares_the_gateway_without_a_compute_cluster() {
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "example.azurecr.io/agent:1".to_string(),
+            bundled_from: None,
+        })
+        .egress(SandboxEgress::Internet)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let stack = Stack::new("azint".to_string())
+        .add(sandbox, ResourceLifecycle::Frozen)
+        .build();
+    let config = DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(empty_env_snapshot())
+        .allow_frozen_changes(false)
+        .external_bindings(ExternalBindings::default())
+        .build();
+    let prepared = PreflightRunner::new()
+        .apply_mutations(stack, &StackState::new(Platform::Azure), &config)
+        .await
+        .unwrap();
+    assert!(prepared.resources.contains_key(SANDBOX_EGRESS_GATEWAY_ID));
+    assert!(prepared
+        .resources()
+        .all(|(_, entry)| entry.config.resource_type().as_ref() != "compute-cluster"));
+}

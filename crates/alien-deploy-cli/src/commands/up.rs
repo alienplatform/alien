@@ -5,6 +5,7 @@
 //!
 //! Pull model (Local, Kubernetes): installs and starts the alien-operator service.
 
+mod extension_bundles;
 mod setup_update;
 
 /// Identifies this binary and its version to the platform, as `alien-cli/<version>` does.
@@ -342,6 +343,7 @@ impl From<DeployConfigNetwork> for NetworkSettings {
 
 #[cfg(test)]
 mod tests {
+    use super::super::helm_release::check_manifest;
     #[test]
     fn a_kubernetes_install_keeps_an_earlier_saved_key_and_saves_no_new_one() {
         use super::token_to_save;
@@ -363,6 +365,201 @@ mod tests {
         MockServer,
     };
     use std::io::Write;
+
+    /// The release check reads what Helm hands its post-renderer: an object of an extension's
+    /// subchart that takes the kind and name of one of Alien's is refused, naming
+    /// the extension, even when the template renders it only on an upgrade; an object of the
+    /// extension's own passes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_extension_object_that_repeats_one_of_alien_s_is_refused_on_upgrade() {
+        if !crate::commands::helm_release::local_helm_is_4() {
+            eprintln!("skipped: the local helm is not Helm 4");
+            return;
+        }
+        let plain = Stack::new("app".to_string()).build();
+        let settings = StackSettings::default();
+        let chart = render_kubernetes_helm_chart(
+            &plain,
+            &settings,
+            "app",
+            &alien_infra::LoadedExtensions::default(),
+        )
+        .unwrap();
+        let values = write_kubernetes_helm_values(
+            chart.path(),
+            "https://manager.example.com",
+            Some(&OperatorEnrollment {
+                code: "ax_enroll_fixture",
+                audience: "https://manager.example.com",
+            }),
+            "dep_1",
+            "app",
+            "app",
+            &settings,
+            "registry.example.com/alien-operator:1.0.0",
+            None,
+            None,
+        )
+        .unwrap();
+        // A post-renderer that keeps what Helm hands it, as the release check reads it.
+        let plugins = tempfile::tempdir().unwrap();
+        let seen = plugins.path().join("seen.yaml");
+        std::fs::create_dir_all(plugins.path().join("keep")).unwrap();
+        std::fs::write(
+            plugins.path().join("keep.sh"),
+            format!("#!/bin/sh\ntee {}\n", seen.display()),
+        )
+        .unwrap();
+        std::process::Command::new("chmod")
+            .arg("+x")
+            .arg(plugins.path().join("keep.sh"))
+            .status()
+            .unwrap();
+        std::fs::write(
+            plugins.path().join("keep/plugin.yaml"),
+            format!(
+                "apiVersion: v1\ntype: postrenderer/v1\nname: keep\nversion: 0.1.0\nruntime: subprocess\nruntimeConfig:\n  platformCommand:\n    - command: {}\n",
+                plugins.path().join("keep.sh").display()
+            ),
+        )
+        .unwrap();
+        let post_rendered = |upgrade: bool| {
+            let mut helm = std::process::Command::new("helm");
+            helm.args(["template", "rel"])
+                .arg(chart.path())
+                .args(["--namespace", "ns", "--post-renderer", "keep", "-f"])
+                .arg(&values)
+                .env("HELM_PLUGINS", plugins.path());
+            if upgrade {
+                // What an upgrade reads from the installed release with `lookup`.
+                helm.args([
+                    "--is-upgrade",
+                    "--set-string",
+                    "logCollector.scope.deploymentLabelValue=dep_1",
+                    // An upgrade keeps the installed release's key; the chart refuses to make one.
+                    "--set-string",
+                    "runtime.encryption.key=0000000000000000000000000000000000000000000000000000000000000001",
+                ]);
+            }
+            let output = helm.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            std::fs::read_to_string(&seen).unwrap()
+        };
+        let alien = post_rendered(false);
+        check_manifest(&alien, &[]).expect("Alien's release repeats no object");
+        let secret = alien_helm::post_rendered_objects(&alien)
+            .unwrap()
+            .into_iter()
+            .find(|object| object.kind == "Secret")
+            .expect("Alien's chart renders a Secret");
+
+        // The chart as the modifier pass leaves it for an extension with Helm modifiers.
+        let mut stack = plain.clone();
+        stack.extensions = vec![serde_json::from_value(serde_json::json!({
+            "name": "acme", "version": "1.0.0", "digest": "sha256:0", "resourceTypes": {}
+        }))
+        .unwrap()];
+        let write = |path: &str, contents: String| {
+            let path = chart.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        };
+        let read = |path: &str| std::fs::read_to_string(chart.path().join(path)).unwrap();
+        write("files/stack.json", serde_json::to_string(&stack).unwrap());
+        write(
+            "Chart.yaml",
+            format!(
+                "{}dependencies:\n- name: acme\n  version: 0.0.0\n",
+                read("Chart.yaml")
+            ),
+        );
+        write(
+            "values.schema.json",
+            read("values.schema.json").replacen(
+                "\"properties\": {",
+                "\"properties\": {\n    \"acme\": { \"type\": \"object\" },",
+                1,
+            ),
+        );
+        write(
+            "charts/acme/Chart.yaml",
+            "apiVersion: v2\nname: acme\ntype: application\nversion: 0.0.0\n".to_string(),
+        );
+        write("charts/acme/values.yaml", "{}\n".to_string());
+        write(
+            "charts/acme/templates/acme.yaml",
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: acme\n".to_string(),
+        );
+        let extensions = super::super::helm_release::extension_subcharts(chart.path()).unwrap();
+        assert_eq!(extensions, ["acme"]);
+        check_manifest(&post_rendered(true), &extensions)
+            .expect("an object of the extension's own passes");
+
+        for gate in ["if .Release.IsUpgrade", "if index .Release \"IsUpgrade\""] {
+            write(
+                "charts/acme/templates/zz-gated.yaml",
+                format!(
+                    "{{{{- {gate} }}}}\napiVersion: v1\nkind: Secret\nmetadata:\n  name: {}\n{{{{- end }}}}\n",
+                    secret.name
+                ),
+            );
+            check_manifest(&post_rendered(false), &extensions)
+                .expect("an install renders no second Secret");
+            let refusal = check_manifest(&post_rendered(true), &extensions).unwrap_err();
+            assert!(
+                refusal.contains(&format!(
+                    "extension 'acme' renders Secret {} (",
+                    secret.name
+                )) && refusal.contains("app/charts/acme/templates/zz-gated.yaml")
+                    && refusal.contains("app/templates/")
+                    && refusal.ends_with("collide whatever namespace each names"),
+                "{gate}: {refusal}"
+            );
+        }
+    }
+
+    /// The chart the deploy CLI installs carries the stack's Helm modifiers: an extension the
+    /// stack lists whose hooks module this process hasn't loaded stops the install.
+    #[tokio::test]
+    async fn the_installed_chart_runs_the_stack_s_helm_modifiers() {
+        let mut stack = Stack::new("app".to_string())
+            .add(
+                alien_core::Storage::new("data".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let settings = StackSettings::default();
+        let chart = render_kubernetes_helm_chart(
+            &stack,
+            &settings,
+            "app",
+            &alien_infra::LoadedExtensions::default(),
+        )
+        .unwrap();
+        assert!(chart.path().join("Chart.yaml").exists());
+
+        stack.extensions = vec![serde_json::from_value(serde_json::json!({
+            "name": "acme", "version": "1.0.0", "digest": "sha256:0", "resourceTypes": {}
+        }))
+        .unwrap()];
+        let error = render_kubernetes_helm_chart(
+            &stack,
+            &settings,
+            "app",
+            &alien_infra::LoadedExtensions::default(),
+        )
+        .unwrap_err();
+        let chain = format!("{error:?}");
+        assert!(
+            error.message.contains("extension") && chain.contains("extension 'acme' can't run"),
+            "{chain}"
+        );
+    }
 
     #[tokio::test]
     async fn setup_delete_acquire_sends_the_platform_setup_method() {
@@ -409,9 +606,17 @@ mod tests {
                 .await;
             let client = create_manager_client("setup-token", &server.base_url()).unwrap();
             // Stop at acquire, before any provider resources are accessed.
-            let error = push_deletion(&client, "dep_demo", platform, kubernetes_client_config())
-                .await
-                .expect_err("the mock stops teardown at acquire");
+            let error = push_deletion(
+                &client,
+                "dep_demo",
+                platform,
+                kubernetes_client_config(),
+                false,
+                &server.base_url(),
+                "setup-token",
+            )
+            .await
+            .expect_err("the mock stops teardown at acquire");
             acquire.assert_hits_async(1).await;
             assert!(
                 error.to_string().contains("stop after acquire"),
@@ -1374,6 +1579,203 @@ mod tests {
         unlock.assert_hits_async(1).await;
     }
 
+    /// Direct setup checks every extension bundle its release pins before the first step, so
+    /// a bundle it refuses runs nothing and the lock is released.
+    #[tokio::test]
+    async fn setup_refuses_an_extension_bundle_before_any_step_runs() {
+        let server = MockServer::start_async().await;
+        let mut detail = installed_deployment("pending", Some("rel_target"));
+        detail["deploymentProtocolVersion"] =
+            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION.into();
+        detail["currentReleaseId"] = serde_json::Value::Null;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(detail);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/acquire");
+                then.status(200).json_body(serde_json::json!({"deployments": [{
+                "deployment": {"id": "dep_demo", "status": "pending", "retryRequested": false},
+                "executionClaim": {"operationId": "op_ext", "attemptId": "attempt_1"}
+            }]}));
+            })
+            .await;
+        let mut target = mock_release("rel_target");
+        target["stack"]["machines"] = target["stack"]["aws"].take();
+        // A digest no bundle can match is refused before anything is downloaded or written.
+        target["stack"]["machines"]["extensions"] = serde_json::json!([{
+            "name": "acme", "version": "1.0.0", "digest": "sha256:not-a-digest", "resourceTypes": {}
+        }]);
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/releases/rel_target");
+                then.status(200).json_body(target);
+            })
+            .await;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile");
+                then.status(200);
+            })
+            .await;
+        let bundles = server
+            .mock_async(|when, then| {
+                when.path_contains("/v1/extensions/bundles/");
+                then.status(500);
+            })
+            .await;
+        let unlock = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            run_machines_setup(&server),
+        )
+        .await
+        .expect("setup finishes")
+        .expect_err("the bundle is refused");
+
+        assert!(
+            format!("{error:?}").contains("Extension 'acme'"),
+            "{error:?}"
+        );
+        reconcile.assert_hits_async(0).await;
+        bundles.assert_hits_async(0).await;
+        unlock.assert_hits_async(1).await;
+    }
+
+    /// Direct teardown checks every extension bundle the releases pin before anything runs,
+    /// so a bundle it refuses deletes nothing and takes no lock.
+    #[tokio::test]
+    async fn teardown_refuses_an_extension_bundle_before_any_step_runs() {
+        let server = MockServer::start_async().await;
+        let mut teardown = installed_deployment("teardown-required", None);
+        teardown["currentReleaseId"] = "rel_ext".into();
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(teardown);
+            })
+            .await;
+        let mut release = mock_release("rel_ext");
+        release["stack"]["machines"] = release["stack"]["aws"].take();
+        // A digest no bundle can match is refused before anything is downloaded or written.
+        release["stack"]["machines"]["extensions"] = serde_json::json!([{
+            "name": "acme", "version": "1.0.0", "digest": "sha256:not-a-digest", "resourceTypes": {}
+        }]);
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/releases/rel_ext");
+                then.status(200).json_body(release);
+            })
+            .await;
+        let lock_or_step = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path_contains("/v1/sync/");
+                then.status(500);
+            })
+            .await;
+        let bundles = server
+            .mock_async(|when, then| {
+                when.path_contains("/v1/extensions/bundles/");
+                then.status(500);
+            })
+            .await;
+        let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+
+        let error = push_deletion(
+            &client,
+            "dep_demo",
+            Platform::Machines,
+            ClientConfig::Machines,
+            false,
+            &server.base_url(),
+            "setup-token",
+        )
+        .await
+        .expect_err("the bundle is refused");
+
+        assert!(
+            format!("{error:?}").contains("Extension 'acme'"),
+            "{error:?}"
+        );
+        lock_or_step.assert_hits_async(0).await;
+        bundles.assert_hits_async(0).await;
+    }
+
+    /// The chart the setup CLI installs renders a custom type with its extension's emitter, from
+    /// the bundle the manager serves.
+    #[tokio::test]
+    async fn the_kubernetes_chart_runs_the_extensions_helm_emitter() {
+        let bundle = alien_infra::extension_bundle::testing::TestBundle::with_hooks(
+            "acme",
+            "1.0.0",
+            r#"[{"name":"emit-zone","kind":"helmEmitter","resourceType":"acme/zone","platform":"kubernetes"}]"#,
+            &[],
+        );
+        let mut manifest = bundle.manifest.clone();
+        manifest.resource_types = serde_json::from_value(serde_json::json!({
+            "acme/zone": {
+                "lifecycles": ["frozen"], "holdsData": false,
+                "setup": {"cloudformation": [], "terraform": [], "helm": ["kubernetes"], "importers": []},
+                "controllerPlatforms": [], "permissionSets": [], "link": {"permissionSets": []},
+                "schemas": {"config": {}, "outputs": {}}
+            }
+        }))
+        .unwrap();
+        let mut stack: Stack = serde_json::from_value(serde_json::json!({
+            "id": "app",
+            "resources": {"zone": {
+                "config": {"type": "acme/zone", "id": "zone"},
+                "lifecycle": "frozen",
+                "dependencies": []
+            }}
+        }))
+        .unwrap();
+        stack.extensions = vec![manifest];
+        let server = MockServer::start_async().await;
+        let core = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path(format!("/v1/extensions/bundles/{}", bundle.manifest.digest));
+                then.status(200).body(&bundle.zip);
+            })
+            .await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let cache = alien_infra::extension_bundle::BundleCache::new(cache_dir.path());
+
+        let extensions =
+            extension_bundles::extensions_in(&cache, &server.base_url(), "dep-token", &stack)
+                .await
+                .unwrap();
+        let rendered =
+            render_kubernetes_helm_chart(&stack, &StackSettings::default(), "demo", &extensions);
+
+        core.assert_hits_async(1).await;
+        // The module answers with no fragment, which the chart can't read: the emitter ran.
+        let Err(error) = rendered else {
+            panic!("the chart rendered with an emitter that answers nothing")
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("the output of the Helm emitter of extension 'acme' for acme/zone on kubernetes did not read"),
+            "{message}"
+        );
+    }
+
     /// A manager can remove the record on the `Deleted` checkpoint and still answer 500 (work
     /// after its commit failed). The final reconcile then finds the record gone, so the
     /// teardown that finished is reported as finished.
@@ -1444,6 +1846,7 @@ mod tests {
             })
             .await;
         let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+        let manager_url = server.base_url();
 
         // Once the failing commit is answered, the record is gone. The
         // watcher stops with the deletion, so a deletion that fails before
@@ -1453,6 +1856,9 @@ mod tests {
             "dep_demo",
             Platform::Machines,
             ClientConfig::Machines,
+            false,
+            &manager_url,
+            "setup-token",
         );
         let result = tokio::time::timeout(std::time::Duration::from_secs(60), async {
             tokio::pin!(deletion);
@@ -1473,6 +1879,7 @@ mod tests {
         .expect("the deletion finishes within a minute");
 
         result.expect("a finished teardown whose record is gone must succeed");
+        // The read before the acquire, and the read under the lock (policy and state, reused).
         deployment.assert_hits_async(2).await;
         acquire.assert_hits_async(1).await;
         assert!(progress.hits_async().await >= 1);
@@ -1575,8 +1982,25 @@ mod tests {
         client_config: ClientConfig,
         protocol: u32,
     ) -> (Result<()>, usize, usize) {
+        let (result, kept, changed, _) =
+            run_teardown_with_policy(platform, client_config, protocol, None, false).await;
+        (result, kept, changed)
+    }
+
+    /// The same teardown against a record that carries a deletion policy, run with `erase_data`;
+    /// also returns how often the lock was given back.
+    async fn run_teardown_with_policy(
+        platform: Platform,
+        client_config: ClientConfig,
+        protocol: u32,
+        policy: Option<&str>,
+        erase_data: bool,
+    ) -> (Result<()>, usize, usize, usize) {
         let server = MockServer::start_async().await;
-        let record = recorded_deployment("teardown-required", platform, protocol, None);
+        let mut record = recorded_deployment("teardown-required", platform, protocol, None);
+        if let Some(policy) = policy {
+            record["runtimeMetadata"] = serde_json::json!({"deletionPolicy": policy});
+        }
         server
             .mock_async(|when, then| {
                 when.method(httpmock::Method::GET)
@@ -1601,7 +2025,7 @@ mod tests {
             serde_json::json!({"success": true, "current": null}),
         )
         .await;
-        server
+        let release = server
             .mock_async(|when, then| {
                 when.method(httpmock::Method::POST).path("/v1/sync/release");
                 then.status(200);
@@ -1610,11 +2034,68 @@ mod tests {
         let client = create_manager_client("setup-token", &server.base_url()).unwrap();
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            push_deletion(&client, "dep_demo", platform, client_config),
+            push_deletion(
+                &client,
+                "dep_demo",
+                platform,
+                client_config,
+                erase_data,
+                &server.base_url(),
+                "setup-token",
+            ),
         )
         .await
         .expect("teardown finishes");
-        (result, kept.hits_async().await, changed.hits_async().await)
+        (
+            result,
+            kept.hits_async().await,
+            changed.hits_async().await,
+            release.hits_async().await,
+        )
+    }
+
+    /// `push_deletion` hands its caller's erase choice to the acquire: against a recorded retain
+    /// a run that asks for erase is refused with the lock given back, and a run that matches the
+    /// record is not refused. Hard-coding the flag in `run_setup_deletion` fails the first.
+    #[tokio::test]
+    async fn push_deletion_passes_the_erase_choice_to_the_acquire() {
+        let protocol = alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION;
+        for (policy, erase, refused_text) in [
+            ("retain", true, "requested with data retained"),
+            ("erase", false, "requested with data erase"),
+        ] {
+            let (result, _, _, releases) = run_teardown_with_policy(
+                Platform::Gcp,
+                gcp_client_config(),
+                protocol,
+                Some(policy),
+                erase,
+            )
+            .await;
+            let error = result.expect_err("a changed policy is refused");
+            assert!(
+                format!("{error:?}").contains(refused_text),
+                "{policy}/{erase}: {error:?}"
+            );
+            assert_eq!(releases, 1, "{policy}/{erase}: the lock is given back");
+        }
+        for (policy, erase) in [("erase", true), ("retain", false)] {
+            let (result, _, _, _) = run_teardown_with_policy(
+                Platform::Gcp,
+                gcp_client_config(),
+                protocol,
+                Some(policy),
+                erase,
+            )
+            .await;
+            if let Err(error) = result {
+                let text = format!("{error:?}");
+                assert!(
+                    !text.contains("cannot be changed"),
+                    "{policy}/{erase}: a matching run is not refused: {text}"
+                );
+            }
+        }
     }
 
     /// An older manager must acknowledge retention support before teardown executes.
@@ -3165,13 +3646,174 @@ platform = "aws"
         initialize.assert_async().await;
     }
 
+    #[tokio::test]
+    async fn initialize_declares_the_setup_capabilities_on_every_key_cloud() {
+        for platform in ["aws", "gcp", "azure"] {
+            initialize_declares_the_setup_capabilities(platform).await;
+        }
+    }
+
+    /// A Kubernetes or Local install is pull: its initialize request must declare no
+    /// capabilities, whatever the stack holds.
+    #[tokio::test]
+    async fn initialize_declares_no_setup_capabilities_for_pull_platforms() {
+        for platform in ["kubernetes", "local"] {
+            let server = MockServer::start_async().await;
+            let base_url = server.base_url();
+            let _resolve = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET).path("/v1/resolve");
+                    then.status(200)
+                        .json_body(serde_json::json!({"managerUrl": base_url}));
+                })
+                .await;
+            let initialize = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST)
+                        .path("/v1/initialize")
+                        .json_body_partial(r#"{"name":"subdomain-app"}"#)
+                        .matches(|req| {
+                            let body: serde_json::Value =
+                                serde_json::from_slice(req.body.as_deref().unwrap_or_default())
+                                    .unwrap_or_default();
+                            body.get("setupCapabilities")
+                                .and_then(|v| v.as_array())
+                                .map_or(true, |v| v.is_empty())
+                        });
+                    then.status(409).json_body(serde_json::json!({
+                        "code": "STOP_AFTER_INITIALIZE",
+                        "message": "stop after initialize",
+                        "retryable": false,
+                        "internal": false
+                    }));
+                })
+                .await;
+            let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+            writeln!(
+                file,
+                r#"
+name = "subdomain-app"
+platform = "{platform}"
+"#
+            )
+            .expect("config should be written");
+            let args = UpArgs::parse_from([
+                "deploy",
+                "--config",
+                file.path().to_str().expect("temp path should be UTF-8"),
+                "--base-url",
+                &base_url,
+                "--manager-url",
+                &base_url,
+                "--token",
+                "test-capabilities-token",
+            ]);
+            let error = up_command(args, None)
+                .await
+                .expect_err("the mock stops the command after initialize");
+            assert!(
+                error.to_string().contains("stop after initialize"),
+                "{platform}: {error:?}"
+            );
+            initialize.assert_async().await;
+        }
+    }
+
+    async fn initialize_declares_the_setup_capabilities(platform: &str) {
+        let server = MockServer::start_async().await;
+        let base_url = server.base_url();
+        let resolve = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/v1/resolve");
+                then.status(200)
+                    .json_body(serde_json::json!({"managerUrl": base_url}));
+            })
+            .await;
+        // Answer only an initialize request that declares `create-keys`, the one a
+        // platform needs before it admits a stack with encryption keys, and
+        // stop there so nothing is tracked or deployed.
+        let initialize = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/initialize")
+                    .json_body_partial(
+                        r#"{"name":"subdomain-app","setupCapabilities":["create-keys"]}"#,
+                    );
+                then.status(409).json_body(serde_json::json!({
+                    "code": "STOP_AFTER_INITIALIZE",
+                    "message": "stop after initialize",
+                    "retryable": false,
+                    "internal": false
+                }));
+            })
+            .await;
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+name = "subdomain-app"
+platform = "{platform}"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+            "--base-url",
+            &base_url,
+            "--manager-url",
+            &base_url,
+            "--token",
+            "test-capabilities-token",
+        ]);
+        let error = up_command(args, None)
+            .await
+            .expect_err("the mock stops the command after initialize");
+
+        assert!(
+            error.to_string().contains("stop after initialize"),
+            "{platform}: {error:?}"
+        );
+        resolve.assert_async().await;
+        initialize.assert_async().await;
+    }
+
+    /// Only a run that performs the setup declares it can create keys; a pull-model install
+    /// only starts a local Operator.
+    #[test]
+    fn setup_capabilities_are_declared_only_by_a_push_setup_run() {
+        let settings = |model| StackSettings {
+            deployment_model: model,
+            ..Default::default()
+        };
+        assert_eq!(
+            setup_capabilities_for(Platform::Gcp, &settings(DeploymentModel::Push)),
+            vec!["create-keys".to_string()]
+        );
+        assert!(setup_capabilities_for(Platform::Gcp, &settings(DeploymentModel::Pull)).is_empty());
+        // Settings default to push, but the manager makes these pull.
+        for platform in [Platform::Kubernetes, Platform::Local] {
+            assert!(
+                setup_capabilities_for(platform, &settings(DeploymentModel::Push)).is_empty(),
+                "{platform}"
+            );
+        }
+    }
+
     /// The rendered install holds the one-use code, and no deployment token
     /// reaches the release Secret, its values or the Operator.
     #[test]
     fn kubernetes_install_carries_an_enrollment_code_and_no_token() {
         let stack = Stack::new("orders".to_string()).build();
-        let chart = render_kubernetes_helm_chart(&stack, &StackSettings::default(), "orders-eu")
-            .expect("chart renders");
+        let chart = render_kubernetes_helm_chart(
+            &stack,
+            &StackSettings::default(),
+            "orders-eu",
+            &alien_infra::LoadedExtensions::default(),
+        )
+        .expect("chart renders");
         let values = write_kubernetes_helm_values(
             chart.path(),
             "https://manager.example.test",
@@ -3282,6 +3924,16 @@ platform = "aws"
         status: u16,
         body: serde_json::Value,
     ) -> (Result<()>, Option<serde_json::Value>, usize) {
+        let stack = mock_release("rel_k8s")["stack"]["aws"].take();
+        kubernetes_install_of(stack, status, body).await
+    }
+
+    /// [`kubernetes_install_with_code_answer`] for a release whose Kubernetes stack is `stack`.
+    async fn kubernetes_install_of(
+        stack: serde_json::Value,
+        status: u16,
+        body: serde_json::Value,
+    ) -> (Result<()>, Option<serde_json::Value>, usize) {
         use std::os::unix::fs::PermissionsExt;
         let server = MockServer::start_async().await;
         let mut deployment = installed_deployment("running", Some("rel_k8s"));
@@ -3299,7 +3951,7 @@ platform = "aws"
             })
             .await;
         let mut release = mock_release("rel_k8s");
-        release["stack"]["kubernetes"] = release["stack"]["aws"].take();
+        release["stack"] = serde_json::json!({ "kubernetes": stack });
         server
             .mock_async(|when, then| {
                 when.method(httpmock::Method::GET)
@@ -3335,9 +3987,11 @@ platform = "aws"
             &client,
             &args,
             &server.base_url(),
+            "ax_dg_fixture",
             "dep_demo",
             "orders-eu",
             &StackSettings::default(),
+            None,
             None,
         )
         .await;
@@ -3345,6 +3999,107 @@ platform = "aws"
             .ok()
             .map(|contents| serde_json::from_str(&contents).unwrap());
         (result, values, code.hits_async().await)
+    }
+
+    /// A refusal that carries no check's reason prints the preflights' own message.
+    #[test]
+    fn kubernetes_preflights_refusal_without_reasons_keeps_its_message() {
+        let error = preflights_refused(AlienError::new(
+            alien_preflights::error::ErrorData::ValidationFailed {
+                error_count: 1,
+                warning_count: 0,
+                results: Vec::new(),
+            },
+        ));
+        assert_eq!(
+            error.message,
+            "Configuration error: The release's Kubernetes stack failed its preflights: Validation failed with 1 errors and 0 warnings"
+        );
+    }
+
+    /// The refusal the CLI prints quotes an extension's name and resource type with their
+    /// control characters escaped, so the terminal shows the text the manifest holds.
+    #[tokio::test]
+    async fn kubernetes_preflights_refusal_prints_control_characters_escaped() {
+        let manifest: alien_core::ExtensionManifest = serde_json::from_value(serde_json::json!({
+            "name": "acme\u{1b}[2J",
+            "version": "1.0.0",
+            "digest": "sha256:0",
+            "resourceTypes": { "acme\u{1b}[31m/zone": {
+                "lifecycles": ["frozen"],
+                "holdsData": false,
+                "setup": { "cloudformation": [], "terraform": [], "helm": ["kubernetes"], "importers": [] },
+                "controllerPlatforms": [],
+                "permissionSets": [],
+                "link": { "permissionSets": [] },
+                "schemas": { "config": { "type": "object" }, "outputs": { "type": "object" } }
+            } }
+        }))
+        .unwrap();
+        let mut stack = Stack::new("orders".to_string()).build();
+        stack.extensions = vec![manifest];
+
+        let error = alien_preflights::runner::PreflightRunner::new()
+            .run_template_preflights_on(
+                &stack,
+                Platform::Kubernetes,
+                alien_preflights::ClusterCloud::of_target(None),
+            )
+            .await
+            .expect_err("the preflights refuse the stack");
+        let printed = preflights_refused(error).to_string();
+
+        assert!(!printed.contains('\u{1b}'), "{printed:?}");
+        assert!(
+            printed.contains("Extension name 'acme\\u{1b}[2J'"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("resource type 'acme\\u{1b}[31m/zone'"),
+            "{printed}"
+        );
+    }
+
+    /// A Kubernetes stack the template preflights refuse is refused before the
+    /// CLI asks for an enrollment code or loads an extension: Helm never runs,
+    /// and no extension hook renders anything.
+    #[tokio::test]
+    async fn kubernetes_deploy_of_a_stack_the_preflights_refuse_asks_for_nothing() {
+        // `acme/zone` is Live, and its extension allows it only Frozen.
+        let mut manifest =
+            alien_infra::extension_bundle::testing::TestBundle::new("acme", "1.0.0", &[]).manifest;
+        manifest.resource_types = serde_json::from_value(serde_json::json!({ "acme/zone": {
+            "lifecycles": ["frozen"],
+            "holdsData": false,
+            "setup": { "cloudformation": [], "terraform": [], "helm": ["kubernetes"], "importers": [] },
+            "controllerPlatforms": [],
+            "permissionSets": [],
+            "link": { "permissionSets": [] },
+            "schemas": { "config": { "type": "object" }, "outputs": { "type": "object" } }
+        } }))
+        .unwrap();
+        let zone = alien_core::CustomResource::from_untagged(
+            "acme/zone",
+            serde_json::json!({ "id": "zone" }),
+        )
+        .unwrap();
+        let mut stack = Stack::new("orders".to_string())
+            .add(zone, alien_core::ResourceLifecycle::Live)
+            .build();
+        stack.extensions = vec![manifest];
+
+        let (result, values, hits) = kubernetes_install_of(
+            serde_json::to_value(&stack).unwrap(),
+            200,
+            serde_json::json!({ "code": "ax_enroll_fixture", "managerAudience": "aud" }),
+        )
+        .await;
+
+        let error = result.expect_err("the preflights refuse the stack");
+        // The reason reaches the message the CLI prints, not only the error's context.
+        assert!(error.message.contains("acme/zone"), "{}", error.message);
+        assert_eq!(hits, 0, "no enrollment code is issued");
+        assert!(values.is_none(), "helm must not run");
     }
 
     /// Running `deploy` again with a group key, after the Operator enrolled,
@@ -3404,8 +4159,13 @@ platform = "aws"
     #[test]
     fn kubernetes_helm_values_leave_the_encryption_key_to_the_chart() {
         let stack = Stack::new("orders".to_string()).build();
-        let chart = render_kubernetes_helm_chart(&stack, &StackSettings::default(), "orders-eu")
-            .expect("chart renders");
+        let chart = render_kubernetes_helm_chart(
+            &stack,
+            &StackSettings::default(),
+            "orders-eu",
+            &alien_infra::LoadedExtensions::default(),
+        )
+        .expect("chart renders");
         for run in ["first run", "second run"] {
             let values = write_kubernetes_helm_values(
                 chart.path(),
@@ -4524,7 +5284,7 @@ async fn up_command_with(
 
     let install_context_platform = base_platform.unwrap_or(platform);
     let install_context_platform_str = install_context_platform.as_str().to_string();
-    let (manager_url, install_management_config) =
+    let (manager_url, install_management_config, install_management_external_id) =
         if requires_install_context(install_context_platform) {
             if print_progress {
                 output::info("Resolving deployment install context via platform API...");
@@ -4541,10 +5301,14 @@ async fn up_command_with(
             // single-account setup (where the deployment account *is* the
             // managing account and no cross-account access is involved);
             // downstream code is already `Option<ManagementConfig>`-aware.
-            (context.manager_url, context.management_config)
+            (
+                context.manager_url,
+                context.management_config,
+                context.management_external_id,
+            )
         } else {
             match resolved.manager_url {
-                Some(url) => (url, None),
+                Some(url) => (url, None, None),
                 None => {
                     if print_progress {
                         output::info("Discovering manager via platform API...");
@@ -4555,7 +5319,11 @@ async fn up_command_with(
                         &install_context_platform_str,
                     )
                     .await?;
-                    (context.manager_url, context.management_config)
+                    (
+                        context.manager_url,
+                        context.management_config,
+                        context.management_external_id,
+                    )
                 }
             }
         };
@@ -4869,6 +5637,7 @@ async fn up_command_with(
             &manager_url,
             &effective_token,
             install_management_config.clone(),
+            install_management_external_id.clone(),
             &args.network,
             None,
             setup_revision,
@@ -4995,6 +5764,7 @@ async fn up_command_with(
                 &name,
                 &stack_settings,
                 platform,
+                base_platform,
                 embedded_config,
                 public_endpoints.as_ref(),
             )
@@ -5058,6 +5828,7 @@ async fn up_command_with(
                     &manager_url,
                     &effective_token,
                     install_management_config,
+                    install_management_external_id,
                     &args.network,
                     Some(on_progress),
                     setup_revision,
@@ -5647,6 +6418,7 @@ async fn run_tracked_setup_update(
         base_platform,
         manager_url,
         &token,
+        None,
         None,
         &args.network,
         None,
@@ -6605,6 +7377,9 @@ fn read_line_with_echo() -> Result<String> {
 struct ManagerInstallContext {
     manager_url: String,
     management_config: Option<ManagementConfig>,
+    /// The ExternalId the platform issued for the token's deployment group, which a setup run
+    /// writes into the trust of the roles it creates for the managing role.
+    management_external_id: Option<alien_core::ManagementExternalId>,
 }
 
 /// Discover the manager URL and platform-managed install context via the platform API.
@@ -6677,6 +7452,8 @@ async fn discover_manager_install_context(
     #[serde(rename_all = "camelCase")]
     struct ResolveInstallContext {
         management_config: ManagementConfig,
+        #[serde(default)]
+        management_external_id: Option<alien_core::ManagementExternalId>,
     }
 
     let resolved: ResolveResponse =
@@ -6687,11 +7464,17 @@ async fn discover_manager_install_context(
                 message: "Failed to parse /v1/resolve response".to_string(),
             })?;
 
+    let (management_config, management_external_id) = match resolved.install_context {
+        Some(context) => (
+            Some(context.management_config),
+            context.management_external_id,
+        ),
+        None => (None, None),
+    };
     Ok(ManagerInstallContext {
         manager_url: resolved.manager_url,
-        management_config: resolved
-            .install_context
-            .map(|context| context.management_config),
+        management_config,
+        management_external_id,
     })
 }
 
@@ -7168,6 +7951,23 @@ fn kubernetes_resource_prefix(token: &str, name: &str) -> String {
     format!("k{}", hex::encode(&hash.finalize()[..12]))
 }
 
+/// What this run's setup can do. A pull-model install only starts an Operator (Helm for
+/// Kubernetes, a local process for Local), which does not create keys, so it declares nothing
+/// and a platform keeps refusing a stack with keys. The platform decides first: the manager
+/// makes Kubernetes pull whatever the settings say, and the settings alone say push for a
+/// Kubernetes run before this CLI forces pull later.
+fn setup_capabilities_for(platform: Platform, stack_settings: &StackSettings) -> Vec<String> {
+    if matches!(platform, Platform::Kubernetes | Platform::Local)
+        || stack_settings.deployment_model != DeploymentModel::Push
+    {
+        return Vec::new();
+    }
+    alien_cli_common::SETUP_CAPABILITIES
+        .iter()
+        .map(|capability| capability.to_string())
+        .collect()
+}
+
 async fn initialize_deployment(
     client: &ServerClient,
     token: &str,
@@ -7202,6 +8002,9 @@ async fn initialize_deployment(
         // The Kubernetes CLI installs the Operator with Helm. Runtime work
         // starts inside that Operator, so this must use Helm's setup handoff.
         setup_method: (platform == Platform::Kubernetes).then(|| "helm".to_string()),
+        // Without this a platform refuses a stack with encryption keys. Only a run that
+        // performs the setup itself (push) can create them.
+        setup_capabilities: setup_capabilities_for(platform, stack_settings),
         // Lets the manager show the exact `helm uninstall` command at teardown.
         helm_release,
     };
@@ -7284,6 +8087,7 @@ async fn run_pull_model(
     deployment_name: &str,
     stack_settings: &StackSettings,
     platform: Platform,
+    base_platform: Option<Platform>,
     embedded_config: Option<&DeployCliConfig>,
     public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
@@ -7294,9 +8098,11 @@ async fn run_pull_model(
                 client,
                 args,
                 manager_url,
+                token,
                 deployment_id,
                 deployment_name,
                 stack_settings,
+                base_platform,
                 public_endpoints,
             )
             .await
@@ -7560,13 +8366,27 @@ async fn run_kubernetes_pull_model(
     client: &ServerClient,
     args: &UpArgs,
     manager_url: &str,
+    token: &str,
     deployment_id: &str,
     deployment_name: &str,
     stack_settings: &StackSettings,
+    base_platform: Option<Platform>,
     public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
     output::info("Kubernetes platform detected — installing alien-operator with Helm.");
     let (stack, resource_prefix) = fetch_kubernetes_release_stack(client, deployment_id).await?;
+    // Before the enrollment code and the extensions: rendering the chart runs the extensions'
+    // hooks, which may run only on a stack the preflights accept. A rerun without
+    // --base-platform does not know the cluster's cloud, so it checks the stack as the chart
+    // every Kubernetes target installs.
+    alien_preflights::runner::PreflightRunner::new()
+        .run_template_preflights_on(
+            &stack,
+            Platform::Kubernetes,
+            alien_preflights::ClusterCloud::of_target(base_platform),
+        )
+        .await
+        .map_err(preflights_refused)?;
     let HelmRelease {
         name: release,
         namespace,
@@ -7602,7 +8422,19 @@ async fn run_kubernetes_pull_model(
         }
     };
 
-    let chart_dir = render_kubernetes_helm_chart(&stack, stack_settings, deployment_name)?;
+    let extensions = extension_bundles::extensions_for(manager_url, token, &stack).await?;
+    let chart_dir = alien_infra::run_hooks({
+        let (stack, stack_settings, deployment_name) = (
+            stack.clone(),
+            stack_settings.clone(),
+            deployment_name.to_string(),
+        );
+        move || render_kubernetes_helm_chart(&stack, &stack_settings, &deployment_name, &extensions)
+    })
+    .await
+    .context(ErrorData::ConfigurationError {
+        message: "The stack's extensions stopped before the Helm chart was ready".to_string(),
+    })??;
     let values_file = write_kubernetes_helm_values(
         chart_dir.path(),
         manager_url,
@@ -7640,6 +8472,32 @@ async fn run_kubernetes_pull_model(
     output::info(&format!("Deployment ID: {}", deployment_id));
 
     Ok(())
+}
+
+/// The preflights' refusal of a release's Kubernetes stack, with the reason of each failed check
+/// in the message the CLI prints.
+fn preflights_refused(
+    error: AlienError<alien_preflights::error::ErrorData>,
+) -> AlienError<ErrorData> {
+    let reasons = match &error.error {
+        Some(alien_preflights::error::ErrorData::ValidationFailed { results, .. }) => results
+            .iter()
+            .flat_map(|result| result.errors.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join("; "),
+        _ => String::new(),
+    };
+    let reasons = if reasons.is_empty() {
+        error.message.clone()
+    } else {
+        reasons
+    };
+    error.context(ErrorData::ConfigurationError {
+        message: format!(
+            "The release's Kubernetes stack failed its preflights: {}",
+            alien_preflights::escape_for_display(&reasons)
+        ),
+    })
 }
 
 /// The Helm release `up` installs the Operator as. Registration reports it, so
@@ -7736,6 +8594,7 @@ fn render_kubernetes_helm_chart(
     stack: &Stack,
     stack_settings: &StackSettings,
     deployment_name: &str,
+    extensions: &alien_infra::LoadedExtensions,
 ) -> Result<tempfile::TempDir> {
     let chart_dir =
         tempfile::tempdir()
@@ -7743,14 +8602,18 @@ fn render_kubernetes_helm_chart(
             .context(ErrorData::ConfigurationError {
                 message: "Failed to create temporary Helm chart directory".to_string(),
             })?;
-    let registry = alien_helm::HelmRegistry::built_in();
+    let registries = alien_infra::DeploymentRegistries::for_stack(
+        stack,
+        &alien_infra::HostRegistrations::NONE,
+        extensions,
+    );
     let mut helm_settings = stack_settings.clone();
     // Helm charts install the Kubernetes operator, which always polls the manager.
     helm_settings.deployment_model = DeploymentModel::Pull;
-    let chart = alien_helm::generate_helm_chart(
+    let mut chart = alien_helm::generate_helm_chart(
         stack,
         alien_helm::HelmOptions {
-            registry: &registry,
+            registry: &registries.helm,
             stack_settings: helm_settings,
             chart_name: sanitize_kubernetes_dns_label(deployment_name),
         },
@@ -7760,6 +8623,12 @@ fn render_kubernetes_helm_chart(
             message: format!("Failed to generate Kubernetes Helm chart: {error}"),
         })
     })?;
+    registries
+        .modifiers
+        .modify_helm(&mut chart)
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to apply the stack's extensions to the Helm chart".to_string(),
+        })?;
 
     for (relative_path, contents) in chart.files {
         let path = chart_dir.path().join(relative_path);
@@ -7852,7 +8721,7 @@ fn write_kubernetes_helm_values(
     Ok(values_path)
 }
 
-async fn helm_upgrade_install(
+pub(crate) async fn helm_upgrade_install(
     helm: &str,
     chart_dir: &Path,
     values_file: &Path,
@@ -7873,7 +8742,7 @@ async fn helm_upgrade_install(
         .arg(values_file)
         .arg("--wait")
         .arg("--timeout")
-        .arg("300s");
+        .arg("15m");
 
     if let Some(kubeconfig) = kubeconfig {
         cmd.env("KUBECONFIG", kubeconfig);
@@ -7882,22 +8751,30 @@ async fn helm_upgrade_install(
         cmd.arg("--kube-context").arg(context);
     }
 
-    let output = cmd
-        .output()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to execute helm. Ensure Helm is installed and available on PATH."
-                .to_string(),
-        })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!("Helm upgrade/install failed: {stderr}"),
-        }));
+    let check = super::helm_release::add_release_check(&mut cmd, chart_dir).await?;
+    let result = async {
+        let output =
+            cmd.output()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message:
+                        "Failed to execute helm. Ensure Helm is installed and available on PATH."
+                            .to_string(),
+                })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!("Helm upgrade/install failed: {stderr}"),
+            }));
+        }
+        Ok(())
     }
-
-    Ok(())
+    .await;
+    match &check {
+        Some(check) => check.explain(result),
+        None => result,
+    }
 }
 
 fn split_image_tag(image: &str) -> Result<(String, String)> {
@@ -8129,26 +9006,28 @@ async fn run_push_model(
     manager_url: &str,
     deployment_token: &str,
     management_config: Option<ManagementConfig>,
+    management_external_id: Option<alien_core::ManagementExternalId>,
     network_args: &NetworkArgs,
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
     setup_revision: Option<&str>,
 ) -> Result<SetupRunOutcome> {
     let client_config = setup_client_config(base_platform.unwrap_or(platform)).await?;
 
-    push_initial_setup(
-        client,
-        deployment_id,
-        platform,
-        base_platform,
-        client_config,
-        management_config,
-        manager_url,
-        deployment_token,
-        Some(network_args),
-        on_progress,
-        setup_revision,
-    )
-    .await
+    push_initial_setup_targeted()
+        .client(client)
+        .deployment_id(deployment_id)
+        .platform(platform)
+        .maybe_base_platform(base_platform)
+        .client_config(client_config)
+        .maybe_management_config(management_config)
+        .maybe_management_external_id(management_external_id)
+        .manager_base_url(manager_url)
+        .deployment_token(deployment_token)
+        .network_args(network_args)
+        .maybe_on_progress(on_progress)
+        .maybe_setup_revision(setup_revision)
+        .call()
+        .await
 }
 
 async fn setup_client_config(platform: Platform) -> Result<ClientConfig> {
@@ -8228,6 +9107,7 @@ async fn push_initial_setup_targeted(
     base_platform: Option<Platform>,
     client_config: ClientConfig,
     management_config: Option<alien_core::ManagementConfig>,
+    management_external_id: Option<alien_core::ManagementExternalId>,
     manager_base_url: &str,
     deployment_token: &str,
     network_args: Option<&NetworkArgs>,
@@ -8440,6 +9320,7 @@ async fn push_initial_setup_targeted(
 
         config.setup_run = true;
         config.setup_run_id = Some(uuid::Uuid::new_v4().to_string());
+        config.management_external_id = management_external_id.clone();
 
         // Re-fetch the deployment state now that we hold the lock.
         // The manager may have advanced the state while we were waiting.
@@ -8605,6 +9486,16 @@ async fn push_initial_setup_targeted(
                     .ai_access_checks = checks;
             }
         }
+        // Every extension the releases list is downloaded and checked before any step runs.
+        let service_provider = extension_bundles::provider_for(
+            None,
+            manager_base_url,
+            deployment_token,
+            &state,
+            deployment_id,
+            extension_bundles::Operation::Setup,
+        )
+        .await?;
 
         // Run the shared step loop with per-step reconciliation via the manager API
         let transport = SetupRevisionTransport {
@@ -8630,7 +9521,7 @@ async fn push_initial_setup_targeted(
                 deployment_id,
                 &policy,
                 &transport,
-                None,
+                service_provider,
                 on_progress.as_ref(),
             )
             .await,
@@ -8776,6 +9667,9 @@ pub async fn push_deletion(
     deployment_id: &str,
     platform: Platform,
     client_config: ClientConfig,
+    erase_data: bool,
+    manager_url: &str,
+    token: &str,
 ) -> Result<()> {
     let deployment = client
         .get_deployment()
@@ -8879,7 +9773,16 @@ pub async fn push_deletion(
     })?;
 
     apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
-    let service_provider = runtime_service_provider(&client_config)?;
+    // Every extension the releases list is downloaded and checked before any step runs.
+    let service_provider = extension_bundles::provider_for(
+        runtime_service_provider(&client_config)?,
+        manager_url,
+        token,
+        &state,
+        deployment_id,
+        extension_bundles::Operation::Teardown,
+    )
+    .await?;
 
     if platform == Platform::Local
         && !matches!(
@@ -8914,6 +9817,7 @@ pub async fn push_deletion(
         &client_config,
         stack_settings.deployment_model,
         service_provider,
+        erase_data,
     )
     .await
 }
@@ -9062,6 +9966,7 @@ async fn run_setup_deletion(
     client_config: &ClientConfig,
     deployment_model: alien_core::DeploymentModel,
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    erase_data: bool,
 ) -> Result<()> {
     let session = format!("push-setup-deletion-{}", uuid::Uuid::new_v4());
     let acquire_outcome = acquire_setup_delete_deployment(
@@ -9071,33 +9976,34 @@ async fn run_setup_deletion(
         &session,
         deployment_model,
         setup_method(state.platform),
+        erase_data,
     )
     .await
     .context(ErrorData::DeploymentFailed {
         operation: "acquire setup teardown lock".to_string(),
     })?;
 
-    let execution_claim = match acquire_outcome {
-        SetupDeleteAcquireOutcome::Acquired { execution_claim } => execution_claim,
+    let (execution_claim, deployment) = match acquire_outcome {
+        SetupDeleteAcquireOutcome::Acquired {
+            execution_claim,
+            deployment,
+        } => (execution_claim, *deployment),
+        SetupDeleteAcquireOutcome::PolicyRefused { message } => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "erase_data".to_string(),
+                message,
+            }));
+        }
+        SetupDeleteAcquireOutcome::LockedReadFailed { message } => {
+            return Err(AlienError::new(ErrorData::ConfigurationError { message }));
+        }
         SetupDeleteAcquireOutcome::AlreadyDeleted => {
             output::success("Deployment deleted successfully.");
             return Ok(());
         }
     };
 
-    // Re-fetch deployment under lock
-    let deployment = client
-        .get_deployment()
-        .id(deployment_id)
-        .send()
-        .await
-        .into_sdk_error()
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to get deployment from manager".to_string(),
-        })?
-        .into_inner();
-
+    // The record the acquire read with the lock held.
     let status = parse_deployment_status(&deployment.status)?;
     state.status = status;
     state.stack_state = deployment

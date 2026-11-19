@@ -70,6 +70,8 @@ pub fn bold(msg: &str) -> String {
 
 /// Print a status line (legacy — prefer label_value)
 pub fn status(label: &str, value: &str) {
+    // A value that spans lines keeps them in the value column.
+    let value = value.replace('\n', &format!("\n{:23}", ""));
     eprintln!("  {} {}", ansi("1", &format!("{label:<20}")), value);
 }
 

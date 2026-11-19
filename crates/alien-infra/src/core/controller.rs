@@ -631,6 +631,26 @@ pub struct ResourceControllerContext<'a> {
 }
 
 impl ResourceControllerContext<'_> {
+    /// Whether this run is a setup run with direct setup authority: the one that creates a
+    /// Frozen resource itself, as opposed to adopting what a setup package created.
+    pub fn is_direct_setup_run(&self) -> bool {
+        self.initial_setup_authority == InitialSetupAuthority::DirectSetup
+            && self.deployment_config.setup_run
+    }
+
+    /// The deployment id a direct setup writes into ownership markers. The runner sets it on
+    /// every step; without it nothing can be marked or recognised as owned, so this fails.
+    pub fn setup_owner_deployment_id(&self) -> crate::error::Result<&str> {
+        self.deployment_config.deployment_id.as_deref().ok_or_else(|| {
+            alien_error::AlienError::new(crate::error::ErrorData::CloudPlatformError {
+                message: "the deployment id is not available, so ownership of what setup \
+                          creates cannot be recorded"
+                    .to_string(),
+                resource_id: Some(self.desired_config.id().to_string()),
+            })
+        })
+    }
+
     pub fn emit_heartbeat(&self, heartbeat: ResourceHeartbeat) {
         self.heartbeat_collector.emit(heartbeat);
     }
@@ -759,6 +779,15 @@ pub trait ResourceController: Send + Sync + Debug {
         Ok(false)
     }
 
+    /// Whether a pending `needs_update` of this resource also holds the CREATION of resources
+    /// that depend on it. Only a controller whose update publishes what its dependents read
+    /// when they are created (a sandbox's image binding) says yes. The default is no, so an
+    /// update that is blocked (for instance waiting for setup) never stops a new dependent from
+    /// being created.
+    fn needs_update_holds_dependent_creation(&self, _resource_id: &str) -> bool {
+        false
+    }
+
     /// Whether the delete flow, at the controller's current state, has removed nothing yet.
     ///
     /// When the executor deletes a failed create to replace it, it keeps the create's
@@ -786,6 +815,17 @@ pub trait ResourceController: Send + Sync + Debug {
     /// state itself.
     fn updates_during_dependency_change(&self, _dependency: &ResourceRef) -> bool {
         false
+    }
+
+    /// Brings the list of machines a cluster admits up to date with the cloud, and does
+    /// nothing else. The deployment loop calls it for a deployment whose update or refresh
+    /// failed, where no step runs, so a machine that replaces a lost one is still admitted.
+    ///
+    /// It takes `&self` and returns nothing: it cannot change the controller's state, and it
+    /// must not start, retry or undo any work, change a group's size, or send anything to the
+    /// cluster except the list itself. Controllers without such a list keep this default.
+    async fn sync_membership(&self, _context: &ResourceControllerContext<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Whether a Running resource must continue its controller state machine
@@ -1043,6 +1083,10 @@ fn deserialize_controller_by_tag(
         // They are registered via register_controller_deserializer_extension().
         #[cfg(feature = "kubernetes")]
         "KubernetesContainerController" => deser!(crate::container::KubernetesContainerController),
+        #[cfg(feature = "azure")]
+        "AzureSandboxGatewayDeclarationController" => {
+            deser!(crate::container::AzureSandboxGatewayDeclarationController)
+        }
         #[cfg(feature = "local")]
         "LocalContainerController" => deser!(crate::container::LocalContainerController),
 
@@ -1292,6 +1336,10 @@ fn deserialize_controller_by_tag(
         #[cfg(feature = "azure")]
         "AzureServiceBusNamespaceController" => {
             deser!(crate::infra_requirements::AzureServiceBusNamespaceController)
+        }
+
+        crate::step_protocol::PROXY_CONTROLLER_TYPE => {
+            deser!(crate::step_protocol::ExtensionProxyController)
         }
 
         other => {

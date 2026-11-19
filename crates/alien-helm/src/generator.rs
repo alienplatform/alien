@@ -19,7 +19,7 @@ use alien_core::{
     AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode, ErrorData,
     KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
     KubernetesClusterProvider, Platform, RemoteStackManagementOutputs, ResourceLifecycle, Result,
-    ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
+    ServiceAccount, ServiceAccountOutputs, SetupFormat, Stack, StackSettings, Worker, WorkerCode,
     ALIEN_STACK_TAG_KEY,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -258,6 +258,32 @@ pub fn generate_product_helm_chart_with_image_identity(
     )
 }
 
+/// The README section listing each extension the stack uses, with its version and the origins
+/// outside the cluster its controllers may call.
+fn extensions_md(stack: &Stack) -> Option<String> {
+    if stack.extensions.is_empty() {
+        return None;
+    }
+    let lines = stack
+        .extensions
+        .iter()
+        .map(|extension| {
+            let mut line = format!("- `{}` version {}.", extension.name, extension.version);
+            if !extension.egress.is_empty() {
+                line.push_str(&format!(
+                    " Its controllers may also call, with none of this deployment's credentials: {}.",
+                    extension.egress.join(", ")
+                ));
+            }
+            line
+        })
+        .collect::<Vec<_>>();
+    Some(format!(
+        "\n## Extensions\n\nThis deployment uses these extensions.\n\n{}\n",
+        lines.join("\n")
+    ))
+}
+
 fn generate_helm_chart_internal(
     stack: &Stack,
     mut options: HelmOptions<'_>,
@@ -275,7 +301,7 @@ fn generate_helm_chart_internal(
     );
     let stack = &platform_stack;
     let chart_name = sanitize_chart_name(&options.chart_name);
-    let analysis = ChartAnalysis::from_stack(stack, options.registry)?;
+    let analysis = ChartAnalysis::from_stack(stack, Some(options.registry))?;
 
     let stack_json = to_stable_pretty_json(stack).context(ErrorData::JsonSerializationFailed {
         reason: "failed to serialize stack into chart metadata".to_string(),
@@ -466,6 +492,9 @@ fn generate_helm_chart_internal(
         readme.push_str(
             "\n## Runtime cleanup and Helm history\n\nRuntime cleanup and Pod log collection default to the deployment resource prefix (`serviceAccountPrefix`). Helm upgrades automatically preserve the existing immutable cleanup scope. Pod log collection follows the resource prefix independently. For GitOps or offline rendering, set `logCollector.scope.deploymentLabelValue` to the installed cleanup ConfigMap’s `data.labelValue` before upgrading, and render upgrades with `helm template --is-upgrade`; without cluster lookup an upgrade with no explicit scope is refused. Renderers that do not identify upgrades must preserve this value explicitly. Use `logCollector.scope.podLabelKey` and `podLabelValue` to override workload log selection. An older mismatched cleanup scope does not remove those workloads; they require separately scoped cleanup.\n\nRuntime cleanup uses the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set `runtime.cleanup.onUninstall.helmHistoryBackend=configmap`. The SQL and memory backends are unsupported because the chart cannot verify and prune unsafe rollback history.\n\n## Remote Operator\n\nThe Remote Operator is disabled by default and adds no cluster-scoped resources until enabled. Install or upgrade the chart once with it disabled, then enable it in a second upgrade with `remoteOperator.bootstrapIdentity=true`; this proves that Helm uses a supported Kubernetes history backend before any durable identity is created. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it. Protected upgrades use the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set both `runtime.cleanup.onUninstall.helmHistoryBackend=configmap` and `remoteOperator.helmHistoryBackend=configmap`. Before identity creation, a credential-free one-shot Job mounts the exact pending Helm record from that backend and verifies a render-specific proof, so stale records cannot authorize an upgrade. The SQL and memory storage backends are rejected because the chart cannot verify or prune their rollback history. Uninstall permanently retires this release by deleting its exact retained identity records and identity PVC.\n",
         );
+    }
+    if let Some(section) = extensions_md(stack) {
+        readme.push_str(&section);
     }
     files.insert("README.md".to_string(), readme);
     files.insert(
@@ -2312,8 +2341,8 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
         validate_runtime_encryption_key(options.runtime_encryption_key)?;
     }
 
-    let registry = HelmRegistry::built_in();
-    let analysis = ChartAnalysis::from_stack(options.stack, &registry)?;
+    // These values name no infrastructure, so no emitter runs.
+    let analysis = ChartAnalysis::from_stack(options.stack, None)?;
     let mut yaml = String::new();
 
     yaml.push_str("management:\n");
@@ -3861,7 +3890,10 @@ struct KubernetesRoleRule {
 }
 
 impl ChartAnalysis {
-    fn from_stack(stack: &Stack, registry: &HelmRegistry) -> Result<Self> {
+    /// Reads what a chart needs from `stack`. With `registry`, it also runs each frozen
+    /// resource's Helm emitter; without one, it skips them, for callers that read only the
+    /// stack's service accounts and services.
+    fn from_stack(stack: &Stack, registry: Option<&HelmRegistry>) -> Result<Self> {
         let mut analysis = Self {
             postgres: crate::postgres::values(stack),
             ..Self::default()
@@ -3938,8 +3970,23 @@ impl ChartAnalysis {
                 continue;
             }
 
+            let Some(registry) = registry else {
+                continue;
+            };
             let resource_type = entry.config.resource_type();
-            let Some(emitter) = registry.emitter(&resource_type, Platform::Kubernetes) else {
+            stack.check_setup_format(
+                resource_id,
+                &resource_type,
+                SetupFormat::Helm,
+                Platform::Kubernetes,
+            )?;
+            // A custom type whose descriptor lists Helm must have its emitter.
+            let emitter = if stack.descriptor(&resource_type).is_some() {
+                Some(registry.require(&resource_type, Platform::Kubernetes)?)
+            } else {
+                registry.emitter(&resource_type, Platform::Kubernetes)
+            };
+            let Some(emitter) = emitter else {
                 continue;
             };
 
@@ -4221,6 +4268,10 @@ runtime:
       enabled: true
       existingClaim: ""
       storageClassName: ""
+      # The install lists StorageClasses (cluster-wide read) to fail early, naming the fix, when the
+      # identity claim could never bind. Helm cannot skip a refused lookup, so an installer without
+      # cluster-wide read access sets this to false.
+      storageClassCheck: true
       accessModes:
         - ReadWriteOnce
       size: 1Gi
@@ -4406,6 +4457,12 @@ sandbox:
   # Network probe image (repository[:tag][@digest]). Empty uses the pinned default; an air-gapped
   # install sets it to the copy in its registry mirror.
   cniProbeImage: ""
+  # Lets the Operator read the cluster DNS Service (`kube-system/kube-dns`) through a one-object Role
+  # in `kube-system`, so the sandbox gateway resolves names through it. That matters on a cluster whose
+  # resolver is a node-local cache at a link-local address (AKS LocalDNS). `auto` renders the Role
+  # except on Google Kubernetes Engine, where a managed `kube-system` can refuse it; `true` and `false`
+  # force it. With no Role the gateway keeps the cluster's resolver and still deploys.
+  readClusterDNS: auto
   # The nameserver address(es) pods get in /etc/resolv.conf (the kubelet's clusterDNS). Required
   # when a sandbox uses `allow` egress: the sandbox policy admits UDP and TCP port 53 to exactly
   # these addresses and nothing else on private ranges. Find it with:
@@ -4941,6 +4998,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "tolerations": { "type": "array" },
             "warmPoolSize": { "type": "integer", "minimum": 0 },
             "cniProbeImage": { "type": "string" },
+            "readClusterDNS": { "enum": ["auto", true, false] },
             "clusterDNS": {
                 "type": "array",
                 "items": { "type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}$" }
@@ -5148,6 +5206,7 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
                 "enabled": { "type": "boolean" },
                 "existingClaim": { "type": "string" },
                 "storageClassName": { "type": "string" },
+                "storageClassCheck": { "type": "boolean" },
                 "accessModes": { "type": "array", "items": { "type": "string" } },
                 "size": { "type": "string" }
               }
@@ -7841,6 +7900,39 @@ spec:
 
 fn pvc_tpl() -> String {
     r#"{{- if and .Values.runtime.data.persistence.enabled (not .Values.runtime.data.persistence.existingClaim) }}
+{{- /*
+  The identity claim binds only with a StorageClass: the cluster default, one the chart names, or one
+  the chart creates. Without one the claim stays Pending and the Operator never starts, with no
+  message. The check runs only on a fresh claim (an upgrade with a bound claim reads nothing) and only
+  when `lookup` can list StorageClasses (it returns nothing under `helm template`). Helm cannot catch
+  a refused lookup, so an installer without cluster-wide read access sets
+  runtime.data.persistence.storageClassCheck=false.
+*/ -}}
+{{- $claimName := printf "%s-runtime-data" (include "deployment.fullname" .) -}}
+{{- if .Values.runtime.data.persistence.storageClassCheck }}
+{{- if not (lookup "v1" "PersistentVolumeClaim" .Release.Namespace $claimName) }}
+{{- $bootstrapClass := dig "clusterBootstrap" "storageClass" "default" (dict) (.Values | toYaml | fromYaml) -}}
+{{- $bootstrapEnabled := get $bootstrapClass "enabled" -}}
+{{- $named := .Values.runtime.data.persistence.storageClassName -}}
+{{- $classes := lookup "storage.k8s.io/v1" "StorageClass" "" "" -}}
+{{- if hasKey $classes "items" }}
+{{- $hasDefault := false -}}
+{{- $hasNamed := false -}}
+{{- range $classes.items }}
+{{- $annotations := default dict .metadata.annotations -}}
+{{- if or (eq (get $annotations "storageclass.kubernetes.io/is-default-class") "true") (eq (get $annotations "storageclass.beta.kubernetes.io/is-default-class") "true") }}{{ $hasDefault = true }}{{ end }}
+{{- if eq .metadata.name $named }}{{ $hasNamed = true }}{{ end }}
+{{- end }}
+{{- if $named }}
+{{- if and (not $hasNamed) (not (and $bootstrapEnabled (eq (get $bootstrapClass "name") $named))) }}
+{{- fail (printf "runtime.data.persistence.storageClassName is %q, but this cluster has no StorageClass with that name, so the Operator's identity claim %s would stay Pending. Name a StorageClass that exists (kubectl get storageclass), or set clusterBootstrap.storageClass.default.enabled=true with that name and a provisioner so the chart creates it." $named $claimName) }}
+{{- end }}
+{{- else if and (not $hasDefault) (not $bootstrapEnabled) }}
+{{- fail (printf "The cluster has no default StorageClass, so the Operator's identity claim %s would stay Pending and the Operator would never start. Set runtime.data.persistence.storageClassName to a StorageClass of this cluster (EKS Auto Mode: create one with provisioner ebs.csi.eks.amazonaws.com), set clusterBootstrap.storageClass.default.enabled=true with a name and provisioner so the chart creates one, set runtime.data.persistence.existingClaim, or set runtime.data.persistence.storageClassCheck=false to skip this check (needed when the claim binds to a pre-provisioned PersistentVolume that has no StorageClass)." $claimName) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -8434,6 +8526,9 @@ metadata:
   name: {chart_name}
 spec:
   interval: 10m
+  # The chart's setup check runs as a Helm hook that waits up to 13 minutes; Flux's default
+  # Helm timeout is 5 minutes. This applies to install and upgrade.
+  timeout: 15m
   # Without retries Flux marks the release Stalled after one failed install or upgrade and
   # stops until someone forces a reconcile.
   install:
@@ -8617,8 +8712,15 @@ The chart generates nothing at render time. The Operator creates its encryption 
 in its own Secret on first start. Keep credentials and any values file containing them private.
 
 ```bash
-helm install {chart_name} . --namespace={namespace} --create-namespace --values install-values.yaml --atomic --wait --timeout 10m
+helm install {chart_name} . --namespace={namespace} --create-namespace --values install-values.yaml --atomic --wait --timeout 15m
 ```
+
+The install lists the cluster's StorageClasses to fail early, naming the fix, when the
+Operator's identity claim could not bind. An installer limited to the release namespace
+cannot list them, and Helm then fails with a forbidden error; add
+`--set runtime.data.persistence.storageClassCheck=false` for such an installer.
+The check also refuses a cluster with no default StorageClass when the claim is meant to bind
+to a pre-provisioned PersistentVolume that has no class; set `storageClassCheck=false` for that too.
 
 Managed packages can supply the project's resolved management endpoint as a
 chart default. The installation service supplies an override when the selected
@@ -8676,7 +8778,9 @@ the Operator installation and its permissions; upgrade the chart to change those
 edit them in the deployment dashboard and retain the original Helm values.
 Preview upgrades with `helm upgrade --dry-run=server` so the chart can compare
 values with the installed Secret. Client-side `helm template --is-upgrade`
-cannot do that.
+cannot do that. Run the upgrade itself with `--atomic --wait --timeout 15m`, the
+same as the install: the setup check that runs before it can take several minutes
+on nodes that start slowly, and Helm's default timeout is 5 minutes.
 
 ## Workload priority
 

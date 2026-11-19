@@ -501,6 +501,14 @@ pub struct GcpAgentPlatformTemplateController {
     /// and carried into the binding so a deployed workload can sign.
     #[serde(default)]
     pub(crate) preview_service_account: Option<String>,
+    /// What a direct setup run created around the engine (signing identity, signing role, engine
+    /// grants), so teardown removes exactly that. Empty when a setup package made them.
+    #[serde(default)]
+    pub(crate) engine_setup: crate::sandbox::gcp_engine_setup::EngineSetupRecord,
+    /// Fingerprint of the grant inputs the last direct setup run reconciled, so a rerun updates
+    /// only when a profile or caller changed.
+    #[serde(default)]
+    pub(crate) reconciled_grants: Option<String>,
 }
 
 #[controller]
@@ -546,6 +554,26 @@ impl GcpAgentPlatformTemplateController {
         self.preview_ports = config.preview_ports.clone();
         self.egress = Some(config.egress.clone());
         self.default_policy = config.default_policy.clone();
+
+        // A direct setup run has no package to place the grants and the preview signing identity
+        // around the engine, so it places them here, the same ones the package would.
+        if ctx.is_direct_setup_run() {
+            let signer = crate::sandbox::gcp_engine_setup::set_up_engine_access(
+                ctx,
+                config,
+                &engine,
+                &mut self.engine_setup,
+            )
+            .await?;
+            if signer.is_some() {
+                self.preview_service_account = signer;
+            }
+            self.reconciled_grants =
+                Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(
+                    ctx,
+                    crate::core::ResourcePermissionsHelper::get_gcp_management_service_account_email(ctx),
+                )?);
+        }
 
         info!(id=%config.id, engine=%engine, "Creating sandbox environment template");
         let operation_name = create_template(ctx, &client, &config.id, &engine, body).await?;
@@ -821,6 +849,28 @@ impl GcpAgentPlatformTemplateController {
         self.preview_ports = config.preview_ports.clone();
         let previous = ctx.previous_resource_config::<Sandbox>()?;
 
+        // A direct setup run owns the grants around the engine, so each setup run places the ones
+        // a newly added profile or remote caller needs, as applying the package again does.
+        if ctx.is_direct_setup_run() {
+            if let Some(engine) = self.engine.clone() {
+                let signer = crate::sandbox::gcp_engine_setup::set_up_engine_access(
+                    ctx,
+                    config,
+                    &engine,
+                    &mut self.engine_setup,
+                )
+                .await?;
+                if signer.is_some() {
+                    self.preview_service_account = signer;
+                }
+                self.reconciled_grants =
+                    Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(
+                        ctx,
+                        crate::core::ResourcePermissionsHelper::get_gcp_management_service_account_email(ctx),
+                    )?);
+            }
+        }
+
         // The template is immutable, so an unchanged body needs no work and a changed one is a
         // replace, never an in-place edit.
         if template_identity(config)? == template_identity(previous)? {
@@ -892,6 +942,22 @@ impl GcpAgentPlatformTemplateController {
             }
         }
 
+        if self.engine_setup != Default::default() {
+            crate::sandbox::gcp_engine_setup::tear_down_engine_access(
+                ctx,
+                &engine,
+                &self.engine_setup,
+            )
+            .await?;
+        } else if !config.preview_ports.is_empty()
+            && ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        {
+            // The record may have been dropped by an older manager rewriting the state; the
+            // signer's own description still names this deployment. Only a direct-setup
+            // deployment with preview ports can have a signer, and a package install's
+            // management identity cannot read service accounts (GCP answers 403).
+            crate::sandbox::gcp_engine_setup::remove_marked_signer(ctx, &config.id).await?;
+        }
         self.clear_state();
         info!(id=%config.id, "sandbox template teardown complete");
         Ok(HandlerAction::Continue {
@@ -913,6 +979,26 @@ impl GcpAgentPlatformTemplateController {
         status = ResourceStatus::RefreshFailed
     );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
+
+    /// A direct setup run places the grants around the engine for the profiles and callers the
+    /// stack declares now. It updates once when those inputs differ from what it last placed,
+    /// and not at all in a steady state.
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if !(matches!(self.state, GcpAgentPlatformTemplateState::Ready)
+            && ctx.deployment_config.setup_run
+            && ctx.is_direct_setup_run())
+        {
+            return Ok(false);
+        }
+        Ok(self.reconciled_grants.as_deref()
+            != Some(
+                crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(
+                    ctx,
+                    crate::core::ResourcePermissionsHelper::get_gcp_management_service_account_email(ctx),
+                )?
+                .as_str(),
+            ))
+    }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         None
@@ -987,6 +1073,7 @@ impl GcpAgentPlatformTemplateController {
         self.preview_ports = Vec::new();
         self.egress = None;
         self.default_policy = None;
+        self.engine_setup = Default::default();
     }
 
     fn engine_and_template(&self, resource_id: &str) -> Result<(String, String)> {
@@ -1030,6 +1117,8 @@ impl GcpAgentPlatformTemplateController {
             allow_egress: None,
             preview_ports: Vec::new(),
             preview_service_account: None,
+            engine_setup: Default::default(),
+            reconciled_grants: None,
             _internal_stay_count: None,
         }
     }
@@ -1153,6 +1242,20 @@ mod tests {
         provider
             .expect_get_gcp_agent_platform_client()
             .returning(move |_| Ok(client.clone()));
+        // Teardown looks for a preview signer this deployment may have made; none exists here.
+        let mut iam = alien_gcp_clients::iam::MockIamApi::new();
+        iam.expect_get_service_account().returning(|name| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "ServiceAccount".to_string(),
+                    resource_name: name,
+                },
+            ))
+        });
+        let iam = Arc::new(iam);
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
         Arc::new(provider)
     }
 

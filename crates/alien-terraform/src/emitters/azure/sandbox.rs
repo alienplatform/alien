@@ -144,6 +144,9 @@ impl TfEmitter for AzureSandboxEmitter {
                         )]),
                     ),
                     attr("schema_validation_enabled", Expression::Bool(false)),
+                    // Azure stores the subnet id lower-cased, so without this every plan shows an
+                    // in-place update that changes only the case.
+                    attr("ignore_casing", Expression::Bool(true)),
                     attr(
                         "depends_on",
                         Expression::Array(vec![
@@ -791,7 +794,7 @@ mod tests {
                         image: "ubuntu".to_string(),
                         bundled_from: None,
                     })
-                    .egress(SandboxEgress::Internet)
+                    .egress(SandboxEgress::None)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -943,5 +946,149 @@ mod tests {
 
         let undeclared = binding_with(SandboxEgress::Internet, None);
         assert!(!undeclared.contains("idlePauseSeconds"), "{undeclared}");
+    }
+
+    /// Every item the package creates for a sandbox is listed in
+    /// `alien_core::sandbox_setup_parity`, with whether direct setup creates it. An item the
+    /// emitter produces that the table does not name is a piece direct setup would miss without
+    /// anyone noticing; a listed item the emitter no longer produces is a stale row.
+    #[test]
+    fn every_item_the_package_creates_is_accounted_for_in_direct_setup() {
+        use alien_core::permissions::{ManagementPermissions, PermissionProfile};
+        use alien_core::sandbox_setup_parity::AZURE_SANDBOX_ITEMS;
+        use alien_core::{Network, NetworkSettings, RemoteBindings, RemoteStackManagement};
+        use std::collections::BTreeSet;
+
+        // Remote access excludes internet egress, so two stacks between them reach every item.
+        let build = |remote_access: bool| {
+            let base = Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                    bundled_from: None,
+                })
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                });
+            let builder = Stack::new("acme".to_string())
+                .add(
+                    Network::new("network".to_string())
+                        .settings(NetworkSettings::Create {
+                            cidr: None,
+                            availability_zones: 2,
+                        })
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    RemoteStackManagement::new("manager".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    RemoteBindings::new("access".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                );
+            let builder = if remote_access {
+                builder.add_with_remote_access(
+                    base.egress(SandboxEgress::Allow).build(),
+                    ResourceLifecycle::Frozen,
+                )
+            } else {
+                builder.add(
+                    base.egress(SandboxEgress::Internet).build(),
+                    ResourceLifecycle::Frozen,
+                )
+            };
+            builder
+                .management(ManagementPermissions::Extend(
+                    PermissionProfile::new().resource("agents", ["sandbox/images"]),
+                ))
+                .build()
+        };
+
+        let mut emitted = BTreeSet::new();
+        for remote_access in [true, false] {
+            let stack = build(remote_access);
+            let resource = stack.resources.get("agents").expect("sandbox");
+            let names = IndexMap::from([
+                ("agents".to_string(), "agents".to_string()),
+                ("network".to_string(), "network".to_string()),
+                ("manager".to_string(), "manager".to_string()),
+                ("access".to_string(), "access".to_string()),
+            ]);
+            let settings = StackSettings::default();
+            let ctx = EmitContext {
+                stack: &stack,
+                resource,
+                resource_id: "agents",
+                platform: alien_core::Platform::Azure,
+                targets_kubernetes: false,
+                stack_settings: &settings,
+                names: &names,
+                pins: &alien_core::SetupPins::default(),
+            };
+            let fragment = AzureSandboxEmitter.emit(&ctx).expect("the sandbox renders");
+            for block in fragment.resource_blocks.iter() {
+                let kind = block.labels.first().map(|l| l.as_str()).unwrap_or_default();
+                let label = block.labels.get(1).map(|l| l.as_str()).unwrap_or_default();
+                let item = match kind {
+                    "azapi_resource" if label.ends_with("_vnet") => "vnet-connection",
+                    "azapi_resource" => "sandbox-group",
+                    "azurerm_role_assignment" if label.contains("_access_") => {
+                        "role-assignment:access"
+                    }
+                    "azurerm_role_assignment" if label.contains("_images_") => {
+                        "role-assignment:images"
+                    }
+                    "azurerm_role_assignment" => "role-assignment:workload",
+                    other => panic!(
+                        "the Azure sandbox emitter produced `{other}` ({label}), which \
+                         alien_core::sandbox_setup_parity does not account for. Add it there as \
+                         `Creates` once direct setup creates it with the same grant, `Pending`, \
+                         or `PackageOnly` with the refusal that covers it"
+                    ),
+                };
+                emitted.insert(item.to_string());
+            }
+        }
+
+        let listed: BTreeSet<String> = AZURE_SANDBOX_ITEMS
+            .iter()
+            .map(|(item, _)| item.to_string())
+            .collect();
+        // The workload assignment needs a profile's service account in the stack, which this
+        // fixture does not build; the profile-grant generator tests cover that row.
+        let mut listed_here = listed;
+        listed_here.remove("role-assignment:workload");
+        assert_eq!(
+            emitted, listed_here,
+            "the emitter's items and alien_core::sandbox_setup_parity::AZURE_SANDBOX_ITEMS differ"
+        );
+    }
+
+    /// No identity is ever attached to the sandbox group. Azure answers a guest's token request
+    /// on its platform-injected identity endpoint from the group's identity, so a group with none
+    /// issues no token on any boot path: the guest can see the endpoint variables, and they open
+    /// nothing. A rendered identity would turn them into a live credential.
+    #[test]
+    fn the_sandbox_group_carries_no_managed_identity() {
+        let fragment = emit_for(ResourceLifecycle::Frozen);
+        let group = fragment
+            .resource_blocks
+            .iter()
+            .find(|block| {
+                block.labels().first().map(|l| l.as_str()) == Some("azapi_resource")
+                    && block.body().attributes().any(|a| {
+                        a.key() == "type"
+                            && a.expr().to_string().contains("Microsoft.App/sandboxGroups")
+                    })
+            })
+            .expect("the sandbox group resource is emitted");
+        let rendered = hcl::to_string(group).expect("the group renders");
+        assert!(!rendered.to_lowercase().contains("identity"), "{rendered}");
+        assert!(
+            group.body().blocks().all(|b| b.identifier() != "identity"),
+            "{rendered}"
+        );
     }
 }

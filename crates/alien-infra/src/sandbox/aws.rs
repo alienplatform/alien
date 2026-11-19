@@ -1245,10 +1245,7 @@ impl AwsSandboxController {
             if self.egress_replica_secret_ready
                 && ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
             {
-                let client = ctx
-                    .service_provider
-                    .get_aws_secrets_manager_client(ctx.get_aws_config()?)
-                    .await?;
+                let client = super::egress::replica_secret_client(ctx).await?;
                 super::egress::delete_aws_replica_secret(client.as_ref(), ctx.resource_prefix)
                     .await?;
             }
@@ -5503,9 +5500,17 @@ mod tests {
                 let secrets_manager: Arc<
                     dyn alien_aws_clients::secrets_manager::SecretsManagerApi,
                 > = Arc::new(secrets_manager);
-                provider
+                // The replica secret is a credential, so it is reached only through the provider
+                // without the deployment's interceptors.
+                let mut uninterceptable = MockPlatformServiceProvider::new();
+                uninterceptable
                     .expect_get_aws_secrets_manager_client()
                     .returning(move |_| Ok(secrets_manager.clone()));
+                let uninterceptable: Arc<dyn crate::PlatformServiceProvider> =
+                    Arc::new(uninterceptable);
+                provider
+                    .expect_without_interceptors()
+                    .returning(move || Some(uninterceptable.clone()));
             }
             let mut builder = SingleControllerExecutor::builder()
                 .resource(internet_sandbox(id))
@@ -6172,6 +6177,7 @@ mod tests {
                 provider
                     .expect_get_aws_secrets_manager_client()
                     .returning(move |_| Ok(secrets_manager.clone()));
+                provider.expect_without_interceptors().returning(|| None);
                 let mut builder = SingleControllerExecutor::builder()
                     .resource(internet_sandbox("agents"))
                     .controller(AwsSandboxController {

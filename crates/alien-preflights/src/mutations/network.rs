@@ -166,11 +166,12 @@ impl StackMutation for NetworkMutation {
 }
 
 /// Kubernetes workloads and logical compute pools use the existing cluster network.
-/// Cloud databases and a setup-managed cluster still need cloud network resources.
+/// Cloud databases, a setup-managed cluster and an extension type that requires the network
+/// still need cloud network resources.
 fn kubernetes_requires_cloud_network(stack: &Stack, config: &DeploymentConfig) -> bool {
     if stack
         .resources()
-        .any(|(_, entry)| alien_core::is_network_database(entry))
+        .any(|(_, entry)| alien_core::keeps_cloud_network(stack, entry))
     {
         return true;
     }
@@ -211,7 +212,9 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: alien_core::permissions::PermissionsConfig::default(),
