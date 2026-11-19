@@ -110,6 +110,11 @@ pub fn validate_sources(
             {
                 return Err(refuse(format!("mount '{path}': region is not a valid region name")));
             }
+            if source.availability_zone_id.is_none() {
+                return Err(refuse(format!(
+                    "mount '{path}': availabilityZoneId is missing: pass the zone id of a mount target of this file system that the sandbox's network reaches (for example use2-az1; the S3 Files mount target listing shows it as availabilityZoneId)"
+                )));
+            }
             if let Some(zone) = &source.availability_zone_id {
                 let mut parts = zone.splitn(2, "-az");
                 let valid = matches!(
@@ -197,6 +202,7 @@ mod tests {
             |s| s.access_point_id = "fs-1".into(),
             |s| s.region = "US East".into(),
             |s| s.availability_zone_id = Some("use2".into()),
+            |s| s.availability_zone_id = None,
             |s| s.credentials.session_token.clear(),
             |s| s.credentials.expiration = "tomorrow".into(),
             |s| s.credentials.expiration = "2001-01-01T00:00:00Z".into(),

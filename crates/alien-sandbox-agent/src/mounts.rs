@@ -199,6 +199,7 @@ pub enum Refusal {
     Missing(String),
     NoMounts,
     RefreshFailed(String),
+    NoZone(String),
 }
 
 impl std::fmt::Display for Refusal {
@@ -207,6 +208,11 @@ impl std::fmt::Display for Refusal {
             Self::Unknown(path) => write!(f, "'{path}' is not a declared s3files mount"),
             Self::Missing(path) => write!(f, "no source was given for the mount '{path}'"),
             Self::NoMounts => f.write_str("this sandbox declares no s3files mounts"),
+            Self::NoZone(path) => write!(
+                f,
+                "mount '{path}': {}",
+                "availabilityZoneId is missing: pass the zone id of a mount target of this file system that the sandbox's network reaches (for example use2-az1; the S3 Files mount target listing shows it as availabilityZoneId)"
+            ),
             Self::RefreshFailed(reason) => write!(f, "the new credentials were stored but not applied: {reason}"),
         }
     }
@@ -313,8 +319,12 @@ impl Mounts {
             }
         }
         for path in self.s3files_paths() {
-            if !given.contains_key(path) {
-                return Err(Refusal::Missing(path.to_string()));
+            match given.get(path) {
+                None => return Err(Refusal::Missing(path.to_string())),
+                Some(source) if source.availability_zone_id.is_none() => {
+                    return Err(Refusal::NoZone(path.to_string()))
+                }
+                Some(_) => {}
             }
         }
         Ok(())
@@ -745,6 +755,13 @@ mod tests {
             mounts.check_sources(&extra),
             Err(Refusal::Unknown("/other".into()))
         );
+        let mut no_zone = source("1");
+        no_zone.availability_zone_id = None;
+        let message = mounts
+            .check_sources(&BTreeMap::from([("/workspace".to_string(), no_zone)]))
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("availabilityZoneId") && message.contains("use2-az1"), "{message}");
         // A tmpfs path takes no source.
         let tmpfs = BTreeMap::from([("/workspace/tmp".to_string(), source("1"))]);
         assert!(matches!(

@@ -100,7 +100,12 @@ impl Helper {
         availability_zone_id: Option<&str>,
     ) -> Result<(), String> {
         let zone = availability_zone_id
-            .ok_or_else(|| "the mount names no availability zone id".to_string())?;
+            .ok_or_else(|| {
+                "the mount names no availabilityZoneId: pass the zone id of a mount target of this \
+                 file system that the sandbox's network reaches (for example use2-az1; the S3 \
+                 Files mount target listing shows it)"
+                    .to_string()
+            })?;
         if self.attached.contains_key(path) {
             return Err("already mounted".into());
         }
