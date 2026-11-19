@@ -2975,7 +2975,7 @@
       "description": "One mount an image may ask for.",
       "properties": {
         "from": {
-          "description": "Source of a bind mount: the path of another declared `nfs` or `tmpfs` mount, or a path\ninside one. Required for bind and refused for other types.",
+          "description": "Source of a bind mount: the path of a declared `tmpfs` mount, or a path inside one. The\nbind's own path must be inside a declared `nfs` mount. Required for bind and refused for\nother types.",
           "type": "string"
         },
         "path": {

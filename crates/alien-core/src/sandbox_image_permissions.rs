@@ -102,7 +102,7 @@ pub struct ContractMount {
     /// Size in bytes; tmpfs only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<u64>,
-    /// Source path; bind only. A declared nfs or tmpfs mount path, or inside one.
+    /// Source path; bind only. A declared tmpfs mount path, or inside one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
 }

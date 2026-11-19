@@ -58,8 +58,9 @@ pub struct SandboxImageMount {
     /// refused for other types.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<String>,
-    /// Source of a bind mount: the path of another declared `nfs` or `tmpfs` mount, or a path
-    /// inside one. Required for bind and refused for other types.
+    /// Source of a bind mount: the path of a declared `tmpfs` mount, or a path inside one. The
+    /// bind's own path must be inside a declared `nfs` mount. Required for bind and refused for
+    /// other types.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
 }
@@ -198,17 +199,31 @@ impl SandboxImagePermissions {
                     if let Err(reason) = check_mount_path(from) {
                         return refuse("from", from, &reason);
                     }
-                    // Only from what the agent itself mounted, so a bind can never expose a path
-                    // of the image's own file system somewhere the declaration did not name.
+                    // Only from a tmpfs the agent itself mounted, so a bind can never expose a
+                    // path of the image's own file system (or one shared file system at a second
+                    // place) somewhere the declaration did not name.
                     let source = self.mounts.iter().find(|source| {
-                        source.mount_type != SandboxImageMountType::Bind
+                        source.mount_type == SandboxImageMountType::Tmpfs
                             && is_same_or_under(from, &source.path)
                     });
                     if source.is_none() {
                         return refuse(
                             "from",
                             from,
-                            "must be the path of a declared nfs or tmpfs mount, or inside one",
+                            "must be the path of a declared tmpfs mount, or inside one",
+                        );
+                    }
+                    // Only into a declared nfs mount: the bind exists to place local scratch
+                    // inside the shared file system, not to cover any other path of the image.
+                    let target = self.mounts.iter().any(|target| {
+                        target.mount_type == SandboxImageMountType::Nfs
+                            && is_under(&mount.path, &target.path)
+                    });
+                    if !target {
+                        return refuse(
+                            "path",
+                            &mount.path,
+                            "a bind must be placed inside a declared nfs mount",
                         );
                     }
                     if is_same_or_under(&mount.path, from) {
@@ -297,6 +312,11 @@ fn is_same_or_under(path: &str, ancestor: &str) -> bool {
         || path
             .strip_prefix(ancestor)
             .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Whether `path` is strictly below `ancestor`, compared by whole segments.
+fn is_under(path: &str, ancestor: &str) -> bool {
+    path != ancestor && is_same_or_under(path, ancestor)
 }
 
 /// A tmpfs size in bytes, from a whole quantity with an optional unit suffix.
@@ -542,7 +562,11 @@ mod tests {
         .validate("s")
         .unwrap();
         permissions(
-            vec![tmpfs(), bind("/var/lib/app/scratch/a", "/data")],
+            vec![
+                nfs(),
+                tmpfs(),
+                bind("/var/lib/app/scratch/a", "/workspace/a"),
+            ],
             vec![],
         )
         .validate("s")
@@ -554,6 +578,22 @@ mod tests {
                 "undeclared source",
             ),
             (vec![nfs(), bind("/etc", "/workspace/etc")], "system source"),
+            (
+                vec![tmpfs(), bind("/var/lib/app/scratch", "/data")],
+                "target outside any nfs mount",
+            ),
+            (
+                vec![nfs(), tmpfs(), bind("/var/lib/app/scratch", "/workspace")],
+                "target is the nfs mount itself",
+            ),
+            (
+                vec![
+                    nfs(),
+                    mount(SandboxImageMountType::Nfs, "/shared", None),
+                    bind("/shared", "/workspace/shared"),
+                ],
+                "nfs source",
+            ),
             (
                 vec![tmpfs(), bind("/var/lib/app", "/data")],
                 "parent of a mount",
@@ -567,9 +607,10 @@ mod tests {
             ),
             (
                 vec![
+                    nfs(),
                     tmpfs(),
-                    bind("/data", "/elsewhere"),
-                    bind("/elsewhere", "/x"),
+                    bind("/var/lib/app/scratch", "/workspace/a"),
+                    bind("/workspace/a", "/workspace/b"),
                 ],
                 "from a bind",
             ),
