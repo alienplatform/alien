@@ -306,7 +306,7 @@ fn main() -> Result<()> {
             match egress.start().await {
                 Ok(()) => {
                     if egress.ensure_ready().is_ok() { state.start_image_once()?; }
-                    alien_sandbox_agent::gateway_egress::record_nfs_port_drops("boot").await;
+                    egress.record_boot_nfs_port_drops().await;
                 }
                 Err(error) => tracing::error!(code = %error.code, "egress startup failed; session routes remain unavailable"),
             }

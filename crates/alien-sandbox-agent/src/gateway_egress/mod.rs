@@ -545,6 +545,14 @@ impl GatewayEgress {
     // The supervisor retains NET_ADMIN before creating worker threads. Installing here lets
     // the platform finish snapshot restoration before enabling the command UID rules.
     // Callers hold update_lock, so token installation cannot race this transaction.
+    /// Records the NFS-port drop's counters at boot, where the firewall is installed at boot.
+    /// With the run hook installing it (`boot-run-hook`), there is nothing to count before.
+    pub async fn record_boot_nfs_port_drops(&self) {
+        if self.routing_ready.load(Ordering::Acquire) {
+            record_nfs_port_drops("boot").await;
+        }
+    }
+
     async fn install_routing_at_run(&self) -> Result<()> {
         if !self.routing_ready.load(Ordering::Acquire) {
             redirect::install_at_run()

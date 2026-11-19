@@ -88,6 +88,10 @@ if [ "$variant" = started ]; then
     grep -q "$fact" /run/alien/boot-report || fail "boot report lacks $fact: $(cat /run/alien/boot-report)"
   done
   grep -q 'boot report' /tmp/agent.log || fail "the boot report is not in the log"
+  # The run hook installs the firewall: its counters are read from then on, never before.
+  ! grep -q ' error: ' /run/alien/unmarked-drops || fail "counters: $(cat /run/alien/unmarked-drops)"
+  grep -q '^[0-9]* boot-run-hook ip jumps=\[[0-9, ]*\] loopback_return=[0-9]* dropped=[0-9]* ip6 ' \
+    /run/alien/unmarked-drops || fail "counters: $(cat /run/alien/unmarked-drops)"
   [ "$(cat /tmp/kernel-settings/usermodehelper-bset)" = "$(printf '0\t0')" ] \
     || fail "the seal did not write the bset stand-in"
   [ "$(cat /tmp/kernel-settings/usermodehelper-inheritable)" = "$(printf '0\t0')" ] \
