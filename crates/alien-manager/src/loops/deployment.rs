@@ -2800,6 +2800,201 @@ mod tests {
         }
     }
 
+    /// Credentials that can run every phase, for a test platform deployment.
+    struct TestCredentials;
+
+    #[async_trait]
+    impl CredentialResolver for TestCredentials {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn resolve_with_capability(
+            &self,
+            deployment: &DeploymentRecord,
+        ) -> Result<ResolvedCredentials, AlienError> {
+            Ok(ResolvedCredentials {
+                client_config: self.resolve(deployment).await?,
+                has_provision_capability: true,
+            })
+        }
+    }
+
+    /// The status and error a push deployment of a release listing `extension` saves after one
+    /// tick of a manager whose bundles are `bundles`.
+    #[cfg(feature = "sqlite")]
+    async fn tick_with_extension(
+        extension: alien_core::ExtensionManifest,
+        bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
+    ) -> (String, String) {
+        // A manager's builder sets the key; this loop runs without one.
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            SqliteDatabase::new(temp.path().join("manager.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let store = Arc::new(SqliteDeploymentStore::new(db.clone()));
+        let caller = Subject::system();
+        let deployment = store
+            .create_deployment(
+                &caller,
+                CreateDeploymentParams {
+                    name: "extended".to_string(),
+                    deployment_group_id: "dg_test".to_string(),
+                    platform: Platform::Test,
+                    deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: StackSettings {
+                        deployment_model: alien_core::DeploymentModel::Push,
+                        ..Default::default()
+                    },
+                    stack_state: None,
+                    environment_variables: None,
+                    public_subdomain: None,
+                    input_values: Default::default(),
+                    setup_item: None,
+                    deployment_token: None,
+                },
+            )
+            .await
+            .unwrap();
+        let filter = DeploymentFilter {
+            deployment_ids: Some(vec![deployment.id.clone()]),
+            ..Default::default()
+        };
+        let mut item = store
+            .acquire(&caller, "manager-session", &filter, 1)
+            .await
+            .unwrap()
+            .remove(0);
+        item.deployment.desired_release_id = Some("rel_ext".to_string());
+        let mut stack = Stack::new("extended".to_string()).build();
+        stack.extensions = vec![extension];
+        item.deployment.supplied_stacks = Some(SuppliedStacks {
+            desired: Some(stack),
+            current: None,
+        });
+        let bindings = Arc::new(ServerBindings {
+            local_queues: Arc::new(alien_local::LocalQueueService::default()),
+            kv: Arc::new(LocalKv::new(temp.path().join("kv")).await.unwrap()),
+            command_storage: Arc::new(
+                LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())
+                    .unwrap(),
+            ),
+            command_dispatcher: Arc::new(NullCommandDispatcher),
+            command_registry: Arc::new(InMemoryCommandRegistry::default()),
+            artifact_registry: None,
+            bindings_provider: None,
+            target_bindings_providers: Default::default(),
+            registry_routing_table: Arc::new(
+                crate::routes::registry_proxy::RegistryRoutingTable::new(vec![]).unwrap(),
+            ),
+        });
+        DeploymentLoop::new(
+            Arc::new(crate::config::ManagerConfig::default()),
+            store.clone(),
+            Arc::new(SqliteReleaseStore::new(db.clone())),
+            Arc::new(TestCredentials),
+            bindings,
+            None,
+        )
+        .with_extension_bundles(bundles)
+        .process_deployment(
+            item.deployment,
+            item.execution_claim,
+            "manager-session",
+            ProcessOptions::deployment_tick(),
+        )
+        .await;
+        let stored = store
+            .get_deployment(&caller, &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        (
+            stored.status,
+            stored
+                .error
+                .map(|error| error.to_string())
+                .unwrap_or_default(),
+        )
+    }
+
+    /// The manager loads a release's extensions before the release's first step: a bundle it
+    /// can't load fails the deployment naming the extension, and one it loads runs.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_push_deployment_runs_only_with_its_extensions_loaded() {
+        use crate::traits::ExtensionBundleStore;
+        use alien_infra::extension_bundle::testing::TestBundle;
+        let bundle = TestBundle::new("acme", "1.0.0", &[]);
+        let objects = tempfile::tempdir().unwrap();
+        let store = Arc::new(crate::providers::StateDirExtensionBundles::new(
+            objects.path(),
+        ));
+        let bundles = Some(Arc::new(crate::extension_bundles::ExtensionBundles::new(
+            store.clone(),
+        )));
+        let message = |(_, error): (String, String)| error;
+
+        let unstored = message(tick_with_extension(bundle.manifest.clone(), None).await);
+        let missing = message(tick_with_extension(bundle.manifest.clone(), bundles.clone()).await);
+        let mut tampered = bundle.zip.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        let hex = bundle.manifest.digest.strip_prefix("sha256:").unwrap();
+        store
+            .put(&Subject::system(), "default", hex, tampered)
+            .await
+            .unwrap();
+        let refused = message(
+            tick_with_extension(
+                bundle.manifest.clone(),
+                Some(Arc::new(crate::extension_bundles::ExtensionBundles::new(
+                    store.clone(),
+                ))),
+            )
+            .await,
+        );
+        store
+            .put(&Subject::system(), "default", hex, bundle.zip.clone())
+            .await
+            .unwrap();
+        let (loaded_status, loaded) = tick_with_extension(
+            bundle.manifest.clone(),
+            Some(Arc::new(crate::extension_bundles::ExtensionBundles::new(
+                store.clone(),
+            ))),
+        )
+        .await;
+
+        assert!(
+            unstored.contains("stores no extension bundles"),
+            "{unstored}"
+        );
+        assert!(
+            missing.contains("Extension 'acme'") && missing.contains("no such bundle"),
+            "{missing}"
+        );
+        assert!(
+            refused.contains("Extension 'acme'") && refused.contains("sha256"),
+            "{refused}"
+        );
+        assert_eq!(loaded_status, "provisioning", "{loaded}");
+        assert!(loaded.is_empty(), "{loaded}");
+    }
+
     /// A protected deployment's step gets what its enforcers verify: the target release's
     /// signed statement for its platform, the project's signer lists and its newest signed
     /// config. Without them every protected update fails: management may not write what runs,
@@ -7966,6 +8161,10 @@ fn parse_status(status: &str) -> DeploymentStatus {
         }
     }
 }
+
+#[cfg(all(test, feature = "sqlite"))]
+#[path = "deployment_extension_tests.rs"]
+mod extension_controller_tests;
 
 #[cfg(all(test, feature = "sqlite"))]
 #[path = "deployment_parity_tests.rs"]

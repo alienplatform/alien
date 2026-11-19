@@ -3673,6 +3673,166 @@ mod tests {
         declared.assert_async().await;
     }
 
+    // The extension checks run before any push or request, and only for a stack that lists an
+    // extension; the test above covers a stack without one.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn a_prebuilt_stack_whose_extension_bundle_is_missing_is_refused_before_any_request() {
+        let error = release_a_prebuilt_stack_with_an_extension(
+            SigningPlan::Unsigned("not under test".to_string()),
+            0,
+        )
+        .await;
+        assert!(
+            error.contains("no generated module's folder has its bundle"),
+            "{error}"
+        );
+    }
+
+    /// An extension's code runs in the customer's environment, outside what a release signs, so
+    /// a release of a stack that lists one can't be signed: protected deployments refuse it.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn a_release_with_an_extension_is_refused_where_protected_deployments_follow() {
+        let error = release_a_prebuilt_stack_with_an_extension(signing_plan(), 1).await;
+
+        assert!(
+            error.contains("protected deployments follow production")
+                && error.contains("signed releases don't support extensions yet")
+                && error.contains("`acme`"),
+            "{error}"
+        );
+    }
+
+    /// With no protected deployment on the channel, the release goes on unsigned: it reaches
+    /// the extension checks that follow.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn a_release_with_an_extension_goes_on_unsigned_without_protected_deployments() {
+        let error = release_a_prebuilt_stack_with_an_extension(signing_plan(), 0).await;
+
+        assert!(
+            error.contains("no generated module's folder has its bundle"),
+            "{error}"
+        );
+    }
+
+    /// A plan that signs with a one-admin signer list.
+    #[cfg(feature = "platform")]
+    fn signing_plan() -> SigningPlan {
+        let alice = alien_signing::SecretKey::from_secret_bytes(&[1; 32]).unwrap();
+        let list = alien_signing::SignedStatement::new(
+            &alien_signing::Envelope {
+                kind: alien_signing::Kind::SignerList.as_str().to_string(),
+                project: "prj".to_string(),
+                install: None,
+                sequence: 1,
+                not_after: None,
+                signer_list_version: 1,
+                body: alien_signing::SignerListBody {
+                    previous: None,
+                    admin_threshold: 1,
+                    signers: vec![alien_signing::Signer {
+                        id: "alice".to_string(),
+                        key: alice.public_key().as_str().to_string(),
+                        kind: alien_signing::SignerKind::Device,
+                        backend: None,
+                        roles: vec![alien_signing::Role::Admin, alien_signing::Role::Release],
+                        label: None,
+                    }],
+                    deny: Vec::new(),
+                    keep: Vec::new(),
+                    recovered: false,
+                },
+            }
+            .to_payload()
+            .unwrap(),
+        )
+        .sign_with("alice", &alice)
+        .unwrap();
+        let fingerprint = alien_signing::fingerprint(&list.open().unwrap().digest);
+        let chain = alien_signing::SignerChain::from_statements(&fingerprint, &[list]).unwrap();
+        SigningPlan::Sign(Box::new(signing::release::ReleaseSigner {
+            signer: crate::signing::StatementSigner::Key {
+                id: "alice".to_string(),
+                key: alice,
+            },
+            chain,
+        }))
+    }
+
+    /// Releases a prebuilt stack that lists the extension `acme` with `plan` and `protected`
+    /// deployments on its channel, and returns why it
+    /// failed. Nothing reaches the platform.
+    #[cfg(feature = "platform")]
+    async fn release_a_prebuilt_stack_with_an_extension(
+        plan: SigningPlan,
+        protected: u64,
+    ) -> String {
+        let server = httpmock::MockServer::start_async().await;
+        let created = server
+            .mock_async(|when, then| {
+                when.method("POST").path("/v1/releases");
+                then.status(201);
+            })
+            .await;
+        let mut stack = Stack::new("prebuilt-app".to_string())
+            .add(test_container("writer", "registry.example.com/writer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string()), ResourceLifecycle::Live)
+            .build();
+        stack.extensions.push(alien_core::ExtensionManifest {
+            name: "acme".to_string(),
+            version: "0.1.0".to_string(),
+            digest: format!("sha256:{}", "0".repeat(64)),
+            resource_types: Default::default(),
+            egress: Vec::new(),
+        });
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().join(".alien");
+        let build_dir = output_dir.join("build/test");
+        fs::create_dir_all(&build_dir).unwrap();
+        fs::write(
+            build_dir.join("stack.json"),
+            serde_json::to_vec(&stack).unwrap(),
+        )
+        .unwrap();
+        let ctx = ExecutionMode::Platform {
+            base_url: server.base_url(),
+            api_key: Some("test-key".to_string()),
+            no_browser: true,
+            workspace: Some("sample-workspace".to_string()),
+            project: Some("sample".to_string()),
+        };
+        let args = ReleaseArgs::try_parse_from(["release", "--prebuilt", "--no-promote"]).unwrap();
+        let config = ReleaseConfig {
+            project_dir: output.path().to_path_buf(),
+            extension_module_dirs: None,
+            output_dir,
+            manager: None,
+            workspace_name: "sample-workspace".to_string(),
+            project_link: crate::project_link::ProjectLink::new(
+                "sample-workspace".to_string(),
+                "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                "sample".to_string(),
+            ),
+            git_metadata: None,
+            platforms: vec!["test".to_string()],
+            onboarding_inputs: vec![],
+            signing: SigningState {
+                plan,
+                protected,
+                channel: "production".to_string(),
+                promoted: true,
+                json: false,
+                quiet: true,
+            },
+        };
+        let Err(error) = release_task_core(args, config, &ctx).await else {
+            panic!("the release is refused");
+        };
+        created.assert_hits_async(0).await;
+        error.to_string()
+    }
+
     #[tokio::test]
     async fn cached_aws_worker_still_validates_its_local_archive_before_registry_access() {
         let output = tempfile::tempdir().unwrap();
