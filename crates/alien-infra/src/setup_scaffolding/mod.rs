@@ -18,6 +18,7 @@ mod aws_sandbox;
 mod aws_sandbox_egress;
 #[cfg(feature = "gcp")]
 mod gcp_sandbox;
+mod gcp_sandbox_state;
 
 /// The credentials a scaffolding step acts with: setup's, never the runtime identity's.
 pub struct SetupScaffoldingContext<'a> {
@@ -194,7 +195,12 @@ pub fn changes_requiring_setup(
         }
     }
     if platform == Platform::Gcp {
-        changes.extend(gcp_frozen_sandbox_image_changes(installed, records, stack_state, target));
+        changes.extend(gcp_frozen_sandbox_image_changes(
+            installed,
+            records,
+            stack_state,
+            target,
+        ));
     }
     Ok(changes)
 }
@@ -233,7 +239,8 @@ fn gcp_frozen_sandbox_image_changes(
                     ..
                 })
             );
-            match writer_granted && gcp_sandbox::templates_grant_recorded(stack_state, resource_id)
+            match writer_granted
+                && gcp_sandbox_state::templates_grant_recorded(stack_state, resource_id)
             {
                 true => None,
                 false => Some(format!(
@@ -308,7 +315,9 @@ pub fn seeds(
     scaffolded(stack, stack_state.platform)
         .filter_map(|(_, _, scaffolded)| match scaffolded {
             #[cfg(feature = "aws")]
-            Scaffolded::AwsSandbox(sandbox) => Some(aws_sandbox::seed(ctx, stack, sandbox, records)),
+            Scaffolded::AwsSandbox(sandbox) => {
+                Some(aws_sandbox::seed(ctx, stack, sandbox, records))
+            }
             #[cfg(not(feature = "aws"))]
             Scaffolded::AwsSandbox(_) => Some(Err(aws_not_built())),
             // Its controller is built by the setup run's own executor; there is nothing to seed.
