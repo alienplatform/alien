@@ -363,7 +363,7 @@ pub fn run(
             attributes,
         } => {
             let at = open_dir(libc::AT_FDCWD, target, false)?;
-            let mount = new_mount("tmpfs", Some("tmpfs"), params, *attributes)?;
+            let mount = new_mount("tmpfs", Some(BROKER_SOURCE), params, *attributes)?;
             in_time(attach_by)?;
             attach(&mount, &at, target).map(Some)
         }
@@ -498,11 +498,23 @@ pub fn port_held_by(port: u16, procs: &str) -> Result<(), Refusal> {
 
 /// Every mount in this namespace as (mount ID, mount point, filesystem type), from
 /// `/proc/self/mountinfo` (whose octal escapes are decoded).
+/// The source name of every tmpfs the broker makes (and so of binds from one): how a mount the
+/// broker made but never recorded is recognised.
+pub const BROKER_SOURCE: &str = "alien-mount";
+
+/// Each mount in this namespace: (ID, mount point, filesystem type).
 fn mounts() -> Vec<(u64, String, String)> {
+    mounts_with_source()
+        .into_iter()
+        .map(|(id, point, fstype, _)| (id, point, fstype))
+        .collect()
+}
+
+fn mounts_with_source() -> Vec<(u64, String, String, String)> {
     parse_mountinfo(&std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default())
 }
 
-fn parse_mountinfo(text: &str) -> Vec<(u64, String, String)> {
+fn parse_mountinfo(text: &str) -> Vec<(u64, String, String, String)> {
     let decode = |field: &str| {
         let bytes = field.as_bytes();
         let mut out = Vec::new();
@@ -526,10 +538,42 @@ fn parse_mountinfo(text: &str) -> Vec<(u64, String, String)> {
             let mut fields = head.split(' ');
             let id = fields.next()?.parse().ok()?;
             let point = decode(fields.nth(3)?);
-            let fstype = tail.split(' ').next()?.to_string();
-            Some((id, point, fstype))
+            let mut tail = tail.split(' ');
+            let fstype = tail.next()?.to_string();
+            let source = decode(tail.next()?);
+            Some((id, point, fstype, source))
         })
         .collect()
+}
+
+/// Detaches every mount only the broker could have made (NFS, which the image cannot mount, or a
+/// tmpfs or bind with [`BROKER_SOURCE`]) that is not in `made`: what a helper killed between
+/// attaching and reporting leaves, wherever the image moved it. Every helper runs this first.
+pub fn detach_orphans(made: &BTreeSet<u64>) -> usize {
+    let mut detached = 0;
+    for _ in 0..64 {
+        let found: Vec<(u64, String)> = mounts_with_source()
+            .into_iter()
+            .filter(|(id, _, fstype, source)| {
+                !made.contains(id) && (fstype.starts_with("nfs") || source == BROKER_SOURCE)
+            })
+            .map(|(id, point, _, _)| (id, point))
+            .collect();
+        let before = detached;
+        for (id, point) in found {
+            let one = Plan::Umount {
+                target: point,
+                flags: libc::MNT_DETACH,
+            };
+            if run(&one, &BTreeSet::from([id]), None).is_ok() {
+                detached += 1;
+            }
+        }
+        if detached == before {
+            break;
+        }
+    }
+    detached
 }
 
 /// Detaches (lazily, `MNT_DETACH`) every NFS mount in this mount namespace, wherever it is,
@@ -579,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn mountinfo_gives_id_point_and_type() {
+    fn mountinfo_gives_id_point_type_and_source() {
         let text = "29 1 0:26 / / rw,relatime shared:1 - ext4 /dev/vda rw\n\
                     41 29 0:40 / /mnt/a\\040b rw,nosuid,nodev - nfs4 127.0.0.1:/ rw,vers=4.2\n\
                     42 41 0:41 / /scratch rw master:3 - tmpfs tmpfs rw,size=1024k\n\
@@ -587,10 +631,10 @@ mod tests {
         assert_eq!(
             parse_mountinfo(text),
             vec![
-                (29, "/".to_string(), "ext4".to_string()),
-                (41, "/mnt/a b".to_string(), "nfs4".to_string()),
-                (42, "/scratch".to_string(), "tmpfs".to_string()),
-                (43, "/odd\\".to_string(), "tmpfs".to_string()),
+                (29, "/".into(), "ext4".into(), "/dev/vda".into()),
+                (41, "/mnt/a b".into(), "nfs4".into(), "127.0.0.1:/".into()),
+                (42, "/scratch".into(), "tmpfs".into(), "tmpfs".into()),
+                (43, "/odd\\".into(), "tmpfs".into(), "tmpfs".into()),
             ]
         );
     }

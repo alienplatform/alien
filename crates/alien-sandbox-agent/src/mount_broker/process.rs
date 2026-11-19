@@ -1042,12 +1042,25 @@ impl Loop<'_> {
             return;
         };
         let namespace = namespace.as_raw_fd();
+        // The detach reports which recorded mounts are still there: a mount ID is reused once
+        // its mount is gone, and a stale record would hide a new mount from the orphan sweep.
+        let mut fds = [0; 2];
+        // SAFETY: fds has room for two descriptors.
+        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+            return;
+        }
+        // SAFETY: two descriptors the kernel just returned.
+        let (read, write) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
         // SAFETY: the broker is single-threaded, so the child may allocate.
         let pid = unsafe { libc::fork() };
         if pid == 0 {
+            drop(read);
             // SAFETY: a mount namespace descriptor; the helper is single-threaded.
             let code = if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } == 0 {
                 ops::detach_nfs();
+                let present: Vec<u64> = ops::mount_ids().into_iter().collect();
+                let _ = std::fs::File::from(write)
+                    .write_all(&serde_json::to_vec(&present).unwrap_or_default());
                 0
             } else {
                 1
@@ -1055,6 +1068,7 @@ impl Loop<'_> {
             // SAFETY: leaving the forked helper.
             unsafe { libc::_exit(code) };
         }
+        drop(write);
         if pid < 0 {
             return;
         }
@@ -1068,12 +1082,15 @@ impl Loop<'_> {
                 // SAFETY: signalling our own helper.
                 unsafe { libc::kill(pid, libc::SIGKILL) };
                 self.zombies.push(pid);
-                break;
+                return;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        // Detached mounts are gone from the namespace; the next request's helper prunes the
-        // record of every mount it no longer finds.
+        let mut text = Vec::new();
+        let _ = std::fs::File::from(read).read_to_end(&mut text);
+        if let Ok(present) = serde_json::from_slice::<BTreeSet<u64>>(&text) {
+            self.made.retain(|id, _| present.contains(id));
+        }
     }
 
     fn finish(&mut self) {
@@ -1166,6 +1183,9 @@ fn helper(
             alive: made.iter().copied().collect(),
         };
     }
+    // A helper killed after attaching but before reporting left a mount the broker never
+    // recorded: it goes before anything else.
+    ops::detach_orphans(made);
     let result = (|| {
         if let Plan::Nfs { port, .. } = plan {
             // The image's view of the (read-only) cgroup mount shows the same members.

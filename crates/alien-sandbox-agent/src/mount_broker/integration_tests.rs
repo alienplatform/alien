@@ -664,6 +664,49 @@ print(results)
     );
     println!("PAUSE    an NFS mount off the declared paths was detached too");
 
+    // What a helper killed between attaching and reporting would leave, wherever the image moved
+    // it: an NFS mount and a tmpfs with the broker's source that the broker never recorded. The
+    // next request's helper detaches both first; a mount the broker did not make stays.
+    std::fs::create_dir_all("/elsewhere/orphan-nfs").unwrap();
+    std::fs::create_dir_all("/elsewhere/orphan-tmpfs").unwrap();
+    std::fs::create_dir_all("/elsewhere/theirs").unwrap();
+    assert!(Command::new("mount")
+        .args(["-i", "-t", "nfs4", "-o"])
+        .arg(format!("{options},addr=127.0.0.1"))
+        .args(["127.0.0.1:/", "/elsewhere/orphan-nfs"])
+        .status()
+        .unwrap()
+        .success());
+    for (source, point) in [
+        ("alien-mount", "/elsewhere/orphan-tmpfs"),
+        ("theirs", "/elsewhere/theirs"),
+    ] {
+        assert!(Command::new("mount")
+            .args(["-t", "tmpfs", "-o", "size=1m", source, point])
+            .status()
+            .unwrap()
+            .success());
+    }
+    allowed("/opt/alien/bin/alien-mount tmpfs /scratch -o size=1m && /opt/alien/bin/alien-mount umount /scratch");
+    assert!(
+        mount_line("/elsewhere/orphan-nfs").is_none(),
+        "an orphan NFS mount stayed"
+    );
+    assert!(
+        mount_line("/elsewhere/orphan-tmpfs").is_none(),
+        "an orphan tmpfs stayed"
+    );
+    assert!(
+        mount_line("/elsewhere/theirs").is_some(),
+        "a mount the broker did not make went"
+    );
+    assert!(Command::new("umount")
+        .arg("/elsewhere/theirs")
+        .status()
+        .unwrap()
+        .success());
+    println!("ORPHAN   unrecorded broker mounts were detached by the next request; others stayed");
+
     // From the pause until the resume, no new mounts.
     mount_broker::pausing().expect("pausing");
     refused(
