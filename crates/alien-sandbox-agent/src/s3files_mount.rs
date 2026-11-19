@@ -20,6 +20,36 @@ use crate::s3files::{self, ClientKey, ProxyFiles};
 pub const PROXY_BINARY: &str = "/opt/alien/efs-proxy";
 /// Amazon's root certificates, shipped with the proxy (efs-utils `dist/efs-utils.crt`).
 pub const CA_BUNDLE: &str = "/opt/alien/efs-utils.crt";
+/// One mount, from the first step to the mounted file system, gets this long. A step that does
+/// not finish fails the mount with the step's name.
+pub const MOUNT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+const DNS_BUDGET: std::time::Duration = std::time::Duration::from_secs(6);
+const CONNECT_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Runs `work` on its own thread and gives up after `budget`. The thread is left to finish by
+/// itself when it overruns (a blocked system call cannot be cancelled).
+fn within<T: Send + 'static>(
+    budget: std::time::Duration,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(work());
+    });
+    receiver.recv_timeout(budget).ok()
+}
+
+/// The last line the proxy wrote, printable and short, for a failure message.
+fn proxy_log_tail(dir: &Path) -> String {
+    let text = std::fs::read_to_string(dir.join("proxy.log")).unwrap_or_default();
+    let line = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let line: String = line.chars().filter(|c| !c.is_control()).take(200).collect();
+    if line.is_empty() {
+        "the proxy log is empty".to_string()
+    } else {
+        format!("proxy log: {line}")
+    }
+}
 
 struct Attached {
     dir: PathBuf,
@@ -130,6 +160,37 @@ impl Helper {
         if self.attached.contains_key(path) {
             return Err("already mounted".into());
         }
+        let started = std::time::Instant::now();
+        // Step 1, dns: the mount target's name must resolve (and the network must let this
+        // process ask). Step 2, connect: its NFS port must answer.
+        let dns_name = s3files::mount_target_name(fs_id, region, zone);
+        tracing::info!(mount = path, "resolving the mount target");
+        let lookup_name = dns_name.clone();
+        let address = within(DNS_BUDGET, move || {
+            use std::net::ToSocketAddrs;
+            (lookup_name.as_str(), crate::mount_network::NFS_PORT)
+                .to_socket_addrs()
+                .map(|mut a| a.next())
+                .map_err(|e| e.to_string())
+        });
+        let address = match address {
+            None => {
+                return Err(format!(
+                    "dns: resolving {dns_name} took longer than {} s (the sandbox network gives this process no resolver)",
+                    DNS_BUDGET.as_secs()
+                ))
+            }
+            Some(Err(e)) => return Err(format!("dns: cannot resolve {dns_name}: {e}")),
+            Some(Ok(None)) => return Err(format!("dns: {dns_name} has no address")),
+            Some(Ok(Some(address))) => address,
+        };
+        tracing::info!(mount = path, "connecting to the mount target");
+        if let Err(e) = std::net::TcpStream::connect_timeout(&address, CONNECT_BUDGET) {
+            return Err(format!(
+                "connect: cannot reach the mount target {address} on port {}: {e}",
+                crate::mount_network::NFS_PORT
+            ));
+        }
         tracing::info!(mount = path, "reading the stored credentials");
         let credentials = self.read_credentials(path)?;
         let dir = self.credentials_dir.join(format!(
@@ -175,7 +236,6 @@ impl Helper {
             self.ports.pop();
             return Err(reason);
         }
-        let dns_name = s3files::mount_target_name(fs_id, region, zone);
         let config = s3files::proxy_config(&ProxyFiles {
             listen_port: port,
             dns_name: &dns_name,
@@ -226,7 +286,7 @@ impl Helper {
             Ok(proxy) => proxy,
             Err(e) => {
                 self.ports.retain(|p| *p != port);
-                return Err(format!("cannot start the proxy: {e}"));
+                return Err(format!("proxy: cannot start the proxy: {e}"));
             }
         };
         drop(listener);
@@ -234,12 +294,29 @@ impl Helper {
         std::thread::sleep(std::time::Duration::from_millis(300));
         if let Ok(Some(status)) = proxy.try_wait() {
             self.ports.retain(|p| *p != port);
-            return Err(format!("the proxy exited at start ({status})"));
+            return Err(format!(
+                "proxy: exited at start ({status}); {}",
+                proxy_log_tail(&dir)
+            ));
         }
 
         std::fs::create_dir_all(path).map_err(|e| format!("cannot create {path}: {e}"))?;
         tracing::info!(mount = path, port, "mounting over the proxy");
-        let outcome = mount_nfs(path, port);
+        // Step 3, tls and nfs: the kernel's mount call waits on the proxy's TLS session to the
+        // mount target, and does not return on its own when that never comes up.
+        let target = path.to_string();
+        let left = MOUNT_DEADLINE
+            .saturating_sub(started.elapsed())
+            .max(std::time::Duration::from_secs(5));
+        let outcome = within(left, move || mount_nfs(&target, port));
+        let outcome = match outcome {
+            Some(result) => result.map_err(|e| format!("nfs: {e}; {}", proxy_log_tail(&dir))),
+            None => Err(format!(
+                "tls/nfs: the mount did not finish in {} s; {}",
+                MOUNT_DEADLINE.as_secs(),
+                proxy_log_tail(&dir)
+            )),
+        };
         if let Err(reason) = outcome {
             let _ = proxy.kill();
             let _ = proxy.wait();
@@ -321,4 +398,45 @@ fn mount_nfs(path: &str, port: u16) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_step_that_overruns_is_given_up_on() {
+        let started = Instant::now();
+        let result = within(Duration::from_millis(200), || {
+            std::thread::sleep(Duration::from_secs(3));
+            1
+        });
+        assert!(result.is_none());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(within(Duration::from_secs(2), || 7), Some(7));
+    }
+
+    #[test]
+    fn the_proxy_log_tail_is_one_short_printable_line() {
+        let dir = std::env::temp_dir().join(format!("tail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(proxy_log_tail(&dir).contains("empty"));
+        std::fs::write(dir.join("proxy.log"), "first\nTLS \u{1b}[31mhandshake failed\n\n").unwrap();
+        let tail = proxy_log_tail(&dir);
+        assert_eq!(tail, "proxy log: TLS [31mhandshake failed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unresolvable_mount_target_fails_fast_naming_the_dns_step() {
+        let dir = std::env::temp_dir().join(format!("dns-{}", std::process::id()));
+        let mut helper = Helper::new(dir);
+        let started = Instant::now();
+        let error = helper
+            .mount("/mnt/x", "fs-0000", "fsap-0000", "us-east-2", Some("use2-az1"))
+            .expect_err("nothing resolves here");
+        assert!(error.starts_with("dns:") || error.starts_with("connect:"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(12));
+    }
 }

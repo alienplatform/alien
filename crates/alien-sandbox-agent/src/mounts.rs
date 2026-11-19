@@ -452,6 +452,9 @@ pub struct HelperClient {
 impl MountBackend for HelperClient {
     fn request(&self, request: &HelperRequest) -> Result<(), String> {
         let mut guard = self.stream.lock().map_err(|_| "mount helper failed")?;
+        // Every step in the helper has its own deadline, so this one only catches a helper that
+        // is stuck.
+        let _ = guard.0.set_read_timeout(Some(std::time::Duration::from_secs(40)));
         let mut line = serde_json::to_string(request).map_err(|_| "bad request")?;
         line.push('\n');
         guard
@@ -459,10 +462,16 @@ impl MountBackend for HelperClient {
             .write_all(line.as_bytes())
             .map_err(|_| "the mount helper is gone")?;
         let mut reply = String::new();
-        guard
-            .1
-            .read_line(&mut reply)
-            .map_err(|_| "the mount helper is gone")?;
+        guard.1.read_line(&mut reply).map_err(|e| {
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) {
+                "the mount helper did not answer in 40 s"
+            } else {
+                "the mount helper is gone"
+            }
+        })?;
         let reply: HelperReply =
             serde_json::from_str(&reply).map_err(|_| "the mount helper is gone")?;
         match reply.error {

@@ -136,8 +136,35 @@ impl AwsSandbox {
         mounts: &std::collections::BTreeMap<String, crate::traits::SandboxMountSource>,
     ) -> Result<()> {
         let body = serde_json::json!({ "mounts": mounts });
-        self.put_agent("sandbox.mounts", sandbox_id, "/v1/mounts", &body)
-            .await
+        let reply = self
+            .put_agent("sandbox.mounts", sandbox_id, "/v1/mounts", &body)
+            .await?;
+        // The agent answers with each mount's state; a failed mount says which step failed.
+        Self::check_mount_states(&reply)
+    }
+
+    /// Turns the agent's per-mount states into an error naming every mount that is not mounted.
+    fn check_mount_states(reply: &str) -> Result<()> {
+        #[derive(serde::Deserialize)]
+        struct State {
+            path: String,
+            state: String,
+        }
+        let Ok(states) = serde_json::from_str::<Vec<State>>(reply) else {
+            return Ok(());
+        };
+        let bad: Vec<String> = states
+            .iter()
+            .filter(|s| s.state != "mounted")
+            .map(|s| format!("{}: {}", s.path, s.state))
+            .collect();
+        if bad.is_empty() {
+            return Ok(());
+        }
+        Err(AlienError::new(ErrorData::SandboxUnreachable {
+            operation: "sandbox.mounts".to_string(),
+            reason: format!("mounts not in place: {}", bad.join("; ")),
+        }))
     }
 
     /// A PUT the agent answers once the sandbox's endpoint is up; throttles and restore failures
@@ -148,7 +175,7 @@ impl AwsSandbox {
         sandbox_id: &str,
         path: &str,
         body: &serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let deadline = std::time::Instant::now() + SANDBOX_READY_TIMEOUT;
         let mut delay = SANDBOX_READY_POLL;
         let mut last_seen = "the endpoint gave no answer".to_string();
@@ -164,7 +191,9 @@ impl AwsSandbox {
                     .json(body)
                     .timeout(SANDBOX_READY_TIMEOUT);
                 match request.send().await {
-                    Ok(response) if response.status().is_success() => return Ok(()),
+                    Ok(response) if response.status().is_success() => {
+                        return Ok(response.text().await.unwrap_or_default());
+                    }
                     Ok(response) => {
                         let status = response.status();
                         last_seen = format!("HTTP {status}");
@@ -174,6 +203,9 @@ impl AwsSandbox {
                                 reason: format!("the agent refused the request: {last_seen}"),
                             }));
                         }
+                    }
+                    Err(e) if e.is_timeout() => {
+                        last_seen = "the agent did not answer in time".to_string()
                     }
                     Err(_) => last_seen = "the connection failed".to_string(),
                 }
@@ -1031,6 +1063,7 @@ impl Sandbox for AwsSandbox {
             &body,
         )
         .await
+        .map(|_| ())
     }
 
     async fn update_egress(
@@ -1432,6 +1465,17 @@ mod tests {
     };
     use alien_error::Context;
     use std::time::Duration;
+
+    #[test]
+    fn a_failed_mount_state_becomes_the_error_with_its_step() {
+        let reply = r#"[{"path":"/data","state":"mounted"},{"path":"/w","state":"failed: dns: cannot resolve the mount target"}]"#;
+        let error = AwsSandbox::check_mount_states(reply).expect_err("a failed mount refuses");
+        let text = error.to_string();
+        assert!(text.contains("/w: failed: dns:"), "{text}");
+        assert!(!text.contains("/data"), "{text}");
+        let all = r#"[{"path":"/data","state":"mounted"}]"#;
+        AwsSandbox::check_mount_states(all).expect("all mounted is fine");
+    }
 
     /// Exercise both retrying endpoint operations over actual HTTP, including request replay.
     #[rstest::rstest]
