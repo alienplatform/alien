@@ -39,6 +39,31 @@ pub enum AgentSource {
     Binary(std::path::PathBuf),
 }
 
+/// Files that sit beside a local agent binary and travel with it: the TLS proxy the agent starts
+/// to attach S3 Files, and the certificate authorities it verifies the mount target against.
+/// Both are optional in the directory and are installed read-only next to the agent.
+pub const MOUNT_PROXY_FILES: [(&str, u32); 2] = [("efs-proxy", 0o755), ("efs-utils.crt", 0o444)];
+
+/// The mount proxy files that sit beside `agent_binary`, when all are present.
+fn mount_proxy_files(agent: &AgentSource) -> Vec<(&'static str, u32, std::path::PathBuf)> {
+    let AgentSource::Binary(binary) = agent else {
+        return Vec::new();
+    };
+    let Some(directory) = binary.parent() else {
+        return Vec::new();
+    };
+    let found: Vec<_> = MOUNT_PROXY_FILES
+        .iter()
+        .map(|(name, mode)| (*name, *mode, directory.join(name)))
+        .filter(|(_, _, path)| path.is_file())
+        .collect();
+    if found.len() == MOUNT_PROXY_FILES.len() {
+        found
+    } else {
+        Vec::new()
+    }
+}
+
 /// Refuses a reference that cannot cross into generated content: a newline in it writes its own
 /// Dockerfile directives.
 fn checked_reference<'a>(reference: &'a str, what: &str) -> Result<&'a str> {
@@ -284,6 +309,12 @@ fn write_bundle_inner(
     // Every fallible input resolves before the archive exists, so no failure — a bad reference
     // or an unreadable agent binary — leaves a truncated zip behind.
     let mut dockerfile = render_dockerfile(base_image, agent, contract)?;
+    let proxy_files = mount_proxy_files(agent);
+    for (name, mode, _) in &proxy_files {
+        dockerfile.push_str(&format!(
+            "\nCOPY --chown=0:0 --chmod={mode:04o} {name} /opt/alien/{name}\n"
+        ));
+    }
     let command_bytes = image_command
         .map(serde_json::to_vec)
         .transpose()
@@ -322,6 +353,18 @@ fn write_bundle_inner(
         // builders that drop archive modes, and neither alone is reliable across both.
         let options: SimpleFileOptions = SimpleFileOptions::default().unix_permissions(AGENT_MODE);
         zip.start_file(AGENT_FILENAME, options)
+            .into_alien_error()
+            .context(failed("write", destination))?;
+        zip.write_all(&bytes)
+            .into_alien_error()
+            .context(failed("write", destination))?;
+    }
+
+    for (name, mode, path) in &proxy_files {
+        let bytes = std::fs::read(path)
+            .into_alien_error()
+            .context(failed("read", path))?;
+        zip.start_file(*name, SimpleFileOptions::default().unix_permissions(*mode))
             .into_alien_error()
             .context(failed("write", destination))?;
         zip.write_all(&bytes)
@@ -565,6 +608,47 @@ mod tests {
         let mut contents = String::new();
         std::io::Read::read_to_string(&mut dockerfile_entry, &mut contents).expect("reads");
         assert!(contents.starts_with("FROM ubuntu:24.04"));
+    }
+
+    /// The mount proxy and its certificate authorities ride along when they sit beside a local
+    /// agent binary, and only then: a bundle without them stays exactly as it was.
+    #[test]
+    fn the_mount_proxy_files_ship_beside_a_local_agent_only_when_both_exist() {
+        let read = |bundle: &Path| {
+            let mut archive =
+                zip::ZipArchive::new(std::fs::File::open(bundle).expect("opens")).expect("zip");
+            let mut names: Vec<String> = (0..archive.len())
+                .map(|i| archive.by_index(i).expect("entry").name().to_string())
+                .collect();
+            names.sort();
+            let mut dockerfile = String::new();
+            std::io::Read::read_to_string(
+                &mut archive.by_name("Dockerfile").expect("Dockerfile"),
+                &mut dockerfile,
+            )
+            .expect("reads");
+            (names, dockerfile)
+        };
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let agent = dir.path().join("agent-bin");
+        std::fs::write(&agent, b"\x7fELF-not-really").expect("agent");
+        let bundle = dir.path().join("sandbox.zip");
+
+        std::fs::write(dir.path().join("efs-proxy"), b"proxy").expect("proxy");
+        write_bundle(&bundle, "ubuntu:24.04", &AgentSource::Binary(agent.clone())).expect("writes");
+        let (names, dockerfile) = read(&bundle);
+        assert_eq!(names, vec!["Dockerfile", AGENT_FILENAME], "one file alone is not shipped");
+        assert!(!dockerfile.contains("efs-proxy"));
+
+        std::fs::write(dir.path().join("efs-utils.crt"), b"roots").expect("crt");
+        write_bundle(&bundle, "ubuntu:24.04", &AgentSource::Binary(agent)).expect("writes");
+        let (names, dockerfile) = read(&bundle);
+        assert_eq!(
+            names,
+            vec!["Dockerfile", AGENT_FILENAME, "efs-proxy", "efs-utils.crt"]
+        );
+        assert!(dockerfile.contains("COPY --chown=0:0 --chmod=0755 efs-proxy /opt/alien/efs-proxy"));
+        assert!(dockerfile.contains("COPY --chown=0:0 --chmod=0444 efs-utils.crt /opt/alien/efs-utils.crt"));
     }
 
     /// Image-sourced bundles carry no agent binary: the zip holds only the Dockerfile.
