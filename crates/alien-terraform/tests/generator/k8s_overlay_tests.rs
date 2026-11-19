@@ -10,7 +10,7 @@
 
 use super::helpers::{
     assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, gate_input,
-    prepare_for_target, render, snapshot_module,
+    prepare_for_target, render, resource_attributes, snapshot_module,
 };
 use alien_core::{
     ArtifactRegistry, AzureResourceGroup, CapacityGroup, ComputeCluster, ComputePoolSelection,
@@ -241,6 +241,66 @@ fn gke_overlay_emits_workload_identity_binding() {
     let module = render(&stack, TerraformTarget::Gke, StackSettings::default());
     snapshot_module("gke_overlay_workload_identity", &module);
     assert_terraform_valid(&module, "gke_overlay_workload_identity");
+}
+
+#[test]
+fn gke_management_service_account_has_one_workload_identity_role_resource() {
+    let stack = Stack::new("gke-management".to_string())
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gke, StackSettings::default());
+
+    // The binding is authoritative for the role, so any other resource granting the same role
+    // on the same service account is overwritten by it on every apply.
+    let bindings = resource_attributes(&module, "google_service_account_iam_binding");
+    let members = resource_attributes(&module, "google_service_account_iam_member");
+    let mut grants_by_service_account: std::collections::BTreeMap<(String, String), usize> =
+        Default::default();
+    for (_, attributes) in bindings.iter().chain(members.iter()) {
+        *grants_by_service_account
+            .entry((
+                attributes["service_account_id"].clone(),
+                attributes["role"].clone(),
+            ))
+            .or_default() += 1;
+    }
+    for ((service_account, role), count) in &grants_by_service_account {
+        assert_eq!(
+            *count, 1,
+            "{service_account} has {count} resources granting {role}"
+        );
+    }
+
+    let (label, binding) = bindings
+        .iter()
+        .find(|(_, attributes)| attributes["role"].contains("roles/iam.workloadIdentityUser"))
+        .expect("the management service account has a Workload Identity binding");
+    assert!(
+        label.ends_with("_workload_identity"),
+        "the binding keeps its address: {label}"
+    );
+    assert!(
+        binding["members"].contains("workload_identity_config")
+            && binding["members"].contains("principal://iam.googleapis.com/"),
+        "the binding lists the Kubernetes service account and the federated principal: {}",
+        binding["members"]
+    );
+    assert!(
+        members.is_empty(),
+        "no separate member resource for the same role"
+    );
+
+    // Upgrade: the old member address is forgotten, not destroyed.
+    let rendered = module.files.values().cloned().collect::<String>();
+    assert!(
+        rendered.contains("google_service_account_iam_member."),
+        "removed block names the old member address"
+    );
+    assert!(rendered.contains("destroy = false"));
+    assert_terraform_valid(&module, "gke_management_workload_identity");
 }
 
 #[test]
