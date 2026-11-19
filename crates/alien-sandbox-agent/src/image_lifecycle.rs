@@ -38,6 +38,17 @@ pub async fn run(name: &str, command: &[String], deadline: Duration) -> Result<(
         .ok_or_else(|| format!("{name} has no program"))?;
     let leader = crate::mount_broker::image_leader()
         .ok_or_else(|| format!("{name}: the image command is not running"))?;
+    // The recorded PID may have exited and been reused: it must still be in the image cgroup.
+    let in_image = std::fs::read_to_string(format!("/proc/{leader}/cgroup"))
+        .map(|cgroup| {
+            cgroup.lines().any(|line| {
+                line.strip_prefix("0::") == Some(crate::mount_broker::IMAGE_CGROUP_NAME)
+            })
+        })
+        .unwrap_or(false);
+    if !in_image {
+        return Err(format!("{name}: the image command is not running"));
+    }
     let environ = std::fs::read(format!("/proc/{leader}/environ"))
         .map_err(|error| format!("{name}: cannot read the image's environment: {error}"))?;
     let mut process = std::process::Command::new(program);

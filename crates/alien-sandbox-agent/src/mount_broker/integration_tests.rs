@@ -105,6 +105,7 @@ fn mount_line(path: &str) -> Option<String> {
 const FORWARD: &str = r#"
 import socket, sys, threading
 port, target = int(sys.argv[1]), int(sys.argv[2])
+delay = float(sys.argv[3]) if len(sys.argv) > 3 else 0
 def pipe(a, b):
     try:
         while True:
@@ -123,6 +124,8 @@ while True:
     if target == 0:
         threading.Thread(target=lambda c=client: c.recv(1 << 20) and __import__('time').sleep(3600), daemon=True).start()
         continue
+    if delay:
+        __import__('time').sleep(delay)
     upstream = socket.create_connection(('127.0.0.1', target))
     threading.Thread(target=pipe, args=(client, upstream), daemon=True).start()
     threading.Thread(target=pipe, args=(upstream, client), daemon=True).start()
@@ -176,14 +179,16 @@ fn scenario() {
     }
     std::fs::write("/tmp/forward.py", FORWARD).unwrap();
 
-    // The image's loopback proxy, a foreign one (not in the image cgroup) and a hung one.
+    // The image's loopback proxy, a foreign one (not in the image cgroup), a hung one and a slow
+    // one (answers after 2s).
     let mut proxy = spawn_image("exec python3 /tmp/forward.py 20123 2049");
     let mut foreign = Command::new("python3")
         .args(["/tmp/forward.py", "20124", "2049"])
         .spawn()
         .unwrap();
     let mut hung = spawn_image("exec python3 /tmp/forward.py 20125 0");
-    for port in [20123, 20124, 20125] {
+    let mut slow = spawn_image("exec python3 /tmp/forward.py 20126 2049 2");
+    for port in [20123, 20124, 20125, 20126] {
         wait_for_listener(port);
     }
     mount_broker::set_image_leader(proxy.id());
@@ -548,7 +553,78 @@ print(results)
     );
     println!("PAUSE    a failed pause step detached the broker's NFS mount");
 
-    for child in [&mut proxy, &mut foreign, &mut hung] {
+    // A caller trickling its request one byte at a time cannot hold the broker: every caller
+    // gets the whole request read within one bound, so the next caller is answered promptly.
+    let mut trickle = spawn_image(
+        "exec python3 -c \"import socket, time; s = socket.socket(socket.AF_UNIX); s.connect('/run/alien/mount.sock'); [ (s.send(b' '), time.sleep(1.5)) for _ in range(20) ]\"",
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    let started = Instant::now();
+    refused(
+        "/opt/alien/bin/alien-mount tmpfs /workspace -o size=1m",
+        "EPERM",
+    );
+    let took = started.elapsed();
+    assert!(
+        took < Duration::from_secs(4),
+        "a trickling caller held the broker for {took:?}"
+    );
+    let _ = trickle.kill();
+    let _ = trickle.wait();
+    println!("TRICKLE  a caller sending a byte every 1.5s did not hold the broker ({took:?})");
+
+    // A pause detach while an NFS request is in flight ends that request first: the server
+    // answers after the detach, and its mount must not land then.
+    let mut pending = spawn_image(&format!(
+        "exec /opt/alien/bin/mount.nfs4 127.0.0.1:/ /workspace -o {}",
+        options.replace("port=20123", "port=20126")
+    ));
+    std::thread::sleep(Duration::from_millis(500));
+    let started = Instant::now();
+    mount_broker::detach_nfs_mounts().expect("detach while a request is in flight");
+    let took = started.elapsed();
+    let status = pending.wait().unwrap();
+    let ended = started.elapsed();
+    // Past the slow server's answer.
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        mount_line("/workspace").is_none(),
+        "an in-flight NFS mount landed after the pause detach: {:?}",
+        mount_line("/workspace")
+    );
+    assert_eq!(
+        status.code(),
+        Some(32),
+        "the in-flight request was not ended"
+    );
+    assert!(took < Duration::from_secs(4), "the detach waited {took:?}");
+    assert!(
+        ended < Duration::from_secs(1),
+        "the in-flight request ran on for {ended:?}"
+    );
+    println!(
+        "PAUSE    a detach during an in-flight NFS request ended it ({took:?}); nothing landed"
+    );
+
+    // Two NFS mounts stacked on one path both go at pause.
+    allowed(&format!(
+        "/opt/alien/bin/mount.nfs4 127.0.0.1:/ /workspace -o {options} && /opt/alien/bin/mount.nfs4 127.0.0.1:/ /workspace -o {options}"
+    ));
+    let stacked = std::fs::read_to_string("/proc/self/mountinfo")
+        .unwrap()
+        .lines()
+        .filter(|line| line.split(' ').nth(4) == Some("/workspace"))
+        .count();
+    assert_eq!(stacked, 2, "two NFS mounts on /workspace");
+    mount_broker::detach_nfs_mounts().expect("detach");
+    assert!(
+        mount_line("/workspace").is_none(),
+        "a stacked NFS mount survived the pause detach: {:?}",
+        mount_line("/workspace")
+    );
+    println!("PAUSE    both NFS mounts stacked on /workspace were detached");
+
+    for child in [&mut proxy, &mut foreign, &mut hung, &mut slow] {
         let _ = child.kill();
         let _ = child.wait();
     }

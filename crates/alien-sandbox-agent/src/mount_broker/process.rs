@@ -29,6 +29,12 @@ pub const IMAGE_MARK: u32 = 0xa120;
 /// How long a mount request may take before its helper is killed.
 pub const REQUEST_DEADLINE: Duration = Duration::from_secs(30);
 
+/// How long a caller has to send its whole request line.
+const REQUEST_READ: Duration = Duration::from_secs(2);
+
+/// Added to the broker's own bounds before the agent stops waiting for an answer.
+const ANSWER_SLACK: Duration = Duration::from_secs(10);
+
 /// Capabilities the broker keeps: mount (SYS_ADMIN), enter a mount namespace (SYS_CHROOT with
 /// SYS_ADMIN), read image processes' descriptors (SYS_PTRACE, DAC_READ_SEARCH), write the cgroup
 /// (DAC_OVERRIDE) and kill a helper that missed its deadline (KILL).
@@ -59,6 +65,25 @@ pub struct Broker {
     control: OwnedFd,
     join: OwnedFd,
     pid: i32,
+    /// How long the agent waits for any broker answer: the broker may first finish one request
+    /// (its deadline) and one request read.
+    answer_within: libc::timeval,
+}
+
+/// Bounds blocking receives on `socket` by `timeout`.
+///
+/// Async-signal-safe: used in `pre_exec`.
+fn receive_timeout(socket: RawFd, timeout: &libc::timeval) -> io::Result<()> {
+    // SAFETY: a valid descriptor and a correctly sized timeval.
+    check(unsafe {
+        libc::setsockopt(
+            socket,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            (timeout as *const libc::timeval).cast(),
+            size_of::<libc::timeval>() as libc::socklen_t,
+        )
+    })
 }
 
 static BROKER: OnceLock<Broker> = OnceLock::new();
@@ -128,11 +153,17 @@ pub fn start(declared: &Declared, config: Config) -> io::Result<()> {
         unsafe { libc::_exit(code) };
     }
     drop((control_broker, join_broker));
+    let answer_within = libc::timeval {
+        tv_sec: (config.deadline + REQUEST_READ + ANSWER_SLACK).as_secs() as libc::time_t,
+        tv_usec: 0,
+    };
+    receive_timeout(control_agent.as_raw_fd(), &answer_within)?;
     BROKER
         .set(Broker {
             control: control_agent,
             join: join_agent,
             pid,
+            answer_within,
         })
         .map_err(|_| io::Error::other("the mount broker is started only once"))
 }
@@ -232,10 +263,25 @@ fn receive(socket: RawFd) -> io::Result<Option<Received>> {
     }
 }
 
+/// Discards answers that arrived after an earlier wait gave up, so they cannot be taken for the
+/// answer to the next message.
+fn drain_late_acks(socket: RawFd) {
+    let mut ack = [0u8];
+    // SAFETY: reading one byte into a buffer we own, without blocking.
+    while unsafe { libc::recv(socket, ack.as_mut_ptr().cast(), 1, libc::MSG_DONTWAIT) } == 1 {}
+}
+
 fn wait_ack(socket: RawFd, what: &str) -> io::Result<()> {
     let mut ack = [0u8];
     // SAFETY: reading one byte into a buffer we own.
     let n = unsafe { libc::recv(socket, ack.as_mut_ptr().cast(), 1, 0) };
+    if n < 0 {
+        let error = io::Error::last_os_error();
+        return Err(io::Error::new(
+            error.kind(),
+            format!("the mount broker did not answer {what}: {error}"),
+        ));
+    }
     if n == 1 && ack[0] == b'k' {
         Ok(())
     } else {
@@ -280,6 +326,7 @@ pub fn serve_socket(path: &Path) -> io::Result<()> {
     let _serial = CONTROL
         .lock()
         .map_err(|_| io::Error::other("broker control poisoned"))?;
+    drain_late_acks(broker.control.as_raw_fd());
     send_with_fds(
         broker.control.as_raw_fd(),
         b'S',
@@ -299,6 +346,7 @@ pub fn detach_nfs_mounts() -> io::Result<()> {
     let _serial = CONTROL
         .lock()
         .map_err(|_| io::Error::other("broker control poisoned"))?;
+    drain_late_acks(broker.control.as_raw_fd());
     send_with_fds(broker.control.as_raw_fd(), b'D', &[])?;
     wait_ack(broker.control.as_raw_fd(), "to detach its NFS mounts")
 }
@@ -321,7 +369,8 @@ pub unsafe fn join_image_cgroup() -> io::Result<()> {
     {
         return Err(io::Error::last_os_error());
     }
-    let sent = send_with_fds(broker.join.as_raw_fd(), b'J', &[fds[1]]);
+    let sent = receive_timeout(fds[0], &broker.answer_within)
+        .and_then(|()| send_with_fds(broker.join.as_raw_fd(), b'J', &[fds[1]]));
     libc::close(fds[1]);
     let result = sent.and_then(|()| {
         let mut ack = [0u8];
@@ -354,17 +403,30 @@ fn deny_network() -> io::Result<()> {
         jf,
         k,
     };
-    let mut filter = [
+    let mut filter = vec![
         stmt(0x20, 4),
         jump(ARCH, 1, 0),
         stmt(0x06, 0x80000000),
         stmt(0x20, 0),
+    ];
+    // x32 numbers come under AUDIT_ARCH_X86_64 with bit 30 set: kill that ABI.
+    #[cfg(target_arch = "x86_64")]
+    filter.extend([
+        libc::sock_filter {
+            code: 0x35,
+            jt: 0,
+            jf: 1,
+            k: 0x40000000,
+        },
+        stmt(0x06, 0x80000000),
+    ]);
+    filter.extend([
         jump(libc::SYS_socket as u32, 0, 3),
         stmt(0x20, 16),
         jump(libc::AF_UNIX as u32, 1, 0),
         stmt(0x06, 0x00050000 | libc::EPERM as u32),
         stmt(0x06, 0x7fff0000),
-    ];
+    ]);
     let program = libc::sock_fprog {
         len: filter.len() as u16,
         filter: filter.as_mut_ptr(),
@@ -629,11 +691,17 @@ impl Loop<'_> {
         let Ok((mut connection, _)) = listener.accept() else {
             return;
         };
-        let _ = connection.set_read_timeout(Some(Duration::from_secs(2)));
-        let _ = connection.set_write_timeout(Some(Duration::from_secs(2)));
+        let _ = connection.set_write_timeout(Some(REQUEST_READ));
+        // One deadline for the whole request, not per read: a caller that trickles bytes must
+        // not hold the broker's only thread.
+        let read_by = Instant::now() + REQUEST_READ;
         let mut text = Vec::new();
         let mut buffer = [0u8; 4096];
         loop {
+            let left = read_by.saturating_duration_since(Instant::now());
+            if left.is_zero() || connection.set_read_timeout(Some(left)).is_err() {
+                break;
+            }
             match connection.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(n) => {
@@ -676,13 +744,14 @@ impl Loop<'_> {
             );
             return;
         };
-        match self.fork_helper(&plan, namespace.as_raw_fd()) {
+        let deadline = Instant::now() + self.config.deadline;
+        match self.fork_helper(&plan, namespace.as_raw_fd(), deadline) {
             Ok((helper, pipe)) => {
                 self.inflight = Some(Inflight {
                     connection,
                     helper,
                     pipe,
-                    deadline: Instant::now() + self.config.deadline,
+                    deadline,
                     plan,
                 });
             }
@@ -693,7 +762,12 @@ impl Loop<'_> {
         }
     }
 
-    fn fork_helper(&self, plan: &Plan, namespace: RawFd) -> io::Result<(i32, std::fs::File)> {
+    fn fork_helper(
+        &self,
+        plan: &Plan,
+        namespace: RawFd,
+        deadline: Instant,
+    ) -> io::Result<(i32, std::fs::File)> {
         let mut fds = [0; 2];
         // SAFETY: fds has room for two descriptors.
         check(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) })?;
@@ -707,7 +781,7 @@ impl Loop<'_> {
         if pid == 0 {
             drop(read);
             let made: BTreeSet<u64> = self.made.keys().copied().collect();
-            let outcome = helper(plan, namespace, &made, &self.config.cgroup_dir);
+            let outcome = helper(plan, namespace, &made, &self.config.cgroup_dir, deadline);
             let mut write = std::fs::File::from(write);
             let _ = write.write_all(&serde_json::to_vec(&outcome).unwrap_or_default());
             // SAFETY: leaving the forked helper.
@@ -717,28 +791,41 @@ impl Loop<'_> {
         Ok((pid, std::fs::File::from(read)))
     }
 
-    /// Detaches every NFS mount the broker made, in a helper bound by the request deadline. Used
-    /// when the image's own pause step fails: an NFS connection does not survive the snapshot.
+    /// Detaches every NFS mount at a declared path, in a helper bound by the request deadline.
+    /// Used when the image's own pause step fails: an NFS connection does not survive the
+    /// snapshot. A request still in flight is ended first, so its mount cannot land afterwards.
     fn detach_nfs(&mut self) {
+        if let Some(helper) = self.inflight.as_ref().map(|inflight| inflight.helper) {
+            self.expire();
+            // A killed helper is gone once it leaves the kernel; wait for that, bounded, so a
+            // mount it was attaching is in place (and detached below) or never made.
+            let gone_by = Instant::now() + REQUEST_READ;
+            while Instant::now() < gone_by {
+                // SAFETY: reaping our own helper without blocking.
+                if unsafe { libc::waitpid(helper, std::ptr::null_mut(), libc::WNOHANG) } != 0 {
+                    self.zombies.retain(|pid| *pid != helper);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         let Some(namespace) = &self.namespace else {
             return;
         };
-        let ids: Vec<u64> = self
-            .made
+        let points: Vec<String> = self
+            .declared
+            .permissions
+            .mounts
             .iter()
-            .filter(|(_, kind)| **kind == "nfs")
-            .map(|(id, _)| *id)
+            .map(|mount| mount.path.clone())
             .collect();
-        if ids.is_empty() {
-            return;
-        }
         let namespace = namespace.as_raw_fd();
         // SAFETY: the broker is single-threaded, so the child may allocate.
         let pid = unsafe { libc::fork() };
         if pid == 0 {
             // SAFETY: a mount namespace descriptor; the helper is single-threaded.
             let code = if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } == 0 {
-                ops::detach(&ids);
+                ops::detach_nfs(&points);
                 0
             } else {
                 1
@@ -763,10 +850,8 @@ impl Loop<'_> {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        // Detached mounts are gone from the namespace; the next request's helper prunes the rest.
-        for id in ids {
-            self.made.remove(&id);
-        }
+        // Detached mounts are gone from the namespace; the next request's helper prunes the
+        // record of every mount it no longer finds.
     }
 
     fn finish(&mut self) {
@@ -840,7 +925,13 @@ fn respond(connection: &mut UnixStream, reply: Reply) {
 
 /// Runs in the forked helper: checks that need the broker's view, then joins the image's mount
 /// namespace and carries out the plan.
-fn helper(plan: &Plan, namespace: RawFd, made: &BTreeSet<u64>, cgroup_dir: &Path) -> ops::Outcome {
+fn helper(
+    plan: &Plan,
+    namespace: RawFd,
+    made: &BTreeSet<u64>,
+    cgroup_dir: &Path,
+    deadline: Instant,
+) -> ops::Outcome {
     // SAFETY: a mount namespace descriptor; the helper is single-threaded.
     if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } != 0 {
         let error = io::Error::last_os_error();
@@ -858,7 +949,7 @@ fn helper(plan: &Plan, namespace: RawFd, made: &BTreeSet<u64>, cgroup_dir: &Path
             // The image's view of the (read-only) cgroup mount shows the same members.
             ops::port_held_by(*port, &cgroup_dir.join("cgroup.procs").to_string_lossy())?;
         }
-        ops::run(plan, made)
+        ops::run(plan, made, Some(deadline))
     })();
     // Listed in the image's mount namespace, so a mount the image's view no longer has is
     // forgotten (a lazily detached parent takes its children with it).

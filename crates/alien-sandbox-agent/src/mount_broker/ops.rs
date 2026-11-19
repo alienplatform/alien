@@ -6,6 +6,7 @@ use std::{
     ffi::CString,
     io,
     os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+    time::Instant,
 };
 
 use super::request::{Errno, Plan, Refusal, MOUNT_ATTR_NODEV, MOUNT_ATTR_NOSUID};
@@ -225,8 +226,30 @@ fn attach(mount: &OwnedFd, target: &OwnedFd, path: &str) -> Result<u64, Refusal>
     Ok(made)
 }
 
-/// Carries out a checked plan. `made` is every mount ID the broker made.
-pub fn run(plan: &Plan, made: &BTreeSet<u64>) -> Result<Option<u64>, Refusal> {
+/// Least time left on the request deadline for a new mount to still be attached. The broker kills
+/// a helper at the deadline; a mount attached just before that kill would land without the broker
+/// ever learning its ID.
+const ATTACH_MARGIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Refuses to attach a mount whose request is about to reach its deadline. The detached mount is
+/// released when its descriptor closes.
+fn in_time(attach_by: Option<Instant>) -> Result<(), Refusal> {
+    match attach_by {
+        Some(deadline) if Instant::now() + ATTACH_MARGIN > deadline => Err((
+            Errno::Etimedout,
+            "the server answered too close to the request deadline; nothing was mounted".into(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Carries out a checked plan. `made` is every mount ID the broker made; `attach_by` is the
+/// request deadline.
+pub fn run(
+    plan: &Plan,
+    made: &BTreeSet<u64>,
+    attach_by: Option<Instant>,
+) -> Result<Option<u64>, Refusal> {
     match plan {
         Plan::Nfs {
             target,
@@ -237,6 +260,7 @@ pub fn run(plan: &Plan, made: &BTreeSet<u64>) -> Result<Option<u64>, Refusal> {
         } => {
             let at = open_dir(libc::AT_FDCWD, target, false)?;
             let mount = new_mount("nfs4", Some(source), params, *attributes)?;
+            in_time(attach_by)?;
             attach(&mount, &at, target).map(Some)
         }
         Plan::Tmpfs {
@@ -246,6 +270,7 @@ pub fn run(plan: &Plan, made: &BTreeSet<u64>) -> Result<Option<u64>, Refusal> {
         } => {
             let at = open_dir(libc::AT_FDCWD, target, false)?;
             let mount = new_mount("tmpfs", Some("tmpfs"), params, *attributes)?;
+            in_time(attach_by)?;
             attach(&mount, &at, target).map(Some)
         }
         Plan::Bind { from, target } => {
@@ -290,6 +315,7 @@ pub fn run(plan: &Plan, made: &BTreeSet<u64>) -> Result<Option<u64>, Refusal> {
             {
                 return Err(os_error("cannot set nosuid,nodev on the bind"));
             }
+            in_time(attach_by)?;
             attach(&tree, &at, target).map(Some)
         }
         Plan::Umount { target, flags } => {
@@ -361,9 +387,13 @@ pub fn port_held_by(port: u16, procs: &str) -> Result<(), Refusal> {
     ))
 }
 
-/// Where each mount in this namespace is: mount ID to mount point, from `/proc/self/mountinfo`
-/// (whose octal escapes are decoded).
-fn mount_points() -> std::collections::BTreeMap<u64, String> {
+/// Every mount in this namespace as (mount ID, mount point, filesystem type), from
+/// `/proc/self/mountinfo` (whose octal escapes are decoded).
+fn mounts() -> Vec<(u64, String, String)> {
+    parse_mountinfo(&std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default())
+}
+
+fn parse_mountinfo(text: &str) -> Vec<(u64, String, String)> {
     let decode = |field: &str| {
         let bytes = field.as_bytes();
         let mut out = Vec::new();
@@ -381,33 +411,77 @@ fn mount_points() -> std::collections::BTreeMap<u64, String> {
         }
         String::from_utf8_lossy(&out).into_owned()
     };
-    std::fs::read_to_string("/proc/self/mountinfo")
-        .unwrap_or_default()
-        .lines()
+    text.lines()
         .filter_map(|line| {
-            let mut fields = line.split(' ');
+            let (head, tail) = line.split_once(" - ")?;
+            let mut fields = head.split(' ');
             let id = fields.next()?.parse().ok()?;
-            Some((id, decode(fields.nth(3)?)))
+            let point = decode(fields.nth(3)?);
+            let fstype = tail.split(' ').next()?.to_string();
+            Some((id, point, fstype))
         })
         .collect()
 }
 
-/// Detaches each of `ids` (lazily, `MNT_DETACH`), checking by mount ID that the path still
-/// shows that mount. Returns how many were detached.
-pub fn detach(ids: &[u64]) -> usize {
-    let points = mount_points();
+/// Detaches (lazily, `MNT_DETACH`) every NFS mount at one of `points`, the declared paths,
+/// checking by mount ID that the path still shows that mount. Only the broker mounts there (the
+/// image cannot), so this also takes a mount whose helper was killed before it reported. Repeats
+/// until a pass finds none, so mounts stacked on one path all go. Returns how many were detached.
+pub fn detach_nfs(points: &[String]) -> usize {
     let mut detached = 0;
-    for id in ids {
-        let Some(point) = points.get(id) else {
-            continue;
-        };
-        let one = Plan::Umount {
-            target: point.clone(),
-            flags: libc::MNT_DETACH,
-        };
-        if run(&one, &BTreeSet::from([*id])).is_ok() {
-            detached += 1;
+    for _ in 0..64 {
+        let found: Vec<(u64, String)> = mounts()
+            .into_iter()
+            .filter(|(_, point, fstype)| fstype.starts_with("nfs") && points.contains(point))
+            .map(|(id, point, _)| (id, point))
+            .collect();
+        let before = detached;
+        for (id, point) in found {
+            let one = Plan::Umount {
+                target: point,
+                flags: libc::MNT_DETACH,
+            };
+            // Only the top mount on a path matches its ID; the ones below go in later passes.
+            if run(&one, &BTreeSet::from([id]), None).is_ok() {
+                detached += 1;
+            }
+        }
+        if detached == before {
+            break;
         }
     }
     detached
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_attach_in_the_last_moments_of_a_request() {
+        let now = Instant::now();
+        assert!(in_time(None).is_ok());
+        assert!(in_time(Some(now + std::time::Duration::from_secs(10))).is_ok());
+        assert_eq!(
+            in_time(Some(now + std::time::Duration::from_secs(1))).map_err(|(errno, _)| errno),
+            Err(Errno::Etimedout)
+        );
+    }
+
+    #[test]
+    fn mountinfo_gives_id_point_and_type() {
+        let text = "29 1 0:26 / / rw,relatime shared:1 - ext4 /dev/vda rw\n\
+                    41 29 0:40 / /mnt/a\\040b rw,nosuid,nodev - nfs4 127.0.0.1:/ rw,vers=4.2\n\
+                    42 41 0:41 / /scratch rw master:3 - tmpfs tmpfs rw,size=1024k\n\
+                    43 29 0:42 / /odd\\134 rw - tmpfs tmpfs rw\n";
+        assert_eq!(
+            parse_mountinfo(text),
+            vec![
+                (29, "/".to_string(), "ext4".to_string()),
+                (41, "/mnt/a b".to_string(), "nfs4".to_string()),
+                (42, "/scratch".to_string(), "tmpfs".to_string()),
+                (43, "/odd\\".to_string(), "tmpfs".to_string()),
+            ]
+        );
+    }
 }
