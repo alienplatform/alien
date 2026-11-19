@@ -532,7 +532,11 @@ impl GcpQueueController {
             }
         }
         if let Some(agent) = self.dead_letter_agent.clone() {
-            if self.dead_letter_project_subscriber_added && ctx.is_direct_setup_run() {
+            // Setup teardown deletes setup-owned resources under direct setup authority but
+            // is not a setup run, so the delete path checks the authority only.
+            if self.dead_letter_project_subscriber_added
+                && ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup
+            {
                 let id = ctx.desired_config.id().to_string();
                 self.revoke_project_subscriber(ctx, &id, &agent).await?;
             }
@@ -1573,6 +1577,47 @@ mod tests {
         let mut run = setup_owned_queue_run(provider, |builder| builder).await;
         declare(&mut run, queue_dead_lettering("tasks")).await;
         assert_eq!(project.members(), [AGENT_MEMBER]);
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert!(project.members().is_empty());
+    }
+
+    /// Setup teardown is direct setup authority but not a setup run: the delete still removes
+    /// the member the queue added (found when a real teardown left it behind).
+    #[tokio::test]
+    async fn setup_teardown_removes_the_project_member_the_queue_added() {
+        let existing = IamPolicy {
+            version: Some(3),
+            bindings: vec![alien_gcp_clients::iam::Binding {
+                role: "roles/pubsub.subscriber".into(),
+                members: vec![AGENT_MEMBER.into()],
+                condition: None,
+            }],
+            ..Default::default()
+        };
+        let (provider, project) = project_grant_provider(existing, false);
+        let mut run = SingleControllerExecutor::builder()
+            .resource(queue_dead_lettering("tasks"))
+            .controller(GcpQueueController {
+                state: GcpQueueState::Ready,
+                topic_name: Some("test-tasks".into()),
+                subscription_name: Some("test-tasks-sub".into()),
+                dead_letter_agent: Some(AGENT_MEMBER.into()),
+                dead_letter_project_subscriber: true,
+                dead_letter_project_subscriber_added: true,
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .setup_run(false)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(
+                Queue::new("failed".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build()
+            .await
+            .unwrap();
         run.delete().unwrap();
         run.run_until_terminal().await.unwrap();
         assert!(project.members().is_empty());
