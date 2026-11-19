@@ -51,21 +51,77 @@ pub(super) fn original_destination(stream: &TcpStream) -> io::Result<SocketAddrV
 /// processes remain outside that cgroup and retain their DNS and metadata paths.
 pub(super) fn install() -> io::Result<()> {
     crate::netfilter::install(install_rules())?;
-    crate::netfilter::install(install_ip6_rules()).map_err(ip6_failed)
+    let ip6 = crate::netfilter::install(install_ip6_rules()).map_err(ip6_failed)?;
+    report_ip6(ip6);
+    Ok(())
 }
 
 pub(super) async fn install_at_run() -> io::Result<()> {
     crate::netfilter::apply(install_rules()).await?;
-    crate::netfilter::apply(install_ip6_rules())
+    let ip6 = crate::netfilter::apply(install_ip6_rules())
         .await
-        .map_err(ip6_failed)
+        .map_err(ip6_failed)?;
+    report_ip6(ip6);
+    Ok(())
 }
 
-/// Names the IPv6 step: a guest kernel can lack IPv6 nftables while it has the IPv4 family.
+/// The outcome of the IPv6 half of the NFS-port drop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ip6 {
+    /// No image permissions: nothing to install.
+    NotDeclared,
+    Installed,
+    /// The kernel refused the family itself when the table was added (this errno): it has no
+    /// IPv6 netfilter, so there is nothing to install rules into.
+    Absent(i32),
+}
+
+/// Set once the kernel refused the IPv6 family: the counters then skip it.
+static IP6_ABSENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn report_ip6(ip6: Ip6) {
+    let state = match ip6 {
+        Ip6::NotDeclared => return,
+        Ip6::Installed => "installed".to_string(),
+        Ip6::Absent(errno) => {
+            IP6_ABSENT.store(true, std::sync::atomic::Ordering::Relaxed);
+            let error = io::Error::from_raw_os_error(errno);
+            tracing::warn!(
+                %error,
+                "the kernel has no IPv6 nftables (table ip6 alien_gateway refused): continuing with the IPv4 NFS-port drop only"
+            );
+            format!("absent ({}: {error})", errno_name(errno))
+        }
+    };
+    crate::boot_report::set("ip6 nftables", state);
+    crate::boot_report::record_ipv6();
+}
+
+fn errno_name(errno: i32) -> &'static str {
+    match errno {
+        libc::EOPNOTSUPP => "EOPNOTSUPP",
+        libc::EAFNOSUPPORT => "EAFNOSUPPORT",
+        libc::ENOENT => "ENOENT",
+        _ => "errno",
+    }
+}
+
+/// The errors with which a kernel without IPv6 netfilter refuses `add table ip6`. Any other error,
+/// or any error after the table exists, keeps the agent from going on.
+fn family_refused(error: &nlink::netlink::Error) -> Option<i32> {
+    error
+        .errno()
+        .filter(|errno| [libc::EOPNOTSUPP, libc::EAFNOSUPPORT, libc::ENOENT].contains(errno))
+}
+
+/// Names the IPv6 step, which keeps the image from starting, and records it.
 fn ip6_failed(error: io::Error) -> io::Error {
-    io::Error::other(format!(
-        "the IPv6 NFS-port drop (table ip6 alien_gateway) was refused, so the kernel may lack IPv6 nftables: {error}"
-    ))
+    let error = io::Error::other(format!(
+        "the IPv6 NFS-port drop (table ip6 alien_gateway) was refused: {error}"
+    ));
+    crate::boot_report::set("ip6 nftables", format!("failed: {error}"));
+    crate::boot_report::record_ipv6();
+    error
 }
 
 /// One line with every counter of the NFS-port drop: per family, the jumps into the chain (per
@@ -74,6 +130,10 @@ pub(super) async fn nfs_port_counters() -> io::Result<String> {
     let conn = Connection::<Nftables>::new().map_err(io::Error::other)?;
     let mut line = Vec::new();
     for (family, name) in [(Family::Ip, "ip"), (Family::Ip6, "ip6")] {
+        if matches!(family, Family::Ip6) && IP6_ABSENT.load(std::sync::atomic::Ordering::Relaxed) {
+            line.push("ip6 absent".to_string());
+            continue;
+        }
         let rules = conn
             .list_rules("alien_gateway", family)
             .await
@@ -192,9 +252,9 @@ fn add_nfs_port_drop(
 
 /// With image permissions, the IPv6 half of the NFS-port drop, in a transaction of its own after
 /// the IPv4 rules so that a kernel refusing the IPv6 family is named. Nothing without them.
-async fn install_ip6_rules() -> nlink::netlink::Result<()> {
+async fn install_ip6_rules() -> nlink::netlink::Result<Ip6> {
     if crate::image_permissions::declared().is_none() {
-        return Ok(());
+        return Ok(Ip6::NotDeclared);
     }
     let conn = Connection::<Nftables>::new()?;
     let tables = conn.list_tables().await?;
@@ -203,6 +263,21 @@ async fn install_ip6_rules() -> nlink::netlink::Result<()> {
         .iter()
         .any(|table| table.family == Family::Ip6 && table.name == "alien_gateway")
     {
+        batch = batch.del_table("alien_gateway", Family::Ip6);
+    } else {
+        // The table alone first: a refusal here is the kernel refusing the family, told apart
+        // from a refused rule. The full transaction below replaces it.
+        if let Err(error) = conn
+            .transaction()
+            .add_table("alien_gateway", Family::Ip6)
+            .commit(&conn)
+            .await
+        {
+            return match family_refused(&error) {
+                Some(errno) => Ok(Ip6::Absent(errno)),
+                None => Err(error),
+            };
+        }
         batch = batch.del_table("alien_gateway", Family::Ip6);
     }
     batch = batch.add_table("alien_gateway", Family::Ip6).add_chain(
@@ -215,7 +290,8 @@ async fn install_ip6_rules() -> nlink::netlink::Result<()> {
     );
     add_nfs_port_drop(batch, "alien_gateway", "filter", Family::Ip6)?
         .commit(&conn)
-        .await
+        .await?;
+    Ok(Ip6::Installed)
 }
 
 async fn install_rules() -> nlink::netlink::Result<()> {
@@ -336,4 +412,22 @@ pub(super) fn mark(fd: std::os::fd::RawFd) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::family_refused;
+    use nlink::netlink::Error;
+
+    #[test]
+    fn only_a_refused_family_lets_the_ip6_table_be_absent() {
+        // As a Lambda guest kernel answers `add table ip6`: "Not supported (errno 95)".
+        for errno in [libc::EOPNOTSUPP, libc::EAFNOSUPPORT, libc::ENOENT] {
+            assert_eq!(family_refused(&Error::from_errno(errno)), Some(errno));
+            assert_eq!(family_refused(&Error::from_errno(-errno)), Some(errno));
+        }
+        for errno in [libc::EPERM, libc::EINVAL, libc::ENOMEM, libc::EBUSY] {
+            assert_eq!(family_refused(&Error::from_errno(errno)), None);
+        }
+    }
 }

@@ -56,7 +56,7 @@ fn console(reason: &str) {
         .and_then(|mut kmsg| std::io::Write::write_all(&mut kmsg, format!("{line}\n").as_bytes()));
 }
 
-fn write(path: &Path, reason: &str) -> std::io::Result<()> {
+pub(crate) fn write(path: &Path, reason: &str) -> std::io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
     if let Some(directory) = path.parent() {
         std::fs::DirBuilder::new()

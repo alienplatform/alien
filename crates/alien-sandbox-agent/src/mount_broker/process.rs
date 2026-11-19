@@ -346,8 +346,8 @@ fn drain_late_acks(socket: RawFd) {
     while unsafe { libc::recv(socket, ack.as_mut_ptr().cast(), 1, libc::MSG_DONTWAIT) } == 1 {}
 }
 
-fn wait_ack(socket: RawFd, what: &str) -> io::Result<()> {
-    let mut ack = [0u8; 512];
+fn wait_ack(socket: RawFd, what: &str) -> io::Result<String> {
+    let mut ack = [0u8; 2048];
     // SAFETY: reading into a buffer we own, at most its length.
     let n = unsafe { libc::recv(socket, ack.as_mut_ptr().cast(), ack.len(), 0) };
     if n < 0 {
@@ -360,10 +360,10 @@ fn wait_ack(socket: RawFd, what: &str) -> io::Result<()> {
     ack_result(&ack[..n as usize], what)
 }
 
-/// `k`, or `e` followed by the broker's reason.
-fn ack_result(ack: &[u8], what: &str) -> io::Result<()> {
+/// `k` followed by what the broker reports (may be empty), or `e` followed by its reason.
+fn ack_result(ack: &[u8], what: &str) -> io::Result<String> {
     match ack.split_first() {
-        Some((b'k', _)) => Ok(()),
+        Some((b'k', report)) => Ok(String::from_utf8_lossy(report).into_owned()),
         Some((b'e', reason)) if !reason.is_empty() => Err(io::Error::other(format!(
             "the mount broker refused {what}: {}",
             String::from_utf8_lossy(reason)
@@ -374,8 +374,8 @@ fn ack_result(ack: &[u8], what: &str) -> io::Result<()> {
 
 /// Creates the broker's socket at `path` in the agent's current mount namespace (the one the
 /// image runs in) and hands it, with that namespace, to the broker. Called before the image
-/// starts.
-pub fn serve_socket(path: &Path) -> io::Result<()> {
+/// starts. Returns the broker's report of the seal.
+pub fn serve_socket(path: &Path) -> io::Result<String> {
     let broker = BROKER
         .get()
         .ok_or_else(|| io::Error::other("no mount broker"))?;
@@ -467,6 +467,21 @@ fn seal_helper_settings(helpers: &HelperSettings) -> Result<(), String> {
     }
 }
 
+/// The helper settings as the kernel now reads them back, for the boot report.
+fn helper_settings_report(helpers: &HelperSettings) -> String {
+    let read = |path: &Path| match std::fs::read_to_string(path) {
+        Ok(value) => format!("{:?}", value.trim_end()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => "absent".to_string(),
+        Err(error) => format!("unreadable ({error})"),
+    };
+    format!(
+        "usermodehelper bset {}; usermodehelper inheritable {}; modprobe {}",
+        read(&helpers.bset),
+        read(&helpers.inheritable),
+        read(&helpers.modprobe)
+    )
+}
+
 static CONTROL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Asks the broker to detach every NFS mount in the image's mount namespace (blocking; bounded by
@@ -499,7 +514,9 @@ fn control_message(tag: u8, what: &str, within: Duration) -> io::Result<()> {
         tv_usec: 0,
     };
     receive_timeout(control, &timeout)?;
-    let result = send_with_fds(control, tag, &[]).and_then(|()| wait_ack(control, what));
+    let result = send_with_fds(control, tag, &[])
+        .and_then(|()| wait_ack(control, what))
+        .map(drop);
     receive_timeout(control, &broker.answer_within)?;
     result
 }
@@ -724,7 +741,7 @@ fn broker_main(
         made: BTreeMap::new(),
         inflight: None,
         zombies: Vec::new(),
-        sealed: false,
+        sealed: None,
         paused: false,
         boot_capabilities,
     }
@@ -740,8 +757,8 @@ struct Loop<'a> {
     made: BTreeMap<u64, &'static str>,
     inflight: Option<Inflight>,
     zombies: Vec<i32>,
-    /// The kernel's helpers are sealed (once, before the image first starts).
-    sealed: bool,
+    /// The kernel's helpers are sealed (once, before the image first starts), with what was done.
+    sealed: Option<String>,
     /// From the start of a pause until the resume: no new mounts.
     paused: bool,
     /// The capability sets the broker started with (`/proc/self/status`), for seal errors.
@@ -846,10 +863,14 @@ impl Loop<'_> {
             || (message.tag == b'S' && message.fds.len() == 2);
         let mut reason = String::new();
         if message.tag == b'S' && ok {
-            if let Err(error) = self.seal(message.fds[1].as_raw_fd()) {
-                reason = format!("cannot seal the kernel's helpers: {error}");
-                eprintln!("mount broker: {reason}");
-                ok = false;
+            match self.seal(message.fds[1].as_raw_fd()) {
+                // On success the ack carries the seal's report for the agent's boot report.
+                Ok(report) => reason = report,
+                Err(error) => {
+                    reason = format!("cannot seal the kernel's helpers: {error}");
+                    eprintln!("mount broker: {reason}");
+                    ok = false;
+                }
             }
         }
         if message.tag == b'S' && ok {
@@ -860,7 +881,7 @@ impl Loop<'_> {
             self.namespace = Some(namespace);
         }
         let mut ack = vec![if ok { b'k' } else { b'e' }];
-        ack.extend(reason.bytes().take(500));
+        ack.extend(reason.bytes().take(2000));
         // SAFETY: writing from a buffer we own, at most its length.
         unsafe {
             libc::send(
@@ -878,9 +899,9 @@ impl Loop<'_> {
     /// the capability sets of every program the kernel runs on its own and stops module loading
     /// by program, then drops the capabilities that took. Any other failure keeps the image from
     /// starting.
-    fn seal(&mut self, namespace: RawFd) -> Result<(), String> {
-        if self.sealed {
-            return Ok(());
+    fn seal(&mut self, namespace: RawFd) -> Result<String, String> {
+        if let Some(report) = &self.sealed {
+            return Ok(report.clone());
         }
         // The kernel lets a process write `usermodehelper/*` only with both SETPCAP and SYS_MODULE.
         let held = crate::privilege::permitted_capabilities()
@@ -998,8 +1019,9 @@ impl Loop<'_> {
         crate::privilege::restrict_capabilities(BROKER_CAPABILITIES).map_err(|error| {
             format!("step drop SETPCAP, SYS_MODULE and LINUX_IMMUTABLE: {error}")
         })?;
-        self.sealed = true;
-        Ok(())
+        let report = format!("{report}; {}", helper_settings_report(&self.config.helpers));
+        self.sealed = Some(report.clone());
+        Ok(report)
     }
 
     /// Kills every process in the steps cgroup (`cgroup.kill`, or one by one where the kernel
@@ -1554,11 +1576,21 @@ mod tests {
         std::fs::create_dir(&helpers.modprobe).unwrap();
         let error = seal_helper_settings(&helpers).unwrap_err();
         assert!(error.contains("step modprobe"), "{error}");
+        std::fs::write(&helpers.bset, "0\t0\n").unwrap();
+        std::fs::remove_dir(&helpers.modprobe).unwrap();
+        assert_eq!(
+            helper_settings_report(&helpers),
+            "usermodehelper bset \"0\\t0\"; usermodehelper inheritable \"0\\t0\"; modprobe absent"
+        );
     }
 
     #[test]
     fn a_refusal_carries_the_broker_reason() {
-        assert!(ack_result(b"k", "its socket").is_ok());
+        assert_eq!(ack_result(b"k", "its socket").unwrap(), "");
+        assert_eq!(
+            ack_result(b"kread-only: /usr/sbin", "its socket").unwrap(),
+            "read-only: /usr/sbin"
+        );
         let error = ack_result(b"ecannot seal: step modprobe: EROFS", "its socket").unwrap_err();
         assert_eq!(
             error.to_string(),

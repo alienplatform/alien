@@ -64,6 +64,13 @@ if [ "$variant" = started ]; then
   grep -q 'mount broker: sealed:.*created: /var/lib/app/scratch' /tmp/agent.log \
     || fail "the seal did not create the missing declared path"
   [ -d /var/lib/app/scratch ] || fail "/var/lib/app/scratch missing"
+  [ "$(stat -c %a /run/alien/boot-report)" = 644 ] || fail "boot-report mode"
+  for fact in '^ip6 nftables: installed$' '^ipv6 addresses (/proc/net/if_inet6): ' \
+    '^ipv6 default route (/proc/net/ipv6_route): ' '^seal: read-only: .*usermodehelper bset .*modprobe '; do
+    grep -q "$fact" /run/alien/boot-report || fail "boot report lacks $fact: $(cat /run/alien/boot-report)"
+  done
+  grep -q 'boot report' /tmp/agent.log || fail "the boot report is not in the log"
+  echo "boot report:"; sed 's/^/  /' /run/alien/boot-report
   echo "OK started: run hook 200, image running, exec ran, declared path created before the seal"
 else
   ! pgrep -f '^/bin/sleep 3601$' >/dev/null || fail "the image started"
@@ -74,7 +81,8 @@ else
   ! grep -q 'ZXhlYy1yYW4K' <<<"$exec_body" || fail "exec ran"
   grep -qF 'the image will not start' /tmp/agent.log || fail "the reason is not on the agent's stderr"
   case "$variant" in
-    seal-fails) grep -q 'SYS_MODULE' <<<"$reason" || fail "reason: $reason" ;;
+    seal-fails) grep -q 'SYS_MODULE' <<<"$reason" || fail "reason: $reason"
+      grep -q '^seal: failed: .*SYS_MODULE' /run/alien/boot-report || fail "boot report: $(cat /run/alien/boot-report)" ;;
     run-hook-step-fails) grep -q '1.1.1.1:443 is reachable without the gateway' <<<"$reason" || fail "reason: $reason" ;;
   esac
   echo "OK $variant: run hook 200, image never started, exec answers: $reason"

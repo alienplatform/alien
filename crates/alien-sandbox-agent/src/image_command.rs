@@ -374,7 +374,8 @@ fn start_from_with_env(
                 reason: "an image with image permissions must start its command as root (USER root or no USER)".into(),
             }));
         }
-        crate::mount_broker::serve_socket(Path::new(crate::mount_broker::SOCKET_PATH))
+        let sealed = crate::mount_broker::serve_socket(Path::new(crate::mount_broker::SOCKET_PATH))
+            .inspect_err(|error| crate::boot_report::set("seal", format!("failed: {error}")))
             .into_alien_error()
             .context(ErrorData::OperationFailed {
                 operation: "start image command".to_string(),
@@ -383,6 +384,7 @@ fn start_from_with_env(
                     crate::mount_broker::SOCKET_PATH
                 ),
             })?;
+        crate::boot_report::set("seal", sealed);
     }
     // Docker supplies these defaults even when the image config omits them.
     // Explicit image or create-time variables retain precedence.
