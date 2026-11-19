@@ -167,6 +167,26 @@ fn each_connection_is_one_rule_and_the_agent_gets_the_contract() {
         .unwrap()
         .iter()
         .any(|rule| rule["CidrIp"] == "127.0.0.1/32" && rule["IpProtocol"] == "-1"));
+    // The agent cannot filter IPv6 inside the MicroVM, so the group is what blocks it: every rule
+    // is IPv4, the created network has no IPv6 range (no default `::/0` egress on a new group),
+    // and the connector's interfaces are IPv4 only.
+    for rule in rules.as_array().unwrap() {
+        assert!(rule.get("CidrIpv6").is_none(), "{rule:#}");
+        assert!(rule.get("DestinationPrefixListId").is_none(), "{rule:#}");
+        assert!(rule.get("DestinationSecurityGroupId").is_none(), "{rule:#}");
+    }
+    assert!(!template
+        .resources
+        .values()
+        .any(
+            |resource| resource.resource_type == "AWS::EC2::VPCCidrBlock"
+                || resource.resource_type == "AWS::EC2::SecurityGroupEgress"
+        ));
+    assert_eq!(
+        json_of(&template.resources["AgentsEgressConnector"].properties["Configuration"])
+            ["VpcEgressConfiguration"]["NetworkProtocol"],
+        "IPv4"
+    );
 
     // The image is built at runtime, which narrows the connection to the target's addresses.
     assert!(!template.resources.contains_key("Agents"));
