@@ -401,6 +401,10 @@ async fn handle_pubsub_cloudevent(
 struct PubSubPushMessage {
     message: PubSubPushMessageData,
     subscription: Option<String>,
+    /// How many times Pub/Sub has tried to deliver the message. Pub/Sub sets it only for a
+    /// subscription with a dead-letter policy, so it is absent otherwise.
+    #[serde(default, rename = "deliveryAttempt")]
+    delivery_attempt: Option<u32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -473,6 +477,7 @@ async fn handle_pubsub_push_message(
         GcpQueueDelivery::Filtered => return StatusCode::OK.into_response(),
     };
 
+    let delivery_attempt = push_msg.delivery_attempt;
     let original_source = push_msg.subscription.unwrap_or_default();
     let source = match logical_source {
         Some(logical) if state.collector.contains_key(logical) => logical.to_owned(),
@@ -490,7 +495,7 @@ async fn handle_pubsub_push_message(
         timestamp: Utc::now(),
         source,
         attributes,
-        attempt_count: None,
+        attempt_count: delivery_attempt,
     };
 
     dispatch_queue_messages(
@@ -611,7 +616,7 @@ mod queue_routing_tests {
                     http_client: create_forward_client(std::time::Duration::from_secs(300)),
                     proxy_shutdown: CancellationToken::new(),
                 };
-                let body = serde_json::json!({"message": {"data": "e30=", "messageId": "provider-id"}, "subscription": subscription});
+                let body = serde_json::json!({"message": {"data": "e30=", "messageId": "provider-id"}, "subscription": subscription, "deliveryAttempt": 3});
                 let mut request = Request::builder()
                     .method("POST")
                     .uri("/__alien/queue/jobs")
@@ -648,6 +653,8 @@ mod queue_routing_tests {
                     }
                 );
                 assert_eq!(message.id, "provider-id");
+                // The attempt Pub/Sub counted is passed on in the push format.
+                assert_eq!(message.attempt_count, if cloud_event { 1 } else { 3 });
                 assert!(!response.is_finished());
                 control
                     .send_task_result(tonic::Request::new(SendTaskResultRequest {

@@ -46,6 +46,11 @@ pub struct AzureQueueController {
     /// while the queue has none, so state of queues without one is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) dead_letter: Option<String>,
+    /// Set before the dead-letter settings are written and cleared once Service Bus answered.
+    /// A lost response may leave the settings applied while `dead_letter` is not updated, so
+    /// the next run writes them again from the desired stack (including clearing them).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dead_letter_write_started: bool,
 }
 
 #[controller]
@@ -183,7 +188,8 @@ impl AzureQueueController {
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let queue = ctx.desired_resource_config::<Queue>()?;
         Ok(super::may_change_queue_settings(ctx, &queue.id)
-            && desired_dead_letter(ctx, &queue).map(dead_letter_key) != self.dead_letter)
+            && (self.dead_letter_write_started
+                || desired_dead_letter(ctx, &queue).map(dead_letter_key) != self.dead_letter))
     }
 
     #[handler(
@@ -238,7 +244,9 @@ impl AzureQueueController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Queue>()?;
         let desired = desired_dead_letter(ctx, &config);
-        if desired.clone().map(dead_letter_key) != self.dead_letter {
+        if self.dead_letter_write_started
+            || desired.clone().map(dead_letter_key) != self.dead_letter
+        {
             let cfg = ctx.get_azure_config()?;
             let mgmt = ctx
                 .service_provider
@@ -289,6 +297,7 @@ impl AzureQueueController {
                     properties.max_delivery_count = Some(AZURE_DEFAULT_MAX_DELIVERY_COUNT);
                 }
             }
+            self.dead_letter_write_started = true;
             mgmt.create_or_update_queue(resource_group, namespace, queue_name.clone(), properties)
                 .await
                 .context(ErrorData::CloudPlatformError {
@@ -296,6 +305,7 @@ impl AzureQueueController {
                     resource_id: Some(config.id.clone()),
                 })?;
             self.dead_letter = desired.map(dead_letter_key);
+            self.dead_letter_write_started = false;
         }
         info!(id=%config.id, "Azure Queue updated");
         Ok(HandlerAction::Continue {
@@ -579,6 +589,91 @@ mod tests {
         let written = written.lock().unwrap();
         assert_eq!(written[1].forward_dead_lettered_messages_to, None);
         assert_eq!(written[1].max_delivery_count, Some(10));
+    }
+
+    /// Service Bus applies the write but the response is lost; the setting is removed before
+    /// the retry. The recorded setting is still empty, yet the applied one must be cleared.
+    #[tokio::test]
+    async fn a_dead_letter_write_with_a_lost_response_is_cleared_when_the_setting_is_removed() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        type Props = alien_azure_clients::models::queue::SbQueueProperties;
+        let cloud: Arc<std::sync::Mutex<Props>> = Arc::new(std::sync::Mutex::new(Props {
+            max_delivery_count: Some(10),
+            ..Default::default()
+        }));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut mgmt = MockServiceBusManagementApi::new();
+        let view = cloud.clone();
+        mgmt.expect_get_queue().returning(move |_, _, _| {
+            Ok(SbQueue {
+                properties: Some(view.lock().unwrap().clone()),
+                ..Default::default()
+            })
+        });
+        let (stored, counted) = (cloud.clone(), calls.clone());
+        mgmt.expect_create_or_update_queue()
+            .returning(move |_, _, _, properties| {
+                *stored.lock().unwrap() = properties;
+                if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(AlienError::new(
+                        alien_client_core::ErrorData::RemoteServiceUnavailable {
+                            message: "response lost after the write".into(),
+                        },
+                    ));
+                }
+                Ok(SbQueue::default())
+            });
+        let mgmt = Arc::new(mgmt);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_service_bus_management_client()
+            .returning(move |_| Ok(mgmt.clone()));
+        let plain = Queue::new("work".into()).build();
+        let mut run = SingleControllerExecutor::builder()
+            .resource(plain.clone())
+            .controller(AzureQueueController {
+                state: AzureQueueState::Ready,
+                namespace_name: Some("test-bus".into()),
+                queue_name: Some("test-work".into()),
+                ..Default::default()
+            })
+            .platform(Platform::Azure)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .with_stack_resource(
+                Queue::new("failed".into()).build(),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build()
+            .await
+            .unwrap();
+        *run.desired_resource_config_mut("work").unwrap() =
+            alien_core::Resource::new(with_dead_letter(7));
+        run.update(with_dead_letter(7)).unwrap();
+        while calls.load(Ordering::SeqCst) == 0 {
+            let _ = run.step().await;
+        }
+        assert_eq!(
+            cloud
+                .lock()
+                .unwrap()
+                .forward_dead_lettered_messages_to
+                .as_deref(),
+            Some("test-failed"),
+            "the lost write was applied"
+        );
+
+        *run.desired_resource_config_mut("work").unwrap() =
+            alien_core::Resource::new(plain.clone());
+        run.run_until_terminal().await.unwrap();
+        if run.needs_update().unwrap() {
+            run.update(plain).unwrap();
+            run.run_until_terminal().await.unwrap();
+        }
+        let cloud = cloud.lock().unwrap();
+        assert_eq!(cloud.forward_dead_lettered_messages_to, None);
+        assert_eq!(cloud.max_delivery_count, Some(10));
+        assert!(!run.needs_update().unwrap());
     }
 
     #[tokio::test]

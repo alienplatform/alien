@@ -61,15 +61,23 @@ async fn drain_confirmed(client: &Client, url: &str, path: &str) -> Vec<Value> {
 
 /// Waits until the Worker answers, so the first real request does not pay for a cold start.
 async fn warm_up(client: &Client, url: &str) {
+    let mut last = String::from("no answer");
     for _ in 0..30 {
-        if let Ok(response) = client.get(format!("{url}/health")).send().await {
-            if response.status().is_success() {
-                return;
+        match client.get(format!("{url}/health")).send().await {
+            Ok(response) if response.status().is_success() => return,
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                last = format!(
+                    "HTTP {status}: {}",
+                    body.chars().take(300).collect::<String>()
+                );
             }
+            Err(error) => last = format!("request error: {error}"),
         }
         sleep(Duration::from_secs(5)).await;
     }
-    panic!("the Worker never answered /health");
+    panic!("the Worker never answered /health at {url}; last answer: {last}");
 }
 
 async fn json_request(client: &Client, request: reqwest::RequestBuilder) -> Value {
@@ -172,6 +180,8 @@ pub async fn check_dead_letter(
     let started = Instant::now();
     let mut failed: BTreeMap<String, Value> = BTreeMap::new();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    // The highest attempt number Pub/Sub put on a delivery the Worker received.
+    let mut highest: BTreeMap<String, u64> = BTreeMap::new();
     let mut good_seen = BTreeSet::new();
     loop {
         assert!(
@@ -187,6 +197,7 @@ pub async fn check_dead_letter(
         }
         let deliveries = json_request(&client, client.get(format!("{url}/deliveries"))).await;
         counts.clear();
+        highest.clear();
         good_seen.clear();
         for record in deliveries.as_array().unwrap() {
             let id = record["id"].as_str().unwrap();
@@ -194,6 +205,10 @@ pub async fn check_dead_letter(
                 continue;
             }
             *counts.entry(id.to_string()).or_default() += 1;
+            if let Some(attempt) = record["attempt"].as_u64() {
+                let entry = highest.entry(id.to_string()).or_default();
+                *entry = (*entry).max(attempt);
+            }
             if !record["poison"].as_bool().unwrap() {
                 good_seen.insert(id.to_string());
             }
@@ -215,15 +230,35 @@ pub async fn check_dead_letter(
             json!({"id": id, "poison": true}),
             "payload intact"
         );
-        // Pub/Sub counts every push attempt, including one that failed before it reached the
-        // Worker (a cold start answering 5xx), which the Worker cannot record. So on GCP only,
-        // the recorded count can be one short of `MAX_ATTEMPTS`; a real run recorded 4 for a
-        // message that was moved after 5 attempts. AWS and Azure count exactly.
-        let attempts = counts[&id] as u64;
-        assert!(
-            (lowest_recorded(&deployment.platform)..=MAX_ATTEMPTS + 2).contains(&attempts),
-            "{id} was delivered {attempts} times; about {MAX_ATTEMPTS} expected"
-        );
+        if deployment.platform == "gcp" {
+            // The Worker's own count is the wrong instrument on GCP: Pub/Sub counts every push
+            // attempt, including one that failed before it reached the Worker (a cold start
+            // answering 5xx). The push body carries Pub/Sub's own attempt number when the
+            // subscription has a dead-letter policy. Pub/Sub moves the message once
+            // `maxDeliveryAttempts` attempts failed, so no delivery carries a higher number;
+            // the highest one seen is `MAX_ATTEMPTS`, or one less when the last attempt never
+            // reached the Worker.
+            // A Worker image from before the runtime passed the number on reports none (the
+            // attempt then reads as 1 on every delivery): the move into `tasks-failed` with the
+            // payload intact is then the proof, and the Worker-side count is only logged.
+            let seen = highest.get(&id).copied().unwrap_or(1);
+            if highest.values().any(|attempt| *attempt > 1) {
+                assert!(
+                    (MAX_ATTEMPTS - 1..=MAX_ATTEMPTS).contains(&seen),
+                    "{id}: highest attempt Pub/Sub reported was {seen}; {MAX_ATTEMPTS} expected \
+                     (Worker saw {} deliveries)",
+                    counts[&id]
+                );
+            } else {
+                info!(%id, worker_deliveries = counts[&id], "Worker image does not report Pub/Sub's attempt number");
+            }
+        } else {
+            let attempts = counts[&id] as u64;
+            assert!(
+                (MAX_ATTEMPTS..=MAX_ATTEMPTS + 2).contains(&attempts),
+                "{id} was delivered {attempts} times; about {MAX_ATTEMPTS} expected"
+            );
+        }
     }
     for n in 0..GOOD {
         assert!(counts[&format!("{prefix}-good-{n}")] >= 1);

@@ -64,11 +64,41 @@ impl ManagedQueue {
         else {
             return;
         };
-        let source = self.queue.lock().await;
+        // Both stores are locked in one fixed order (by address), whichever is the source. A
+        // setting that changes from A->B to B->A while receives wait would otherwise leave one
+        // holding A for B and another holding B for A.
+        let mine = self as *const ManagedQueue as usize;
+        let theirs = Arc::as_ptr(&target.queue) as usize;
+        if mine == theirs {
+            return;
+        }
+        let (first, second) = if mine < theirs {
+            (&self.queue, &target.queue.queue)
+        } else {
+            (&target.queue.queue, &self.queue)
+        };
+        let first = first.lock().await;
+        let second = second.lock().await;
+        let (source, destination) = if mine < theirs {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        // The setting may have changed while waiting for the locks: leave it to the next receive.
+        let unchanged = self
+            .dead_letter
+            .read()
+            .expect("dead-letter setting poisoned")
+            .as_ref()
+            .is_some_and(|now| {
+                Arc::ptr_eq(&now.queue, &target.queue) && now.max_attempts == target.max_attempts
+            });
+        if !unchanged {
+            return;
+        }
         let Some(source) = source.as_ref() else {
             return;
         };
-        let destination = target.queue.queue.lock().await;
         let Some(destination) = destination.as_ref() else {
             tracing::warn!("dead-letter target queue is unavailable; messages stay in place");
             return;
@@ -578,6 +608,38 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    /// While the setting changes from A->B to B->A, receives that waited on the old target and
+    /// receives that use the new one must not wait for each other's queue forever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn receives_on_queues_that_dead_letter_to_each_other_do_not_deadlock() {
+        let directory = tempfile::tempdir().unwrap();
+        let manager = LocalQueueManager::new(directory.path().to_owned());
+        manager.create_queue("a").await.unwrap();
+        manager.create_queue("b").await.unwrap();
+        let a = manager.load_queue("a").await.unwrap();
+        let b = manager.load_queue("b").await.unwrap();
+        for (from, to) in [(&a, &b), (&b, &a)] {
+            *from.dead_letter.write().unwrap() = Some(DeadLetterTarget {
+                queue: to.clone(),
+                max_attempts: 5,
+            });
+        }
+        let moves = async {
+            let mut tasks = Vec::new();
+            for _ in 0..500 {
+                for queue in [a.clone(), b.clone()] {
+                    tasks.push(tokio::spawn(async move { queue.move_dead_letters().await }));
+                }
+            }
+            for task in tasks {
+                task.await.unwrap();
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(30), moves)
+            .await
+            .expect("moves between queues that name each other deadlocked");
+    }
 
     /// A message that keeps failing moves to the dead-letter queue with its payload, and the
     /// setting and the failed deliveries survive a restart of the owner.

@@ -38,6 +38,11 @@ pub struct AwsQueueController {
     /// Whether the queue was last written with the 14 day retention of a dead-letter target.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) dead_letter_target: bool,
+    /// Set before the dead-letter attributes are sent and cleared once SQS answered. If the
+    /// response was lost the attributes may be applied while the recorded values are not
+    /// updated, so a later run rewrites both from the desired stack (including clearing them).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dead_letter_write_started: bool,
 }
 
 #[controller]
@@ -536,7 +541,8 @@ impl AwsQueueController {
     fn dead_letter_changed(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let queue = ctx.desired_resource_config::<Queue>()?;
         let is_target = !queues_dead_lettering_to(ctx.desired_stack, &queue.id).is_empty();
-        Ok(desired_redrive_policy(ctx, &queue)? != self.redrive_policy
+        Ok(self.dead_letter_write_started
+            || desired_redrive_policy(ctx, &queue)? != self.redrive_policy
             || is_target != self.dead_letter_target)
     }
 
@@ -556,14 +562,16 @@ impl AwsQueueController {
         let desired = desired_redrive_policy(ctx, &queue)?;
         let is_target = !queues_dead_lettering_to(ctx.desired_stack, &queue.id).is_empty();
         let mut attributes = std::collections::HashMap::new();
-        if desired != self.redrive_policy {
+        // After a possibly lost write the recorded values cannot be trusted: write both.
+        let rewrite = self.dead_letter_write_started;
+        if rewrite || desired != self.redrive_policy {
             // An empty value removes the policy.
             attributes.insert(
                 "RedrivePolicy".to_string(),
                 desired.clone().unwrap_or_default(),
             );
         }
-        if is_target != self.dead_letter_target {
+        if rewrite || is_target != self.dead_letter_target {
             let retention = if is_target {
                 AWS_DEAD_LETTER_TARGET_RETENTION_SECONDS
             } else {
@@ -575,6 +583,7 @@ impl AwsQueueController {
             .service_provider
             .get_aws_sqs_client(ctx.get_aws_config()?)
             .await?;
+        self.dead_letter_write_started = true;
         set_queue_attributes(
             ctx,
             client.as_ref(),
@@ -586,6 +595,7 @@ impl AwsQueueController {
         .await?;
         self.redrive_policy = desired;
         self.dead_letter_target = is_target;
+        self.dead_letter_write_started = false;
         Ok(())
     }
 

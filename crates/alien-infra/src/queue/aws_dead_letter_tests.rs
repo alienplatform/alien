@@ -200,3 +200,67 @@ fn the_target_arn_uses_the_partition_of_the_region() {
         assert_eq!(policy["maxReceiveCount"], 5);
     }
 }
+
+/// SQS applies the attributes but the response is lost; the setting is removed before the
+/// retry. Recorded state still says "no policy", yet the applied policy must be cleared.
+#[tokio::test]
+async fn a_redrive_write_with_a_lost_response_is_cleared_when_the_setting_is_removed() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let cloud: Writes = Default::default();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut sqs = MockSqsApi::new();
+    let (stored, counted) = (cloud.clone(), calls.clone());
+    sqs.expect_set_queue_attributes()
+        .returning(move |_, request| {
+            stored.lock().unwrap().push(request.attributes.clone());
+            if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteServiceUnavailable {
+                        message: "response lost after the write".into(),
+                    },
+                ));
+            }
+            Ok(())
+        });
+    let sqs = Arc::new(sqs);
+    let mut provider = MockPlatformServiceProvider::new();
+    provider
+        .expect_get_aws_sqs_client()
+        .returning(move |_| Ok(sqs.clone()));
+    let plain = Queue::new("tasks".into()).build();
+    let mut run = SingleControllerExecutor::builder()
+        .resource(plain.clone())
+        .controller(controller("tasks"))
+        .platform(Platform::Aws)
+        .resource_lifecycle(ResourceLifecycle::Live)
+        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+        .with_stack_resource(Queue::new("failed".into()).build(), ResourceLifecycle::Live)
+        .service_provider(Arc::new(provider))
+        .build()
+        .await
+        .unwrap();
+    *run.desired_resource_config_mut("tasks").unwrap() = Resource::new(with_dead_letter(7));
+    run.update(with_dead_letter(7)).unwrap();
+    while calls.load(Ordering::SeqCst) == 0 {
+        let _ = run.step().await;
+    }
+    assert_eq!(
+        cloud.lock().unwrap()[0]["RedrivePolicy"].is_empty(),
+        false,
+        "the lost write carried the policy"
+    );
+
+    *run.desired_resource_config_mut("tasks").unwrap() = Resource::new(plain.clone());
+    run.run_until_terminal().await.unwrap();
+    if run.needs_update().unwrap() {
+        run.update(plain).unwrap();
+        run.run_until_terminal().await.unwrap();
+    }
+    let writes = cloud.lock().unwrap();
+    assert_eq!(
+        writes.last().unwrap()["RedrivePolicy"],
+        "",
+        "no policy may outlive the setting"
+    );
+    assert!(!run.needs_update().unwrap());
+}

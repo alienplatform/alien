@@ -18,6 +18,37 @@ const pulled = (
   withDeadLetter ? pulledBuilder.deadLetter(pulledFailed, { maxAttempts: 5 }) : pulledBuilder
 ).build()
 const results = new alien.Storage("results").build()
+// DLQ_E2E_TWO_QUEUES=1 adds a second dead-letter queue with its own Worker, to show that two
+// queues share the one project-level grant and the last one removes it.
+const twoQueues = process.env.DLQ_E2E_TWO_QUEUES === "1"
+const second = twoQueues ? new alien.Queue("second-failed").build() : undefined
+const secondTasks =
+  second !== undefined
+    ? new alien.Queue("second").deadLetter(second, { maxAttempts: 5 }).build()
+    : undefined
+const secondWorker =
+  secondTasks !== undefined
+    ? new alien.Worker("consumer-second")
+        .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
+        .permissions("execution")
+        // It serves the same app as `consumer` (the harness may talk to either), so it links the
+        // same queues and storage.
+        .publicEndpoint("api-second")
+        .readinessProbe({ method: "GET", path: "/health" })
+        .timeoutSeconds(30)
+        .link(secondTasks)
+        .link(tasks)
+        .link(failed)
+        .link(pulled)
+        .link(pulledFailed)
+        .link(results)
+        .trigger({
+          type: "queue",
+          queue: secondTasks.ref(),
+          batch: { maxMessages: 10, maxWindowSeconds: 5 },
+        })
+        .build()
+    : undefined
 const worker = new alien.Worker("consumer")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .permissions("execution")
@@ -32,7 +63,7 @@ const worker = new alien.Worker("consumer")
   .trigger({ type: "queue", queue: tasks.ref(), batch: { maxMessages: 10, maxWindowSeconds: 5 } })
   .build()
 
-export default new alien.Stack("queue-dead-letter")
+let stack = new alien.Stack("queue-dead-letter")
   .platforms(["aws", "gcp", "azure", "local"])
   .add(failed, queueLifecycle)
   .add(tasks, queueLifecycle)
@@ -40,6 +71,15 @@ export default new alien.Stack("queue-dead-letter")
   .add(pulled, queueLifecycle)
   .add(results, "frozen")
   .add(worker, "live")
+
+if (second !== undefined && secondTasks !== undefined && secondWorker !== undefined) {
+  stack = stack
+    .add(second, queueLifecycle)
+    .add(secondTasks, queueLifecycle)
+    .add(secondWorker, "live")
+}
+
+export default stack
   .permissions({
     profiles: {
       execution:
