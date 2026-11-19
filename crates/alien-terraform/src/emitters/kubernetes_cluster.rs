@@ -1185,7 +1185,10 @@ fn aks_default_upgrade_settings() -> hcl::Block {
         [
             attr("drain_timeout_in_minutes", Expression::Number(0.into())),
             attr("max_surge", Expression::String("10%".to_string())),
-            attr("node_soak_duration_in_minutes", Expression::Number(0.into())),
+            attr(
+                "node_soak_duration_in_minutes",
+                Expression::Number(0.into()),
+            ),
         ],
     )
 }

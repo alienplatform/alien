@@ -1214,7 +1214,13 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     assert!(helm.contains("output \"helm_values\""));
     let compact_values = helm.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(compact_values
-        .contains("chart_values_provider = yamldecode(acme_app_deployment.this.helm_values)"));
+        .contains("chart_values_provider_yaml = acme_app_deployment.this.helm_values"));
+    assert!(compact_values
+        .contains("chart_values_provider = yamldecode(local.chart_values_provider_yaml)"));
+    assert_eq!(
+        helm.matches("acme_app_deployment.this.helm_values").count(),
+        1
+    );
     assert!(compact_values.contains("sensitive = true"));
     assert!(!helm.contains("local.helm_values"));
     assert!(helm.contains("resource \"kubernetes_secret_v1\" \"remote_operator_credentials\""));

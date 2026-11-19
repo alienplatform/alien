@@ -5337,29 +5337,32 @@ fn remote_operator_values_override(pod_labels_when: &str) -> String {
 /// (`helm_install_enabled = false`).
 fn helm_values_blocks(provider_resource: &str, product_remote_operator: bool) -> Vec<Structure> {
     let mut blocks = Vec::new();
+    // The provider's values are named once, here; the release and the output read the local.
+    let mut locals = vec![attr(
+        "chart_values_provider_yaml",
+        expr::raw(format!("{provider_resource}.this.helm_values")),
+    )];
     let value = if product_remote_operator {
-        let base = format!("yamldecode({provider_resource}.this.helm_values)");
-        blocks.push(Structure::Block(block(
-            "locals",
-            [
-                attr("chart_values_provider", expr::raw(base)),
-                attr(
-                    "chart_values_remote_operator",
-                    expr::raw(format!(
-                        "yamldecode({})",
-                        remote_operator_values_override(
-                            "var.helm_install_enabled && var.remote_operator_enabled"
-                        )
-                    )),
-                ),
-            ],
-        )));
+        locals.push(attr(
+            "chart_values_provider",
+            expr::raw("yamldecode(local.chart_values_provider_yaml)"),
+        ));
+        locals.push(attr(
+            "chart_values_remote_operator",
+            expr::raw(format!(
+                "yamldecode({})",
+                remote_operator_values_override(
+                    "var.helm_install_enabled && var.remote_operator_enabled"
+                )
+            )),
+        ));
         // Terraform's `merge` is shallow; the override replaces `remoteOperator` keys and
         // merges the maps inside it, so merge those levels explicitly.
         "yamlencode(merge(local.chart_values_provider, { remoteOperator = merge(try(local.chart_values_provider.remoteOperator, {}), local.chart_values_remote_operator.remoteOperator, { for key in [\"existingSecret\", \"podLabels\", \"serviceAccountAnnotations\"] : key => merge(try(local.chart_values_provider.remoteOperator[key], {}), local.chart_values_remote_operator.remoteOperator[key]) }) }))".to_string()
     } else {
-        format!("{provider_resource}.this.helm_values")
+        "local.chart_values_provider_yaml".to_string()
     };
+    blocks.push(Structure::Block(block("locals", locals)));
     blocks.push(Structure::Block(Block {
         identifier: Identifier::sanitized("output"),
         labels: vec![BlockLabel::String("helm_values".to_string())],
@@ -5703,15 +5706,13 @@ fn helm_install_body(
         // required because the chart's server-side `lookup` checks cannot
         // validate a Secret that Terraform has only planned to create.
         Expression::Array(vec![
-            expr::raw(format!("{provider_resource}.this.helm_values")),
+            expr::raw("local.chart_values_provider_yaml"),
             expr::raw(remote_operator_values_override(
                 "var.remote_operator_enabled",
             )),
         ])
     } else {
-        Expression::Array(vec![expr::raw(format!(
-            "{provider_resource}.this.helm_values"
-        ))])
+        Expression::Array(vec![expr::raw("local.chart_values_provider_yaml")])
     };
     let mut helm_body = vec![
         attr("count", expr::raw("var.helm_install_enabled ? 1 : 0")),
