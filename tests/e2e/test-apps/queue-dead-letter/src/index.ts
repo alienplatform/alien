@@ -22,6 +22,27 @@ const sendRequest = z.object({
   prefix: z.string().min(1).default("m"),
 })
 
+/**
+ * One `receive` that gives up after `ms`. On Google Cloud a pull from an empty subscription can
+ * wait longer than this Worker's request timeout, so an empty queue would otherwise fail the
+ * whole request. A pull that is still waiting when we give up is left to expire.
+ */
+async function receiveWithin(
+  target: ReturnType<typeof queue>,
+  max: number,
+  ms = 8000,
+): Promise<Awaited<ReturnType<ReturnType<typeof queue>["receive"]>>> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<[]>(resolve => {
+    timer = setTimeout(() => resolve([]), ms)
+  })
+  try {
+    return await Promise.race([target.receive(max), timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 const app = new Hono()
 app.onError(async (error, c) => {
   const failure = (await AlienError.from(error)).withContext(
@@ -74,7 +95,7 @@ app.post("/failed/drain", async c => {
   const failed = queue("tasks-failed")
   const drained: { task: unknown; attempt: number }[] = []
   for (;;) {
-    const messages = await failed.receive(10)
+    const messages = await receiveWithin(failed, 10)
     if (messages.length === 0) break
     for (const message of messages) {
       drained.push({
@@ -146,7 +167,7 @@ app.post("/pull/failed/drain", async c => {
   const failed = queue("pulled-failed")
   const drained: { task: unknown; attempt: number }[] = []
   for (;;) {
-    const messages = await failed.receive(10)
+    const messages = await receiveWithin(failed, 10)
     if (messages.length === 0) break
     for (const message of messages) {
       drained.push({
@@ -172,7 +193,7 @@ app.post("/pull/peek", async c => {
 /** Reads `tasks` with `receive` (the pull path) and gives every message back; shows what is left. */
 app.post("/tasks/peek", async c => {
   const tasks = queue("tasks")
-  const messages = await tasks.receive(10)
+  const messages = await receiveWithin(tasks, 10)
   await Promise.all(messages.map(message => tasks.nack(message.receiptHandle)))
   return c.json({ visible: messages.length })
 })
