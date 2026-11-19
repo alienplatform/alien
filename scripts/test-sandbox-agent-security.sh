@@ -57,10 +57,26 @@ docker create --name "$container" --privileged --cgroupns=private \
     /agent-tests --list --ignored --exact "$name" | grep -Fx "$name: test"
     unshare --mount --net bash -euo pipefail -c "
       ip link set lo up
-      ip addr add 10.0.1.5/32 dev lo
-      ip addr add 10.0.2.5/32 dev lo
-      echo 0 > /proc/sys/net/ipv6/conf/lo/disable_ipv6
-      ip -6 addr add fd00::5/128 dev lo nodad
+      for knob in all default lo; do echo 0 > /proc/sys/net/ipv6/conf/\$knob/disable_ipv6; done
+      # Off-VM servers: another network namespace behind a veth pair.
+      ip netns add remote
+      ip link add veth0 type veth peer name veth1 netns remote
+      ip addr add 192.168.77.1/24 dev veth0
+      ip -6 addr add fd01::1/64 dev veth0 nodad
+      ip link set veth0 up
+      for knob in all default lo; do
+        echo 0 | ip netns exec remote tee /proc/sys/net/ipv6/conf/\$knob/disable_ipv6 >/dev/null
+      done
+      ip -n remote link set lo up
+      ip -n remote addr add 10.0.1.5/32 dev lo
+      ip -n remote addr add 10.0.2.5/32 dev lo
+      ip -n remote -6 addr add fd00::5/128 dev lo nodad
+      ip -n remote addr add 192.168.77.2/24 dev veth1
+      ip -n remote -6 addr add fd01::2/64 dev veth1 nodad
+      ip -n remote link set veth1 up
+      ip route add 10.0.0.0/16 via 192.168.77.2
+      ip -6 route add fd00::/64 via fd01::2
+      export ALIEN_TEST_REMOTE_NETNS=/run/netns/remote
       exec /agent-tests --ignored --exact $name --nocapture
     "
   ' >/dev/null

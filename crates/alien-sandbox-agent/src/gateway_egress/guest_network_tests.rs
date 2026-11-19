@@ -237,8 +237,30 @@ print(f'uid={os.getuid()} ordinary devices and PTY work; raw devices denied')
 }
 
 #[test]
-#[ignore = "requires isolated network/mount/cgroup namespaces, ALL capabilities, cgroup2, Python 3, the NFS client, 10.0.1.5, 10.0.2.5 and fd00::5 on lo"]
+#[ignore = "requires isolated network/mount/cgroup namespaces, ALL capabilities, cgroup2, Python 3, the NFS client, and the remote network namespace scripts/test-sandbox-agent-security.sh sets up"]
 fn image_nfs_leaves_only_through_its_mark_and_declared_connections() {
+    // Off-VM addresses (10.0.1.5, 10.0.2.5, fd00::5) live in another network namespace behind a
+    // veth pair; 192.168.77.1 is this namespace's own address on that link.
+    let remote_namespace =
+        std::env::var("ALIEN_TEST_REMOTE_NETNS").expect("ALIEN_TEST_REMOTE_NETNS");
+    // Runs `make` on a thread in the namespace an address belongs to; the socket stays there.
+    let bind_at = |address: &'static str| {
+        let remote = address.starts_with("10.") || address.starts_with("[fd00:");
+        let namespace = remote_namespace.clone();
+        std::thread::spawn(move || {
+            if remote {
+                let file = fs::File::open(&namespace).expect("remote namespace");
+                // SAFETY: a network namespace descriptor; only this thread changes namespace.
+                let entered = unsafe {
+                    libc::setns(std::os::fd::AsRawFd::as_raw_fd(&file), libc::CLONE_NEWNET)
+                };
+                assert_eq!(entered, 0, "{}", std::io::Error::last_os_error());
+            }
+            (TcpListener::bind(address), UdpSocket::bind(address))
+        })
+        .join()
+        .unwrap()
+    };
     // A declaration with one private connection, read the way the agent reads it at boot.
     std::env::set_var(
         crate::image_permissions::ENV_IMAGE_COMMAND,
@@ -268,8 +290,10 @@ fn image_nfs_leaves_only_through_its_mark_and_declared_connections() {
         ("127.0.0.1:20049", "loopback-data-server"),
         ("[fd00::5]:20049", "data-server-v6"),
         ("[::1]:20049", "loopback-data-server-v6"),
+        // The VM's own non-loopback address, where provider processes reach the agent.
+        ("192.168.77.1:20049", "local-address"),
     ] {
-        let listener = TcpListener::bind(address).expect(address);
+        let listener = bind_at(address).0.expect(address);
         let count = Arc::clone(
             connections
                 .lock()
@@ -363,6 +387,8 @@ except OSError as error:
             20049,
             "0x0 loopback-data-server".to_string(),
         ),
+        // The VM's own address stays reachable: provider processes reach the agent that way.
+        ("0", "192.168.77.1", 20049, "0x0 local-address".to_string()),
         // The agent's own sockets carry its mark and are not affected.
         (
             "0xa11e",
@@ -388,9 +414,10 @@ except OSError as error:
         (0, "[fd00::5]:20053", "dropped"),
         (0, "127.0.0.1:20053", "delivered"),
         (0, "[::1]:20053", "delivered"),
+        (0, "192.168.77.1:20053", "delivered"),
         (super::redirect::MARK, "10.0.1.5:20053", "delivered"),
     ] {
-        let receiver = UdpSocket::bind(address).expect(address);
+        let receiver = bind_at(address).1.expect(address);
         receiver
             .set_read_timeout(Some(std::time::Duration::from_secs(1)))
             .unwrap();
@@ -433,6 +460,7 @@ except OSError as error:
         ("127.0.0.1:20049", "127.0.0.1:/", "connected"),
         ("[fd00::5]:20049", "[fd00::5]:/", "dropped"),
         ("[::1]:20049", "[::1]:/", "connected"),
+        ("192.168.77.1:20049", "192.168.77.1:/", "connected"),
     ] {
         let count = Arc::clone(&connections.lock().unwrap()[address]);
         let before = count.load(Ordering::SeqCst);

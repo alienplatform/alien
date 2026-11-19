@@ -1,6 +1,6 @@
 use std::{
     io,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddrV4},
+    net::{Ipv4Addr, SocketAddrV4},
     os::fd::AsRawFd,
 };
 
@@ -93,8 +93,9 @@ fn image_exemptions(rule: impl Fn() -> Rule, verdict: Expr) -> Vec<Rule> {
 
 const UNMARKED: &str = "unmarked";
 
-/// With image permissions, new TCP and UDP traffic to anything but loopback from a socket that
-/// carries no mark is dropped, in both IPv4 and IPv6. Sockets made in the guest cgroup carry the
+/// With image permissions, new TCP and UDP traffic that leaves the VM (anything not routed
+/// through `lo`) from a socket that carries no mark is dropped, in both IPv4 and IPv6. Traffic to
+/// the VM's own addresses stays allowed: provider processes in the VM reach the agent that way. Sockets made in the guest cgroup carry the
 /// guest or image mark from the socket-create hook, and the agent marks its own. What carries none
 /// was made outside the guest cgroup: the kernel's own sockets (the NFS client, including the pNFS
 /// data servers a layout names, which skip the hook) and the kernel's helper processes, which run
@@ -107,13 +108,9 @@ fn add_unmarked_drop(
     family: Family,
 ) -> nlink::netlink::Result<nlink::netlink::nftables::Transaction> {
     let rule = || Rule::new(table, UNMARKED).family(family);
-    let loopback = match family {
-        Family::Ip6 => rule().match_daddr_v6(Ipv6Addr::LOCALHOST, 128),
-        _ => rule().match_daddr_v4(Ipv4Addr::new(127, 0, 0, 0), 8),
-    };
     Ok(batch
         .add_chain(Chain::new(table, UNMARKED)?.family(family))
-        .add_rule(loopback.expr(Expr::Verdict(Verdict::Return)))
+        .add_rule(rule().match_oif("lo").expr(Expr::Verdict(Verdict::Return)))
         .add_rule(rule().match_l4proto(libc::IPPROTO_TCP as u8).drop())
         .add_rule(rule().match_l4proto(libc::IPPROTO_UDP as u8).drop())
         .add_rule(
