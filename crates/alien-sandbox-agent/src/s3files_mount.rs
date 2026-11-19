@@ -27,11 +27,14 @@ struct Attached {
     fs_id: String,
     access_point_id: String,
     region: String,
+    port: u16,
 }
 
 pub struct Helper {
     credentials_dir: PathBuf,
     key: Option<ClientKey>,
+    /// Loopback ports of the running proxies, which guest sockets must not reach.
+    ports: Vec<u16>,
     attached: HashMap<String, Attached>,
 }
 
@@ -40,8 +43,21 @@ impl Helper {
         Self {
             credentials_dir,
             key: None,
+            ports: Vec::new(),
             attached: HashMap::new(),
         }
+    }
+
+    /// Drops guest-marked traffic to the NFS port and to every proxy port. Fails closed: a mount
+    /// is not made when the rules cannot be installed.
+    fn guard_ports(&self) -> Result<(), String> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| "cannot start the network rule installer".to_string())?;
+        runtime
+            .block_on(crate::mount_network::install(&self.ports))
+            .map_err(|_| "cannot install the mount network rules".to_string())
     }
 
     fn key(&mut self) -> Result<&ClientKey, String> {
@@ -148,6 +164,12 @@ impl Helper {
             .local_addr()
             .map_err(|_| "cannot read the loopback port".to_string())?
             .port();
+        // The rules come before the proxy exists, so there is no moment it is reachable by guests.
+        self.ports.push(port);
+        if let Err(reason) = self.guard_ports() {
+            self.ports.pop();
+            return Err(reason);
+        }
         let dns_name = s3files::mount_target_name(fs_id, region, zone);
         let config = s3files::proxy_config(&ProxyFiles {
             listen_port: port,
@@ -192,13 +214,18 @@ impl Helper {
             });
         }
         tracing::info!(mount = path, port, "starting the proxy");
-        let mut proxy = command
-            .spawn()
-            .map_err(|e| format!("cannot start the proxy: {e}"))?;
+        let mut proxy = match command.spawn() {
+            Ok(proxy) => proxy,
+            Err(e) => {
+                self.ports.retain(|p| *p != port);
+                return Err(format!("cannot start the proxy: {e}"));
+            }
+        };
         drop(listener);
         // A proxy that dies at once has a reason in its log; say only that it did.
         std::thread::sleep(std::time::Duration::from_millis(300));
         if let Ok(Some(status)) = proxy.try_wait() {
+            self.ports.retain(|p| *p != port);
             return Err(format!("the proxy exited at start ({status})"));
         }
 
@@ -208,6 +235,8 @@ impl Helper {
         if let Err(reason) = outcome {
             let _ = proxy.kill();
             let _ = proxy.wait();
+            self.ports.retain(|p| *p != port);
+            let _ = self.guard_ports();
             return Err(reason);
         }
         self.attached.insert(
@@ -218,6 +247,7 @@ impl Helper {
                 fs_id: fs_id.to_string(),
                 access_point_id: access_point_id.to_string(),
                 region: region.to_string(),
+                port,
             },
         );
         Ok(())
@@ -251,6 +281,8 @@ impl Helper {
             // The unmount comes first in the caller; a proxy that outlives it only holds a port.
             let _ = attached.proxy.kill();
             let _ = attached.proxy.wait();
+            self.ports.retain(|p| *p != attached.port);
+            let _ = self.guard_ports();
         }
     }
 }
