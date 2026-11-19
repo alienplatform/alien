@@ -42,7 +42,11 @@ fn within<T: Send + 'static>(
 /// The last line the proxy wrote, printable and short, for a failure message.
 fn proxy_log_tail(dir: &Path) -> String {
     let text = std::fs::read_to_string(dir.join("proxy.log")).unwrap_or_default();
-    let line = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let line = text
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("");
     let line: String = line.chars().filter(|c| !c.is_control()).take(200).collect();
     if line.is_empty() {
         "the proxy log is empty".to_string()
@@ -443,7 +447,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tail-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(proxy_log_tail(&dir).contains("empty"));
-        std::fs::write(dir.join("proxy.log"), "first\nTLS \u{1b}[31mhandshake failed\n\n").unwrap();
+        std::fs::write(
+            dir.join("proxy.log"),
+            "first\nTLS \u{1b}[31mhandshake failed\n\n",
+        )
+        .unwrap();
         let tail = proxy_log_tail(&dir);
         assert_eq!(tail, "proxy log: TLS [31mhandshake failed");
         let _ = std::fs::remove_dir_all(&dir);
@@ -455,9 +463,18 @@ mod tests {
         let mut helper = Helper::new(dir);
         let started = Instant::now();
         let error = helper
-            .mount("/mnt/x", "fs-0000", "fsap-0000", "us-east-2", Some("use2-az1"))
+            .mount(
+                "/mnt/x",
+                "fs-0000",
+                "fsap-0000",
+                "us-east-2",
+                Some("use2-az1"),
+            )
             .expect_err("nothing resolves here");
-        assert!(error.starts_with("dns:") || error.starts_with("connect:"), "{error}");
+        assert!(
+            error.starts_with("dns:") || error.starts_with("connect:"),
+            "{error}"
+        );
         assert!(started.elapsed() < Duration::from_secs(12));
     }
 }

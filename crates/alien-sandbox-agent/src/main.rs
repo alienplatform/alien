@@ -128,18 +128,22 @@ fn main() -> Result<()> {
     #[cfg(target_os = "linux")]
     if unsafe { libc::geteuid() } == 0 {
         let declared = alien_sandbox_agent::mounts::parse_declared(
-            std::env::var(alien_sandbox_agent::mounts::ENV_MOUNTS).ok().as_deref(),
+            std::env::var(alien_sandbox_agent::mounts::ENV_MOUNTS)
+                .ok()
+                .as_deref(),
         )
         .map_err(|reason| invalid(alien_sandbox_agent::mounts::ENV_MOUNTS, &reason))?;
         if !declared.is_empty() {
             let helper = alien_sandbox_agent::mounts::fork_helper(
-                declared.iter().any(|mount| matches!(mount, alien_core::SandboxMount::S3files { .. })),
+                declared
+                    .iter()
+                    .any(|mount| matches!(mount, alien_core::SandboxMount::S3files { .. })),
             )
-                .into_alien_error()
-                .context(failed(
-                    "start the mount helper",
-                    "cannot fork the helper".to_string(),
-                ))?;
+            .into_alien_error()
+            .context(failed(
+                "start the mount helper",
+                "cannot fork the helper".to_string(),
+            ))?;
             alien_sandbox_agent::mounts::install(alien_sandbox_agent::mounts::Mounts::new(
                 declared,
                 state.exec_identity.uid,

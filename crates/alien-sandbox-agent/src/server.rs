@@ -353,7 +353,7 @@ pub fn router(state: Arc<AgentState>) -> Router {
         )
         .route(
             &hook_path("suspend"),
-            get(hook_lifecycle).post(hook_lifecycle),
+            get(suspend_mounts_hook).post(suspend_mounts_hook),
         )
         .route(
             &hook_path("terminate"),
@@ -564,8 +564,34 @@ async fn resume_egress_hook(
         egress.resume().await?;
     }
     #[cfg(not(target_os = "linux"))]
-    let _ = (state, peer, headers);
+    let _ = (&state, peer, &headers);
+    // The network is back, so the file systems can be reached again. A mount that fails shows in
+    // the health `mounts` status; it does not fail the resume.
+    #[cfg(target_os = "linux")]
+    if crate::mounts::global().is_some_and(|m| !m.is_empty()) {
+        let _ = tokio::task::spawn_blocking(|| {
+            if let Some(mounts) = crate::mounts::global() {
+                mounts.resume();
+            }
+        })
+        .await;
+    }
     Ok(StatusCode::OK)
+}
+
+/// Before the sandbox is suspended, mounted file systems are unmounted: their connections do not
+/// survive the restore.
+async fn suspend_mounts_hook() -> StatusCode {
+    #[cfg(target_os = "linux")]
+    if crate::mounts::global().is_some_and(|m| !m.is_empty()) {
+        let _ = tokio::task::spawn_blocking(|| {
+            if let Some(mounts) = crate::mounts::global() {
+                mounts.suspend();
+            }
+        })
+        .await;
+    }
+    StatusCode::OK
 }
 
 async fn run_command(

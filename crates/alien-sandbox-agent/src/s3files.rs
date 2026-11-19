@@ -113,7 +113,10 @@ fn quote_plus(text: &str) -> String {
 }
 
 fn credential_scope(date: DateTime<Utc>, region: &str) -> String {
-    format!("{}/{region}/{SERVICE}/{REQUEST_TYPE}", date.format("%Y%m%d"))
+    format!(
+        "{}/{region}/{SERVICE}/{REQUEST_TYPE}",
+        date.format("%Y%m%d")
+    )
 }
 
 /// `create_canonical_request`
@@ -264,7 +267,10 @@ fn client_auth_extension(
         return Err("bad signature".into());
     }
     body.extend(der(0x04, signature_hex.as_bytes()));
-    body.extend(der(0x17, date.format("%y%m%d%H%M%SZ").to_string().as_bytes()));
+    body.extend(der(
+        0x17,
+        date.format("%y%m%d%H%M%SZ").to_string().as_bytes(),
+    ));
     if !session_token.is_empty() {
         body.extend(der(0xa0, &utf8(session_token)));
     }
@@ -310,13 +316,15 @@ pub fn client_certificate_pem(
     );
     // `subjectKeyIdentifier = hash`, as upstream's v3_ca section asks (written as a plain
     // extension so the SHA-1 key hash is exactly openssl's).
-    params.custom_extensions.push(CustomExtension::from_oid_content(
-        &[2, 5, 29, 14],
-        der(
-            0x04,
-            &hex::decode(&key.public_key_hash).map_err(|_| "bad key hash".to_string())?,
-        ),
-    ));
+    params
+        .custom_extensions
+        .push(CustomExtension::from_oid_content(
+            &[2, 5, 29, 14],
+            der(
+                0x04,
+                &hex::decode(&key.public_key_hash).map_err(|_| "bad key hash".to_string())?,
+            ),
+        ));
     params.serial_number = Some(rcgen::SerialNumber::from_slice(
         &Sha256::digest(format!("{}{}", date.timestamp(), credentials.access_key_id))[..16],
     ));
@@ -325,7 +333,9 @@ pub fn client_certificate_pem(
     };
     // Order as upstream writes them: access point, client auth, file system id.
     if !access_point_id.is_empty() {
-        params.custom_extensions.push(extension(1, utf8(access_point_id)));
+        params
+            .custom_extensions
+            .push(extension(1, utf8(access_point_id)));
     }
     params.custom_extensions.push(extension(2, auth));
     params.custom_extensions.push(extension(3, utf8(fs_id)));
@@ -515,9 +525,16 @@ mod tests {
         // Decode and look for the three identifiers.
         use base64::Engine as _;
         let body: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
-        let der = base64::engine::general_purpose::STANDARD.decode(body).unwrap();
+        let der = base64::engine::general_purpose::STANDARD
+            .decode(body)
+            .unwrap();
         let text = String::from_utf8_lossy(&der).to_string();
-        for needle in ["fsap-0123456789abcdef0", "fs-0abc123", "ASIAEXAMPLEKEYID123", "TOKEN"] {
+        for needle in [
+            "fsap-0123456789abcdef0",
+            "fs-0abc123",
+            "ASIAEXAMPLEKEYID123",
+            "TOKEN",
+        ] {
             assert!(text.contains(needle), "{needle}");
         }
         // The signature in the certificate is the one for this key and time.
@@ -541,7 +558,13 @@ mod tests {
             expiration: "2030-01-01T00:00:00Z".into(),
         };
         let pem = client_certificate_pem(
-            &key, &credentials, "us-east-1", "fs-0abc123", "fsap-0123456789abcdef0", "sandbox", at(),
+            &key,
+            &credentials,
+            "us-east-1",
+            "fs-0abc123",
+            "fsap-0123456789abcdef0",
+            "sandbox",
+            at(),
         )
         .unwrap();
         std::fs::write(format!("{dir}/cert.pem"), pem).unwrap();

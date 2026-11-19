@@ -222,6 +222,8 @@ impl std::fmt::Display for Refusal {
 struct Inner {
     status: BTreeMap<String, String>,
     start_deferred: bool,
+    /// The sources last delivered, kept so a resume can mount again without the binding.
+    sources: BTreeMap<String, MountSource>,
 }
 
 /// The sandbox's declared mounts and what has happened to each.
@@ -255,6 +257,7 @@ impl Mounts {
             inner: Mutex::new(Inner {
                 status,
                 start_deferred: false,
+                sources: BTreeMap::new(),
             }),
         }
     }
@@ -346,6 +349,13 @@ impl Mounts {
     /// Mounts every declared mount that can be mounted now, in declaration order. A tmpfs under
     /// an s3files mount waits for it. Failures are recorded as the mount's status.
     pub fn advance(&self, sources: &BTreeMap<String, MountSource>) {
+        if !sources.is_empty() {
+            self.inner
+                .lock()
+                .expect("mount status")
+                .sources
+                .extend(sources.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
         for mount in &self.declared {
             let path = mount.path();
             if self.is_mounted(path) {
@@ -400,6 +410,16 @@ impl Mounts {
         }
         write_credentials(&self.credentials_dir, path, credentials)
             .map_err(|_| Refusal::Unknown(path.to_string()))?;
+        // A resume mounts from the remembered source; it must carry the newest credentials.
+        if let Some(source) = self
+            .inner
+            .lock()
+            .expect("mount status")
+            .sources
+            .get_mut(path)
+        {
+            source.credentials = credentials.clone();
+        }
         // Only a mounted file system has a certificate to remake; before that the mount reads
         // the new file itself.
         if self.is_mounted(path) {
@@ -412,7 +432,50 @@ impl Mounts {
         Ok(())
     }
 
-    /// Unmounts in reverse declaration order, before a suspend. Status goes back to `pending`.
+    /// True when the mount is a file system from outside, or sits under one. A plain tmpfs keeps
+    /// its memory across a suspend; these do not survive it: the connection to the file system
+    /// is gone when the VM is restored.
+    fn is_remote_or_under_remote(&self, mount: &SandboxMount) -> bool {
+        matches!(mount, SandboxMount::S3files { .. })
+            || self.declared.iter().any(|other| {
+                matches!(other, SandboxMount::S3files { .. })
+                    && other.path() != mount.path()
+                    && Path::new(mount.path()).starts_with(other.path())
+            })
+    }
+
+    /// Before a suspend: unmounts the s3files mounts (and anything mounted under them), innermost
+    /// first, and stops their proxies. Status goes back to `pending`. A tmpfs outside them stays
+    /// as it is. Credentials files stay, so renewals arriving while suspended still apply.
+    pub fn suspend(&self) {
+        for mount in self.declared.iter().rev() {
+            let path = mount.path();
+            if !self.is_remote_or_under_remote(mount) || !self.is_mounted(path) {
+                continue;
+            }
+            match self.backend.request(&HelperRequest::Unmount {
+                path: path.to_string(),
+            }) {
+                Ok(()) => self.set(path, "pending".into()),
+                Err(reason) => self.set(path, format!("failed: {reason}")),
+            }
+        }
+    }
+
+    /// After a resume: mounts again whatever [`Mounts::suspend`] took away (or that failed), from
+    /// the sources delivered before. Nothing is asked of the binding.
+    pub fn resume(&self) {
+        let sources = self.inner.lock().expect("mount status").sources.clone();
+        // A mount that failed on the way down is still there; forget it so it is tried afresh.
+        for mount in &self.declared {
+            if self.is_remote_or_under_remote(mount) && !self.is_mounted(mount.path()) {
+                self.set(mount.path(), "pending".into());
+            }
+        }
+        self.advance(&sources);
+    }
+
+    /// Unmounts every mount in reverse declaration order. Status goes back to `pending`.
     pub fn unmount_all(&self) {
         for mount in self.declared.iter().rev() {
             let path = mount.path();
@@ -454,7 +517,9 @@ impl MountBackend for HelperClient {
         let mut guard = self.stream.lock().map_err(|_| "mount helper failed")?;
         // Every step in the helper has its own deadline, so this one only catches a helper that
         // is stuck.
-        let _ = guard.0.set_read_timeout(Some(std::time::Duration::from_secs(40)));
+        let _ = guard
+            .0
+            .set_read_timeout(Some(std::time::Duration::from_secs(40)));
         let mut line = serde_json::to_string(request).map_err(|_| "bad request")?;
         line.push('\n');
         guard
@@ -636,10 +701,16 @@ pub(crate) fn unmount(path: &str) -> Result<(), String> {
     let target = c_string(path)?;
     // SAFETY: valid NUL-terminated path.
     if unsafe { libc::umount2(target.as_ptr(), 0) } != 0 {
-        return Err(format!(
-            "unmount failed: {}",
-            std::io::Error::last_os_error()
-        ));
+        let error = std::io::Error::last_os_error();
+        // A process still holding a file open must not keep the VM from suspending: detach, and
+        // the mount goes once the last file closes.
+        // SAFETY: as above.
+        if error.raw_os_error() == Some(libc::EBUSY)
+            && unsafe { libc::umount2(target.as_ptr(), libc::MNT_DETACH) } == 0
+        {
+            return Ok(());
+        }
+        return Err(format!("unmount failed: {error}"));
     }
     Ok(())
 }
@@ -838,6 +909,126 @@ mod tests {
             serde_json::to_string(&mounts.status()).unwrap()
         );
         assert!(!shown.contains("secret"), "{shown}");
+    }
+
+    fn with_standalone_tmpfs(fake: &Arc<Fake>, dir: &Path) -> Mounts {
+        let mut declared = workspace_and_scratch();
+        declared.push(SandboxMount::Tmpfs {
+            path: "/cache".into(),
+            size: "1Gi".into(),
+        });
+        Mounts::new(
+            declared,
+            1000,
+            1000,
+            dir.to_path_buf(),
+            Box::new(Arc::clone(fake)),
+        )
+    }
+
+    #[test]
+    fn a_suspend_unmounts_the_file_system_and_what_sits_on_it_but_not_a_plain_tmpfs() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(Fake::default());
+        let mounts = with_standalone_tmpfs(&fake, dir.path());
+        mounts.advance(&BTreeMap::from([("/workspace".to_string(), source("1"))]));
+        assert!(mounts.ready());
+        fake.calls.lock().unwrap().clear();
+        mounts.suspend();
+        assert_eq!(
+            *fake.calls.lock().unwrap(),
+            vec![
+                HelperRequest::Unmount {
+                    path: "/workspace/tmp".into()
+                },
+                HelperRequest::Unmount {
+                    path: "/workspace".into()
+                },
+            ]
+        );
+        let states: Vec<_> = mounts
+            .status()
+            .into_iter()
+            .map(|m| (m.path, m.state))
+            .collect();
+        assert!(
+            states.contains(&("/cache".into(), "mounted".into())),
+            "{states:?}"
+        );
+        assert!(
+            states.contains(&("/workspace".into(), "pending".into())),
+            "{states:?}"
+        );
+    }
+
+    #[test]
+    fn a_resume_mounts_again_from_the_remembered_sources_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(Fake::default());
+        let mounts = with_standalone_tmpfs(&fake, dir.path());
+        mounts.advance(&BTreeMap::from([("/workspace".to_string(), source("1"))]));
+        mounts.suspend();
+        fake.calls.lock().unwrap().clear();
+        mounts.resume();
+        let calls = fake.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert!(matches!(&calls[0], HelperRequest::S3Files { path, .. } if path == "/workspace"));
+        assert!(matches!(&calls[1], HelperRequest::Tmpfs { path, .. } if path == "/workspace/tmp"));
+        assert!(mounts.ready());
+    }
+
+    #[test]
+    fn credentials_renewed_while_suspended_are_the_ones_a_resume_mounts_with() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(Fake::default());
+        let mounts = mounts(&fake, dir.path());
+        mounts.advance(&BTreeMap::from([("/workspace".to_string(), source("1"))]));
+        mounts.suspend();
+        fake.calls.lock().unwrap().clear();
+        mounts.renew("/workspace", &credentials("2")).unwrap();
+        // Suspended: only the file changes; there is no certificate to remake.
+        assert!(fake.calls.lock().unwrap().is_empty());
+        mounts.resume();
+        let written = std::fs::read_to_string(credentials_file(dir.path(), "/workspace")).unwrap();
+        assert!(
+            written.contains("SK2") && !written.contains("SK1"),
+            "stale credentials written"
+        );
+        assert!(mounts.ready());
+    }
+
+    #[test]
+    fn a_failed_remount_shows_in_the_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = Arc::new(Fake::default());
+        let mounts_ok = mounts(&ok, dir.path());
+        mounts_ok.advance(&BTreeMap::from([("/workspace".to_string(), source("1"))]));
+        // A backend that fails s3files from the start: resume leaves a failed status, not a panic.
+        let bad = Arc::new(Fake {
+            fail_s3: true,
+            ..Default::default()
+        });
+        let mounts_bad = mounts(&bad, dir.path());
+        mounts_bad.advance(&BTreeMap::from([("/workspace".to_string(), source("1"))]));
+        mounts_bad.resume();
+        assert_eq!(
+            mounts_bad.status()[0].state,
+            "failed: no route to the mount target"
+        );
+        assert!(!mounts_bad.ready());
+    }
+
+    #[test]
+    fn a_suspend_with_nothing_mounted_asks_the_helper_for_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(Fake::default());
+        let mounts = mounts(&fake, dir.path());
+        mounts.suspend();
+        mounts.resume();
+        assert!(
+            fake.calls.lock().unwrap().is_empty(),
+            "no source was ever delivered"
+        );
     }
 
     #[test]

@@ -191,6 +191,9 @@ mod tests {
         // A second install replaces the table rather than stacking.
         runtime.block_on(install(&[])).expect("reinstalls");
         marked_connect(to(&proxy), GUEST_MARK).expect("the proxy port rule left with the table");
-        assert!(marked_connect(to(&nfs), GUEST_MARK).is_err(), "2049 stays closed to guests");
+        assert!(
+            marked_connect(to(&nfs), GUEST_MARK).is_err(),
+            "2049 stays closed to guests"
+        );
     }
 }
