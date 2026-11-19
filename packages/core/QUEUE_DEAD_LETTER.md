@@ -88,6 +88,8 @@ An older manager or runtime cannot read a stack that has `deadLetter` and report
 unknown field `deadLetter`. Update them before releasing a stack that uses it.
 
 On Google Cloud, for a Frozen queue with a Worker trigger, the Pub/Sub service agent's
-subscriber grant is shared by the whole project: destroying another stack in the same
-project can remove it. Rerun the setup to restore it. Messages are redelivered meanwhile
+subscriber grant is shared by the whole project. On Terraform it is removed when the stack
+is destroyed, even if another stack or your own dead-letter subscriptions in the project
+still rely on it. Rerun the setup (or re-add the grant) to restore it. Adding or removing
+such a Worker trigger in a later release asks for setup to be rerun first. Messages are redelivered meanwhile
 and none are lost.

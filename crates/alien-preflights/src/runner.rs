@@ -352,12 +352,7 @@ impl PreflightRunner {
             return Ok((None, results));
         };
         Ok((
-            Self::with_chosen_machines(
-                prepared,
-                stack_state,
-                &chosen,
-                release_stack,
-            )?,
+            Self::with_chosen_machines(prepared, stack_state, &chosen, release_stack)?,
             results,
         ))
     }
@@ -2313,6 +2308,91 @@ mod setup_update_authorization_tests {
                 old.permissions, new.permissions,
                 "default profile on {platform}"
             );
+        }
+    }
+
+    /// An installed Frozen queue with a dead-letter target and no Worker gains a Live Worker
+    /// trigger in an ordinary release. On Google Cloud that needs a project-level grant only
+    /// setup writes, so the release is refused until setup is rerun, and the setup digest
+    /// carries the need. Without the dead letter the same release needs nothing.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn a_worker_trigger_on_a_frozen_dead_letter_queue_requires_setup_on_gcp() {
+        let stack = |dead_letter: bool, worker: bool| {
+            let failed = Queue::new("failed".into()).build();
+            let queue = if dead_letter {
+                Queue::new("jobs".into())
+                    .dead_letter(
+                        alien_core::QueueDeadLetter::builder()
+                            .queue(alien_core::ResourceRef::new(Queue::RESOURCE_TYPE, "failed"))
+                            .build(),
+                    )
+                    .build()
+            } else {
+                Queue::new("jobs".into()).build()
+            };
+            let mut stack = Stack::new("stack".into())
+                .add(failed, ResourceLifecycle::Frozen)
+                .add(queue.clone(), ResourceLifecycle::Frozen);
+            if worker {
+                stack = stack.add(
+                    Worker::new("consumer".into())
+                        .code(WorkerCode::Image {
+                            image: "app:v1".into(),
+                        })
+                        .permissions("execution".into())
+                        .trigger(WorkerTrigger::queue(&queue))
+                        .build(),
+                    ResourceLifecycle::Live,
+                );
+            }
+            stack.build()
+        };
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let config = deployment_config();
+        let state = StackState::new(Platform::Gcp);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".into(),
+        };
+
+        let old = stack(true, false);
+        let target = stack(true, true);
+        assert_ne!(old.setup_update_digest(), target.setup_update_digest());
+        let error = runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect_err("the project-level grant needs setup");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        assert!(error.message.contains("Frozen queue 'jobs'"));
+
+        // The same trigger on a queue without a dead letter needs no setup.
+        let plain_old = stack(false, false);
+        let plain_target = stack(false, true);
+        assert_eq!(
+            plain_old.setup_update_digest(),
+            plain_target.setup_update_digest()
+        );
+        let result = runner
+            .run_deployment_time_preflights(
+                plain_target,
+                &state,
+                &config,
+                &client,
+                Some(&plain_old),
+                None,
+                None,
+            )
+            .await;
+        if let Err(error) = result {
+            assert_ne!(error.code, "DEPLOYMENT_SETUP_REQUIRED", "{error:?}");
         }
     }
 

@@ -4,9 +4,10 @@
   "platforms": {
     "gcp": [
       {
-        // Granted to management only when the trigger queue is Live. With a Frozen queue, setup
-        // grants the Pub/Sub service agent subscriber for the project and management holds no
-        // subscription IAM write access.
+        // Granted to management only when the trigger queue is Live. With a Frozen trigger queue
+        // this set is not attached: setup grants the Pub/Sub service agent subscriber for the
+        // project instead. (A stack with any Live queue already holds
+        // pubsub.subscriptions.setIamPolicy project-wide through queue/provision.)
         // A worker's push subscription for a queue trigger is named <stack prefix>-<worker>-<queue>.
         // Pub/Sub does not honor an IAM condition on a subscription's name for getIamPolicy and
         // setIamPolicy (a real project answered 403 with a name condition and succeeded without

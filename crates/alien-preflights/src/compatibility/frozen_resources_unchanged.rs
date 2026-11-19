@@ -629,6 +629,23 @@ impl FrozenResourcesUnchangedCheck {
                         old_stack.queue_visibility_timeout_seconds(id),
                     ));
                 }
+                // A setup-owned dead-letter queue whose Worker push subscription needs the
+                // project-level grant of the Pub/Sub service agent: only setup writes it, and
+                // the queue declaration itself does not change when a Worker trigger is added
+                // or removed.
+                if self.platform == Platform::Gcp
+                    && old_entry
+                        .config
+                        .downcast_ref::<alien_core::Queue>()
+                        .is_some()
+                    && alien_core::queue_needs_project_push_subscriber(new_stack, id)
+                        != alien_core::queue_needs_project_push_subscriber(old_stack, id)
+                {
+                    errors.push(format!(
+                        "Frozen queue '{id}' with a dead-letter queue needs a Pub/Sub subscriber grant \
+                         for its Worker's trigger (or no longer needs it). Rerun setup with the updated stack before updating its consumers."
+                    ));
+                }
                 let old_config = on_platform(self.platform, &old_entry.config);
                 let new_config = on_platform(self.platform, &new_entry.config);
                 // A reference to an input nobody filled in is not a change to what setup
