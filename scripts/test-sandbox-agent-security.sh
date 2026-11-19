@@ -50,6 +50,17 @@ docker create --name "$container" --privileged --cgroupns=private \
         rmdir /sys/fs/cgroup/alien-guest
       fi
     done
+    # The previous test left its cgroups (with the child its escape attempt made) and, in this
+    # network namespace, its firewall behind: this one gets a network namespace of its own.
+    find /sys/fs/cgroup/alien-guest -depth -type d -exec rmdir {} +
+    name=gateway_egress::guest_network_tests::image_nfs_leaves_only_through_its_mark_and_declared_connections
+    /agent-tests --list --ignored --exact "$name" | grep -Fx "$name: test"
+    unshare --mount --net bash -euo pipefail -c "
+      ip link set lo up
+      ip addr add 10.0.1.5/32 dev lo
+      ip addr add 10.0.2.5/32 dev lo
+      exec /agent-tests --ignored --exact $name --nocapture
+    "
   ' >/dev/null
 trap cleanup EXIT
 docker start -a "$container"

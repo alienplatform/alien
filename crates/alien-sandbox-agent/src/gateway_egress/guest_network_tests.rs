@@ -230,3 +230,122 @@ print(f'uid={os.getuid()} ordinary devices and PTY work; raw devices denied')
         );
     }
 }
+
+#[test]
+#[ignore = "requires isolated network/mount/cgroup namespaces, ALL capabilities, cgroup2, Python 3 and 10.0.1.5 and 10.0.2.5 on lo"]
+fn image_nfs_leaves_only_through_its_mark_and_declared_connections() {
+    // A declaration with one private connection, read the way the agent reads it at boot.
+    std::env::set_var(
+        crate::image_permissions::ENV_IMAGE_COMMAND,
+        alien_core::sandbox_image::IMAGE_COMMAND_WITH_IMAGE_PERMISSIONS,
+    );
+    std::env::set_var(crate::image_permissions::ENV_PERMISSIONS_VERSION, "1");
+    std::env::set_var(
+        crate::image_permissions::ENV_PERMISSIONS,
+        r#"{"mounts":[{"type":"nfs","path":"/workspace"}],"connections":[{"cidr":"10.0.1.0/24","port":2049}]}"#,
+    );
+    crate::image_permissions::load_from_env()
+        .expect("declaration")
+        .expect("declared");
+    super::guest_network::install(true).expect("install guest socket classification");
+    privilege::block_command_ipv6();
+    super::redirect::install().expect("install real gateway redirects");
+    // The gateway's redirect target, a server at a declared address, one at an undeclared
+    // address, and a loopback NFS proxy. Each answers with its name.
+    for (address, name) in [
+        ("127.0.0.1:15001", "gateway"),
+        ("10.0.1.5:2049", "declared"),
+        ("10.0.2.5:2049", "undeclared"),
+        ("127.0.0.1:2049", "loopback"),
+    ] {
+        let listener = TcpListener::bind(address).expect(address);
+        std::thread::spawn(move || {
+            for mut socket in listener.incoming().flatten() {
+                let _ = socket.write_all(name.as_bytes());
+            }
+        });
+    }
+    // The image cgroup through a cgroup2 view of our own: the guest's is read-only now.
+    let view = tempfile::tempdir().unwrap();
+    let mounted = Command::new("mount")
+        .args(["-t", "cgroup2", "none"])
+        .arg(view.path())
+        .status()
+        .unwrap();
+    assert!(mounted.success());
+    let image_procs = view.path().join("alien-guest/image/cgroup.procs");
+    assert!(image_procs.exists(), "the image cgroup exists");
+
+    const PROBE: &str = r#"
+import socket, sys
+mark, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+s = socket.socket()
+s.settimeout(2)
+if mark != 'own':
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, int(mark, 0))
+print(hex(s.getsockopt(socket.SOL_SOCKET, socket.SO_MARK)), end=' ')
+try:
+    s.connect((host, port))
+    print(s.recv(64).decode() or 'closed')
+except socket.timeout:
+    print('dropped')
+except OSError as error:
+    print(f'error {error.errno}')
+"#;
+    // `image`: a bounded root process in the image cgroup. `guest`: the same in the guest cgroup.
+    // A number: a socket carrying that mark, set by a process that may (the kernel NFS client's
+    // sockets carry no mark: 0).
+    let probe = |who: &str, host: &str, port: u16| -> String {
+        let mut child = Command::new("python3");
+        let mark = if who == "image" || who == "guest" {
+            "own"
+        } else {
+            who
+        };
+        child.args(["-c", PROBE, mark, host, &port.to_string()]);
+        if who == "image" || who == "guest" {
+            let procs = (who == "image").then(|| image_procs.clone());
+            // SAFETY: only a write to cgroup.procs and privilege syscalls run before exec.
+            unsafe {
+                child.pre_exec(move || {
+                    if let Some(procs) = &procs {
+                        fs::write(procs, "0")?;
+                    }
+                    privilege::drop_image_to(ExecIdentity { uid: 0, gid: 0 })
+                });
+            }
+        }
+        let output = child.output().expect("probe");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    let image_mark = format!("{:#x}", crate::mount_broker::IMAGE_MARK);
+    let cases = [
+        // The image reaches its declared connection directly, and nothing else.
+        ("image", "10.0.1.5", 2049, format!("{image_mark} declared")),
+        ("image", "10.0.2.5", 2049, format!("{image_mark} gateway")),
+        ("image", "10.0.1.5", 443, format!("{image_mark} gateway")),
+        ("image", "127.0.0.1", 2049, format!("{image_mark} loopback")),
+        // The rest of the guest goes through the gateway as before.
+        ("guest", "10.0.1.5", 2049, "0xa11f gateway".to_string()),
+        // Unmarked sockets (the kernel's NFS client) reach NFS only on loopback.
+        ("0", "10.0.1.5", 2049, "0x0 dropped".to_string()),
+        ("0", "10.0.2.5", 2049, "0x0 dropped".to_string()),
+        ("0", "127.0.0.1", 2049, "0x0 loopback".to_string()),
+    ];
+    let mut failures = Vec::new();
+    for (who, host, port, expected) in cases {
+        let got = probe(who, host, port);
+        println!("{who:>5} -> {host}:{port}: {got}");
+        if got != expected {
+            failures.push(format!(
+                "{who} -> {host}:{port}: got '{got}', expected '{expected}'"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
