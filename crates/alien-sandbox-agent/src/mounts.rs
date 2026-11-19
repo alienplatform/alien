@@ -224,6 +224,8 @@ struct Inner {
     start_deferred: bool,
     /// The sources last delivered, kept so a resume can mount again without the binding.
     sources: BTreeMap<String, MountSource>,
+    /// True between a suspend and the resume that follows; nothing is mounted then.
+    suspended: bool,
 }
 
 /// The sandbox's declared mounts and what has happened to each.
@@ -258,6 +260,7 @@ impl Mounts {
                 status,
                 start_deferred: false,
                 sources: BTreeMap::new(),
+                suspended: false,
             }),
         }
     }
@@ -428,6 +431,24 @@ impl Mounts {
                     path: path.to_string(),
                 })
                 .map_err(Refusal::RefreshFailed)?;
+            return Ok(());
+        }
+        // A mount that failed (for instance on credentials that had expired) or is still pending
+        // is tried again with the new credentials, unless a suspend is holding everything down.
+        let (retry, source) = {
+            let inner = self.inner.lock().expect("mount status");
+            let state = inner
+                .status
+                .get(path)
+                .map(String::as_str)
+                .unwrap_or("pending");
+            (
+                !inner.suspended && (state == "pending" || state.starts_with("failed")),
+                inner.sources.get(path).cloned(),
+            )
+        };
+        if let (true, Some(source)) = (retry, source) {
+            self.advance(&BTreeMap::from([(path.to_string(), source)]));
         }
         Ok(())
     }
@@ -448,6 +469,7 @@ impl Mounts {
     /// first, and stops their proxies. Status goes back to `pending`. A tmpfs outside them stays
     /// as it is. Credentials files stay, so renewals arriving while suspended still apply.
     pub fn suspend(&self) {
+        self.inner.lock().expect("mount status").suspended = true;
         for mount in self.declared.iter().rev() {
             let path = mount.path();
             if !self.is_remote_or_under_remote(mount) || !self.is_mounted(path) {
@@ -465,6 +487,7 @@ impl Mounts {
     /// After a resume: mounts again whatever [`Mounts::suspend`] took away (or that failed), from
     /// the sources delivered before. Nothing is asked of the binding.
     pub fn resume(&self) {
+        self.inner.lock().expect("mount status").suspended = false;
         let sources = self.inner.lock().expect("mount status").sources.clone();
         // A mount that failed on the way down is still there; forget it so it is tried afresh.
         for mount in &self.declared {
@@ -766,6 +789,10 @@ mod tests {
         .unwrap()
     }
 
+    fn mounts_with(fake: &Arc<Fake>, dir: &Path) -> Mounts {
+        mounts(fake, dir)
+    }
+
     fn mounts(fake: &Arc<Fake>, dir: &Path) -> Mounts {
         Mounts::new(
             workspace_and_scratch(),
@@ -995,6 +1022,52 @@ mod tests {
             "stale credentials written"
         );
         assert!(mounts.ready());
+    }
+
+    #[test]
+    fn a_renewal_retries_a_mount_that_failed_or_is_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        // A failed state, with the source that was delivered.
+        let retry = Arc::new(Fake::default());
+        let m = mounts_with(&retry, dir.path());
+        m.set("/workspace", "failed: no route to the mount target".into());
+        m.inner
+            .lock()
+            .unwrap()
+            .sources
+            .insert("/workspace".into(), source("1"));
+        m.renew("/workspace", &credentials("2")).unwrap();
+        assert_eq!(m.status()[0].state, "mounted");
+        let calls = retry.calls.lock().unwrap();
+        assert!(calls
+            .iter()
+            .any(|c| matches!(c, HelperRequest::S3Files { .. })));
+        drop(calls);
+        let written = std::fs::read_to_string(credentials_file(dir.path(), "/workspace")).unwrap();
+        assert!(written.contains("SK2"));
+        // Pending with a delivered source (e.g. delivery interrupted) is retried too.
+        let pend = Arc::new(Fake::default());
+        let p = mounts_with(&pend, dir.path());
+        p.inner
+            .lock()
+            .unwrap()
+            .sources
+            .insert("/workspace".into(), source("1"));
+        p.renew("/workspace", &credentials("3")).unwrap();
+        assert_eq!(p.status()[0].state, "mounted");
+        // Never delivered: nothing to mount from, so a renewal only writes the file.
+        let none = Arc::new(Fake::default());
+        let n = mounts_with(&none, dir.path());
+        n.renew("/workspace", &credentials("4")).unwrap();
+        assert!(none.calls.lock().unwrap().is_empty());
+        // Suspended: held down until the resume.
+        let sus = Arc::new(Fake::default());
+        let s = mounts_with(&sus, dir.path());
+        s.advance(&BTreeMap::from([("/workspace".to_string(), source("1"))]));
+        s.suspend();
+        sus.calls.lock().unwrap().clear();
+        s.renew("/workspace", &credentials("5")).unwrap();
+        assert!(sus.calls.lock().unwrap().is_empty());
     }
 
     #[test]
