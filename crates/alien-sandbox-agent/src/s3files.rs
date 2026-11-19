@@ -371,7 +371,12 @@ pub fn proxy_config(files: &ProxyFiles<'_>) -> String {
         format!("CAfile = {}", files.ca_file),
         format!("cert = {}", files.certificate),
         format!("key = {}", files.private_key),
-        format!("checkHost = {}", files.dns_name),
+        // `efs_config["checkHost"] = dns_name[dns_name.index(fs_id):]`: the server certificate
+        // names the file system, not the zone-qualified mount target.
+        format!(
+            "checkHost = {}",
+            &files.dns_name[files.dns_name.find(files.fs_id).unwrap_or(0)..]
+        ),
         "retry_nfs_mount_command_timeout_sec = 30".to_string(),
         format!("fs_id = {}", files.fs_id),
         format!("region = {}", files.region),
@@ -468,7 +473,7 @@ mod tests {
     fn the_proxy_config_matches_the_upstream_layout() {
         let text = proxy_config(&ProxyFiles {
             listen_port: 20049,
-            dns_name: "fs-0abc123.s3files.us-east-1.on.aws",
+            dns_name: "use1-az1.fs-0abc123.s3files.us-east-1.on.aws",
             fs_id: "fs-0abc123",
             region: "us-east-1",
             ca_file: "/opt/alien/efs-utils.crt",
@@ -477,7 +482,7 @@ mod tests {
             pid_file: "/run/alien/mounts/x/proxy.pid",
             log_file: "/run/alien/mounts/x/proxy.log",
         });
-        assert!(text.contains("[efs]\nclient = yes\naccept = 127.0.0.1:20049\nconnect = fs-0abc123.s3files.us-east-1.on.aws:2049\n"));
+        assert!(text.contains("[efs]\nclient = yes\naccept = 127.0.0.1:20049\nconnect = use1-az1.fs-0abc123.s3files.us-east-1.on.aws:2049\n"));
         assert!(text.contains("verify = 2\nCAfile = /opt/alien/efs-utils.crt\ncert = "));
         assert!(text.contains("checkHost = fs-0abc123.s3files.us-east-1.on.aws\n"));
         assert!(!text.contains("secret") && !text.contains("sessionToken"));
