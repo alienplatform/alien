@@ -1482,6 +1482,9 @@ struct ResourcePushTarget {
     resource_type: &'static str,
     /// Local directory containing OCI tarballs produced by `alien build`
     local_image_dir: PathBuf,
+    /// Whether a sandbox sharing this image declares an s3files mount, so its image carries the
+    /// mount proxy.
+    mount_proxy: bool,
 }
 
 impl ResourcePushTarget {
@@ -1535,6 +1538,7 @@ fn add_push_target_resource(
         resource_names: vec![resource_name],
         resource_type,
         local_image_dir,
+        mount_proxy: false,
     });
 }
 
@@ -1649,8 +1653,17 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
                             resource_id.clone(),
                             sandbox.id.clone(),
                             "sandbox",
-                            path,
+                            path.clone(),
                         );
+                        if sandbox.mounts.iter().any(|mount| {
+                            matches!(mount, alien_core::SandboxMount::S3files { .. })
+                        }) {
+                            if let Some(target) =
+                                push_target_for_local_image(&mut targets, "sandbox", &path)
+                            {
+                                target.mount_proxy = true;
+                            }
+                        }
                     } else {
                         // A bundle URI and an Azure catalog name reach this branch too: neither
                         // is a directory, and neither is Alien's to push.
@@ -2230,6 +2243,7 @@ async fn push_target(
         agent_image,
         push_options,
         layered,
+        target.mount_proxy,
     )
     .await?;
     if *platform == Platform::Aws {
@@ -2257,12 +2271,13 @@ struct SandboxAgentLayering {
 }
 
 impl SandboxAgentLayering {
-    fn for_build(self) -> gcp_sandbox_image::AgentLayering {
+    fn for_build(self, mount_proxy: bool) -> gcp_sandbox_image::AgentLayering {
         gcp_sandbox_image::AgentLayering {
             arch: self.target.to_dockdash_arch(),
             contract: self.contract,
             image_command_env: self.image_command_env,
             caller_authorization_header: self.caller_authorization_header,
+            mount_proxy,
         }
     }
 
@@ -2346,6 +2361,7 @@ async fn push_sandbox_agent_image(
     agent_image: &str,
     push_options: &dockdash::PushOptions,
     layering: SandboxAgentLayering,
+    mount_proxy: bool,
 ) -> Result<String> {
     let tarball = images_dir.join(format!("{}.oci.tar", layering.target.runtime_platform_id()));
     if !tarball.is_file() {
@@ -2380,7 +2396,7 @@ async fn push_sandbox_agent_image(
         push_options.auth.clone(),
         // The default cache, which every other dockdash build here uses by not naming one.
         dockdash::BlobCache::new().map_dockdash_err()?,
-        layering.for_build(),
+        layering.for_build(mount_proxy),
     )
     .await?
     .image;
@@ -5606,6 +5622,56 @@ mod tests {
         assert_eq!(manifest_media_type(b"not json"), None);
     }
 
+    /// A sandbox that declares an s3files mount asks for the mount proxy in its image; one that
+    /// declares only tmpfs, or nothing, does not.
+    #[test]
+    fn only_an_s3files_mount_asks_for_the_mount_proxy() {
+        let temp_root = tempdir().unwrap();
+        let mut stack = Stack::new("mounts".to_string());
+        let mut expected = Vec::new();
+        for (id, mounts) in [
+            ("none", vec![]),
+            (
+                "tmpfs",
+                vec![alien_core::SandboxMount::Tmpfs {
+                    path: "/scratch".into(),
+                    size: "1Gi".into(),
+                }],
+            ),
+            (
+                "files",
+                vec![alien_core::SandboxMount::S3files {
+                    path: "/workspace".into(),
+                }],
+            ),
+        ] {
+            let dir = temp_root.path().join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            let sandbox = Sandbox::new(id.to_string())
+                .code(SandboxCode::Image {
+                    image: dir.to_string_lossy().into_owned(),
+                    bundled_from: None,
+                })
+                .egress(alien_core::SandboxEgress::None)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .mounts(mounts)
+                .build();
+            stack = stack.add(sandbox, alien_core::ResourceLifecycle::Live);
+            expected.push((id.to_string(), id == "files"));
+        }
+        let targets = collect_push_targets(&stack.build()).unwrap();
+        let mut found: Vec<_> = targets
+            .iter()
+            .map(|target| (target.resource_name().to_string(), target.mount_proxy))
+            .collect();
+        found.sort();
+        expected.sort();
+        assert_eq!(found, expected);
+    }
+
     #[test]
     fn collect_push_targets_groups_resources_that_share_local_image_directory() {
         let temp_root = tempdir().unwrap();
@@ -7549,7 +7615,7 @@ mod sandbox_build_tests {
                         image: reference.clone(),
                         bundled_from: None,
                     })
-                    .egress(SandboxEgress::None)
+                    .egress(alien_core::SandboxEgress::None)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -7988,7 +8054,7 @@ mod sandbox_build_tests {
                 image: "ubuntu".into(),
                 bundled_from: None,
             })
-            .egress(SandboxEgress::None)
+            .egress(alien_core::SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

@@ -80,6 +80,7 @@ pub async fn build_gcp_sandbox_image(
             contract: GCP_AGENT_PLATFORM,
             image_command_env: true,
             caller_authorization_header: true,
+            mount_proxy: false,
         },
     )
     .await
@@ -109,12 +110,16 @@ pub async fn build_azure_sandbox_image(
             contract: AZURE_SANDBOX,
             image_command_env: true,
             caller_authorization_header: false,
+            mount_proxy: false,
         },
     )
     .await
 }
 
 /// What one backend needs layered onto a base besides the agent itself.
+/// Where the published agent image keeps the mount proxy files.
+const MOUNT_PROXY_AGENT_DIRECTORY: &str = "/opt/alien/mount-proxy";
+
 pub(crate) struct AgentLayering {
     /// The architecture the backend boots, which both the base and the agent are pulled for.
     pub(crate) arch: Arch,
@@ -127,6 +132,9 @@ pub(crate) struct AgentLayering {
     /// consumes `Authorization`; the agent reads the other name from the image, so setting it
     /// anywhere else would make the agent drop the bearer callers still send as `Authorization`.
     pub(crate) caller_authorization_header: bool,
+    /// Whether the image also carries the S3 Files mount proxy and its certificate authorities,
+    /// copied from the agent image. Only a sandbox that declares an s3files mount asks for it.
+    pub(crate) mount_proxy: bool,
 }
 
 pub(crate) async fn build_sandbox_agent_image(
@@ -193,6 +201,31 @@ pub(crate) async fn build_sandbox_agent_image(
             "The agent image {agent_image} has no file at {AGENT_PATH}"
         )))
     })?;
+    let mut mount_proxy_files = Vec::new();
+    if layering.mount_proxy {
+        for (name, mode) in crate::sandbox_bundle::MOUNT_PROXY_FILES {
+            let source = format!("{MOUNT_PROXY_AGENT_DIRECTORY}/{name}");
+            let bytes = match agent.read_file(&source).await {
+                Ok(Some(bytes)) => bytes,
+                Ok(None) => {
+                    return Err(AlienError::new(rejected(format!(
+                        "The agent image {agent_image} has no file at {source}, which a sandbox \
+                         with an s3files mount needs"
+                    ))));
+                }
+                Err(error) => {
+                    let context = unreadable_file(
+                        &error,
+                        resource_name,
+                        &source,
+                        &format!("the agent image {agent_image}"),
+                    );
+                    return Err(error).into_alien_error().context(context);
+                }
+            };
+            mount_proxy_files.push((format!("/opt/alien/{name}"), bytes, mode));
+        }
+    }
     // Each pulled image holds a full archive on disk; only the agent binary was needed.
     drop(agent);
 
@@ -232,6 +265,11 @@ pub(crate) async fn build_sandbox_agent_image(
                 })
                 .and_then(|layer| {
                     layer.data_with_owner(AGENT_PATH, &agent_binary, AGENT_MODE, 0, 0)
+                })
+                .and_then(|layer| {
+                    mount_proxy_files.iter().try_fold(layer, |layer, (path, bytes, mode)| {
+                        layer.data_with_owner(path, bytes, *mode, 0, 0)
+                    })
                 })
                 .and_then(|layer| {
                     layer.empty_directory(
@@ -817,7 +855,7 @@ mod tests {
                 // The stand-in agent is amd64 only; the layering's other choices are the cloud's.
                 AgentLayering {
                     arch: Arch::Amd64,
-                    ..layering.for_build()
+                    ..layering.for_build(false)
                 },
             )
             .await
@@ -841,6 +879,110 @@ mod tests {
                 .unwrap_or_default();
             assert_eq!(env.contains(&named.as_str()), expected, "{cloud}: {env:?}");
         }
+    }
+
+    /// The mount proxy files come from the agent image and are installed read-only beside the
+    /// agent only when the sandbox declares an s3files mount; every other image stays as it was.
+    #[tokio::test]
+    async fn the_mount_proxy_is_layered_only_when_asked_for() {
+        let (_registry, host) = setup_local_registry().await.expect("local registry");
+        let agent_image = format!("{host}/alien/agent:proxy");
+        push_image(
+            &agent_image,
+            &[
+                (AGENT_PATH, b"#!/bin/sh\nexit 0\n"),
+                ("/opt/alien/mount-proxy/efs-proxy", b"proxy-bytes"),
+                ("/opt/alien/mount-proxy/efs-utils.crt", b"ca-bytes"),
+            ],
+        )
+        .await;
+        for (mount_proxy, expected) in [(true, true), (false, false)] {
+            let base_image = format!("{host}/proj/proxy-{mount_proxy}:base");
+            let base = push_image(
+                &base_image,
+                &[("/etc/passwd", b"root:x:0:0::/root:/bin/sh\n")],
+            )
+            .await;
+            let protocol = ClientProtocol::HttpsExcept(vec![host.to_string()]);
+            let layered = build_sandbox_agent_image(
+                "box",
+                base,
+                &base_image,
+                &agent_image,
+                protocol.clone(),
+                RegistryAuth::Anonymous,
+                default_cache(),
+                AgentLayering {
+                    arch: Arch::Amd64,
+                    ..crate::SandboxAgentLayering::AWS.for_build(mount_proxy)
+                },
+            )
+            .await
+            .expect("the agent layers onto the base");
+            let target = format!("{base_image}-agent");
+            layered
+                .image
+                .push(
+                    &target,
+                    &PushOptions {
+                        protocol: ClientProtocol::Http,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("the layered image pushes");
+            let proxy = pushed_file(&target, protocol.clone(), "/opt/alien/efs-proxy").await;
+            let authorities = pushed_file(&target, protocol, "/opt/alien/efs-utils.crt").await;
+            assert_eq!(proxy.is_some(), expected);
+            assert_eq!(authorities.is_some(), expected);
+            if expected {
+                assert_eq!(proxy.as_deref(), Some("proxy-bytes"));
+                let entries = top_layer_entries(&target).await;
+                let mode = |name: &str| {
+                    entries
+                        .iter()
+                        .find(|entry| entry.0.trim_start_matches('/') == name)
+                        .map(|entry| entry.3 & 0o777)
+                };
+                assert_eq!(mode("opt/alien/efs-proxy"), Some(0o755));
+                assert_eq!(mode("opt/alien/efs-utils.crt"), Some(0o444));
+            }
+        }
+    }
+
+    /// An agent image without the proxy cannot serve a sandbox that declares an s3files mount:
+    /// the build says so instead of publishing an image whose mount can never start.
+    #[tokio::test]
+    async fn an_agent_image_without_the_mount_proxy_is_refused_for_s3files() {
+        let (_registry, host) = setup_local_registry().await.expect("local registry");
+        let agent_image = format!("{host}/alien/agent:noproxy");
+        push_image(&agent_image, &[(AGENT_PATH, b"#!/bin/sh\nexit 0\n")]).await;
+        let base_image = format!("{host}/proj/noproxy:base");
+        let base = push_image(
+            &base_image,
+            &[("/etc/passwd", b"root:x:0:0::/root:/bin/sh\n")],
+        )
+        .await;
+        let error = build_sandbox_agent_image(
+            "box",
+            base,
+            &base_image,
+            &agent_image,
+            ClientProtocol::HttpsExcept(vec![host.to_string()]),
+            RegistryAuth::Anonymous,
+            default_cache(),
+            AgentLayering {
+                arch: Arch::Amd64,
+                ..crate::SandboxAgentLayering::AWS.for_build(true)
+            },
+        )
+        .await
+        .err()
+        .expect("the build is refused");
+        assert!(
+            error.to_string().contains("/opt/alien/mount-proxy/efs-proxy"),
+            "{error}"
+        );
     }
 
     /// A scratch or distroless base has no `/etc/passwd` to merge into. Nothing runs inside the
