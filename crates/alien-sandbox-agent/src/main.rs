@@ -123,15 +123,18 @@ fn main() -> Result<()> {
                     "image permissions need the agent to start as root",
                 ));
             }
-            alien_sandbox_agent::mount_broker::start(
+            // From here a failure to start the image keeps the agent up with the reason in
+            // /run/alien/boot-error: the image starts from the run hook, and a failed run hook
+            // ends the sandbox with the reason.
+            alien_sandbox_agent::boot_error::enable();
+            if let Err(error) = alien_sandbox_agent::mount_broker::start(
                 declared,
                 alien_sandbox_agent::mount_broker::Config::default(),
-            )
-            .into_alien_error()
-            .context(failed(
-                "start the mount broker",
-                "cannot fork the broker".to_string(),
-            ))?;
+            ) {
+                alien_sandbox_agent::boot_error::record(format!(
+                    "cannot start the mount broker: {error}"
+                ));
+            }
             alien_sandbox_agent::privilege::filter_image_mounts();
         }
         #[cfg(not(target_os = "linux"))]
@@ -211,15 +214,14 @@ fn main() -> Result<()> {
             ))?;
             #[cfg(target_os = "linux")]
             if image_permissions.is_some() {
-                alien_sandbox_agent::mount_broker::link_shims(&state.agent_binary)
-                    .into_alien_error()
-                    .context(failed(
-                        "install the mount commands",
-                        format!(
-                            "cannot link the mount commands in {}",
-                            alien_sandbox_agent::mount_broker::shim::DIRECTORY
-                        ),
-                    ))?;
+                if let Err(error) =
+                    alien_sandbox_agent::mount_broker::link_shims(&state.agent_binary)
+                {
+                    alien_sandbox_agent::boot_error::record(format!(
+                        "cannot link the mount commands in {}: {error}",
+                        alien_sandbox_agent::mount_broker::shim::DIRECTORY
+                    ));
+                }
             }
             if image_command_enabled()? {
                 // The flag only selects who provides the protection. Either way the agent

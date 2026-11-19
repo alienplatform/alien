@@ -10,7 +10,7 @@ image="alien-mount-broker-test:$$"
 trap 'docker image rm "$image" >/dev/null 2>&1 || true; rm -rf "$fixture"' EXIT
 cat > "$fixture/Dockerfile" <<'DOCKERFILE'
 FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 util-linux iproute2 libgcc-s1 nfs-kernel-server nfs-common procps && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 util-linux iproute2 libgcc-s1 nfs-kernel-server nfs-common rpcbind procps && rm -rf /var/lib/apt/lists/*
 DOCKERFILE
 docker build -q -t "$image" "$fixture" >/dev/null
 name=mount_broker::integration_tests::broker_allows_declared_mounts_and_refuses_everything_else
@@ -30,6 +30,9 @@ docker run --rm --privileged --cgroupns=private \
     mount -t nfsd nfsd /proc/fs/nfsd
     echo "/export 127.0.0.1(rw,sync,no_subtree_check,no_root_squash,fsid=0,insecure)" > /etc/exports
     exportfs -ra
+    # nfsd registers its listeners with rpcbind on some kernels (CI): without it rpc.nfsd fails
+    # with "writing fd to kernel failed: errno 111".
+    rpcbind -w
     rpc.mountd -N 2 -N 3
     rpc.nfsd -N 3 -V 4.1 -V 4.2 2
     /agent-tests --list --ignored --exact "'"$name"'" | grep -Fx "'"$name"': test"

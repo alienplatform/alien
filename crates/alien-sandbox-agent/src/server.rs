@@ -150,6 +150,22 @@ impl AgentState {
 
     /// Called only after network checks, before accepting any session operation.
     pub fn start_image_once(&self) -> crate::error::Result<()> {
+        #[cfg(unix)]
+        if crate::boot_error::enabled() {
+            // Image permissions: the image never starts after a failure, and the caller (the
+            // provider's run hook) succeeds so the sandbox stays up to report why.
+            if crate::boot_error::reason().is_some() {
+                return Ok(());
+            }
+            if let Err(error) = self.start_image() {
+                crate::boot_error::record(error.to_string());
+            }
+            return Ok(());
+        }
+        self.start_image()
+    }
+
+    fn start_image(&self) -> crate::error::Result<()> {
         let mut env = std::collections::BTreeMap::new();
         self.native_environment(&mut env);
         #[cfg(target_os = "linux")]
@@ -643,6 +659,8 @@ async fn run_command(
     Json(mut request): Json<ExecRequest>,
 ) -> std::result::Result<Response, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    #[cfg(unix)]
+    crate::boot_error::refuse()?;
 
     state.native_environment(&mut request.env);
     #[cfg(target_os = "linux")]
@@ -790,6 +808,8 @@ async fn interactive_start(
     Json(mut body): Json<InteractiveStartBody>,
 ) -> std::result::Result<Response, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    #[cfg(unix)]
+    crate::boot_error::refuse()?;
 
     state.native_environment(&mut body.request.env);
     #[cfg(target_os = "linux")]
@@ -983,6 +1003,8 @@ async fn job_start(
     Json(mut request): Json<ExecRequest>,
 ) -> std::result::Result<Json<JobStartResponse>, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    #[cfg(unix)]
+    crate::boot_error::refuse()?;
 
     state.native_environment(&mut request.env);
     #[cfg(target_os = "linux")]

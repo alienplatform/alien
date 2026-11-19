@@ -1,3 +1,5 @@
+#[cfg(unix)]
+pub mod boot_error;
 pub mod children;
 pub mod confine;
 pub mod error;

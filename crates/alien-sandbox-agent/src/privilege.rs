@@ -214,6 +214,90 @@ pub fn restrict_supervisor(network_admin: bool) -> io::Result<()> {
     restrict_capabilities(keep)
 }
 
+/// This thread's permitted capabilities (the low 32; nothing the agent keeps is above them).
+#[cfg(target_os = "linux")]
+pub(crate) fn permitted_capabilities() -> io::Result<u32> {
+    #[repr(C)]
+    struct Header {
+        version: u32,
+        pid: i32,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct Data {
+        effective: u32,
+        permitted: u32,
+        inheritable: u32,
+    }
+    let mut header = Header {
+        version: 0x20080522,
+        pid: 0,
+    };
+    let mut data = [Data::default(); 2];
+    // SAFETY: a version 3 header and two data structures, as capget expects.
+    if unsafe { libc::syscall(libc::SYS_capget, &mut header, data.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(data[0].permitted)
+}
+
+/// The names of the capabilities in `mask` (bits 0 to 31).
+pub(crate) fn capability_names(mask: u32) -> String {
+    const NAMES: [&str; 32] = [
+        "CHOWN",
+        "DAC_OVERRIDE",
+        "DAC_READ_SEARCH",
+        "FOWNER",
+        "FSETID",
+        "KILL",
+        "SETGID",
+        "SETUID",
+        "SETPCAP",
+        "LINUX_IMMUTABLE",
+        "NET_BIND_SERVICE",
+        "NET_BROADCAST",
+        "NET_ADMIN",
+        "NET_RAW",
+        "IPC_LOCK",
+        "IPC_OWNER",
+        "SYS_MODULE",
+        "SYS_RAWIO",
+        "SYS_CHROOT",
+        "SYS_PTRACE",
+        "SYS_PACCT",
+        "SYS_ADMIN",
+        "SYS_BOOT",
+        "SYS_NICE",
+        "SYS_RESOURCE",
+        "SYS_TIME",
+        "SYS_TTY_CONFIG",
+        "MKNOD",
+        "LEASE",
+        "AUDIT_WRITE",
+        "AUDIT_CONTROL",
+        "SETFCAP",
+    ];
+    (0..32)
+        .filter(|bit| mask & (1 << bit) != 0)
+        .map(|bit| format!("CAP_{}", NAMES[bit]))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// This process's capability sets as `/proc/self/status` shows them, for error messages.
+pub(crate) fn capability_sets() -> String {
+    std::fs::read_to_string("/proc/self/status")
+        .map(|status| {
+            status
+                .lines()
+                .filter(|line| line.starts_with("Cap"))
+                .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_else(|error| format!("unreadable: {error}"))
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn restrict_capabilities(keep: u32) -> io::Result<()> {
     #[repr(C)]

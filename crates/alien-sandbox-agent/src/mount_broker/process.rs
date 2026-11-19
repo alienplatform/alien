@@ -182,10 +182,22 @@ pub fn start(declared: &Declared, config: Config) -> io::Result<()> {
     }
     if pid == 0 {
         drop((control_agent, join_agent));
-        let code = match broker_main(declared, &config, control_broker, join_broker, parent) {
+        let code = match broker_main(declared, &config, &control_broker, join_broker, parent) {
             Ok(()) => 0,
             Err(error) => {
                 eprintln!("alien-mount-broker: {error}");
+                // The agent waits for the broker's start: tell it why there is none.
+                let mut answer = b"e".to_vec();
+                answer.extend(error.to_string().bytes().take(500));
+                // SAFETY: writing from a buffer we own, at most its length.
+                unsafe {
+                    libc::send(
+                        control_broker.as_raw_fd(),
+                        answer.as_ptr().cast(),
+                        answer.len(),
+                        libc::MSG_NOSIGNAL,
+                    )
+                };
                 1
             }
         };
@@ -198,6 +210,11 @@ pub fn start(declared: &Declared, config: Config) -> io::Result<()> {
         tv_usec: 0,
     };
     receive_timeout(control_agent.as_raw_fd(), &answer_within)?;
+    if let Err(error) = wait_ack(control_agent.as_raw_fd(), "to start") {
+        // SAFETY: reaping our own child, which ends right after its answer.
+        unsafe { libc::waitpid(pid, std::ptr::null_mut(), 0) };
+        return Err(error);
+    }
     BROKER
         .set(Broker {
             control: control_agent,
@@ -615,10 +632,20 @@ struct Inflight {
 fn broker_main(
     declared: &Declared,
     config: &Config,
-    control: OwnedFd,
+    control: &OwnedFd,
     join: OwnedFd,
     parent: i32,
 ) -> io::Result<()> {
+    // What the agent was started with, for every error that depends on it.
+    let boot_capabilities = crate::privilege::capability_sets();
+    let permitted = crate::privilege::permitted_capabilities()?;
+    let missing = BROKER_CAPABILITIES & !permitted;
+    if missing != 0 {
+        return Err(io::Error::other(format!(
+            "the broker needs {} and the agent was started without it ({boot_capabilities})",
+            crate::privilege::capability_names(missing)
+        )));
+    }
     // SAFETY: plain prctl/unshare/mount calls on this process.
     unsafe {
         check(libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL))?;
@@ -641,7 +668,9 @@ fn broker_main(
         ))?;
     }
     close_other_fds(&[control.as_raw_fd(), join.as_raw_fd()]);
-    crate::privilege::restrict_capabilities(BROKER_CAPABILITIES | SEAL_CAPABILITIES)?;
+    // The seal's capabilities only where the agent has them: without them the seal fails, by
+    // name, when the image is about to start.
+    crate::privilege::restrict_capabilities(BROKER_CAPABILITIES | (SEAL_CAPABILITIES & permitted))?;
     deny_network()?;
     let one: libc::c_int = 1;
     // SAFETY: a valid descriptor and option.
@@ -654,6 +683,19 @@ fn broker_main(
             size_of::<libc::c_int>() as _,
         )
     })?;
+    // Started: the agent waits for this before it relies on the broker.
+    // SAFETY: writing one byte we own.
+    if unsafe {
+        libc::send(
+            control.as_raw_fd(),
+            b"k".as_ptr().cast(),
+            1,
+            libc::MSG_NOSIGNAL,
+        )
+    } != 1
+    {
+        return Err(io::Error::last_os_error());
+    }
     Loop {
         declared,
         config,
@@ -664,8 +706,9 @@ fn broker_main(
         zombies: Vec::new(),
         sealed: false,
         paused: false,
+        boot_capabilities,
     }
-    .run(&control, &join)
+    .run(control, &join)
 }
 
 struct Loop<'a> {
@@ -681,6 +724,8 @@ struct Loop<'a> {
     sealed: bool,
     /// From the start of a pause until the resume: no new mounts.
     paused: bool,
+    /// The capability sets the broker started with (`/proc/self/status`), for seal errors.
+    boot_capabilities: String,
 }
 
 impl Loop<'_> {
@@ -814,6 +859,16 @@ impl Loop<'_> {
     fn seal(&mut self, namespace: RawFd) -> Result<(), String> {
         if self.sealed {
             return Ok(());
+        }
+        // The kernel lets a process write `usermodehelper/*` only with both SETPCAP and SYS_MODULE.
+        let held = crate::privilege::permitted_capabilities()
+            .map_err(|error| format!("step usermodehelper bset: capget: {error}"))?;
+        if held & SEAL_CAPABILITIES != SEAL_CAPABILITIES {
+            return Err(format!(
+                "step usermodehelper bset: writing it needs CAP_SETPCAP and CAP_SYS_MODULE, and the agent was started without {} ({})",
+                crate::privilege::capability_names(SEAL_CAPABILITIES & !held),
+                self.boot_capabilities
+            ));
         }
         ops::load_filesystems();
         let mut pipe = [0; 2];

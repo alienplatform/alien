@@ -134,6 +134,13 @@ while True:
 #[test]
 #[ignore = "requires a disposable privileged container with cgroup2, a kernel NFS server exporting a directory with hello.txt as / on 127.0.0.1:2049, python3, and the agent binary at /agent; run by scripts/test-sandbox-mount-broker.sh"]
 fn broker_allows_declared_mounts_and_refuses_everything_else() {
+    // An agent started without a capability the broker needs is told which one.
+    missing_capability_is_named(21, "start", "the broker needs CAP_SYS_ADMIN");
+    missing_capability_is_named(
+        16,
+        "seal",
+        "step usermodehelper bset: writing it needs CAP_SETPCAP and CAP_SYS_MODULE, and the agent was started without CAP_SYS_MODULE",
+    );
     // The broker must be forked by a single-threaded process, as the agent does at boot; libtest
     // runs this test on a thread of its own, so the scenario runs in a forked child.
     // SAFETY: the child only runs the scenario and leaves with _exit.
@@ -151,6 +158,60 @@ fn broker_allows_declared_mounts_and_refuses_everything_else() {
     assert!(
         libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
         "the scenario failed"
+    );
+}
+
+/// In a forked child (single-threaded, as the agent at boot) that drops `capability` first: the
+/// broker's start or its seal fails with `expect` in the error, before anything is mounted.
+fn missing_capability_is_named(capability: u32, at: &str, expect: &str) {
+    // SAFETY: the child only runs the check and leaves with _exit.
+    let pid = unsafe { libc::fork() };
+    assert!(pid >= 0, "fork");
+    if pid == 0 {
+        let passed = std::panic::catch_unwind(|| {
+            privilege::restrict_capabilities(u32::MAX & !(1 << capability)).expect("drop");
+            let declared = image_permissions::parse(DECLARATION).expect("declaration");
+            let mounts_before = std::fs::read_to_string("/proc/self/mountinfo").unwrap();
+            let started = mount_broker::start(
+                &declared,
+                mount_broker::Config {
+                    helpers: mount_broker::HelperSettings {
+                        bset: "/tmp/caps-helpers/bset".into(),
+                        inheritable: "/tmp/caps-helpers/inheritable".into(),
+                        modprobe: "/tmp/caps-helpers/modprobe".into(),
+                    },
+                    ..Default::default()
+                },
+            );
+            let error = if at == "start" {
+                started
+                    .expect_err("start without the capability")
+                    .to_string()
+            } else {
+                started.expect("start");
+                mount_broker::serve_socket(Path::new("/tmp/caps-run/mount.sock"))
+                    .expect_err("seal without the capability")
+                    .to_string()
+            };
+            println!("missing capability {capability} ({at}): {error}");
+            assert!(error.contains(expect), "{error}");
+            assert_eq!(
+                std::fs::read_to_string("/proc/self/mountinfo").unwrap(),
+                mounts_before,
+                "nothing mounted"
+            );
+        })
+        .is_ok();
+        let _ = std::io::stdout().flush();
+        // SAFETY: leaving the forked child.
+        unsafe { libc::_exit(if passed { 0 } else { 1 }) };
+    }
+    let mut status = 0;
+    // SAFETY: waiting for our own child.
+    unsafe { libc::waitpid(pid, &mut status, 0) };
+    assert!(
+        libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+        "missing capability {capability} at {at}"
     );
 }
 
