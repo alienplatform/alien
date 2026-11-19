@@ -57,6 +57,41 @@ pub(super) async fn install_at_run() -> io::Result<()> {
     crate::netfilter::apply(install_rules()).await
 }
 
+/// One line with every counter of the NFS-port drop: per family, the jumps into the chain (per
+/// port, in order), then the loopback return and the drop.
+pub(super) async fn nfs_port_counters() -> io::Result<String> {
+    let conn = Connection::<Nftables>::new().map_err(io::Error::other)?;
+    let mut line = Vec::new();
+    for (family, name) in [(Family::Ip, "ip"), (Family::Ip6, "ip6")] {
+        let rules = conn
+            .list_rules("alien_gateway", family)
+            .await
+            .map_err(io::Error::other)?;
+        let mut jumps = Vec::new();
+        let mut own = Vec::new();
+        for rule in &rules {
+            let Some((packets, _)) = rule.counter() else {
+                continue;
+            };
+            if rule.chain == NFS_PORTS {
+                own.push(packets);
+            } else {
+                jumps.push(packets);
+            }
+        }
+        let [returned, dropped] = own[..] else {
+            return Err(io::Error::other(format!(
+                "{name}: expected two counted rules in {NFS_PORTS}, found {}",
+                own.len()
+            )));
+        };
+        line.push(format!(
+            "{name} jumps={jumps:?} loopback_return={returned} dropped={dropped}"
+        ));
+    }
+    Ok(line.join(" "))
+}
+
 fn image_mark(op: CmpOp) -> [Expr; 2] {
     [
         Expr::Meta {
@@ -120,8 +155,13 @@ fn add_nfs_port_drop(
     let rule = || Rule::new(table, NFS_PORTS).family(family);
     let mut batch = batch
         .add_chain(Chain::new(table, NFS_PORTS)?.family(family))
-        .add_rule(rule().match_oif("lo").expr(Expr::Verdict(Verdict::Return)))
-        .add_rule(rule().drop());
+        .add_rule(
+            rule()
+                .match_oif("lo")
+                .counter()
+                .expr(Expr::Verdict(Verdict::Return)),
+        )
+        .add_rule(rule().counter().drop());
     for port in ports {
         let [meta, cmp] = image_mark(CmpOp::Neq);
         batch = batch.add_rule(
@@ -132,6 +172,7 @@ fn add_nfs_port_drop(
                 .expr(cmp)
                 .match_l4proto(libc::IPPROTO_TCP as u8)
                 .match_tcp_dport(port)
+                .counter()
                 .jump(ChainName::new(NFS_PORTS)?),
         );
     }

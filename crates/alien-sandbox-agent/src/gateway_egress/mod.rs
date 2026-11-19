@@ -106,6 +106,45 @@ pub struct GatewayEgress {
 /// AWS packages without a gateway still need to distinguish provider control
 /// sockets from every image and exec process. Install only the cgroup marker;
 /// unrestricted packages keep their existing network routing.
+/// Where the NFS-port drop's counters are recorded, one line per moment.
+pub const NFS_PORT_DROPS: &str = "/run/alien/unmarked-drops";
+
+/// With image permissions: appends the NFS-port drop's counters at `moment` (boot, after
+/// onPause, after onResume) to [`NFS_PORT_DROPS`] (root only) and the log.
+pub async fn record_nfs_port_drops(moment: &str) {
+    if crate::image_permissions::declared().is_none() {
+        return;
+    }
+    let line = match redirect::nfs_port_counters().await {
+        Ok(counters) => {
+            tracing::info!(moment, %counters, "NFS-port drop counters");
+            format!("{} {moment} {counters}\n", unix_seconds())
+        }
+        Err(error) => {
+            tracing::error!(moment, %error, "cannot read the NFS-port drop counters");
+            format!("{} {moment} error: {error}\n", unix_seconds())
+        }
+    };
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let written = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(NFS_PORT_DROPS)
+        .and_then(|mut file| file.write_all(line.as_bytes()));
+    if let Err(error) = written {
+        tracing::error!(%error, path = NFS_PORT_DROPS, "cannot record the NFS-port drop counters");
+    }
+}
+
+fn unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default()
+}
+
 pub fn isolate_control_callers() -> Result<()> {
     guest_network::install(true)
         .into_alien_error()
@@ -509,6 +548,7 @@ impl GatewayEgress {
                 .into_alien_error()
                 .context(failed("install Run-hook transparent forwarding"))?;
             self.routing_ready.store(true, Ordering::Release);
+            record_nfs_port_drops("boot-run-hook").await;
         }
         Ok(())
     }

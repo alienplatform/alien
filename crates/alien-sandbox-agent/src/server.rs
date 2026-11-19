@@ -604,6 +604,11 @@ async fn run_image_step(
         tracing::error!(%error, step = name, "the mount broker did not take the pause state");
     }
     let Some(command) = command else {
+        crate::gateway_egress::record_nfs_port_drops(match step {
+            Step::OnPause => "after-onPause",
+            Step::OnResume => "after-onResume",
+        })
+        .await;
         return Ok(());
     };
     // Best effort: a failed step never fails the provider's hook (a failed hook can make the
@@ -623,6 +628,11 @@ async fn run_image_step(
             }
         }
     }
+    crate::gateway_egress::record_nfs_port_drops(match step {
+        Step::OnPause => "after-onPause",
+        Step::OnResume => "after-onResume",
+    })
+    .await;
     Ok(())
 }
 

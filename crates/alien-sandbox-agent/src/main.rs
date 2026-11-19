@@ -302,7 +302,10 @@ fn main() -> Result<()> {
         #[cfg(target_os = "linux")]
         if let Some(egress) = &state.gateway_egress {
             match egress.start().await {
-                Ok(()) => { if egress.ensure_ready().is_ok() { state.start_image_once()?; } }
+                Ok(()) => {
+                    if egress.ensure_ready().is_ok() { state.start_image_once()?; }
+                    alien_sandbox_agent::gateway_egress::record_nfs_port_drops("boot").await;
+                }
                 Err(error) => tracing::error!(code = %error.code, "egress startup failed; session routes remain unavailable"),
             }
         }

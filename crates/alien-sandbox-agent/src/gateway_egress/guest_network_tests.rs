@@ -500,5 +500,38 @@ except OSError as error:
             ));
         }
     }
+    // The drop counts what it drops and what it lets through on loopback, and the agent records
+    // the counters where the platform can read them.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let counters = runtime
+        .block_on(super::redirect::nfs_port_counters())
+        .expect("counters");
+    println!("counters: {counters}");
+    let value = |family: &str, key: &str| -> u64 {
+        let part = counters.split(family).nth(1).unwrap();
+        part.split(&format!("{key}="))
+            .nth(1)
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    if value("ip ", "dropped") == 0
+        || value("ip ", "loopback_return") == 0
+        || value("ip6 ", "dropped") == 0
+    {
+        failures.push(format!("counters did not count: {counters}"));
+    }
+    fs::create_dir_all("/run/alien").unwrap();
+    runtime.block_on(super::record_nfs_port_drops("test"));
+    let recorded = fs::read_to_string(super::NFS_PORT_DROPS).unwrap();
+    if !recorded.contains(" test ip jumps=") {
+        failures.push(format!("not recorded: {recorded}"));
+    }
     assert!(failures.is_empty(), "{failures:#?}");
 }
