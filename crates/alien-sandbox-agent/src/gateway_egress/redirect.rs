@@ -52,6 +52,9 @@ pub(super) fn original_destination(stream: &TcpStream) -> io::Result<SocketAddrV
 pub(super) fn install() -> io::Result<()> {
     crate::netfilter::install(install_rules())?;
     let ip6 = crate::netfilter::install(install_ip6_rules()).map_err(ip6_failed)?;
+    if matches!(ip6, Ip6::Absent(_)) {
+        crate::netfilter::install(block_ip6_ports_by_policy()).map_err(ip6_policy_failed)?;
+    }
     report_ip6(ip6);
     Ok(())
 }
@@ -61,8 +64,60 @@ pub(super) async fn install_at_run() -> io::Result<()> {
     let ip6 = crate::netfilter::apply(install_ip6_rules())
         .await
         .map_err(ip6_failed)?;
+    if matches!(ip6, Ip6::Absent(_)) {
+        crate::netfilter::apply(block_ip6_ports_by_policy())
+            .await
+            .map_err(ip6_policy_failed)?;
+    }
     report_ip6(ip6);
     Ok(())
+}
+
+/// Priority of the IPv6 policy rules: right after the local table's rule (0), so addresses of the
+/// VM itself (`::1` among them) still route locally, and before any lookup that could route out.
+pub(crate) const IP6_POLICY_PRIORITY: u32 = 1;
+
+/// The policy rules for a kernel without IPv6 netfilter: every IPv6 TCP or UDP packet to the NFS
+/// port or a declared connection's port is refused by routing ("prohibit": the connect fails with
+/// `EACCES`), whoever sends it, the kernel's NFS client included. Routing rules need no netfilter,
+/// and the image cannot remove them (no `NET_ADMIN`). Loopback is untouched: the local table is
+/// looked up first. A rule left by an earlier start is kept.
+fn ip6_policy_rules() -> Vec<nlink::netlink::rule::RuleBuilder> {
+    let mut rules = Vec::new();
+    for port in drop_ports() {
+        for protocol in [libc::IPPROTO_TCP, libc::IPPROTO_UDP] {
+            rules.push(
+                nlink::netlink::rule::RuleBuilder::v6()
+                    .priority(IP6_POLICY_PRIORITY)
+                    .ipproto(protocol as u8)
+                    .dport_eq(port)
+                    .prohibit(),
+            );
+        }
+    }
+    rules
+}
+
+pub(super) async fn block_ip6_ports_by_policy() -> nlink::netlink::Result<()> {
+    let conn = Connection::<nlink::netlink::Route>::new()?;
+    for rule in ip6_policy_rules() {
+        match conn.add_rule(rule).await {
+            Ok(()) => {}
+            Err(error) if error.is_already_exists() => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Names the IPv6 policy step, which keeps the image from starting, and records it.
+fn ip6_policy_failed(error: io::Error) -> io::Error {
+    let error = io::Error::other(format!(
+        "the IPv6 NFS-port policy rules (no IPv6 nftables) were refused: {error}"
+    ));
+    crate::boot_report::set("ip6 nfs ports", format!("failed: {error}"));
+    crate::boot_report::record_ipv6();
+    error
 }
 
 /// The outcome of the IPv6 half of the NFS-port drop.
@@ -89,6 +144,17 @@ fn report_ip6(ip6: Ip6) {
             tracing::warn!(
                 %error,
                 "the kernel has no IPv6 nftables (table ip6 alien_gateway refused): continuing with the IPv4 NFS-port drop only"
+            );
+            let ports = drop_ports()
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            crate::boot_report::set(
+                "ip6 nfs ports",
+                format!(
+                    "blocked by policy rule (priority {IP6_POLICY_PRIORITY}, tcp and udp, ports {ports})"
+                ),
             );
             format!("absent ({}: {error})", errno_name(errno))
         }
@@ -199,18 +265,8 @@ fn image_exemptions(rule: impl Fn() -> Rule, verdict: Expr) -> Vec<Rule> {
 
 const NFS_PORTS: &str = "nfs_ports";
 
-/// With image permissions, a new TCP connection that leaves the VM (anything not routed through
-/// `lo`) to the NFS port or a declared connection's port is dropped unless its socket carries the
-/// image mark, in both IPv4 and IPv6. This covers the kernel's NFS client, whose sockets carry no
-/// mark, so a mount cannot bypass the image's loopback proxy through a referral or a second
-/// address. Other traffic from outside the guest cgroup (the provider's DNS forwarder, NTP, the
-/// endpoint proxy) is untouched.
-fn add_nfs_port_drop(
-    batch: nlink::netlink::nftables::Transaction,
-    table: &str,
-    chain: &str,
-    family: Family,
-) -> nlink::netlink::Result<nlink::netlink::nftables::Transaction> {
+/// The NFS port and every declared connection's port, once each.
+fn drop_ports() -> Vec<u16> {
     let mut ports: Vec<u16> = crate::image_permissions::declared()
         .map(|declared| {
             declared
@@ -223,6 +279,21 @@ fn add_nfs_port_drop(
     ports.push(2049);
     ports.sort_unstable();
     ports.dedup();
+    ports
+}
+
+/// With image permissions, a new TCP connection that leaves the VM (anything not routed through
+/// `lo`) to the NFS port or a declared connection's port is dropped unless its socket carries the
+/// image mark, in both IPv4 and IPv6. This covers the kernel's NFS client, whose sockets carry no
+/// mark, so a mount cannot bypass the image's loopback proxy through a referral or a second
+/// address. Other traffic from outside the guest cgroup (the provider's DNS forwarder, NTP, the
+/// endpoint proxy) is untouched.
+fn add_nfs_port_drop(
+    batch: nlink::netlink::nftables::Transaction,
+    table: &str,
+    chain: &str,
+    family: Family,
+) -> nlink::netlink::Result<nlink::netlink::nftables::Transaction> {
     let rule = || Rule::new(table, NFS_PORTS).family(family);
     let mut batch = batch
         .add_chain(Chain::new(table, NFS_PORTS)?.family(family))
@@ -233,7 +304,7 @@ fn add_nfs_port_drop(
                 .expr(Expr::Verdict(Verdict::Return)),
         )
         .add_rule(rule().counter().drop());
-    for port in ports {
+    for port in drop_ports() {
         let [meta, cmp] = image_mark(CmpOp::Neq);
         batch = batch.add_rule(
             Rule::new(table, chain)

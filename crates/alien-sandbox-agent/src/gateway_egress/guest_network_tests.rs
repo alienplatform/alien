@@ -535,3 +535,253 @@ except OSError as error:
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// A kernel without IPv6 netfilter (the agent was refused `table ip6`): the policy rules alone
+/// keep every IPv6 TCP and UDP packet to the NFS port and the declared ports from leaving the VM,
+/// the kernel NFS client's included, whatever the socket's mark. Loopback and other ports are
+/// untouched. This kernel has IPv6 netfilter, so only the policy step is installed here.
+#[test]
+#[ignore = "requires an isolated network namespace, NET_ADMIN, the NFS client, and the remote network namespace scripts/test-sandbox-agent-security.sh sets up"]
+fn without_ip6_netfilter_policy_rules_refuse_ipv6_nfs_ports() {
+    use std::net::{SocketAddr, TcpStream};
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let remote_namespace =
+        std::env::var("ALIEN_TEST_REMOTE_NETNS").expect("ALIEN_TEST_REMOTE_NETNS");
+    let bind_at = |address: &'static str| {
+        let remote = address.starts_with("[fd00:");
+        let namespace = remote_namespace.clone();
+        std::thread::spawn(move || {
+            if remote {
+                let file = fs::File::open(&namespace).expect("remote namespace");
+                // SAFETY: a network namespace descriptor; only this thread changes namespace.
+                let entered = unsafe { libc::setns(file.as_raw_fd(), libc::CLONE_NEWNET) };
+                assert_eq!(entered, 0, "{}", std::io::Error::last_os_error());
+            }
+            (TcpListener::bind(address), UdpSocket::bind(address))
+        })
+        .join()
+        .unwrap()
+    };
+    std::env::set_var(
+        crate::image_permissions::ENV_IMAGE_COMMAND,
+        alien_core::sandbox_image::IMAGE_COMMAND_WITH_IMAGE_PERMISSIONS,
+    );
+    std::env::set_var(crate::image_permissions::ENV_PERMISSIONS_VERSION, "1");
+    std::env::set_var(
+        crate::image_permissions::ENV_PERMISSIONS,
+        r#"{"mounts":[{"type":"nfs","path":"/workspace"}],"connections":[{"cidr":"10.0.1.5/32","port":2049},{"cidr":"10.0.1.5/32","port":20049}]}"#,
+    );
+    crate::image_permissions::load_from_env()
+        .expect("declaration")
+        .expect("declared");
+    crate::netfilter::install(super::redirect::block_ip6_ports_by_policy()).expect("policy rules");
+    // A second start (a restored VM) keeps the rules an earlier one added.
+    crate::netfilter::install(super::redirect::block_ip6_ports_by_policy())
+        .expect("policy rules again");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let rules = runtime
+        .block_on(async {
+            nlink::netlink::Connection::<nlink::netlink::Route>::new()?
+                .get_rules_v6()
+                .await
+        })
+        .expect("list IPv6 rules");
+    let ours = rules
+        .iter()
+        .filter(|rule| rule.priority() == super::redirect::IP6_POLICY_PRIORITY)
+        .count();
+    assert_eq!(ours, 4, "two ports, TCP and UDP, once each: {rules:#?}");
+
+    let connections: Mutex<HashMap<&str, Arc<AtomicUsize>>> = Mutex::default();
+    for address in [
+        "[fd00::5]:2049",
+        "[fd00::5]:20049",
+        "[fd00::5]:8443",
+        "[::1]:2049",
+        "10.0.1.5:2049",
+    ] {
+        let listener = if address.starts_with('1') {
+            // IPv4 off-VM addresses live in the remote namespace too.
+            let namespace = remote_namespace.clone();
+            std::thread::spawn(move || {
+                let file = fs::File::open(&namespace).expect("remote namespace");
+                // SAFETY: as above.
+                assert_eq!(
+                    unsafe { libc::setns(file.as_raw_fd(), libc::CLONE_NEWNET) },
+                    0
+                );
+                TcpListener::bind(address)
+            })
+            .join()
+            .unwrap()
+        } else {
+            bind_at(address).0
+        }
+        .expect(address);
+        let count = Arc::clone(
+            connections
+                .lock()
+                .unwrap()
+                .entry(address)
+                .or_insert_with(|| Arc::new(AtomicUsize::new(0))),
+        );
+        std::thread::spawn(move || {
+            for socket in listener.incoming().flatten() {
+                count.fetch_add(1, Ordering::SeqCst);
+                drop(socket);
+            }
+        });
+    }
+    // A TCP connect from a socket with `mark`: "connected" or the error's name.
+    let connect = |address: &str, mark: u32| -> String {
+        let address: SocketAddr = address.parse().unwrap();
+        let family = if address.is_ipv6() {
+            libc::AF_INET6
+        } else {
+            libc::AF_INET
+        };
+        // SAFETY: plain socket calls on a descriptor this closure owns.
+        let socket = unsafe {
+            let fd = libc::socket(family, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+            assert!(fd >= 0, "{}", std::io::Error::last_os_error());
+            OwnedFd::from_raw_fd(fd)
+        };
+        let marked = unsafe {
+            libc::setsockopt(
+                socket.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_MARK,
+                (&mark as *const u32).cast(),
+                size_of::<u32>() as _,
+            )
+        };
+        assert_eq!(marked, 0, "{}", std::io::Error::last_os_error());
+        let stream = TcpStream::from(socket);
+        let (storage, length) = match address {
+            SocketAddr::V6(v6) => {
+                let mut raw: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+                raw.sin6_family = libc::AF_INET6 as _;
+                raw.sin6_port = v6.port().to_be();
+                raw.sin6_addr.s6_addr = v6.ip().octets();
+                let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+                unsafe {
+                    std::ptr::write((&mut storage as *mut libc::sockaddr_storage).cast(), raw)
+                };
+                (storage, size_of::<libc::sockaddr_in6>())
+            }
+            SocketAddr::V4(v4) => {
+                let mut raw: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+                raw.sin_family = libc::AF_INET as _;
+                raw.sin_port = v4.port().to_be();
+                raw.sin_addr.s_addr = u32::from_ne_bytes(v4.ip().octets());
+                let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+                unsafe {
+                    std::ptr::write((&mut storage as *mut libc::sockaddr_storage).cast(), raw)
+                };
+                (storage, size_of::<libc::sockaddr_in>())
+            }
+        };
+        // SAFETY: a correctly sized address for this socket's family.
+        let result = unsafe {
+            libc::connect(
+                stream.as_raw_fd(),
+                (&storage as *const libc::sockaddr_storage).cast(),
+                length as _,
+            )
+        };
+        if result == 0 {
+            "connected".to_string()
+        } else {
+            match std::io::Error::last_os_error().raw_os_error() {
+                Some(libc::EACCES) => "EACCES".to_string(),
+                other => format!("errno {other:?}"),
+            }
+        }
+    };
+    let image = crate::mount_broker::IMAGE_MARK;
+    let mut failures = Vec::new();
+    for (address, mark, expected) in [
+        ("[fd00::5]:2049", 0, "EACCES"),
+        ("[fd00::5]:2049", image, "EACCES"),
+        ("[fd00::5]:2049", super::redirect::MARK, "EACCES"),
+        ("[fd00::5]:20049", 0, "EACCES"),
+        // Undeclared ports, loopback, and IPv4 (dropped by netfilter, not here) are untouched.
+        ("[fd00::5]:8443", 0, "connected"),
+        ("[::1]:2049", 0, "connected"),
+        ("10.0.1.5:2049", 0, "connected"),
+    ] {
+        let got = connect(address, mark);
+        println!("tcp {mark:#x} -> {address}: {got}");
+        if got != expected {
+            failures.push(format!(
+                "tcp {mark:#x} -> {address}: got '{got}', expected '{expected}'"
+            ));
+        }
+    }
+    for (address, expected) in [
+        ("[fd00::5]:2049", "refused"),
+        ("[fd00::5]:20049", "refused"),
+        ("[fd00::5]:8443", "delivered"),
+    ] {
+        let receiver = bind_at(address).1.expect(address);
+        receiver
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        let sender = UdpSocket::bind("[::]:0").unwrap();
+        let got = match sender.send_to(b"x", address) {
+            Err(error) if error.raw_os_error() == Some(libc::EACCES) => "refused".to_string(),
+            Err(error) => format!("error {error}"),
+            Ok(_) => match receiver.recv(&mut [0; 8]) {
+                Ok(_) => "delivered".to_string(),
+                Err(_) => "lost".to_string(),
+            },
+        };
+        println!("udp -> {address}: {got}");
+        if got != expected {
+            failures.push(format!(
+                "udp -> {address}: got '{got}', expected '{expected}'"
+            ));
+        }
+    }
+    // The kernel's NFS client (`mount -i` makes the mount(2) call directly).
+    let target = tempfile::tempdir().unwrap();
+    for (address, host, expected) in [
+        ("[fd00::5]:2049", "fd00::5", "refused"),
+        ("[::1]:2049", "::1", "connected"),
+    ] {
+        let count = Arc::clone(&connections.lock().unwrap()[address]);
+        let before = count.load(Ordering::SeqCst);
+        let mut mount = Command::new("mount")
+            .args(["-i", "-t", "nfs4", "-o"])
+            .arg(format!(
+                "vers=4.2,proto=tcp6,addr={host},port=2049,soft,timeo=10,retrans=1"
+            ))
+            .arg(format!("[{host}]:/"))
+            .arg(target.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("mount");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        while count.load(Ordering::SeqCst) == before && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let _ = mount.kill();
+        let _ = mount.wait();
+        let got = if count.load(Ordering::SeqCst) > before {
+            "connected"
+        } else {
+            "refused"
+        };
+        println!("kernel -> {address}: {got}");
+        if got != expected {
+            failures.push(format!(
+                "kernel NFS client -> {address}: got '{got}', expected '{expected}'"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

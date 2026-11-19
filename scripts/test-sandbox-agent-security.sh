@@ -53,8 +53,15 @@ docker create --name "$container" --privileged --cgroupns=private \
     # The previous test left its cgroups (with the child its escape attempt made) and, in this
     # network namespace, its firewall behind: this one gets a network namespace of its own.
     find /sys/fs/cgroup/alien-guest -depth -type d -exec rmdir {} +
-    name=gateway_egress::guest_network_tests::image_nfs_leaves_only_through_its_mark_and_declared_connections
+    # Each in a network namespace of its own (the second: the IPv6 policy rules alone, as on a
+    # kernel without IPv6 netfilter).
+    for name in \
+      gateway_egress::guest_network_tests::image_nfs_leaves_only_through_its_mark_and_declared_connections \
+      gateway_egress::guest_network_tests::without_ip6_netfilter_policy_rules_refuse_ipv6_nfs_ports
+    do
     /agent-tests --list --ignored --exact "$name" | grep -Fx "$name: test"
+    # The namespace file an earlier run left (its mount went with its mount namespace).
+    rm -f /run/netns/remote
     unshare --mount --net bash -euo pipefail -c "
       ip link set lo up
       for knob in all default lo; do echo 0 > /proc/sys/net/ipv6/conf/\$knob/disable_ipv6; done
@@ -79,6 +86,7 @@ docker create --name "$container" --privileged --cgroupns=private \
       export ALIEN_TEST_REMOTE_NETNS=/run/netns/remote
       exec /agent-tests --ignored --exact $name --nocapture
     "
+    done
   ' >/dev/null
 trap cleanup EXIT
 docker start -a "$container"
