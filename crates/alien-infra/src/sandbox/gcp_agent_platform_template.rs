@@ -954,6 +954,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: ttl,
                 idle_pause_seconds: None,
+                ..Default::default()
             });
         match limits {
             Some(limits) => builder.limits(limits).build(),

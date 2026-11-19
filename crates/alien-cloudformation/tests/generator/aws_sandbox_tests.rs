@@ -37,6 +37,7 @@ fn sandbox_fixture_with(egress: SandboxEgress, image: &str) -> Sandbox {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build()
 }

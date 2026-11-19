@@ -2564,6 +2564,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
                 idle_pause_seconds: Some(600),
+                ..Default::default()
             })
             .build()
     }
@@ -2582,6 +2583,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
                 idle_pause_seconds: Some(600),
+                ..Default::default()
             })
             .build()
     }

@@ -197,6 +197,7 @@ fn gcp_sandbox_stack(lifecycle: ResourceLifecycle) -> Stack {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             lifecycle,
@@ -308,6 +309,7 @@ fn a_gcp_remote_sandbox_grants_the_access_identity_its_own_engine_and_nothing_wi
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -445,6 +447,7 @@ fn a_frozen_gcp_sandbox_manager_gets_template_verbs_on_its_engine_only() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -546,6 +549,7 @@ fn a_gcp_remote_sandbox_management_role_heartbeats_without_reaching_a_session() 
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -594,6 +598,7 @@ fn two_gcp_preview_sandboxes_share_one_signing_role() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .preview_ports(vec![8080])
                 .build(),

@@ -108,6 +108,7 @@ fn gated_fixture(resource_type: &str, platform: Platform) -> Option<(Stack, Stac
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .build(),
                 ResourceLifecycle::Frozen,

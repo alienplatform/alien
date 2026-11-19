@@ -489,6 +489,7 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())
@@ -581,6 +582,7 @@ fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let stack = Stack::new("byo-sandbox-deny".to_string())
@@ -639,6 +641,7 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,

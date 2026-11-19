@@ -721,6 +721,7 @@ mod tests {
             .lifecycle(crate::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         assert!(resource_entry(sandbox, ResourceLifecycle::Live, true).has_remote_bindings());
@@ -1049,6 +1050,7 @@ mod tests {
             .lifecycle(crate::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build()
     }

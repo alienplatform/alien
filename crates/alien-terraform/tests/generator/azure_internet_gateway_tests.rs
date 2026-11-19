@@ -19,6 +19,7 @@ async fn gateway_body() -> Body {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let stack = Stack::new("azint".to_string())

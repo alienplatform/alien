@@ -798,6 +798,7 @@ mod tests {
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .build(),
                 lifecycle,
@@ -845,6 +846,7 @@ mod tests {
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: Some(3600),
                         idle_pause_seconds,
+                        ..Default::default()
                     })
                     .build(),
                 ResourceLifecycle::Frozen,
@@ -969,6 +971,7 @@ mod tests {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 });
             let builder = Stack::new("acme".to_string())
                 .add(

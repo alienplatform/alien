@@ -265,5 +265,6 @@ fn descriptor_of(
         },
         services: IndexMap::new(),
         requires_network: false,
+        private_network_endpoints: None,
     }
 }

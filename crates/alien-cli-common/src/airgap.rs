@@ -1721,6 +1721,7 @@ mod tests {
                     .lifecycle(alien_core::SandboxLifecyclePolicy {
                         max_lifetime_seconds: Some(3600),
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .build(),
                 alien_core::ResourceLifecycle::Frozen,

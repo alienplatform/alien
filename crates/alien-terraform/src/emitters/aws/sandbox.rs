@@ -1236,6 +1236,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: lifetime,
                 idle_pause_seconds: idle,
+                ..Default::default()
             })
             .build()
     }
@@ -1354,6 +1355,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
 

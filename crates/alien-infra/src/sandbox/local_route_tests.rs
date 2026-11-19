@@ -9,6 +9,7 @@ fn sandbox(id: &str, egress: alien_core::SandboxEgress) -> Sandbox {
         .lifecycle(alien_core::SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(300),
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .code(alien_core::SandboxCode::Image {
             image: "busybox:1.37.0".to_string(),

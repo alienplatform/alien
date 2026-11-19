@@ -439,6 +439,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(300),
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let stack = Stack::new("s".to_string()).build();

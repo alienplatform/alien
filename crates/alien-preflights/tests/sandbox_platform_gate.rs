@@ -43,6 +43,7 @@ fn sandbox(limits: Option<SandboxLimits>) -> Sandbox {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         });
     match limits {
         Some(limits) => builder.limits(limits).build(),
@@ -110,6 +111,7 @@ fn source_sandbox() -> Sandbox {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build()
 }

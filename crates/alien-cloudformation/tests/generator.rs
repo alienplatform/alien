@@ -18,6 +18,7 @@ mod generator {
     pub mod aws_key_policy_differential_tests;
     pub mod aws_open_search_tests;
     pub mod aws_sandbox_gateway_tests;
+    pub mod aws_sandbox_image_permissions_tests;
     pub mod aws_sandbox_tests;
     pub mod boundary_tests;
     pub mod enabled_queue_tests;

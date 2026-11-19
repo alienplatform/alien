@@ -1396,6 +1396,7 @@ mod tests {
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .build(),
                 ResourceLifecycle::Frozen,
@@ -1464,6 +1465,7 @@ mod tests {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build()
         };
@@ -1569,6 +1571,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let stack = Stack::new("test-stack".to_string())
@@ -1620,6 +1623,7 @@ mod tests {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build()
         };
@@ -1671,6 +1675,7 @@ mod tests {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build()
         };

@@ -1548,6 +1548,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let group = format!("{PREFIX}-agent");
@@ -1645,6 +1646,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: Some(600),
+                ..Default::default()
             })
             .build();
         let group = format!("{PREFIX}-agent");
@@ -1903,6 +1905,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let limits = sandbox.resolved_limits();

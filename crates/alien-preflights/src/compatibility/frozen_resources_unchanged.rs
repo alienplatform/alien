@@ -1900,6 +1900,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds,
+                ..Default::default()
             })
             .build();
         Stack::new("stack".to_string())
@@ -1923,6 +1924,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         Stack::new("stack".to_string())

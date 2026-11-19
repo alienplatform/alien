@@ -54,6 +54,7 @@ fn a_sandbox_emits_its_network_policy_and_the_brokers_rbac() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: Some(3600),
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -107,6 +108,7 @@ fn a_live_sandbox_emits_the_same_chart_resources_as_a_frozen_one() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: Some(3600),
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Live,
@@ -143,6 +145,7 @@ fn a_sandbox_allowing_egress_only_reaches_its_gateway() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -194,6 +197,7 @@ fn sandbox_management_gets_only_its_signing_secret() {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(300),
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let mut stack = Stack::new("gateway-access".into())
@@ -324,6 +328,7 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: Some(300),
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -807,6 +812,7 @@ fn sandbox_with_linked_app_as(image_user: Option<u32>) -> Stack {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(3600),
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     sandbox.image_user = image_user;
@@ -1179,6 +1185,7 @@ fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -1361,6 +1368,7 @@ fn the_sandbox_policies_carry_no_ipv6_rule() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -1407,6 +1415,7 @@ fn the_cni_probe_runs_its_clients_on_the_nodes_sessions_use() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -1638,6 +1647,7 @@ fn an_allow_sandbox_without_cluster_dns_fails_the_render_and_names_the_value() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -2088,6 +2098,7 @@ fn every_sandbox_egress_mode_renders_the_network_policy_probe() {
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: Some(3600),
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .build(),
                 ResourceLifecycle::Frozen,

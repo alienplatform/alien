@@ -7420,6 +7420,7 @@ mod sandbox_build_tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build()
     }
@@ -7553,6 +7554,7 @@ mod sandbox_build_tests {
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .build();
                 let stack = Stack::new("prebuilt".into())
@@ -7682,6 +7684,7 @@ mod sandbox_build_tests {
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .build();
                 let built = build_stack(
@@ -7828,6 +7831,7 @@ mod sandbox_build_tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let built = build_stack(
@@ -7926,6 +7930,7 @@ mod sandbox_build_tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let built = build_stack(
@@ -7944,6 +7949,7 @@ mod sandbox_build_tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let pinned_result = build_stack(
@@ -7992,6 +7998,7 @@ mod sandbox_build_tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         #[derive(Default)]
@@ -8061,6 +8068,7 @@ mod sandbox_build_tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let stack = Stack::new("sandbox-build".to_string())

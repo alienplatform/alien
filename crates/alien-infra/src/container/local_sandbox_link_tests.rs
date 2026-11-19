@@ -45,6 +45,7 @@ async fn a_container_reaches_the_sandbox_it_links_with_its_binding_across_a_mana
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(300),
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .code(alien_core::SandboxCode::Image {
                 image: "busybox:1.37.0".to_string(),
@@ -236,6 +237,7 @@ async fn a_container_created_before_its_sandbox_route_returns_waits_and_then_sta
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(300),
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .code(alien_core::SandboxCode::Image {
                 image: "busybox:1.37.0".to_string(),

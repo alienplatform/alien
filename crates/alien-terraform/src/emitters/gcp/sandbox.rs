@@ -499,6 +499,7 @@ mod tests {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: ttl,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build();
             let builder = Stack::new("acme".to_string()).add(
@@ -638,6 +639,7 @@ mod tests {
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .build();
                 let mut builder = Stack::new("acme".to_string())
@@ -704,6 +706,7 @@ mod tests {
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .preview_ports(ports)
                     .build();
@@ -841,6 +844,7 @@ mod tests {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .preview_ports(vec![8080])
                 .build();
@@ -934,6 +938,7 @@ mod tests {
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
+                        ..Default::default()
                     });
                 let builder = Stack::new("acme".to_string())
                     .add(

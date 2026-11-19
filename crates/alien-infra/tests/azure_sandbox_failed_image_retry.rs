@@ -112,6 +112,7 @@ async fn a_failed_build_is_rebuilt_on_retry() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
         )

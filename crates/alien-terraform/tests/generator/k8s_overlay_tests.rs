@@ -1663,6 +1663,7 @@ fn eks_turns_on_network_policy_enforcement_only_when_the_stack_has_a_sandbox() {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let with_sandbox = Stack::new("eks-sandbox".to_string())
@@ -1700,6 +1701,7 @@ fn aks_node_pools_state_the_azure_default_upgrade_settings() {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let stack = Stack::new("aks-upgrade".to_string())
@@ -1769,6 +1771,7 @@ fn aks_adds_a_kata_node_pool_only_when_the_stack_has_a_sandbox() {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let with_sandbox = Stack::new("aks-sandbox".to_string())
