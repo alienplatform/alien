@@ -185,6 +185,101 @@ fn deployer_secrets_never_reach_terraform_variables_or_state() {
     }
 }
 
+/// On a Kubernetes target pods read deployer secrets from Kubernetes Secrets in the release
+/// namespace, so the module creates no cloud store for them, on any cloud, and its outputs name
+/// the Secret the deployer writes.
+#[test]
+fn kubernetes_targets_put_deployer_secrets_in_the_release_namespace() {
+    fn lower(args: FuncArgs) -> Result<Value, String> {
+        Ok(Value::from(
+            args[0].as_str().ok_or("lower takes a string")?.to_lowercase(),
+        ))
+    }
+
+    for target in [
+        TerraformTarget::Eks,
+        TerraformTarget::Gke,
+        TerraformTarget::Aks,
+    ] {
+        let module = render(
+            &deployer_secret_stack(vec![StackInputProvider::Deployer]),
+            target,
+            StackSettings::default(),
+        );
+        let rendered = module.files.values().cloned().collect::<String>();
+        // No cloud store, and no registration entry that would make the control plane follow one.
+        for forbidden in [
+            "resource \"google_secret",
+            "resource \"aws_ssm_parameter\"",
+            "resource \"azurerm_key_vault\"",
+            "vaultPrefix",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "{target:?} module mentions {forbidden}"
+            );
+        }
+        // An earlier AKS module created a Key Vault that may hold deployer values: the new one
+        // forgets it in state and never destroys it. No other cloud's store holds values.
+        assert_eq!(
+            rendered.contains("removed {"),
+            target == TerraformTarget::Aks,
+            "{target:?}"
+        );
+        if target == TerraformTarget::Aks {
+            assert!(rendered.contains("from = azurerm_key_vault.deployer_secrets"));
+            assert!(rendered.contains("from = random_id.deployer_secrets_name_suffix"));
+            assert_eq!(rendered.matches("destroy = false").count(), 2);
+        }
+        let registration = module.get("registration.tf").expect("registration.tf");
+        assert!(
+            !registration.contains("\"deployer-secrets\""),
+            "{target:?} registers the deployer vault:\n{registration}"
+        );
+
+        let outputs = module.get("outputs.tf").expect("outputs.tf");
+        let body: hcl::Body = hcl::from_str(outputs).expect("outputs.tf parses");
+        let value = body
+            .blocks()
+            .find(|block| {
+                block.identifier() == "output"
+                    && block.labels().first().map(|label| label.as_str())
+                        == Some("deployer_secret_api_key")
+            })
+            .expect("deployer secret output")
+            .body()
+            .attributes()
+            .find(|attribute| attribute.key() == "value")
+            .expect("output value")
+            .expr()
+            .clone();
+        let mut context = Context::new();
+        context.declare_var(
+            "local",
+            hcl::value!({ resource_prefix = "Acme-Prod" }),
+        );
+        context.declare_var("var", hcl::value!({ kubernetes_namespace = "apps" }));
+        context.declare_func(
+            "lower",
+            FuncDef::builder().param(ParamType::String).build(lower),
+        );
+        let output = value.evaluate(&context).expect("output evaluates");
+        let object = output.as_object().expect("object output");
+
+        let expected = deployer_secret_location(
+            &VaultBinding::kubernetes_secret("apps", "acme-prod-deployer-secrets"),
+            &deployer_secret_vault_key("apiKey"),
+            &DeployerSecretLocationContext::default(),
+        )
+        .expect("location");
+        assert_eq!(object["name"].as_str(), Some(expected.name.as_str()));
+        assert_eq!(object["namespace"].as_str(), Some("apps"));
+        assert_eq!(object["key"].as_str(), Some("value"));
+
+        assert_terraform_valid(&module, "kubernetes deployer secret");
+    }
+}
+
 /// Distinct ids can normalize to the same Terraform variable; a silent shadow
 /// would make both inputs read one variable, so generation must refuse.
 #[test]

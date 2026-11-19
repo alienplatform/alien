@@ -232,9 +232,7 @@ fn controller_platform_for_entry(
     // managed cloud clusters. Setup omits their cloud infrastructure; only other
     // Frozen resources use the underlying cloud provider.
     if stack_platform == Platform::Kubernetes
-        && resource.is_some_and(|resource| {
-            alien_core::is_kubernetes_native_resource_type(&resource.resource_type())
-        })
+        && resource.is_some_and(alien_core::is_kubernetes_native_resource)
     {
         return Platform::Kubernetes;
     }

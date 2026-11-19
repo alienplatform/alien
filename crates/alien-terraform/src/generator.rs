@@ -591,6 +591,22 @@ pub(crate) fn render_terraform_module(
         ));
     }
 
+    // The deployer secrets vault is a Kubernetes Secret binding on a Kubernetes target, so no
+    // module creates a cloud store for it. An install from an earlier release may have one with
+    // values in it: Terraform must forget it, not destroy it.
+    if target == TerraformTarget::Aks {
+        if let (Some(label), Some(_)) = (
+            labels.get(alien_core::DEPLOYER_SECRETS_VAULT_ID),
+            stack.resources.get(alien_core::DEPLOYER_SECRETS_VAULT_ID),
+        ) {
+            per_resource
+                .entry(alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string())
+                .or_default()
+                .moved_blocks
+                .extend(crate::emitters::azure::vault::forget_vault_blocks(label));
+        }
+    }
+
     if target.is_kubernetes() {
         crate::k8s_identity::overlay_per_resource(
             stack,
@@ -2550,10 +2566,9 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
 /// One output per deployer secret, naming where the deployer writes its value.
 ///
 /// The name comes from the `deployer-secrets` vault's binding: a Parameter Store or
-/// Secret Manager prefix, or a Key Vault. On a Kubernetes target the value is
-/// a Secret in the deployment's namespace whose name the operator derives, so
-/// the output carries the vault key and the deployment status shows the full
-/// name.
+/// Secret Manager prefix, or a Key Vault. On a Kubernetes target the value is a Secret in the
+/// release namespace, whatever the cluster's cloud: the output names it, as
+/// `alien_core::deployer_secret_location` does for a Kubernetes Secret binding.
 /// Resource types the chart binds through its `infrastructure` values.
 const CHART_BOUND_TYPES: &[&str] = &["storage", "queue", "kv", "artifact-registry", "vault"];
 
@@ -2680,11 +2695,30 @@ fn deployer_secret_outputs(
     for input in inputs {
         let vault_key = alien_core::deployer_secret_vault_key(&input.id);
         let (value, description) = if target.is_kubernetes() {
+            // The Secret the pods read: the vault prefix the Kubernetes vault controller
+            // derives (`<resource prefix>-deployer-secrets`), joined to the key the same way
+            // `vault_naming::kubernetes_secret_name` does.
+            let suffix = alien_core::vault_naming::kubernetes_secret_name("", &vault_key);
             (
-                expr::object([("vault_key", Expression::String(vault_key))]),
+                expr::object([
+                    (
+                        "name",
+                        expr::template(format!(
+                            "${{lower(local.resource_prefix)}}-{}{suffix}",
+                            alien_core::DEPLOYER_SECRETS_VAULT_ID
+                        )),
+                    ),
+                    ("namespace", expr::raw("var.kubernetes_namespace")),
+                    (
+                        "key",
+                        Expression::String(
+                            alien_core::vault_naming::KUBERNETES_SECRET_VALUE_KEY.to_string(),
+                        ),
+                    ),
+                ]),
                 format!(
-                    "Secrets vault key for '{}'; the deployment status shows the Kubernetes \
-                     Secret to create.",
+                    "Kubernetes Secret (name, namespace and data key) to write the '{}' value \
+                     into.",
                     input.label
                 ),
             )
