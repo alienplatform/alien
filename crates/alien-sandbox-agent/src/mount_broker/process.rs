@@ -369,6 +369,54 @@ pub fn serve_socket(path: &Path) -> io::Result<()> {
 
 static CONTROL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// The effective capability sets of the live processes that hold the socket with `inode` open.
+/// The broker reads them: the agent no longer holds what reading other processes' descriptors
+/// takes. Empty when no live process holds it.
+pub fn socket_holders(inode: u64) -> io::Result<Vec<u64>> {
+    let broker = BROKER
+        .get()
+        .ok_or_else(|| io::Error::other("no mount broker"))?;
+    let (ours, theirs) = seqpacket_pair()?;
+    // The question waits in the pair the answer comes back on.
+    let question = inode.to_ne_bytes();
+    // SAFETY: sending from a buffer we own on a descriptor we own.
+    if unsafe {
+        libc::send(
+            ours.as_raw_fd(),
+            question.as_ptr().cast(),
+            question.len(),
+            libc::MSG_NOSIGNAL,
+        )
+    } != question.len() as isize
+    {
+        return Err(io::Error::last_os_error());
+    }
+    receive_timeout(ours.as_raw_fd(), &broker.answer_within)?;
+    {
+        let _serial = CONTROL
+            .lock()
+            .map_err(|_| io::Error::other("broker control poisoned"))?;
+        drain_late_acks(broker.control.as_raw_fd());
+        send_with_fds(broker.control.as_raw_fd(), b'P', &[theirs.as_raw_fd()])?;
+        drop(theirs);
+        wait_ack(broker.control.as_raw_fd(), "a socket lookup")?;
+    }
+    let mut answer = vec![0u8; 64 * 1024];
+    // SAFETY: receiving into a buffer we own.
+    let n = unsafe {
+        libc::recv(
+            ours.as_raw_fd(),
+            answer.as_mut_ptr().cast(),
+            answer.len(),
+            0,
+        )
+    };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    serde_json::from_slice(&answer[..n as usize]).map_err(io::Error::other)
+}
+
 /// Asks the broker to detach every NFS mount it made (blocking; bounded by the broker's request
 /// deadline).
 pub fn detach_nfs_mounts() -> io::Result<()> {
@@ -415,6 +463,38 @@ pub unsafe fn join_image_cgroup() -> io::Result<()> {
     });
     libc::close(fds[0]);
     result
+}
+
+/// Reads the inode the agent asks about from `socket` and answers there with its holders.
+fn answer_socket_holders(socket: RawFd) -> io::Result<()> {
+    let mut inode = [0u8; 8];
+    // SAFETY: receiving into a buffer we own, without blocking.
+    let n = unsafe {
+        libc::recv(
+            socket,
+            inode.as_mut_ptr().cast(),
+            inode.len(),
+            libc::MSG_DONTWAIT,
+        )
+    };
+    if n != inode.len() as isize {
+        return Err(io::Error::other("no inode"));
+    }
+    let answer = serde_json::to_vec(&ops::socket_holders(u64::from_ne_bytes(inode)))
+        .map_err(io::Error::other)?;
+    // SAFETY: sending from a buffer we own, without blocking.
+    if unsafe {
+        libc::send(
+            socket,
+            answer.as_ptr().cast(),
+            answer.len(),
+            libc::MSG_NOSIGNAL | libc::MSG_DONTWAIT,
+        )
+    } != answer.len() as isize
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Installs a filter that lets the broker create only `AF_UNIX` sockets.
@@ -647,7 +727,12 @@ impl Loop<'_> {
         if message.tag == b'D' {
             self.detach_nfs();
         }
-        let mut ok = message.tag == b'D' || (message.tag == b'S' && message.fds.len() == 2);
+        let mut ok = message.tag == b'D'
+            || (message.tag == b'S' && message.fds.len() == 2)
+            || (message.tag == b'P' && message.fds.len() == 1);
+        if message.tag == b'P' && ok {
+            ok = answer_socket_holders(message.fds[0].as_raw_fd()).is_ok();
+        }
         if message.tag == b'S' && ok {
             if let Err(error) = self.seal(message.fds[1].as_raw_fd()) {
                 eprintln!("mount broker: cannot seal the kernel's helpers: {error}");

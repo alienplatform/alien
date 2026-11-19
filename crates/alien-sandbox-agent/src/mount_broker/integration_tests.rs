@@ -707,4 +707,56 @@ print(results)
         let _ = child.kill();
         let _ = child.wait();
     }
+
+    provider_attribution();
+}
+
+/// A local caller whose socket carries no mark counts as the provider only if every process
+/// holding that socket has the provider's grant. A program the kernel starts for the image has
+/// none (the broker emptied the helper capability sets) and is refused, the way every hook and
+/// control route refuses it (`authorize_control` answers 403 when this gate says no).
+fn provider_attribution() {
+    // The agent itself runs in the guest cgroup; the callers run outside it, in the root cgroup,
+    // as provider processes and the kernel's helpers do. No socket marker is attached here, so
+    // every socket carries mark 0.
+    std::fs::write(
+        "/sys/fs/cgroup/alien-guest/cgroup.procs",
+        std::process::id().to_string(),
+    )
+    .expect("join the guest cgroup");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for (who, capabilities, expected) in [("helper", false, false), ("provider", true, true)] {
+        let mut caller = Command::new("python3");
+        caller.args([
+            "-c",
+            "import socket, sys, time; s = socket.create_connection(('127.0.0.1', int(sys.argv[1]))); time.sleep(30)",
+            &port,
+        ]);
+        // SAFETY: open, write and capability calls before exec; nothing allocates.
+        unsafe {
+            caller.pre_exec(move || {
+                let procs = libc::open(c"/sys/fs/cgroup/cgroup.procs".as_ptr(), libc::O_WRONLY);
+                if procs < 0 || libc::write(procs, b"0".as_ptr().cast(), 1) != 1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                libc::close(procs);
+                if !capabilities {
+                    privilege::restrict_capabilities(0)?;
+                }
+                Ok(())
+            });
+        }
+        let mut caller = caller.spawn().unwrap();
+        let (_connection, peer) = listener.accept().unwrap();
+        let served = runtime.block_on(crate::peer::image_transport_may_serve(peer));
+        let _ = caller.kill();
+        let _ = caller.wait();
+        println!("PROVIDER mark-0 {who} caller (capabilities: {capabilities}) served: {served}");
+        assert_eq!(served, expected, "{who}");
+    }
 }

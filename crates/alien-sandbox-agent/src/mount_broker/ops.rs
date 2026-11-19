@@ -296,6 +296,64 @@ pub fn load_filesystems() {
     }
 }
 
+/// The effective capability sets of the live processes that hold the socket with `inode` open.
+/// Each process is pinned with a pidfd before its descriptors are read, and kept only if it is
+/// still alive afterwards, so a reused process ID cannot answer for another process.
+pub fn socket_holders(inode: u64) -> Vec<u64> {
+    let link = format!("socket:[{inode}]");
+    let mut holders = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return holders;
+    };
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<libc::pid_t>().ok())
+        else {
+            continue;
+        };
+        // SAFETY: pidfd_open takes a PID and flags.
+        let Ok(pidfd) = owned(
+            unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) },
+            "pidfd",
+        ) else {
+            continue;
+        };
+        let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
+            continue;
+        };
+        if !fds.flatten().any(|fd| {
+            std::fs::read_link(fd.path()).is_ok_and(|target| target.as_os_str() == link.as_str())
+        }) {
+            continue;
+        }
+        let Some(effective) = std::fs::read_to_string(format!("/proc/{pid}/status"))
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find_map(|line| line.strip_prefix("CapEff:"))
+                    .and_then(|value| u64::from_str_radix(value.trim(), 16).ok())
+            })
+        else {
+            continue;
+        };
+        // A pidfd turns readable once its process has exited.
+        let mut poll = libc::pollfd {
+            fd: pidfd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd, no waiting.
+        if unsafe { libc::poll(&mut poll, 1, 0) } != 0 {
+            continue;
+        }
+        holders.push(effective);
+    }
+    holders
+}
+
 /// Least time left on the request deadline for a new mount to still be attached. The broker kills
 /// a helper at the deadline; a mount attached just before that kill would land without the broker
 /// ever learning its ID.
