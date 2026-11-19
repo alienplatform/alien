@@ -176,11 +176,17 @@ impl Helper {
         let address = match address {
             None => {
                 return Err(format!(
-                    "dns: resolving {dns_name} took longer than {} s (the sandbox network gives this process no resolver)",
-                    DNS_BUDGET.as_secs()
+                    "dns: resolving {dns_name} took longer than {} s (resolvers: {})",
+                    DNS_BUDGET.as_secs(),
+                    resolvers()
                 ))
             }
-            Some(Err(e)) => return Err(format!("dns: cannot resolve {dns_name}: {e}")),
+            Some(Err(e)) => {
+                return Err(format!(
+                    "dns: cannot resolve {dns_name}: {e} (resolvers: {})",
+                    resolvers()
+                ))
+            }
             Some(Ok(None)) => return Err(format!("dns: {dns_name} has no address")),
             Some(Ok(Some(address))) => address,
         };
@@ -398,6 +404,21 @@ fn mount_nfs(path: &str, port: u16) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The nameservers this process would ask, for the failure message. Addresses only.
+fn resolvers() -> String {
+    let list: Vec<String> = std::fs::read_to_string("/etc/resolv.conf")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("nameserver "))
+        .map(|a| a.trim().to_string())
+        .collect();
+    if list.is_empty() {
+        "none listed in /etc/resolv.conf".into()
+    } else {
+        list.join(", ")
+    }
 }
 
 #[cfg(test)]
