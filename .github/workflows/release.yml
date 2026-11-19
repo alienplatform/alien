@@ -1740,8 +1740,10 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-sandbox-agent
             target/x86_64-unknown-linux-musl/release/alien-egress-gateway
             target/x86_64-unknown-linux-musl/release/alien-verifier
+            target/x86_64-unknown-linux-musl/release/efs-proxy
+            target/x86_64-unknown-linux-musl/release/efs-utils.crt
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b4-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml', 'crates/alien-core/machine-image-*.txt') }}
+          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b5-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml', 'crates/alien-core/machine-image-*.txt') }}
 
       - uses: ./.ci-tool-versions/.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1765,10 +1767,16 @@ jobs:
       - name: Gateway has the cloud providers compiled in
         run: target/x86_64-unknown-linux-musl/release/alien-egress-gateway --self-check
 
+      # The TLS proxy the sandbox agent starts to attach S3 Files. Built natively and static, so
+      # one binary serves every base image; it travels in the same artifact as the agent.
+      - name: Build the S3 Files mount proxy
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: scripts/build-efs-proxy.sh target/x86_64-unknown-linux-musl/release
+
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/x86_64-unknown-linux-musl
-          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway alien-verifier; do
+          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway alien-verifier efs-proxy efs-utils.crt; do
             cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
           done
 
@@ -1808,8 +1816,10 @@ jobs:
             target/aarch64-unknown-linux-musl/release/alien-manager
             target/aarch64-unknown-linux-musl/release/alien-sandbox-agent
             target/aarch64-unknown-linux-musl/release/alien-egress-gateway
+            target/aarch64-unknown-linux-musl/release/efs-proxy
+            target/aarch64-unknown-linux-musl/release/efs-utils.crt
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b3-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
+          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b4-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
 
       - uses: ./.ci-tool-versions/.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1829,10 +1839,14 @@ jobs:
             --features alien-egress-gateway/cloud,alien-egress-gateway/local \
             --target aarch64-unknown-linux-musl
 
+      - name: Build the S3 Files mount proxy
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: scripts/build-efs-proxy.sh target/aarch64-unknown-linux-musl/release
+
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/aarch64-unknown-linux-musl
-          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway; do
+          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway efs-proxy efs-utils.crt; do
             cp "target/aarch64-unknown-linux-musl/release/${binary}" "staged/aarch64-unknown-linux-musl/${binary}"
           done
 
@@ -2121,7 +2135,7 @@ jobs:
         run: |
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
             mkdir -p "target/${target}/release"
-            for binary in alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway; do
+            for binary in alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway efs-proxy efs-utils.crt; do
               cp "./linux-bins/binaries-${target}/${binary}" "target/${target}/release/${binary}"
               chmod +x "target/${target}/release/${binary}"
             done
