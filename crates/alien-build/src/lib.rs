@@ -8254,7 +8254,12 @@ mod sandbox_push_tests {
             let image = push_target(&targets[0], &platform, &repository, &options, &agent_image)
                 .await
                 .expect("the sandbox pushes");
-            assert!(image.ends_with("-agent"), "{platform}: {image}");
+            if platform == Platform::Gcp {
+                // GCP pins the released image to its digest.
+                assert!(image.contains("@sha256:"), "{platform}: {image}");
+            } else {
+                assert!(image.ends_with("-agent"), "{platform}: {image}");
+            }
             let reference = Reference::try_from(image.as_str()).expect("reference");
             let (_, _, config) = OciClient::new(OciClientConfig {
                 protocol: dockdash::ClientProtocol::Http,
