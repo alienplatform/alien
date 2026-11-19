@@ -95,6 +95,19 @@ pub enum HelperRequest {
     },
 }
 
+impl HelperRequest {
+    /// Names the step and its path for the log; never a credential or an identifier of a file system.
+    fn describe(&self) -> String {
+        let (op, path) = match self {
+            Self::Tmpfs { path, .. } => ("tmpfs", path),
+            Self::S3Files { path, .. } => ("s3files", path),
+            Self::Refresh { path } => ("refresh", path),
+            Self::Unmount { path } => ("unmount", path),
+        };
+        format!("{op} {path}")
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct HelperReply {
     error: Option<String>,
@@ -401,7 +414,10 @@ impl Mounts {
             };
             match outcome {
                 Ok(()) => self.set(path, "mounted".into()),
-                Err(reason) => self.set(path, format!("failed: {reason}")),
+                Err(reason) => {
+                    eprintln!("alien-sandbox-agent: mounts: {path} failed: {reason}");
+                    self.set(path, format!("failed: {reason}"))
+                }
             }
         }
     }
@@ -533,10 +549,16 @@ pub struct HelperClient {
         std::os::unix::net::UnixStream,
         BufReader<std::os::unix::net::UnixStream>,
     )>,
+    /// Carries the agent's mount namespace to the helper, once. The helper cannot open it through
+    /// `/proc`: the agent is not dumpable, so only a process holding `CAP_SYS_PTRACE` may.
+    #[cfg(target_os = "linux")]
+    namespace: Mutex<Option<std::os::unix::net::UnixStream>>,
 }
 
 impl MountBackend for HelperClient {
     fn request(&self, request: &HelperRequest) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        self.hand_over_namespace()?;
         let mut guard = self.stream.lock().map_err(|_| "mount helper failed")?;
         // Every step in the helper has its own deadline, so this one only catches a helper that
         // is stuck.
@@ -569,38 +591,146 @@ impl MountBackend for HelperClient {
     }
 }
 
+#[cfg(target_os = "linux")]
+impl HelperClient {
+    /// Sends the helper a descriptor of this process's mount namespace, once, before its first
+    /// request. Called from the first request, which comes after the agent made its private
+    /// namespace, so the helper mounts where commands will look.
+    fn hand_over_namespace(&self) -> Result<(), String> {
+        let mut slot = self.namespace.lock().map_err(|_| "mount helper failed")?;
+        let Some(channel) = slot.as_ref() else {
+            return Ok(());
+        };
+        let namespace = std::fs::File::open("/proc/self/ns/mnt")
+            .map_err(|e| format!("cannot open the agent's mount namespace: {e}"))?;
+        send_descriptor(channel, std::os::fd::AsRawFd::as_raw_fd(&namespace))
+            .map_err(|e| format!("cannot hand the mount namespace to the helper: {e}"))?;
+        eprintln!("alien-sandbox-agent: mounts: handed the mount namespace to the helper");
+        *slot = None;
+        Ok(())
+    }
+}
+
+/// Sends one descriptor over a Unix socket (`SCM_RIGHTS`), with a single byte of payload.
+#[cfg(target_os = "linux")]
+fn send_descriptor(socket: &std::os::unix::net::UnixStream, fd: i32) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let mut byte = 0u8;
+    let mut iov = libc::iovec {
+        iov_base: (&mut byte as *mut u8).cast(),
+        iov_len: 1,
+    };
+    // SAFETY: CMSG_SPACE only computes a size.
+    let space = unsafe { libc::CMSG_SPACE(std::mem::size_of::<i32>() as u32) } as usize;
+    let mut control = vec![0u8; space];
+    // SAFETY: zeroed msghdr is valid; the pointers set below outlive the call.
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &mut iov;
+    message.msg_iovlen = 1;
+    message.msg_control = control.as_mut_ptr().cast();
+    message.msg_controllen = space as _;
+    // SAFETY: the control buffer holds room for one header and one descriptor.
+    unsafe {
+        let header = libc::CMSG_FIRSTHDR(&message);
+        (*header).cmsg_level = libc::SOL_SOCKET;
+        (*header).cmsg_type = libc::SCM_RIGHTS;
+        (*header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<i32>() as u32) as _;
+        std::ptr::copy_nonoverlapping(
+            (&fd as *const i32).cast::<u8>(),
+            libc::CMSG_DATA(header),
+            std::mem::size_of::<i32>(),
+        );
+    }
+    // SAFETY: a fully initialised message on an open socket.
+    if unsafe { libc::sendmsg(socket.as_raw_fd(), &message, 0) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Receives one descriptor sent by [`send_descriptor`].
+#[cfg(target_os = "linux")]
+fn receive_descriptor(
+    socket: &std::os::unix::net::UnixStream,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let mut byte = 0u8;
+    let mut iov = libc::iovec {
+        iov_base: (&mut byte as *mut u8).cast(),
+        iov_len: 1,
+    };
+    // SAFETY: CMSG_SPACE only computes a size.
+    let space = unsafe { libc::CMSG_SPACE(std::mem::size_of::<i32>() as u32) } as usize;
+    let mut control = vec![0u8; space];
+    // SAFETY: zeroed msghdr is valid; the pointers set below outlive the call.
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &mut iov;
+    message.msg_iovlen = 1;
+    message.msg_control = control.as_mut_ptr().cast();
+    message.msg_controllen = space as _;
+    // SAFETY: a valid message with room for one descriptor.
+    if unsafe { libc::recvmsg(socket.as_raw_fd(), &mut message, libc::MSG_CMSG_CLOEXEC) } <= 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: the kernel filled the control buffer; a descriptor it installed is ours to own.
+    unsafe {
+        let header = libc::CMSG_FIRSTHDR(&message);
+        if header.is_null()
+            || (*header).cmsg_level != libc::SOL_SOCKET
+            || (*header).cmsg_type != libc::SCM_RIGHTS
+        {
+            return Err(std::io::Error::other("no descriptor came with the message"));
+        }
+        let mut fd = 0i32;
+        std::ptr::copy_nonoverlapping(
+            libc::CMSG_DATA(header),
+            (&mut fd as *mut i32).cast::<u8>(),
+            std::mem::size_of::<i32>(),
+        );
+        Ok(std::os::fd::OwnedFd::from_raw_fd(fd))
+    }
+}
+
 /// Forks the helper. Call before the agent drops capabilities and before it starts threads.
 /// In the parent returns the client; the child never returns.
 #[cfg(target_os = "linux")]
 pub fn fork_helper(prepare_key: bool) -> std::io::Result<HelperClient> {
     use std::os::unix::net::UnixStream;
     let (parent, child) = UnixStream::pair()?;
+    let (namespace_parent, namespace_child) = UnixStream::pair()?;
     // SAFETY: the agent has no other threads yet; the child only uses its own memory and exits.
     match unsafe { libc::fork() } {
         -1 => Err(std::io::Error::last_os_error()),
         0 => {
             drop(parent);
+            drop(namespace_parent);
             // SAFETY: plain prctl calls; the helper dies with the agent, and no one without
             // CAP_SYS_PTRACE can read its memory or descriptors through /proc.
             unsafe {
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
                 libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
             }
-            helper_loop(child, prepare_key);
+            helper_loop(child, namespace_child, prepare_key);
             std::process::exit(0);
         }
         _ => {
             drop(child);
+            drop(namespace_child);
             let reader = BufReader::new(parent.try_clone()?);
             Ok(HelperClient {
                 stream: Mutex::new((parent, reader)),
+                namespace: Mutex::new(Some(namespace_parent)),
             })
         }
     }
 }
 
 #[cfg(target_os = "linux")]
-fn helper_loop(stream: std::os::unix::net::UnixStream, prepare_key: bool) {
+fn helper_loop(
+    stream: std::os::unix::net::UnixStream,
+    namespace: std::os::unix::net::UnixStream,
+    prepare_key: bool,
+) {
     let mut writer = stream.try_clone().expect("socket clone");
     let reader = BufReader::new(stream);
     let mut helper = crate::s3files_mount::Helper::new(CREDENTIALS_DIR.into());
@@ -609,20 +739,31 @@ fn helper_loop(stream: std::os::unix::net::UnixStream, prepare_key: bool) {
     if prepare_key {
         helper.prepare_key();
     }
-    let mut in_agent_namespace = false;
+    // Joined once, on the first request; a failure is the answer to every request after it.
+    let mut joined: Option<Result<(), String>> = None;
+    eprintln!(
+        "alien-sandbox-agent: mounts: helper started ({})",
+        capabilities_line()
+    );
     for line in reader.lines() {
         let Ok(line) = line else { return };
         let error = match serde_json::from_str::<HelperRequest>(&line) {
-            // The agent moves into a private mount namespace after this process was forked, and
-            // what the guest sees is what that namespace holds. Mount there, not here.
-            Ok(request) if !in_agent_namespace => match join_agent_mount_namespace() {
-                Ok(()) => {
-                    in_agent_namespace = true;
-                    perform(&mut helper, &request).err()
+            Ok(request) => {
+                // The agent moves into a private mount namespace after this process was forked,
+                // and what commands see is what that namespace holds. Mount there, not here.
+                let ready = joined
+                    .get_or_insert_with(|| join_agent_mount_namespace(&namespace))
+                    .clone();
+                let what = request.describe();
+                let outcome = ready.and_then(|()| perform(&mut helper, &request));
+                match &outcome {
+                    Ok(()) => eprintln!("alien-sandbox-agent: mounts: {what}: ok"),
+                    Err(reason) => {
+                        eprintln!("alien-sandbox-agent: mounts: {what}: failed: {reason}")
+                    }
                 }
-                Err(reason) => Some(reason),
-            },
-            Ok(request) => perform(&mut helper, &request).err(),
+                outcome.err()
+            }
             Err(_) => Some("unreadable request".to_string()),
         };
         let reply = serde_json::to_string(&HelperReply { error }).expect("reply");
@@ -632,30 +773,37 @@ fn helper_loop(stream: std::os::unix::net::UnixStream, prepare_key: bool) {
     }
 }
 
-/// `setns` into the mount namespace of the agent, this process's parent. Needs CAP_SYS_ADMIN and a
-/// single thread, both true of the helper.
+/// `setns` into the mount namespace the agent sent as a descriptor. Needs CAP_SYS_ADMIN and a
+/// single thread, both true of the helper. The helper does not open `/proc/<agent>/ns/mnt` itself:
+/// the agent is not dumpable, so that open needs `CAP_SYS_PTRACE`, which a MicroVM does not give.
 #[cfg(target_os = "linux")]
-fn join_agent_mount_namespace() -> Result<(), String> {
-    // SAFETY: getppid has no arguments and cannot fail.
-    let parent = unsafe { libc::getppid() };
-    let path = c_string(&format!("/proc/{parent}/ns/mnt"))?;
-    // SAFETY: valid NUL-terminated path; the descriptor is closed below.
-    let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
-    if fd < 0 {
+fn join_agent_mount_namespace(channel: &std::os::unix::net::UnixStream) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    let fd = receive_descriptor(channel)
+        .map_err(|e| format!("did not receive the agent's mount namespace: {e}"))?;
+    // SAFETY: fd is a namespace descriptor received from the agent.
+    let rc = unsafe { libc::setns(fd.as_raw_fd(), libc::CLONE_NEWNS) };
+    if rc != 0 {
         return Err(format!(
-            "cannot open the agent's mount namespace: {}",
+            "cannot join the agent's mount namespace: {}",
             std::io::Error::last_os_error()
         ));
     }
-    // SAFETY: fd is a namespace descriptor just opened.
-    let rc = unsafe { libc::setns(fd, libc::CLONE_NEWNS) };
-    let error = std::io::Error::last_os_error();
-    // SAFETY: fd is open and owned here.
-    unsafe { libc::close(fd) };
-    if rc != 0 {
-        return Err(format!("cannot join the agent's mount namespace: {error}"));
-    }
     Ok(())
+}
+
+/// The helper's effective capabilities, for the log line that explains a failed step.
+#[cfg(target_os = "linux")]
+fn capabilities_line() -> String {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find(|l| l.starts_with("CapEff:"))
+                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        })
+        .unwrap_or_else(|| "capabilities unknown".to_string())
 }
 
 #[cfg(target_os = "linux")]
@@ -1211,6 +1359,63 @@ mod tests {
             !target.join("fill").exists(),
             "the unmount removed the mount"
         );
+    }
+
+    /// The helper is not dumpable-visible to its sibling processes: the agent sets dumpable to 0,
+    /// and opening `/proc/<agent>/ns/mnt` then needs CAP_SYS_PTRACE. The namespace must therefore
+    /// reach the helper as a descriptor from the agent, never by a path the helper opens itself.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_namespace_reaches_the_helper_without_opening_the_agents_proc_entry() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::net::UnixStream;
+        // The split this reproduces: a non-dumpable agent and a helper without CAP_SYS_PTRACE.
+        // Both run in forked children because dumpable is a property of the whole process.
+        // SAFETY: each child only runs the scenario and leaves with _exit.
+        let agent = unsafe { libc::fork() };
+        assert!(agent >= 0);
+        if agent == 0 {
+            let outcome = std::panic::catch_unwind(|| {
+                assert_eq!(unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) }, 0);
+                let (agent_end, helper_end) = UnixStream::pair().unwrap();
+                let agent_pid = unsafe { libc::getpid() };
+                let helper = unsafe { libc::fork() };
+                assert!(helper >= 0);
+                if helper == 0 {
+                    // The old way: open the agent's entry by path.
+                    let path = std::ffi::CString::new(format!("/proc/{agent_pid}/ns/mnt")).unwrap();
+                    let by_path = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY) };
+                    let by_path_ok = by_path >= 0;
+                    // The new way: the agent hands the descriptor over.
+                    let received = receive_descriptor(&helper_end).is_ok();
+                    // Report: bit 0 = by path worked, bit 1 = received.
+                    unsafe { libc::_exit(i32::from(by_path_ok) | (i32::from(received) << 1)) }
+                }
+                let namespace = std::fs::File::open("/proc/self/ns/mnt").unwrap();
+                send_descriptor(&agent_end, namespace.as_raw_fd()).unwrap();
+                let mut status = 0;
+                assert_eq!(unsafe { libc::waitpid(helper, &mut status, 0) }, helper);
+                assert!(libc::WIFEXITED(status));
+                let report = libc::WEXITSTATUS(status);
+                assert_eq!(report & 2, 2, "the descriptor must arrive");
+                // Without CAP_SYS_PTRACE the path is closed. (Under root in a container it can be
+                // open, so only the descriptor route is asserted when the path happens to work.)
+                eprintln!("open by path worked: {}", report & 1 == 1);
+                if unsafe { libc::geteuid() } != 0 {
+                    assert_eq!(
+                        report & 1,
+                        0,
+                        "a non-dumpable agent's entry is closed to it"
+                    );
+                }
+            });
+            // SAFETY: leave the forked harness copy.
+            unsafe { libc::_exit(i32::from(outcome.is_err())) };
+        }
+        let mut status = 0;
+        // SAFETY: waiting for the child just forked.
+        assert_eq!(unsafe { libc::waitpid(agent, &mut status, 0) }, agent);
+        assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0);
     }
 
     #[test]

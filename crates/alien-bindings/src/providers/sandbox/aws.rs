@@ -150,8 +150,12 @@ impl AwsSandbox {
             path: String,
             state: String,
         }
+        // An answer that is not a list of states says nothing about the mounts: not a success.
         let Ok(states) = serde_json::from_str::<Vec<State>>(reply) else {
-            return Ok(());
+            return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                operation: "sandbox.mounts".to_string(),
+                reason: "the agent's answer did not list the mounts' states".to_string(),
+            }));
         };
         let bad: Vec<String> = states
             .iter()
@@ -1028,11 +1032,9 @@ impl Sandbox for AwsSandbox {
         path: &str,
         credentials: crate::traits::SandboxMountCredentials,
     ) -> Result<()> {
-        if !self
-            .mounts
-            .iter()
-            .any(|mount| matches!(mount, alien_core::SandboxMount::S3files { path: p } if p == path))
-        {
+        if !self.mounts.iter().any(
+            |mount| matches!(mount, alien_core::SandboxMount::S3files { path: p } if p == path),
+        ) {
             return Err(AlienError::new(ErrorData::SandboxMountsInvalid {
                 reason: format!("'{path}' is not a declared s3files mount"),
             }));
@@ -1475,6 +1477,13 @@ mod tests {
         assert!(!text.contains("/data"), "{text}");
         let all = r#"[{"path":"/data","state":"mounted"}]"#;
         AwsSandbox::check_mount_states(all).expect("all mounted is fine");
+    }
+
+    #[test]
+    fn an_answer_that_does_not_list_the_mounts_is_not_a_success() {
+        for reply in ["", "ok", "{}", "<html>"] {
+            AwsSandbox::check_mount_states(reply).expect_err(reply);
+        }
     }
 
     /// Exercise both retrying endpoint operations over actual HTTP, including request replay.
