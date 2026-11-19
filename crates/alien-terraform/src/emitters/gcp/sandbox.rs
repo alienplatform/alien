@@ -378,6 +378,7 @@ fn emit_image_repository(
             )),
         ]),
     ));
+    emit_verifier_read(ctx, fragment, &label);
     let Some(management_label) = management_label else {
         // Nobody to grant: the repository is all there is, as in direct setup.
         return Ok(());
@@ -437,8 +438,13 @@ fn emit_image_repository(
             attr("member", service_account_member_for_label(management_label)),
         ],
     ));
-    // On a protected install the signing verifier creates the template, and Agent Platform checks
-    // that the creating identity can read the image. It reads this one repository and nothing else.
+    Ok(())
+}
+
+/// On a protected install the signing verifier creates the template, and Agent Platform checks
+/// that the creating identity can read the image. It reads this one repository and nothing else.
+/// Granted whenever a verifier exists, with or without a management identity.
+fn emit_verifier_read(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) {
     if ctx
         .stack
         .resources()
@@ -451,19 +457,11 @@ fn emit_image_repository(
                 attr("project", expr::raw("var.gcp_project")),
                 attr(
                     "location",
-                    expr::traversal([
-                        "google_artifact_registry_repository",
-                        label.as_str(),
-                        "location",
-                    ]),
+                    expr::traversal(["google_artifact_registry_repository", label, "location"]),
                 ),
                 attr(
                     "repository",
-                    expr::traversal([
-                        "google_artifact_registry_repository",
-                        label.as_str(),
-                        "name",
-                    ]),
+                    expr::traversal(["google_artifact_registry_repository", label, "name"]),
                 ),
                 attr(
                     "role",
@@ -478,7 +476,6 @@ fn emit_image_repository(
             ],
         ));
     }
-    Ok(())
 }
 
 /// Binds `permission_set_id` to `member_label`'s service account on this sandbox's engine.
@@ -1031,7 +1028,7 @@ mod tests {
 
         #[test]
         fn template_management_is_bound_only_when_granted() {
-            let granted = |with_profile: bool, with_verifier: bool| {
+            let render = |with_profile: bool, with_verifier: bool, with_manager: bool| {
                 let sandbox = Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
@@ -1048,11 +1045,13 @@ mod tests {
                         GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
                         ResourceLifecycle::Frozen,
                     )
-                    .add(
+                    .add(sandbox, ResourceLifecycle::Frozen);
+                if with_manager {
+                    builder = builder.add(
                         RemoteStackManagement::new("manager".to_string()).build(),
                         ResourceLifecycle::Frozen,
-                    )
-                    .add(sandbox, ResourceLifecycle::Frozen);
+                    );
+                }
                 if with_verifier {
                     builder = builder.add(
                         alien_core::SigningVerifier::new("verifier".to_string()).build(),
@@ -1083,6 +1082,27 @@ mod tests {
                 };
                 GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders")
             };
+            let granted =
+                |with_profile: bool, with_verifier: bool| render(with_profile, with_verifier, true);
+
+            // A protected install with no management identity still lets the verifier read the
+            // image repository, and gets no writer grant.
+            let unmanaged = render(false, true, false);
+            assert!(
+                unmanaged.resource_blocks.iter().any(|block| {
+                    block.labels.get(1).map(|l| l.as_str()) == Some("agents_image_verifier_read")
+                }),
+                "{unmanaged:?}"
+            );
+            assert!(!unmanaged.resource_blocks.iter().any(|block| {
+                block.labels.get(1).map(|l| l.as_str()) == Some("agents_image_write")
+            }));
+            assert!(!render(false, false, false)
+                .resource_blocks
+                .iter()
+                .any(|block| {
+                    block.labels.get(1).map(|l| l.as_str()) == Some("agents_image_verifier_read")
+                }));
 
             let fragment = granted(true, false);
             let members: Vec<_> = fragment
