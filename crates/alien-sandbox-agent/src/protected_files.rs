@@ -60,7 +60,11 @@ pub fn protect(binary: &Path, metadata: &Path) -> io::Result<()> {
 /// read-only in this private mount namespace, as container runtimes do; reading still works. The
 /// image never holds `SYS_ADMIN`, so it cannot undo the binds. Processes outside this namespace
 /// (the provider's, and the mount broker, which writes its own settings) keep their view.
-const READ_ONLY_KERNEL_PATHS: [&str; 2] = ["/proc/sys", "/proc/sysrq-trigger"];
+///
+/// `/sys` too: root-writable files there act on the whole VM as well (`kernel/uevent_helper` names
+/// a program the kernel runs as root on every device event; module parameters, memory settings).
+/// The agent writes nothing below `/sys` after this point (the guest cgroup is set up before).
+const READ_ONLY_KERNEL_PATHS: [&str; 3] = ["/proc/sys", "/proc/sysrq-trigger", "/sys"];
 
 /// Binds `path` over itself with every mount below it, then makes each of those mounts read-only.
 /// Recursive, because a user namespace refuses a plain bind that would uncover locked mounts
@@ -353,6 +357,18 @@ for point, options in visible.items():
 # Reading still works.
 for path in ['kernel/osrelease', 'net/core/somaxconn', 'vm/overcommit_memory']:
     assert pathlib.Path('/proc/sys', path).read_text().strip(), path
+# /sys likewise, every mount below it included.
+for path in ['/sys/kernel/uevent_helper', '/sys/kernel/mm/transparent_hugepage/enabled', '/sys/kernel/profiling']:
+    if not os.path.exists(path): continue
+    try: fd = os.open(path, os.O_WRONLY)
+    except OSError as e: assert e.errno == errno.EROFS, (path, e)
+    else:
+        os.close(fd)
+        raise AssertionError(f'root opened {path} for writing')
+for point, options in visible.items():
+    if point == '/sys' or point.startswith('/sys/'):
+        assert 'ro' in options, (point, options)
+assert pathlib.Path('/sys/class/net/lo/mtu').read_text().strip()
 # The inherited descriptor is CLOEXEC, and root cannot reopen the agent's FD.
 try: os.open(f'/proc/{sys.argv[4]}/fd/{sys.argv[5]}', os.O_WRONLY)
 except OSError as e: assert e.errno in [errno.EACCES, errno.EPERM], e
