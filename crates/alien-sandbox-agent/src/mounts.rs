@@ -356,6 +356,16 @@ impl Mounts {
             .expect("mount status")
             .status
             .insert(path.to_string(), state);
+        let now = self.status();
+        crate::report::update(|s| {
+            s.mounts = now
+                .into_iter()
+                .map(|m| crate::report::MountState {
+                    path: m.path,
+                    state: m.state,
+                })
+                .collect();
+        });
     }
 
     fn is_mounted(&self, path: &str) -> bool {
@@ -415,7 +425,7 @@ impl Mounts {
             match outcome {
                 Ok(()) => self.set(path, "mounted".into()),
                 Err(reason) => {
-                    eprintln!("alien-sandbox-agent: mounts: {path} failed: {reason}");
+                    crate::report::log(&format!("alien-sandbox-agent: mounts: {path} failed: {reason}"));
                     self.set(path, format!("failed: {reason}"))
                 }
             }
@@ -584,6 +594,12 @@ impl MountBackend for HelperClient {
         })?;
         let reply: HelperReply =
             serde_json::from_str(&reply).map_err(|_| "the mount helper is gone")?;
+        let (step, result) = (
+            request.describe(),
+            reply.error.clone().map_or("ok".to_string(), |r| format!("failed: {r}")),
+        );
+        crate::report::log(&format!("alien-sandbox-agent: mounts: {step}: {result}"));
+        crate::report::update(|s| s.steps.push(crate::report::Step { step, result }));
         match reply.error {
             None => Ok(()),
             Some(reason) => Err(reason),
@@ -605,7 +621,7 @@ impl HelperClient {
             .map_err(|e| format!("cannot open the agent's mount namespace: {e}"))?;
         send_descriptor(channel, std::os::fd::AsRawFd::as_raw_fd(&namespace))
             .map_err(|e| format!("cannot hand the mount namespace to the helper: {e}"))?;
-        eprintln!("alien-sandbox-agent: mounts: handed the mount namespace to the helper");
+        crate::report::log("alien-sandbox-agent: mounts: handed the mount namespace to the helper");
         *slot = None;
         Ok(())
     }
@@ -713,9 +729,25 @@ pub fn fork_helper(prepare_key: bool) -> std::io::Result<HelperClient> {
             helper_loop(child, namespace_child, prepare_key);
             std::process::exit(0);
         }
-        _ => {
+        pid => {
             drop(child);
             drop(namespace_child);
+            let capabilities = std::fs::read_to_string(format!("/proc/{pid}/status"))
+                .ok()
+                .and_then(|status| {
+                    status
+                        .lines()
+                        .find(|l| l.starts_with("CapEff:"))
+                        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                });
+            crate::report::log(&format!(
+                "alien-sandbox-agent: mounts: helper forked (pid {pid}, {})",
+                capabilities.as_deref().unwrap_or("capabilities unknown")
+            ));
+            crate::report::update(|s| {
+                s.helper_started = true;
+                s.helper_cap_eff = capabilities;
+            });
             let reader = BufReader::new(parent.try_clone()?);
             Ok(HelperClient {
                 stream: Mutex::new((parent, reader)),

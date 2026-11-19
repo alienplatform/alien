@@ -127,12 +127,28 @@ fn main() -> Result<()> {
     // the guest socket mark, and before any thread exists.
     #[cfg(target_os = "linux")]
     if unsafe { libc::geteuid() } == 0 {
-        let declared = alien_sandbox_agent::mounts::parse_declared(
-            std::env::var(alien_sandbox_agent::mounts::ENV_MOUNTS)
-                .ok()
-                .as_deref(),
-        )
-        .map_err(|reason| invalid(alien_sandbox_agent::mounts::ENV_MOUNTS, &reason))?;
+        let raw = std::env::var(alien_sandbox_agent::mounts::ENV_MOUNTS).ok();
+        let parsed = alien_sandbox_agent::mounts::parse_declared(raw.as_deref());
+        alien_sandbox_agent::report::init(
+            std::path::Path::new(alien_sandbox_agent::report::DIR),
+            alien_sandbox_agent::report::Status {
+                env_present: raw.is_some(),
+                declared_count: parsed.as_ref().ok().map(Vec::len),
+                declared_paths: parsed
+                    .as_ref()
+                    .map(|d| d.iter().map(|m| m.path().to_string()).collect())
+                    .unwrap_or_default(),
+                env_error: parsed.as_ref().err().cloned(),
+                ..Default::default()
+            },
+        );
+        alien_sandbox_agent::report::log(&format!(
+            "alien-sandbox-agent: mounts: declaration {} ({} declared)",
+            if raw.is_some() { "present" } else { "absent" },
+            parsed.as_ref().map_or(0, Vec::len)
+        ));
+        let declared = parsed
+            .map_err(|reason| invalid(alien_sandbox_agent::mounts::ENV_MOUNTS, &reason))?;
         if !declared.is_empty() {
             let helper = alien_sandbox_agent::mounts::fork_helper(
                 declared

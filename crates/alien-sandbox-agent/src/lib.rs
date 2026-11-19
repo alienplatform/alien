@@ -10,6 +10,8 @@ pub mod metadata;
 pub mod mount_network;
 #[cfg(unix)]
 pub mod mounts;
+#[cfg(unix)]
+pub mod report;
 pub mod paths;
 pub mod peer;
 pub mod pid_namespace;

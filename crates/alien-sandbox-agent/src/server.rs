@@ -1508,7 +1508,13 @@ async fn put_mounts(
             reason: "this sandbox declares no mounts".into(),
         }))
     })?;
+    let received: Vec<String> = request.mounts.keys().cloned().collect();
+    crate::report::log(&format!(
+        "alien-sandbox-agent: mounts: PUT /v1/mounts received for {received:?}"
+    ));
+    crate::report::update(|s| s.puts.push(received));
     mounts.check_sources(&request.mounts).map_err(|refusal| {
+        crate::report::log(&format!("alien-sandbox-agent: mounts: PUT refused: {refusal}"));
         ApiError::from(AlienError::new(ErrorData::RequestInvalid {
             reason: refusal.to_string(),
         }))
