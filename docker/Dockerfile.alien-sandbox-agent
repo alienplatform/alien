@@ -8,11 +8,14 @@ FROM docker.io/chainguard/wolfi-base:latest AS binary-selector
 
 COPY target/aarch64-unknown-linux-musl/release/alien-sandbox-agent /tmp/alien-sandbox-agent-aarch64
 COPY target/x86_64-unknown-linux-musl/release/alien-sandbox-agent /tmp/alien-sandbox-agent-x86_64
+COPY target/aarch64-unknown-linux-musl/release/efs-proxy /tmp/efs-proxy-aarch64
+COPY target/x86_64-unknown-linux-musl/release/efs-proxy /tmp/efs-proxy-x86_64
+COPY target/x86_64-unknown-linux-musl/release/efs-utils.crt /tmp/efs-utils.crt
 
 ARG TARGETARCH
 RUN case "$TARGETARCH" in \
-       amd64)  cp /tmp/alien-sandbox-agent-x86_64 /tmp/alien-sandbox-agent ;; \
-       arm64)  cp /tmp/alien-sandbox-agent-aarch64 /tmp/alien-sandbox-agent ;; \
+       amd64)  cp /tmp/alien-sandbox-agent-x86_64 /tmp/alien-sandbox-agent && cp /tmp/efs-proxy-x86_64 /tmp/efs-proxy ;; \
+       arm64)  cp /tmp/alien-sandbox-agent-aarch64 /tmp/alien-sandbox-agent && cp /tmp/efs-proxy-aarch64 /tmp/efs-proxy ;; \
        *)      echo "unsupported TARGETARCH '$TARGETARCH'" >&2; exit 1 ;; \
     esac
 
@@ -26,6 +29,12 @@ RUN apk add --no-cache git
 # be able to rewrite its own supervisor.
 COPY --from=binary-selector --chown=0:0 --chmod=0755 \
      /tmp/alien-sandbox-agent /usr/local/bin/alien-sandbox-agent
+
+# The TLS proxy and certificate authorities the agent starts to attach S3 Files. Nothing in this
+# image runs them: a sandbox image build copies them out only when the sandbox declares an s3files
+# mount, so no other sandbox image grows.
+COPY --from=binary-selector --chown=0:0 --chmod=0755 /tmp/efs-proxy /opt/alien/mount-proxy/efs-proxy
+COPY --from=binary-selector --chown=0:0 --chmod=0444 /tmp/efs-utils.crt /opt/alien/mount-proxy/efs-utils.crt
 
 # Numeric ids and a plain append rather than adduser, which differs across base distributions.
 # Linux runs a process under a uid with no passwd entry, but tooling inside the sandbox reads one.

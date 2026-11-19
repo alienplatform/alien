@@ -156,6 +156,12 @@ cmd_image() {
   # The Dockerfile copies both musl binaries; Agent Platform runs amd64.
   (cd "$repo_root" && cargo zigbuild --release -p alien-sandbox-agent --target x86_64-unknown-linux-musl \
     && cargo zigbuild --release -p alien-sandbox-agent --target aarch64-unknown-linux-musl)
+  # The Dockerfile also carries the S3 Files mount proxy, which this image never runs. Build it
+  # for this machine (amd64); the arm64 copy is only a stand-in so the Dockerfile's COPY resolves
+  # for the single-platform build below.
+  "$repo_root/scripts/build-efs-proxy.sh" "$repo_root/target/x86_64-unknown-linux-musl/release"
+  cp "$repo_root/target/x86_64-unknown-linux-musl/release/efs-proxy" \
+    "$repo_root/target/aarch64-unknown-linux-musl/release/efs-proxy"
   gcloud auth configure-docker "${region}-docker.pkg.dev" --quiet
   docker buildx build --platform linux/amd64 -f "$repo_root/docker/Dockerfile.alien-sandbox-agent" \
     -t "$image" --push "$repo_root"

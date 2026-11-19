@@ -37,7 +37,40 @@ pub enum AgentSource {
     Image(String),
     /// A local agent binary, zipped into the bundle beside the Dockerfile.
     Binary(std::path::PathBuf),
+    /// The same agent, plus the S3 Files mount proxy and its certificate authorities, installed
+    /// read-only next to it. Used only for a sandbox that declares an s3files mount: every other
+    /// image stays as it was.
+    WithMountProxy(Box<AgentSource>),
 }
+
+impl AgentSource {
+    /// This source, carrying the mount proxy when `mounts` declares an s3files mount.
+    pub fn for_mounts(self, mounts: &[alien_core::SandboxMount]) -> Self {
+        let declares = mounts
+            .iter()
+            .any(|mount| matches!(mount, alien_core::SandboxMount::S3files { .. }));
+        if declares {
+            Self::WithMountProxy(Box::new(self))
+        } else {
+            self
+        }
+    }
+
+    /// Where the agent itself comes from, ignoring the mount proxy.
+    fn agent(&self) -> &AgentSource {
+        match self {
+            Self::WithMountProxy(inner) => inner.agent(),
+            other => other,
+        }
+    }
+
+    fn carries_mount_proxy(&self) -> bool {
+        matches!(self, Self::WithMountProxy(_))
+    }
+}
+
+/// Where the published agent image keeps the mount proxy files.
+const MOUNT_PROXY_IMAGE_DIRECTORY: &str = "/opt/alien/mount-proxy";
 
 /// Files that sit beside a local agent binary and travel with it: the TLS proxy the agent starts
 /// to attach S3 Files, and the certificate authorities it verifies the mount target against.
@@ -46,7 +79,10 @@ pub const MOUNT_PROXY_FILES: [(&str, u32); 2] = [("efs-proxy", 0o755), ("efs-uti
 
 /// The mount proxy files that sit beside `agent_binary`, when all are present.
 fn mount_proxy_files(agent: &AgentSource) -> Vec<(&'static str, u32, std::path::PathBuf)> {
-    let AgentSource::Binary(binary) = agent else {
+    if !agent.carries_mount_proxy() {
+        return Vec::new();
+    }
+    let AgentSource::Binary(binary) = agent.agent() else {
         return Vec::new();
     };
     let Some(directory) = binary.parent() else {
@@ -103,7 +139,7 @@ fn render_dockerfile(
     let base_image = checked_reference(base_image, "base image")?;
     // Both lines pin ownership and mode themselves: the untrusted code the agent supervises must
     // not be able to rewrite the supervisor, whichever way the agent arrived.
-    let copy_agent = match agent {
+    let copy_agent = match agent.agent() {
         AgentSource::Image(image) => {
             let image = checked_reference(image, "agent image")?;
             format!(
@@ -113,6 +149,7 @@ fn render_dockerfile(
         AgentSource::Binary(_) => {
             format!("COPY --chown=0:0 --chmod={AGENT_MODE:04o} {AGENT_FILENAME} {AGENT_PATH}")
         }
+        AgentSource::WithMountProxy(_) => unreachable!("agent() never returns the wrapper"),
     };
 
     Ok(format!(
@@ -315,6 +352,15 @@ fn write_bundle_inner(
             "\nCOPY --chown=0:0 --chmod={mode:04o} {name} /opt/alien/{name}\n"
         ));
     }
+    if let (true, AgentSource::Image(image)) = (agent.carries_mount_proxy(), agent.agent()) {
+        let image = checked_reference(image, "agent image")?;
+        for (name, mode) in MOUNT_PROXY_FILES {
+            dockerfile.push_str(&format!(
+                "\nCOPY --from={image} --chown=0:0 --chmod={mode:04o} \
+                 {MOUNT_PROXY_IMAGE_DIRECTORY}/{name} /opt/alien/{name}\n"
+            ));
+        }
+    }
     let command_bytes = image_command
         .map(serde_json::to_vec)
         .transpose()
@@ -334,13 +380,13 @@ fn write_bundle_inner(
     }
     // Deployment alone selects privileged startup together with its capability grant.
     // Older releases can use this bundle without inspected imageUser metadata.
-    let agent_bytes = match agent {
+    let agent_bytes = match agent.agent() {
         AgentSource::Binary(agent_binary) => Some(
             std::fs::read(agent_binary)
                 .into_alien_error()
                 .context(failed("read", agent_binary))?,
         ),
-        AgentSource::Image(_) => None,
+        _ => None,
     };
 
     let archive = File::create(destination)
@@ -610,45 +656,104 @@ mod tests {
         assert!(contents.starts_with("FROM ubuntu:24.04"));
     }
 
-    /// The mount proxy and its certificate authorities ride along when they sit beside a local
-    /// agent binary, and only then: a bundle without them stays exactly as it was.
+    fn read_bundle(bundle: &Path) -> (Vec<String>, String) {
+        let mut archive =
+            zip::ZipArchive::new(std::fs::File::open(bundle).expect("opens")).expect("zip");
+        let mut names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).expect("entry").name().to_string())
+            .collect();
+        names.sort();
+        let mut dockerfile = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("Dockerfile").expect("Dockerfile"),
+            &mut dockerfile,
+        )
+        .expect("reads");
+        (names, dockerfile)
+    }
+
+    fn s3files_mounts() -> Vec<alien_core::SandboxMount> {
+        vec![alien_core::SandboxMount::S3files {
+            path: "/data".to_string(),
+        }]
+    }
+
+    /// A sandbox without an s3files mount gets the same bundle as before, even when the proxy
+    /// files sit beside the agent binary.
     #[test]
-    fn the_mount_proxy_files_ship_beside_a_local_agent_only_when_both_exist() {
-        let read = |bundle: &Path| {
-            let mut archive =
-                zip::ZipArchive::new(std::fs::File::open(bundle).expect("opens")).expect("zip");
-            let mut names: Vec<String> = (0..archive.len())
-                .map(|i| archive.by_index(i).expect("entry").name().to_string())
-                .collect();
-            names.sort();
-            let mut dockerfile = String::new();
-            std::io::Read::read_to_string(
-                &mut archive.by_name("Dockerfile").expect("Dockerfile"),
-                &mut dockerfile,
-            )
-            .expect("reads");
-            (names, dockerfile)
-        };
+    fn the_mount_proxy_is_left_out_unless_an_s3files_mount_is_declared() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let agent = dir.path().join("agent-bin");
+        std::fs::write(&agent, b"\x7fELF-not-really").expect("agent");
+        std::fs::write(dir.path().join("efs-proxy"), b"proxy").expect("proxy");
+        std::fs::write(dir.path().join("efs-utils.crt"), b"roots").expect("crt");
+        let bundle = dir.path().join("sandbox.zip");
+
+        let tmpfs_only = vec![alien_core::SandboxMount::Tmpfs {
+            path: "/scratch".to_string(),
+            size: "1Gi".to_string(),
+        }];
+        let source = AgentSource::Binary(agent.clone()).for_mounts(&tmpfs_only);
+        write_bundle(&bundle, "ubuntu:24.04", &source).expect("writes");
+        let (names, dockerfile) = read_bundle(&bundle);
+        assert_eq!(names, vec!["Dockerfile", AGENT_FILENAME]);
+        assert!(!dockerfile.contains("efs-proxy"));
+        assert!(!dockerfile.contains("mount-proxy"));
+
+        let image = AgentSource::Image("example.com/agent:v1".into()).for_mounts(&[]);
+        write_bundle(&bundle, "ubuntu:24.04", &image).expect("writes");
+        assert!(!read_bundle(&bundle).1.contains("efs-proxy"));
+    }
+
+    /// With an s3files mount, a local agent carries the proxy files beside it, and only when
+    /// both exist.
+    #[test]
+    fn the_mount_proxy_files_ship_beside_a_local_agent_when_s3files_is_declared() {
         let dir = tempfile::TempDir::new().expect("temp dir");
         let agent = dir.path().join("agent-bin");
         std::fs::write(&agent, b"\x7fELF-not-really").expect("agent");
         let bundle = dir.path().join("sandbox.zip");
+        let source = AgentSource::Binary(agent).for_mounts(&s3files_mounts());
 
         std::fs::write(dir.path().join("efs-proxy"), b"proxy").expect("proxy");
-        write_bundle(&bundle, "ubuntu:24.04", &AgentSource::Binary(agent.clone())).expect("writes");
-        let (names, dockerfile) = read(&bundle);
-        assert_eq!(names, vec!["Dockerfile", AGENT_FILENAME], "one file alone is not shipped");
+        write_bundle(&bundle, "ubuntu:24.04", &source).expect("writes");
+        let (names, dockerfile) = read_bundle(&bundle);
+        assert_eq!(
+            names,
+            vec!["Dockerfile", AGENT_FILENAME],
+            "one file alone is not shipped"
+        );
         assert!(!dockerfile.contains("efs-proxy"));
 
         std::fs::write(dir.path().join("efs-utils.crt"), b"roots").expect("crt");
-        write_bundle(&bundle, "ubuntu:24.04", &AgentSource::Binary(agent)).expect("writes");
-        let (names, dockerfile) = read(&bundle);
+        write_bundle(&bundle, "ubuntu:24.04", &source).expect("writes");
+        let (names, dockerfile) = read_bundle(&bundle);
         assert_eq!(
             names,
             vec!["Dockerfile", AGENT_FILENAME, "efs-proxy", "efs-utils.crt"]
         );
         assert!(dockerfile.contains("COPY --chown=0:0 --chmod=0755 efs-proxy /opt/alien/efs-proxy"));
-        assert!(dockerfile.contains("COPY --chown=0:0 --chmod=0444 efs-utils.crt /opt/alien/efs-utils.crt"));
+        assert!(dockerfile
+            .contains("COPY --chown=0:0 --chmod=0444 efs-utils.crt /opt/alien/efs-utils.crt"));
+    }
+
+    /// With an s3files mount, an agent taken from the published image brings the proxy files
+    /// from the same image, read-only and root-owned; the bundle itself holds only the Dockerfile.
+    #[test]
+    fn the_mount_proxy_comes_from_the_agent_image_when_s3files_is_declared() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let bundle = dir.path().join("sandbox.zip");
+        let source =
+            AgentSource::Image("example.com/agent:v1".into()).for_mounts(&s3files_mounts());
+        write_bundle(&bundle, "ubuntu:24.04", &source).expect("writes");
+        let (names, dockerfile) = read_bundle(&bundle);
+        assert_eq!(names, vec!["Dockerfile"]);
+        assert!(dockerfile.contains(
+            "COPY --from=example.com/agent:v1 --chown=0:0 --chmod=0755 /opt/alien/mount-proxy/efs-proxy /opt/alien/efs-proxy"
+        ));
+        assert!(dockerfile.contains(
+            "COPY --from=example.com/agent:v1 --chown=0:0 --chmod=0444 /opt/alien/mount-proxy/efs-utils.crt /opt/alien/efs-utils.crt"
+        ));
     }
 
     /// Image-sourced bundles carry no agent binary: the zip holds only the Dockerfile.
