@@ -83,23 +83,35 @@ async fn provider_socket(peer: SocketAddr) -> Option<bool> {
             nlink::sockdiag::SocketInfo::Inet(socket)
                 if socket.local == peer && socket.is_connected() && socket.mark == Some(0) =>
             {
-                cgroups.push(socket.cgroup_id);
+                cgroups.push((socket.cgroup_id, socket.uid));
             }
             _ => return Some(false),
         }
     }
-    // With image permissions the image can make the kernel start a program that skips the
-    // guest's socket marker, and the image's own sockets must never pass for the provider's: the
-    // caller's socket must also belong to a cgroup outside the guest's. The image cannot leave
-    // its cgroup (the guest's cgroup mount is read-only and it holds no SYS_ADMIN).
+    // With image permissions the image's own sockets must never pass for the provider's: the
+    // caller's socket must belong to a cgroup outside the guest's, which the image cannot leave
+    // (the guest's cgroup mount is read-only and it holds no SYS_ADMIN). And the image can make
+    // the kernel start a program (`request-key`) outside the guest cgroup: it runs as root with
+    // no capabilities (the broker emptied the helper sets), so it cannot change its uid, while
+    // the provider's callers do not run as root.
     if crate::mount_broker::active() {
         let guest = guest_cgroup_ids();
-        if guest.is_empty()
-            || !cgroups
-                .iter()
-                .all(|cgroup| cgroup.is_some_and(|id| !guest.contains(&id)))
-        {
+        if guest.is_empty() {
+            tracing::error!(%peer, "provider caller refused: the guest cgroup tree cannot be read");
             return Some(false);
+        }
+        for (cgroup, uid) in cgroups {
+            if !cgroup.is_some_and(|id| !guest.contains(&id)) {
+                return Some(false);
+            }
+            if uid == 0 {
+                tracing::error!(
+                    %peer,
+                    "provider caller refused: an unmarked root socket outside the guest cgroup \
+                     (a kernel-started program, or a provider process running as root)"
+                );
+                return Some(false);
+            }
         }
     }
     Some(true)

@@ -852,11 +852,19 @@ fn provider_attribution() {
         .enable_all()
         .build()
         .unwrap();
-    // `root`: outside the guest cgroup, capabilities or none. `image`: in the image cgroup.
-    for (who, cgroup, capabilities, expected) in [
-        ("provider", "root", true, true),
-        ("capless root-cgroup", "root", false, true),
-        ("image", "image", true, false),
+    // `root`: outside the guest cgroup. `image`: in the image cgroup. A uid of 0 is what a
+    // program the kernel starts runs as; the provider's callers do not run as root.
+    for (who, cgroup, uid, capabilities, expected) in [
+        ("provider (uid 991)", "root", 991, false, true),
+        (
+            "kernel-started program (uid 0, no capabilities)",
+            "root",
+            0,
+            false,
+            false,
+        ),
+        ("root with capabilities", "root", 0, true, false),
+        ("image", "image", 0, true, false),
     ] {
         let mut caller = Command::new("python3");
         caller.args([
@@ -877,7 +885,9 @@ fn provider_attribution() {
                     }
                     libc::close(procs);
                 }
-                if !capabilities {
+                if uid != 0 {
+                    privilege::drop_to(ExecIdentity { uid, gid: uid })?;
+                } else if !capabilities {
                     privilege::restrict_capabilities(0)?;
                 }
                 Ok(())
