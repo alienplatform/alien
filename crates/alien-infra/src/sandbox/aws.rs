@@ -3817,6 +3817,157 @@ mod tests {
         assert_eq!(binding["maxLifetimeSeconds"], 1800);
     }
 
+    /// A Live sandbox that declares image permissions builds its image with the agent's
+    /// contract: each connection resolved to the address range of the network setup created,
+    /// and the image-command value a released agent refuses, so an older agent fails the
+    /// image build instead of running without the limits.
+    #[tokio::test]
+    async fn a_live_sandbox_with_image_permissions_builds_with_the_agent_contract() {
+        use crate::{AwsNetworkController, AwsNetworkState};
+        use alien_core::{
+            CustomResource, Network, NetworkSettings, ResourceType, SandboxImageConnection,
+            SandboxImageMount, SandboxImageMountType, SandboxImagePermissions,
+        };
+
+        let manifest: alien_core::ExtensionManifest = serde_json::from_value(serde_json::json!({
+            "name": "acme",
+            "version": "0.1.0",
+            "digest": "sha256:00",
+            "resourceTypes": {
+                "acme/files": {
+                    "lifecycles": ["live"],
+                    "holdsData": true,
+                    "setup": { "cloudformation": [], "terraform": [], "helm": [], "importers": [] },
+                    "controllerPlatforms": ["aws"],
+                    "permissionSets": [],
+                    "link": { "permissionSets": [] },
+                    "schemas": { "config": {}, "outputs": {} },
+                    "requiresNetwork": true,
+                    "privateNetworkEndpoints": "stackNetwork"
+                }
+            }
+        }))
+        .expect("extension manifest");
+        let mut subject = sandbox();
+        subject.image_user = Some(0);
+        subject.lifecycle.on_pause = Some(vec!["/usr/local/bin/agentd".into(), "pause".into()]);
+        subject.image_permissions = Some(SandboxImagePermissions {
+            mounts: vec![SandboxImageMount {
+                mount_type: SandboxImageMountType::Nfs,
+                path: "/workspace".into(),
+                size: None,
+                from: None,
+            }],
+            connections: vec![SandboxImageConnection {
+                to: ResourceRef::new(ResourceType::from("acme/files"), "workspace-files"),
+                port: 2049,
+            }],
+        });
+
+        let environment = Arc::new(Mutex::new(None));
+        let captured = environment.clone();
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .withf(|identifier| identifier == IMAGE_ARN)
+            .times(1)
+            .returning(|_| Err(not_found()));
+        client
+            .expect_create_microvm_image()
+            .times(1)
+            .returning(move |request| {
+                *captured.lock().unwrap() = Some(request.environment_variables.clone());
+                Ok(created_response())
+            });
+        client
+            .expect_get_microvm_image_version()
+            .returning(|_, _| Ok(active_version()));
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                description: None,
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(subject)
+            .controller(runtime_seeded_controller())
+            .platform(Platform::Aws)
+            .service_provider(provider(client))
+            .extension(manifest)
+            .with_stack_resource(
+                CustomResource::from_untagged(
+                    "acme/files",
+                    serde_json::json!({ "id": "workspace-files" }),
+                )
+                .unwrap(),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .with_dependency(
+                Network::new("default-network".to_string())
+                    .settings(NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    })
+                    .build(),
+                AwsNetworkController {
+                    state: AwsNetworkState::Ready,
+                    vpc_id: Some("vpc-0123".to_string()),
+                    cidr_block: Some("10.42.0.0/16".to_string()),
+                    ..Default::default()
+                },
+            )
+            .build()
+            .await
+            .expect("executor should build");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("create flow should succeed");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let environment = environment.lock().unwrap().clone().expect("image created");
+        assert_eq!(
+            environment
+                .get(alien_core::sandbox_image::ENV_IMAGE_COMMAND)
+                .map(String::as_str),
+            Some(alien_core::sandbox_image::IMAGE_COMMAND_WITH_IMAGE_PERMISSIONS)
+        );
+        assert_eq!(
+            environment
+                .get(alien_core::sandbox_image::ENV_IMAGE_PERMISSIONS_VERSION)
+                .map(String::as_str),
+            Some(alien_core::sandbox_image::IMAGE_PERMISSIONS_VERSION)
+        );
+        let contract: serde_json::Value = serde_json::from_str(
+            environment
+                .get(alien_core::sandbox_image::ENV_IMAGE_PERMISSIONS)
+                .expect("the contract is set"),
+        )
+        .expect("the contract is JSON");
+        assert_eq!(
+            contract,
+            serde_json::json!({
+                "mounts": [{ "type": "nfs", "path": "/workspace" }],
+                "connections": [{ "cidr": "10.42.0.0/16", "port": 2049 }],
+                "onPause": ["/usr/local/bin/agentd", "pause"]
+            })
+        );
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(
+            controller
+                .supervisor_environment
+                .get(alien_core::sandbox_image::ENV_IMAGE_PERMISSIONS),
+            environment.get(alien_core::sandbox_image::ENV_IMAGE_PERMISSIONS),
+            "the recorded environment matches, so the next pass does not roll"
+        );
+    }
+
     /// A Worker creates sessions under its profile's role, so a direct setup that builds a Frozen
     /// sandbox has to grant each profile the sets it was given on this sandbox, scoped to this
     /// image. Without it the Worker's first `RunMicrovm` is denied.
