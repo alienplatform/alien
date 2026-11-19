@@ -305,6 +305,21 @@ fn emit_image_repository(
         "replace(lower(format(\"%s-{}-img\", local.resource_prefix)), \"_\", \"-\")",
         ctx.resource_id
     );
+    // The repository is refused until the Artifact Registry API is on, so it waits for the
+    // stack's activation of it.
+    let registry_api = ctx.stack.resources().find_map(|(id, entry)| {
+        entry
+            .config
+            .downcast_ref::<alien_core::ServiceActivation>()
+            .filter(|activation| activation.service_name == "artifactregistry.googleapis.com")
+            .and_then(|_| ctx.name_for(id))
+    });
+    let depends_on = registry_api.map(|name| {
+        attr(
+            "depends_on",
+            expr::raw(format!("[google_project_service.{name}]")),
+        )
+    });
     fragment.resource_blocks.push(resource_block(
         "google_artifact_registry_repository",
         &label,
@@ -318,6 +333,10 @@ fn emit_image_repository(
                 expr::template(format!("Image of sandbox '{}'", ctx.resource_id)),
             ),
             attr("labels", labels(ctx, "sandbox")),
+        ]
+        .into_iter()
+        .chain(depends_on)
+        .chain([
             // Tags are made from the digest they name and never move.
             nested(block(
                 "docker_config",
@@ -337,7 +356,7 @@ fn emit_image_repository(
                     )),
                 ],
             )),
-        ],
+        ]),
     ));
     fragment.push_shared_resource(resource_block(
         "google_project_iam_custom_role",
@@ -408,13 +427,24 @@ fn emit_image_repository(
                 attr("project", expr::raw("var.gcp_project")),
                 attr(
                     "location",
-                    expr::traversal(["google_artifact_registry_repository", label.as_str(), "location"]),
+                    expr::traversal([
+                        "google_artifact_registry_repository",
+                        label.as_str(),
+                        "location",
+                    ]),
                 ),
                 attr(
                     "repository",
-                    expr::traversal(["google_artifact_registry_repository", label.as_str(), "name"]),
+                    expr::traversal([
+                        "google_artifact_registry_repository",
+                        label.as_str(),
+                        "name",
+                    ]),
                 ),
-                attr("role", Expression::String("roles/artifactregistry.reader".to_string())),
+                attr(
+                    "role",
+                    Expression::String("roles/artifactregistry.reader".to_string()),
+                ),
                 attr(
                     "member",
                     expr::template(
@@ -845,6 +875,74 @@ mod tests {
                 !kinds.contains(&"google_vertex_ai_reasoning_engine_iam_member".to_string()),
                 "{kinds:?}"
             );
+        }
+
+        #[test]
+        fn the_image_repository_waits_for_the_registry_api_activation() {
+            let sandbox = Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            let stack = Stack::new("acme".to_string())
+                .add(
+                    GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .add(
+                    RemoteStackManagement::new("manager".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    alien_core::ServiceActivation::new("enable-artifact-registry".to_string())
+                        .service_name("artifactregistry.googleapis.com".to_string())
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(sandbox, ResourceLifecycle::Live)
+                .build();
+            let mut names = names();
+            names.insert("manager".to_string(), "manager".to_string());
+            names.insert(
+                "enable-artifact-registry".to_string(),
+                "enable_artifact_registry".to_string(),
+            );
+            let resource = stack.resources.get("agents").expect("sandbox");
+            let settings = StackSettings::default();
+            let ctx = EmitContext {
+                stack: &stack,
+                resource,
+                resource_id: "agents",
+                platform: alien_core::Platform::Gcp,
+                targets_kubernetes: false,
+                stack_settings: &settings,
+                names: &names,
+                pins: &alien_core::SetupPins::default(),
+            };
+            let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
+            let kinds: Vec<_> = fragment
+                .resource_blocks
+                .iter()
+                .filter_map(|block| block.labels.first().map(|l| l.as_str().to_string()))
+                .collect();
+            let repository = fragment
+                .resource_blocks
+                .iter()
+                .find(|block| {
+                    block
+                        .labels
+                        .first()
+                        .is_some_and(|l| l.as_str() == "google_artifact_registry_repository")
+                })
+                .expect("repository");
+            assert!(attribute(repository, "depends_on")
+                .contains("google_project_service.enable_artifact_registry"));
         }
 
         #[test]

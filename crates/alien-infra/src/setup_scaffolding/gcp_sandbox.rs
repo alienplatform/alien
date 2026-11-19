@@ -102,25 +102,49 @@ fn names(ctx: &SetupScaffoldingContext<'_>, sandbox_id: &str) -> Result<(String,
     Ok((repository, role))
 }
 
-/// The management service account's email once its controller has created it. `None` while it is
-/// still being created: a grant naming an account that does not exist yet is refused.
-fn management_member(stack_state: &StackState) -> Result<Option<String>> {
+/// Where the manager's identity stands.
+enum Management {
+    /// The stack declares no management identity (a standalone manager): nobody to grant.
+    Absent,
+    /// Declared, and its service account is not created yet: a grant naming it is refused.
+    Pending,
+    /// The service account exists.
+    Ready(String),
+}
+
+fn management_member(stack_state: &StackState) -> Result<Management> {
+    let mut declared = false;
     for state in stack_state.resources.values() {
-        if state.resource_type != alien_core::RemoteStackManagement::RESOURCE_TYPE.to_string()
-            || state.internal_state.is_none()
-        {
+        if state.resource_type != alien_core::RemoteStackManagement::RESOURCE_TYPE.to_string() {
+            continue;
+        }
+        declared = true;
+        if state.internal_state.is_none() {
             continue;
         }
         let controller =
             state.get_internal_controller_typed::<GcpRemoteStackManagementController>()?;
         if let Some(email) = controller.service_account_email {
-            return Ok(Some(format!("serviceAccount:{email}")));
-        }
-        if state.status == ResourceStatus::Running {
-            break;
+            return Ok(Management::Ready(format!("serviceAccount:{email}")));
         }
     }
-    Ok(None)
+    Ok(if declared {
+        Management::Pending
+    } else {
+        Management::Absent
+    })
+}
+
+/// True while the Artifact Registry API activation the stack declares is not finished: the
+/// repository calls are refused before it.
+fn registry_api_pending(stack_state: &StackState) -> bool {
+    stack_state.resources.values().any(|state| {
+        state
+            .config
+            .downcast_ref::<alien_core::ServiceActivation>()
+            .is_some_and(|activation| activation.service_name == "artifactregistry.googleapis.com")
+            && state.status != ResourceStatus::Running
+    })
 }
 
 pub(super) async fn reconcile(
@@ -131,8 +155,13 @@ pub(super) async fn reconcile(
 ) -> Result<ScaffoldingProgress> {
     let gcp = gcp_config(ctx.client_config)?;
     let (repository, role_id) = names(ctx, sandbox_id)?;
-    let Some(member) = management_member(stack_state)? else {
+    if registry_api_pending(stack_state) {
         return Ok(ScaffoldingProgress::InProgress);
+    }
+    let member = match management_member(stack_state)? {
+        Management::Pending => return Ok(ScaffoldingProgress::InProgress),
+        Management::Ready(member) => Some(member),
+        Management::Absent => None,
     };
     let (project, region) = (gcp.project_id.clone(), gcp.region.clone());
     let cloud_error = |message: String| ErrorData::CloudPlatformError {
@@ -186,6 +215,10 @@ pub(super) async fn reconcile(
         }
     }
     record(records, sandbox_id, &repository, &role_id);
+    // Without a management identity there is nobody to grant: the repository is all there is.
+    let Some(member) = member else {
+        return Ok(ScaffoldingProgress::Done);
+    };
 
     // 2. The role: no delete of any kind.
     let iam = ctx.service_provider.get_gcp_iam_client(gcp)?;
@@ -510,6 +543,63 @@ mod tests {
         assert!(records.is_empty());
     }
 
+    /// A standalone manager has no management identity in the stack: the repository is made and
+    /// setup finishes, with no role and no grant.
+    #[tokio::test]
+    async fn without_a_management_identity_the_repository_alone_finishes() {
+        let mut registry = MockArtifactRegistryApi::new();
+        let mut reads = 0;
+        registry
+            .expect_get_repository()
+            .times(2)
+            .returning(move |_, _, _| {
+                reads += 1;
+                if reads == 1 {
+                    Err(not_found())
+                } else {
+                    Ok(labelled(Some(PREFIX)))
+                }
+            });
+        registry
+            .expect_create_repository()
+            .times(1)
+            .returning(|_, _, _, _| Ok(operation()));
+        let provider = provider(registry, MockIamApi::new());
+        let mut state = StackState::new(Platform::Gcp);
+        state.resource_prefix = PREFIX.to_string();
+        let mut records = BTreeMap::new();
+        let first = step(&provider, &state, &mut records).await.unwrap();
+        assert_eq!(first, ScaffoldingProgress::InProgress);
+        let second = step(&provider, &state, &mut records).await.unwrap();
+        assert_eq!(second, ScaffoldingProgress::Done);
+    }
+
+    /// Repository calls wait for the Artifact Registry API activation the stack declares.
+    #[tokio::test]
+    async fn waits_for_the_registry_api_activation() {
+        let provider = provider(MockArtifactRegistryApi::new(), MockIamApi::new());
+        let mut state = state(Some(
+            "acme-management@test-project-123.iam.gserviceaccount.com",
+        ));
+        state.resources.insert(
+            "enable-artifact-registry".to_string(),
+            StackResourceState::builder()
+                .resource_type(alien_core::ServiceActivation::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Provisioning)
+                .config(alien_core::Resource::new(
+                    alien_core::ServiceActivation::new("enable-artifact-registry".to_string())
+                        .service_name("artifactregistry.googleapis.com".to_string())
+                        .build(),
+                ))
+                .lifecycle(ResourceLifecycle::Frozen)
+                .build(),
+        );
+        let mut records = BTreeMap::new();
+        let progress = step(&provider, &state, &mut records).await.unwrap();
+        assert_eq!(progress, ScaffoldingProgress::InProgress);
+        assert!(records.is_empty());
+    }
+
     /// The record is written in the same step as the create call, so a crash after it still tears
     /// the repository down.
     #[tokio::test]
@@ -776,7 +866,10 @@ mod tests {
                     lifecycle,
                 )
                 .build();
-            assert!(super::super::scaffolds_any(&stack, Platform::Gcp), "{lifecycle:?}");
+            assert!(
+                super::super::scaffolds_any(&stack, Platform::Gcp),
+                "{lifecycle:?}"
+            );
         }
     }
 
