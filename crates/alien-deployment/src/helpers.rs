@@ -180,8 +180,8 @@ pub(crate) struct RetryOutcome {
 /// A resource whose config changed is not resumed, so the executor plans its update or
 /// replaces it: resuming a failed create with a new config would finish it with a mix of both.
 /// One the stack no longer declares is not resumed either, and the executor deletes it. Failed
-/// deletes always resume, because the planner does not restart a delete that has failed, and
-/// A failed refresh resumes only when unchanged: resuming applies the config it recorded, and
+/// deletes always resume, because the planner does not restart a delete that has failed. A
+/// failed refresh resumes only when unchanged: resuming applies the config it recorded, and
 /// the planner does not apply a newer one over that update.
 ///
 /// "Unchanged" is [`alien_infra::retry_config_unchanged`], the comparison the update executor
