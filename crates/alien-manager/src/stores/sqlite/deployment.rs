@@ -1680,6 +1680,9 @@ impl DeploymentStore for SqliteDeploymentStore {
         // A deployment waiting for a secret keeps its status (a first install must not turn into
         // an update) but takes the newer release, which its next step reads as the target.
         let waiting_for_secrets = "waiting-for-secrets";
+        // A deployment already updating takes the newer release too, and keeps its status: the
+        // update loop owns that. Without it, a failing update is retried on the old release.
+        let updating = ["updating", "update-pending"];
 
         let sql = {
             let mut query = Query::update();
@@ -1698,6 +1701,10 @@ impl DeploymentStore for SqliteDeploymentStore {
                         Expr::col(Deployments::Status).eq(waiting_for_secrets),
                         Expr::col(Deployments::Status),
                     )
+                    .case(
+                        Expr::col(Deployments::Status).is_in(updating),
+                        Expr::col(Deployments::Status),
+                    )
                     .finally("update-pending"),
                 )
                 .value(Deployments::NextStepAfter, Option::<String>::None)
@@ -1705,6 +1712,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                     sea_query::Cond::any()
                         .add(Expr::col(Deployments::Status).is_in(eligible_statuses))
                         .add(Expr::col(Deployments::Status).eq(waiting_for_secrets))
+                        .add(Expr::col(Deployments::Status).is_in(updating))
                         // Only the persisted installed grant permits a release to retry
                         // setup work. A requested setting must not authorize manual setup.
                         .add(

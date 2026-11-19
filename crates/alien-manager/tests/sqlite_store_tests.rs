@@ -4556,3 +4556,169 @@ async fn newer_release_reaches_a_deployment_waiting_for_secrets_without_changing
     assert_eq!(dep.status, "waiting-for-secrets");
     assert_eq!(dep.desired_release_id.as_deref(), Some("newer-release"));
 }
+
+/// Every status a deployment can have, and what a new release does to it:
+/// `Some(status)` is the status afterwards for a deployment that takes the release.
+fn status_after_new_release(status: &str) -> Option<&'static str> {
+    match status {
+        // Installed and settled: the release starts an update.
+        "running" | "update-failed" | "refresh-failed" => Some("update-pending"),
+        // Already updating, or waiting on a secret: they take the release as their target
+        // and keep their status.
+        "updating" => Some("updating"),
+        "update-pending" => Some("update-pending"),
+        "waiting-for-secrets" => Some("waiting-for-secrets"),
+        _ => None,
+    }
+}
+
+const ALL_STATUSES: [&str; 20] = [
+    "pending",
+    "preflights-failed",
+    "initial-setup",
+    "initial-setup-failed",
+    "provisioning",
+    "waiting-for-machines",
+    "waiting-for-secrets",
+    "provisioning-failed",
+    "running",
+    "refresh-failed",
+    "update-pending",
+    "updating",
+    "update-failed",
+    "delete-pending",
+    "deleting",
+    "delete-failed",
+    "teardown-required",
+    "teardown-failed",
+    "retention-required",
+    "retained",
+];
+
+#[test]
+fn the_status_table_covers_every_deployment_status() {
+    let mut listed: Vec<String> = ALL_STATUSES.iter().map(|s| s.to_string()).collect();
+    listed.extend(["deleted".to_string(), "error".to_string()]);
+    for status in &listed {
+        serde_json::from_value::<DeploymentStatus>(serde_json::Value::String(status.clone()))
+            .unwrap_or_else(|_| panic!("{status} is not a deployment status"));
+    }
+    // 22 variants in DeploymentStatus.
+    assert_eq!(listed.len(), 22);
+}
+
+#[tokio::test]
+async fn a_new_release_becomes_the_target_of_a_deployment_that_is_already_updating() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group = create_test_group(&store).await;
+    let mut ids = Vec::new();
+    for status in ALL_STATUSES.iter().chain(&["deleted", "error"]) {
+        let deployment =
+            create_test_deployment(&store, &group, &format!("d-{status}"), Platform::Aws).await;
+        {
+            let conn = db.conn().lock().await;
+            conn.execute(
+                "UPDATE deployments SET status = ?1, current_release_id = 'rel_a', desired_release_id = 'rel_a' WHERE id = ?2",
+                (*status, deployment.id.as_str()),
+            )
+            .await
+            .unwrap();
+        }
+        ids.push((*status, deployment.id));
+    }
+
+    store
+        .set_desired_release(&test_subject(), "rel_b", Some(Platform::Aws))
+        .await
+        .unwrap();
+
+    for (status, id) in ids {
+        let record = store
+            .get_deployment(&test_subject(), &id)
+            .await
+            .unwrap()
+            .unwrap();
+        match status_after_new_release(status) {
+            Some(after) => {
+                assert_eq!(
+                    record.desired_release_id.as_deref(),
+                    Some("rel_b"),
+                    "{status}"
+                );
+                assert_eq!(record.status, after, "{status}");
+            }
+            None => {
+                assert_eq!(
+                    record.desired_release_id.as_deref(),
+                    Some("rel_a"),
+                    "{status}"
+                );
+                assert_eq!(record.status, status);
+            }
+        }
+    }
+}
+
+/// A push deployment the manager is stepping: the new release moves the target and
+/// leaves the in-flight update's own state alone. The next step then sees a target
+/// different from the release it prepared, which the update step already handles
+/// (see the superseding-release tests in alien-deployment), so nothing applies twice.
+#[tokio::test]
+async fn a_push_update_keeps_its_progress_when_a_new_release_becomes_its_target() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group = create_test_group(&store).await;
+    let deployment = create_test_deployment_with_settings(
+        &store,
+        &group,
+        "pushed",
+        Platform::Aws,
+        StackSettings {
+            deployment_model: alien_core::DeploymentModel::Push,
+            ..Default::default()
+        },
+    )
+    .await;
+    {
+        let conn = db.conn().lock().await;
+        conn.execute(
+            "UPDATE deployments SET status = 'updating', current_release_id = 'rel_a', desired_release_id = 'rel_b', \
+             runtime_metadata = '{\"pendingPreparedReleaseId\":\"rel_b\"}' WHERE id = ?1",
+            (deployment.id.as_str(),),
+        )
+        .await
+        .unwrap();
+    }
+    let before = store
+        .get_deployment(&test_subject(), &deployment.id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    store
+        .set_desired_release(&test_subject(), "rel_c", Some(Platform::Aws))
+        .await
+        .unwrap();
+
+    let after = store
+        .get_deployment(&test_subject(), &deployment.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.desired_release_id.as_deref(), Some("rel_c"));
+    assert_eq!(after.status, "updating");
+    assert_eq!(after.current_release_id.as_deref(), Some("rel_a"));
+    assert_eq!(
+        serde_json::to_value(&after.runtime_metadata).unwrap(),
+        serde_json::to_value(&before.runtime_metadata).unwrap()
+    );
+    assert_eq!(
+        after
+            .runtime_metadata
+            .unwrap()
+            .pending_prepared_release_id
+            .as_deref(),
+        Some("rel_b")
+    );
+}
