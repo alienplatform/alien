@@ -13,6 +13,8 @@ An [extension](https://alien.dev/docs/guide/extensions) lets you change what Ali
 
 Modifiers, emitters, importers and interceptors are hooks: small pure functions that never call the cloud. They compile to one WebAssembly module inside the release, which Alien runs sandboxed. A controller does call the cloud. It compiles to a second WebAssembly module inside the release, which Alien runs sandboxed wherever it steps the deployment: each call the controller makes goes through Alien, which sends it to the cloud as the deployment. The controller for `alien dev` is a native binary that runs on your machine.
 
+An extension runs with the vendor's trust: it can change the setup template the customer installs. Alien limits what an interceptor may do to a call: it may not change the call's destination, identity or access, and it may not add, remove or change any setting that decides who can reach a resource (public access, network rules and firewalls, source ranges, ingress, ACLs, access policies, a public access block) on any cloud, whatever the value. Such a change fails the call.
+
 ## The examples
 
 Read them in this order:
