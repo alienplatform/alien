@@ -644,6 +644,13 @@ resource "google_artifact_registry_repository" "agents_image" {
       older_than = "604800s"
     }
   }
+
+  lifecycle {
+    precondition {
+      condition     = length(replace(lower(format("%s-agents-img", local.resource_prefix)), "_", "-")) <= 63
+      error_message = "The image repository name of sandbox 'agents' (resource_prefix, the sandbox id and '-img') is longer than the 63 characters Artifact Registry allows. Use a shorter resource_prefix."
+    }
+  }
 }
 
 resource "google_project_iam_custom_role" "gcp_role_sandbox_image_write" {

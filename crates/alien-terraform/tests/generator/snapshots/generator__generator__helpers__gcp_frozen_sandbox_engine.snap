@@ -473,6 +473,46 @@ resource "google_vertex_ai_reasoning_engine" "agents_engine" {
   }
 }
 
+=== agents.tf ===
+resource "google_artifact_registry_repository" "agents_image" {
+  project       = var.gcp_project
+  location      = var.gcp_region
+  repository_id = replace(lower(format("%s-agents-img", local.resource_prefix)), "_", "-")
+  format        = "DOCKER"
+  description   = "Image of sandbox 'agents'"
+  labels = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents"
+    "resource-type" = "sandbox"
+  }
+
+  docker_config {
+    immutable_tags = true
+  }
+
+  cleanup_policies {
+    id     = "delete-untagged"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "UNTAGGED"
+      older_than = "604800s"
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(replace(lower(format("%s-agents-img", local.resource_prefix)), "_", "-")) <= 63
+      error_message = "The image repository name of sandbox 'agents' (resource_prefix, the sandbox id and '-img') is longer than the 63 characters Artifact Registry allows. Use a shorter resource_prefix."
+    }
+  }
+
+  depends_on = [
+    google_vertex_ai_reasoning_engine.agents_engine
+  ]
+}
+
 === registration.tf ===
 resource "terraform_data" "deployment_registration" {
   input = {
@@ -490,7 +530,8 @@ resource "terraform_data" "deployment_registration" {
     inputValues                 = {}
   }
   depends_on = [
-    google_vertex_ai_reasoning_engine.agents_engine
+    google_vertex_ai_reasoning_engine.agents_engine,
+    google_artifact_registry_repository.agents_image
   ]
 
   lifecycle {

@@ -543,6 +543,45 @@ resource "google_vertex_ai_reasoning_engine" "jobs_engine" {
 }
 
 === agents.tf ===
+resource "google_artifact_registry_repository" "agents_image" {
+  project       = var.gcp_project
+  location      = var.gcp_region
+  repository_id = replace(lower(format("%s-agents-img", local.resource_prefix)), "_", "-")
+  format        = "DOCKER"
+  description   = "Image of sandbox 'agents'"
+  labels = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents"
+    "resource-type" = "sandbox"
+  }
+
+  docker_config {
+    immutable_tags = true
+  }
+
+  cleanup_policies {
+    id     = "delete-untagged"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "UNTAGGED"
+      older_than = "604800s"
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(replace(lower(format("%s-agents-img", local.resource_prefix)), "_", "-")) <= 63
+      error_message = "The image repository name of sandbox 'agents' (resource_prefix, the sandbox id and '-img') is longer than the 63 characters Artifact Registry allows. Use a shorter resource_prefix."
+    }
+  }
+
+  depends_on = [
+    google_vertex_ai_reasoning_engine.agents_engine
+  ]
+}
+
 resource "google_service_account" "agents_preview" {
   project      = var.gcp_project
   account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-agents_preview", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-agents_preview", local.resource_prefix)), "_", "-")), 0, 8))
@@ -591,6 +630,45 @@ resource "google_service_account_iam_member" "agents_preview_sign_worker_sa" {
 }
 
 === jobs.tf ===
+resource "google_artifact_registry_repository" "jobs_image" {
+  project       = var.gcp_project
+  location      = var.gcp_region
+  repository_id = replace(lower(format("%s-jobs-img", local.resource_prefix)), "_", "-")
+  format        = "DOCKER"
+  description   = "Image of sandbox 'jobs'"
+  labels = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "jobs"
+    "resource-type" = "sandbox"
+  }
+
+  docker_config {
+    immutable_tags = true
+  }
+
+  cleanup_policies {
+    id     = "delete-untagged"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "UNTAGGED"
+      older_than = "604800s"
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(replace(lower(format("%s-jobs-img", local.resource_prefix)), "_", "-")) <= 63
+      error_message = "The image repository name of sandbox 'jobs' (resource_prefix, the sandbox id and '-img') is longer than the 63 characters Artifact Registry allows. Use a shorter resource_prefix."
+    }
+  }
+
+  depends_on = [
+    google_vertex_ai_reasoning_engine.jobs_engine
+  ]
+}
+
 resource "google_service_account" "jobs_preview" {
   project      = var.gcp_project
   account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-jobs_preview", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-jobs_preview", local.resource_prefix)), "_", "-")), 0, 8))
@@ -648,11 +726,13 @@ resource "terraform_data" "deployment_registration" {
     google_project_iam_member.gcp_role_sandbox_execute_worker_sa_binding_0,
     google_vertex_ai_reasoning_engine.agents_engine,
     google_vertex_ai_reasoning_engine.jobs_engine,
+    google_artifact_registry_repository.agents_image,
     google_service_account.agents_preview,
     google_project_iam_custom_role.gcp_role_sandbox_preview_edge,
     google_vertex_ai_reasoning_engine_iam_member.gcp_role_sandbox_preview_edge_agents_engine_preview_0,
     google_project_iam_custom_role.gcp_role_sandbox_preview_sign,
     google_service_account_iam_member.agents_preview_sign_worker_sa,
+    google_artifact_registry_repository.jobs_image,
     google_service_account.jobs_preview,
     google_vertex_ai_reasoning_engine_iam_member.gcp_role_sandbox_preview_edge_jobs_engine_preview_0,
     google_service_account_iam_member.jobs_preview_sign_worker_sa,
