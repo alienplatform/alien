@@ -410,7 +410,7 @@ impl TfEmitter for AwsSandboxEmitter {
                     },
                 ),
             ),
-            ("Hooks", hooks()),
+            ("Hooks", hooks(sandbox)),
             (
                 "EnvironmentVariables",
                 environment_variables(ctx.stack, sandbox),
@@ -1163,9 +1163,31 @@ fn artifact_uri(sandbox: &Sandbox) -> Result<BundleUri<'_>> {
 /// it is what defers the snapshot until the agent is serving. `Validate` runs on a
 /// MicroVM restored from the snapshot and fails the build when a command or a file write cannot
 /// work on it; 30s is AWS's default and far above the probe's sub-second work. `Run` and
-/// `Resume` are acknowledged by the agent and nothing more: entropy separation between MicroVMs
-/// comes from the MicroVM service.
-fn hooks() -> Expression {
+/// `Resume` are acknowledged by the agent unless the image declares lifecycle steps (refused on
+/// Terraform today, rendered here so the two emitters stay one shape), which enable `Suspend`
+/// and lengthen `Resume` as [`alien_core::sandbox_image_permissions::aws_microvm_session_hooks`]
+/// says. Entropy separation between MicroVMs comes from the MicroVM service.
+fn hooks(sandbox: &Sandbox) -> Expression {
+    let session = alien_core::sandbox_image_permissions::aws_microvm_session_hooks(sandbox);
+    let mut microvm_hooks = vec![
+        ("Run", Expression::String("ENABLED".to_string())),
+        (
+            "RunTimeoutInSeconds",
+            Expression::Number(session.run_timeout_in_seconds.into()),
+        ),
+        ("Resume", Expression::String("ENABLED".to_string())),
+        (
+            "ResumeTimeoutInSeconds",
+            Expression::Number(session.resume_timeout_in_seconds.into()),
+        ),
+    ];
+    if let Some(timeout) = session.suspend_timeout_in_seconds {
+        microvm_hooks.push(("Suspend", Expression::String("ENABLED".to_string())));
+        microvm_hooks.push((
+            "SuspendTimeoutInSeconds",
+            Expression::Number(timeout.into()),
+        ));
+    }
     Expression::from_iter([
         ("Port", Expression::Number(AGENT_PORT.into())),
         (
@@ -1177,15 +1199,7 @@ fn hooks() -> Expression {
                 ("ValidateTimeoutInSeconds", Expression::Number(30.into())),
             ]),
         ),
-        (
-            "MicrovmHooks",
-            Expression::from_iter([
-                ("Run", Expression::String("ENABLED".to_string())),
-                ("RunTimeoutInSeconds", Expression::Number(30.into())),
-                ("Resume", Expression::String("ENABLED".to_string())),
-                ("ResumeTimeoutInSeconds", Expression::Number(30.into())),
-            ]),
-        ),
+        ("MicrovmHooks", Expression::from_iter(microvm_hooks)),
     ])
 }
 
@@ -1251,6 +1265,50 @@ mod tests {
                 ..Default::default()
             })
             .build()
+    }
+
+    /// The session hooks every earlier release rendered, key for key, for an image without
+    /// lifecycle steps; a declared `onPause` adds the suspend hook and `onResume` lengthens resume.
+    #[test]
+    fn session_hooks_change_only_with_declared_lifecycle_steps() {
+        let string = |value: &str| Expression::String(value.to_string());
+        let previous = Expression::from_iter([
+            ("Run", string("ENABLED")),
+            ("RunTimeoutInSeconds", Expression::Number(30.into())),
+            ("Resume", string("ENABLED")),
+            ("ResumeTimeoutInSeconds", Expression::Number(30.into())),
+        ]);
+        let with_session = |microvm_hooks: Expression| {
+            Expression::from_iter([
+                ("Port", Expression::Number(AGENT_PORT.into())),
+                (
+                    "MicrovmImageHooks",
+                    Expression::from_iter([
+                        ("Ready", string("ENABLED")),
+                        ("ReadyTimeoutInSeconds", Expression::Number(120.into())),
+                        ("Validate", string("ENABLED")),
+                        ("ValidateTimeoutInSeconds", Expression::Number(30.into())),
+                    ]),
+                ),
+                ("MicrovmHooks", microvm_hooks),
+            ])
+        };
+        let mut sandbox = sandbox_with_lifecycle(None, None);
+        assert_eq!(hooks(&sandbox), with_session(previous));
+
+        sandbox.lifecycle.on_pause = Some(vec!["/bin/true".into()]);
+        sandbox.lifecycle.on_resume = Some(vec!["/bin/true".into()]);
+        assert_eq!(
+            hooks(&sandbox),
+            with_session(Expression::from_iter([
+                ("Run", string("ENABLED")),
+                ("RunTimeoutInSeconds", Expression::Number(30.into())),
+                ("Resume", string("ENABLED")),
+                ("ResumeTimeoutInSeconds", Expression::Number(60.into())),
+                ("Suspend", string("ENABLED")),
+                ("SuspendTimeoutInSeconds", Expression::Number(60.into())),
+            ]))
+        );
     }
 
     /// The ceilings reach the module under exactly the names `AwsSandboxBinding` reads, carrying

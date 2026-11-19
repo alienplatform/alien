@@ -220,6 +220,12 @@ pub struct MicrovmLifecycleHooks {
     pub resume: String,
     /// Ceiling on the resume hook
     pub resume_timeout_in_seconds: u32,
+    /// `ENABLED` / `DISABLED`; left out unless the image runs a step before a pause
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspend: Option<String>,
+    /// Ceiling on the suspend hook; left out with `suspend`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspend_timeout_in_seconds: Option<u32>,
 }
 
 /// Hook configuration for `CreateMicrovmImage`.
@@ -1458,6 +1464,8 @@ mod tests {
                         run_timeout_in_seconds: 30,
                         resume: "ENABLED".to_string(),
                         resume_timeout_in_seconds: 30,
+                        suspend: None,
+                        suspend_timeout_in_seconds: None,
                     })
                     .build(),
             )

@@ -881,6 +881,8 @@ Resources:
           RunTimeoutInSeconds: 30
           Resume: ENABLED
           ResumeTimeoutInSeconds: 30
+          Suspend: ENABLED
+          SuspendTimeoutInSeconds: 60
       EnvironmentVariables:
       - Key: ALIEN_SANDBOX_ROOT
         Value: /sandbox

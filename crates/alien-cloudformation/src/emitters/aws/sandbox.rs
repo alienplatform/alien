@@ -266,7 +266,7 @@ impl CfEmitter for AwsSandboxEmitter {
                 },
             ),
         );
-        properties.insert("Hooks".to_string(), hooks());
+        properties.insert("Hooks".to_string(), hooks(sandbox));
         properties.insert(
             "EnvironmentVariables".to_string(),
             environment_variables(ctx, sandbox)?,
@@ -825,9 +825,32 @@ fn image_pull_build_policies() -> CfExpression {
 /// it is what defers the snapshot until the agent is serving. `Validate` runs on a
 /// MicroVM restored from the snapshot and fails the build when a command or a file write cannot
 /// work on it; 30s is AWS's default and far above the probe's sub-second work. `Run` and
-/// `Resume` are acknowledged by the agent and nothing more: entropy separation between MicroVMs
-/// comes from the MicroVM service.
-fn hooks() -> CfExpression {
+/// `Resume` are acknowledged by the agent unless the image declares lifecycle steps, which enable
+/// `Suspend` and lengthen `Resume` as
+/// [`alien_core::sandbox_image_permissions::aws_microvm_session_hooks`] says; without them the
+/// hooks are key for key the earlier ones. Entropy separation between MicroVMs comes from the
+/// MicroVM service.
+fn hooks(sandbox: &Sandbox) -> CfExpression {
+    let session = alien_core::sandbox_image_permissions::aws_microvm_session_hooks(sandbox);
+    let mut microvm_hooks = vec![
+        ("Run", CfExpression::from("ENABLED")),
+        (
+            "RunTimeoutInSeconds",
+            CfExpression::Integer(session.run_timeout_in_seconds.into()),
+        ),
+        ("Resume", CfExpression::from("ENABLED")),
+        (
+            "ResumeTimeoutInSeconds",
+            CfExpression::Integer(session.resume_timeout_in_seconds.into()),
+        ),
+    ];
+    if let Some(timeout) = session.suspend_timeout_in_seconds {
+        microvm_hooks.push(("Suspend", CfExpression::from("ENABLED")));
+        microvm_hooks.push((
+            "SuspendTimeoutInSeconds",
+            CfExpression::Integer(timeout.into()),
+        ));
+    }
     CfExpression::object([
         ("Port", CfExpression::Integer(AGENT_PORT)),
         (
@@ -839,15 +862,7 @@ fn hooks() -> CfExpression {
                 ("ValidateTimeoutInSeconds", CfExpression::Integer(30)),
             ]),
         ),
-        (
-            "MicrovmHooks",
-            CfExpression::object([
-                ("Run", CfExpression::from("ENABLED")),
-                ("RunTimeoutInSeconds", CfExpression::Integer(30)),
-                ("Resume", CfExpression::from("ENABLED")),
-                ("ResumeTimeoutInSeconds", CfExpression::Integer(30)),
-            ]),
-        ),
+        ("MicrovmHooks", CfExpression::object(microvm_hooks)),
     ])
 }
 

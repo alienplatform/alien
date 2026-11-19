@@ -180,6 +180,52 @@ pub fn image_permissions_contract(
     }))
 }
 
+/// MicroVM session hooks the agent serves, as the image declares them.
+///
+/// `Run` and `Resume` are always enabled at 30s: the agent acknowledges them. A declared
+/// `onPause` step enables `Suspend`, and a declared `onResume` step raises `Resume`'s ceiling,
+/// each to 60s so the vendor's step has room inside the hook. An image without either keeps the
+/// hooks it had, key for key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AwsMicrovmSessionHooks {
+    pub run_timeout_in_seconds: u32,
+    pub resume_timeout_in_seconds: u32,
+    /// `Some` enables the suspend hook with this ceiling; `None` leaves it out of the request.
+    pub suspend_timeout_in_seconds: Option<u32>,
+}
+
+/// Ceiling on a hook that runs a declared lifecycle step.
+pub const LIFECYCLE_STEP_HOOK_TIMEOUT_SECONDS: u32 = 60;
+/// Ceiling on a hook the agent only acknowledges.
+pub const ACKNOWLEDGED_HOOK_TIMEOUT_SECONDS: u32 = 30;
+
+pub fn aws_microvm_session_hooks(sandbox: &Sandbox) -> AwsMicrovmSessionHooks {
+    AwsMicrovmSessionHooks {
+        run_timeout_in_seconds: ACKNOWLEDGED_HOOK_TIMEOUT_SECONDS,
+        resume_timeout_in_seconds: if sandbox.lifecycle.on_resume.is_some() {
+            LIFECYCLE_STEP_HOOK_TIMEOUT_SECONDS
+        } else {
+            ACKNOWLEDGED_HOOK_TIMEOUT_SECONDS
+        },
+        suspend_timeout_in_seconds: sandbox
+            .lifecycle
+            .on_pause
+            .is_some()
+            .then_some(LIFECYCLE_STEP_HOOK_TIMEOUT_SECONDS),
+    }
+}
+
+impl Default for AwsMicrovmSessionHooks {
+    /// The hooks of an image that declares no lifecycle step.
+    fn default() -> Self {
+        Self {
+            run_timeout_in_seconds: ACKNOWLEDGED_HOOK_TIMEOUT_SECONDS,
+            resume_timeout_in_seconds: ACKNOWLEDGED_HOOK_TIMEOUT_SECONDS,
+            suspend_timeout_in_seconds: None,
+        }
+    }
+}
+
 /// The variables that make a released agent refuse to start and tell a current one which
 /// contract version it is reading. Set together with `ALIEN_SANDBOX_IMAGE_PERMISSIONS`.
 ///

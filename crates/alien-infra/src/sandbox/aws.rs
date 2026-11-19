@@ -301,7 +301,10 @@ impl AwsSandboxController {
             &bundle_uri,
             tier.baseline_memory_mib,
         )
-        .with_agent_environment(agent_environment(ctx, config)?)
+        .with_agent_environment(
+            agent_environment(ctx, config)?,
+            alien_core::sandbox_image_permissions::aws_microvm_session_hooks(config),
+        )
         .with_receipt()
         .into_alien_error()
         .context(ErrorData::ResourceConfigInvalid {
@@ -908,7 +911,10 @@ impl AwsSandboxController {
             &desired_bundle,
             tier.baseline_memory_mib,
         )
-        .with_agent_environment(agent_environment(ctx, config)?)
+        .with_agent_environment(
+            agent_environment(ctx, config)?,
+            alien_core::sandbox_image_permissions::aws_microvm_session_hooks(config),
+        )
         .for_roll(self.active_version.as_deref())
         .for_retry(self.build_retry_generation)
         .with_receipt()

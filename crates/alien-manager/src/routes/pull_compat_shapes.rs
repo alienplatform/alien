@@ -1197,6 +1197,21 @@ fn handled() -> Vec<(&'static str, &'static str, Handling)> {
         ("Sandbox", "default_policy", F(&SANDBOX_POLICY)),
         ("Sandbox", "links", F(&SANDBOX_POLICY)),
         ("Sandbox", "image_user", F(&SANDBOX_IMAGE_USER)),
+        (
+            "Sandbox",
+            "image_permissions",
+            F(&SANDBOX_IMAGE_PERMISSIONS),
+        ),
+        (
+            "SandboxLifecyclePolicy",
+            "on_pause",
+            F(&SANDBOX_IMAGE_PERMISSIONS),
+        ),
+        (
+            "SandboxLifecyclePolicy",
+            "on_resume",
+            F(&SANDBOX_IMAGE_PERMISSIONS),
+        ),
         ("Storage", "cors_upload_origins", F(&STORAGE_UPLOAD_ORIGINS)),
         ("Storage", "notifications", F(&STORAGE_NOTIFICATIONS)),
         ("ServiceAccount", "extension", F(&EXTENSIONS)),

@@ -17,6 +17,7 @@ use alien_core::{
     release_statement,
     sandbox_build_role::{sandbox_build_role_arn, SANDBOX_BUNDLE_STORAGE_ID},
     sandbox_egress::aws_sandbox_agent_environment,
+    sandbox_image_permissions::aws_microvm_session_hooks,
     standard_resource_tags,
 };
 use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
@@ -114,7 +115,10 @@ fn inputs(
         bundle_uri,
         tier.baseline_memory_mib,
     )
-    .with_agent_environment(aws_sandbox_agent_environment(facts.stack, sandbox)))
+    .with_agent_environment(
+        aws_sandbox_agent_environment(facts.stack, sandbox),
+        aws_microvm_session_hooks(sandbox),
+    ))
 }
 
 fn same(sent: &Value, derived: &impl serde::Serialize, what: &str) -> Result<()> {

@@ -285,3 +285,54 @@ fn a_sandbox_without_image_permissions_renders_as_before() {
                 .contains_key("SandboxImageConnectionsNeedCreatedNetwork")
     );
 }
+
+fn microvm_hooks(sandbox: Sandbox) -> Value {
+    let (stack, settings) = stack(sandbox, created());
+    let template = try_render_built_ins(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "hooks",
+    )
+    .unwrap();
+    json_of(&template.resources["Agents"].properties["Hooks"])["MicrovmHooks"].clone()
+}
+
+/// A declared `onPause` needs the provider's suspend hook and a declared `onResume` a resume hook
+/// long enough for the step; an image declaring neither keeps exactly the hooks it had.
+#[test]
+fn declared_lifecycle_steps_enable_the_session_hooks_they_need() {
+    let previous = json!({
+        "Run": "ENABLED", "RunTimeoutInSeconds": 30,
+        "Resume": "ENABLED", "ResumeTimeoutInSeconds": 30
+    });
+    assert_eq!(microvm_hooks(sandbox(None)), previous);
+    let mut mounts_only = designed();
+    mounts_only.connections.clear();
+    let mut no_steps = sandbox(Some(mounts_only));
+    no_steps.lifecycle.on_pause = None;
+    assert_eq!(microvm_hooks(no_steps.clone()), previous);
+
+    let mut pause = no_steps.clone();
+    pause.lifecycle.on_pause = Some(vec!["/usr/local/bin/agentd".into(), "pause".into()]);
+    assert_eq!(
+        microvm_hooks(pause.clone()),
+        json!({
+            "Run": "ENABLED", "RunTimeoutInSeconds": 30,
+            "Resume": "ENABLED", "ResumeTimeoutInSeconds": 30,
+            "Suspend": "ENABLED", "SuspendTimeoutInSeconds": 60
+        })
+    );
+
+    let mut resume = no_steps;
+    resume.lifecycle.on_resume = Some(vec!["/usr/local/bin/agentd".into(), "resume".into()]);
+    assert_eq!(
+        microvm_hooks(resume),
+        json!({
+            "Run": "ENABLED", "RunTimeoutInSeconds": 30,
+            "Resume": "ENABLED", "ResumeTimeoutInSeconds": 60
+        })
+    );
+}
