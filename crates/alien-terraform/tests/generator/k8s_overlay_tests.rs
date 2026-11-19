@@ -345,7 +345,8 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
                 assert!(main.contains("controller       = \"eks.amazonaws.com/alb\""));
                 assert!(main.contains("ingressClassName = \"alb\""));
                 assert!(main.contains("provider   = \"awsAlb\""));
-                assert!(main.contains("mode = \"none\""));
+                assert!(main.contains("mode = \"managedAcmImport\""));
+                assert!(!main.contains("mode = \"none\""));
                 assert!(!main.contains("clusterBootstrap"));
                 assert!(!main.contains("metricsServer"));
                 assert!(!main.contains("eksAutoMode"));
@@ -359,9 +360,13 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
             TerraformTarget::Gke => {
                 assert!(main.contains("routeApi         = \"gateway\""));
                 assert!(main.contains("gatewayClassName = \"gke-l7-global-external-managed\""));
-                assert!(main.contains("listenerPort     = 80"));
+                assert!(main.contains("listenerPort     = 443"));
                 assert!(main.contains("provider          = \"gkeGateway\""));
-                assert!(main.contains("mode = \"none\""));
+                assert!(main.contains("mode               = \"managedTlsSecret\""));
+                assert!(main.contains(
+                    "secretNameTemplate = \"deployment-{{ resourceId }}-tls\""
+                ));
+                assert!(!main.contains("mode = \"none\""));
                 assert!(main.contains("gke-gcloud-auth-plugin"));
                 assert!(main.contains("provideClusterInfo = true"));
                 assert!(cluster.contains(r#"data "google_client_config" "current""#));
@@ -371,7 +376,11 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
             TerraformTarget::Aks => {
                 assert!(main.contains("routeApi         = \"gateway\""));
                 assert!(main.contains("gatewayClassName = \"azure-alb-external\""));
-                assert!(main.contains("listenerPort     = 80"));
+                assert!(main.contains("listenerPort     = 443"));
+                assert!(main.contains("mode               = \"managedTlsSecret\""));
+                assert!(main.contains(
+                    "secretNameTemplate = \"deployment-{{ resourceId }}-tls\""
+                ));
                 assert!(main.contains(
                     "\"alb.networking.azure.io/alb-namespace\" = var.kubernetes_namespace"
                 ));
@@ -381,7 +390,7 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
                 assert!(main.contains("provider     = \"azureApplicationGatewayForContainers\""));
                 assert!(main.contains("albNamespace = var.kubernetes_namespace"));
                 assert!(main.contains("albName      = \"${local.resource_prefix}-alb\""));
-                assert!(main.contains("mode = \"none\""));
+                assert!(!main.contains("mode = \"none\""));
             }
             _ => unreachable!("only managed Kubernetes targets are tested here"),
         }

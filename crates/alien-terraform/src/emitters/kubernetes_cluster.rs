@@ -115,7 +115,8 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
     }}
   }}
   certificate = {{
-    mode = "none"
+    mode = "managedAcmImport"
+    tags = {{}}
   }}
 }}"#,
                     public_subnet_ids = eks_subnet_ids_expr(ctx, label, false),
@@ -1106,7 +1107,7 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
     routeApi         = "gateway"
     controller       = "networking.gke.io/gateway"
     gatewayClassName = "gke-l7-global-external-managed"
-    listenerPort     = 80
+    listenerPort     = 443
     labels           = {}
     annotations      = {}
     provider = {
@@ -1115,7 +1116,8 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
     }
   }
   certificate = {
-    mode = "none"
+    mode               = "managedTlsSecret"
+    secretNameTemplate = "deployment-{{ resourceId }}-tls"
   }
 }"#,
                 ),
@@ -1237,7 +1239,7 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
     routeApi         = "gateway"
     controller       = "alb.networking.azure.io/alb-controller"
     gatewayClassName = "azure-alb-external"
-    listenerPort     = 80
+    listenerPort     = 443
     labels           = {}
     annotations      = {
       "alb.networking.azure.io/alb-namespace" = var.kubernetes_namespace
@@ -1251,7 +1253,8 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
     }
   }
   certificate = {
-    mode = "none"
+    mode               = "managedTlsSecret"
+    secretNameTemplate = "deployment-{{ resourceId }}-tls"
   }
 }"#,
                 ),
