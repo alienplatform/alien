@@ -1004,8 +1004,9 @@ pub(crate) fn unmount(point: &crate::mount_point::MountPoint) -> Result<(), Stri
     // SAFETY: valid NUL-terminated path.
     if unsafe { libc::umount2(target.as_ptr(), 0) } != 0 {
         let error = std::io::Error::last_os_error();
-        // A process still holding a file open must not keep the VM from suspending: detach, and
-        // the mount goes once the last file closes.
+        // The first attempt usually returns EBUSY, because the open descriptor above is itself a
+        // reference to the mount (and a command may hold files open too). A busy mount must not
+        // keep the VM from suspending: detach, and the mount goes once the last reference closes.
         // SAFETY: as above.
         if error.raw_os_error() == Some(libc::EBUSY)
             && unsafe { libc::umount2(target.as_ptr(), libc::MNT_DETACH) } == 0
