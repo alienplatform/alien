@@ -115,11 +115,11 @@
         "lifecycle": {
           "maxLifetimeSeconds": 3600,
           "onPause": [
-            "/usr/local/bin/agentd",
+            "/usr/local/bin/app",
             "pause"
           ],
           "onResume": [
-            "/usr/local/bin/agentd",
+            "/usr/local/bin/app",
             "resume"
           ]
         }

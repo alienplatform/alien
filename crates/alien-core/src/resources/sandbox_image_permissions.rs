@@ -670,10 +670,10 @@ mod tests {
 
     #[test]
     fn lifecycle_argv_must_name_an_absolute_program() {
-        validate_lifecycle_argv("s", "onPause", &["/usr/bin/agentd".into(), "pause".into()])
+        validate_lifecycle_argv("s", "onPause", &["/usr/bin/app".into(), "pause".into()])
             .unwrap();
         assert!(validate_lifecycle_argv("s", "onPause", &[]).is_err());
-        assert!(validate_lifecycle_argv("s", "onPause", &["agentd".into()]).is_err());
+        assert!(validate_lifecycle_argv("s", "onPause", &["app".into()]).is_err());
         assert!(validate_lifecycle_argv("s", "onPause", &["/a".into(), "b\0".into()]).is_err());
     }
 

@@ -447,8 +447,8 @@ mod tests {
             })
             .egress(egress)
             .lifecycle(SandboxLifecyclePolicy {
-                on_pause: Some(vec!["/usr/local/bin/agentd".into(), "pause".into()]),
-                on_resume: Some(vec!["/usr/local/bin/agentd".into(), "resume".into()]),
+                on_pause: Some(vec!["/usr/local/bin/app".into(), "pause".into()]),
+                on_resume: Some(vec!["/usr/local/bin/app".into(), "resume".into()]),
                 ..Default::default()
             })
             .build();
@@ -651,8 +651,8 @@ mod tests {
                     {"type": "bind", "from": "/var/lib/app/scratch", "path": "/workspace/tmp"}
                 ],
                 "connections": [{"cidr": "10.0.1.5/32", "port": 2049}],
-                "onPause": ["/usr/local/bin/agentd", "pause"],
-                "onResume": ["/usr/local/bin/agentd", "resume"]
+                "onPause": ["/usr/local/bin/app", "pause"],
+                "onResume": ["/usr/local/bin/app", "resume"]
             })
         );
         assert_eq!(environment.len(), 3);

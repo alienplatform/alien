@@ -41,8 +41,8 @@ const builder = new alien.Sandbox("builder")
   .defaultPolicy("internet")
   .lifecycle({
     maxLifetimeSeconds: 3_600,
-    onPause: ["/usr/local/bin/agentd", "pause"],
-    onResume: ["/usr/local/bin/agentd", "resume"],
+    onPause: ["/usr/local/bin/app", "pause"],
+    onResume: ["/usr/local/bin/app", "resume"],
   })
   .imagePermissions({
     mounts: [

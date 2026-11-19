@@ -74,8 +74,8 @@ describe("Sandbox", () => {
     const r = complete()
       .egress("internet")
       .lifecycle({
-        onPause: ["/usr/local/bin/agentd", "pause"],
-        onResume: ["/usr/local/bin/agentd", "resume"],
+        onPause: ["/usr/local/bin/app", "pause"],
+        onResume: ["/usr/local/bin/app", "resume"],
       })
       .imagePermissions({
         mounts: [
@@ -94,8 +94,8 @@ describe("Sandbox", () => {
       connections: [{ to: { type: "acme/files", id: "workspace-files" }, port: 2049 }],
     })
     expect(r.config.lifecycle).toEqual({
-      onPause: ["/usr/local/bin/agentd", "pause"],
-      onResume: ["/usr/local/bin/agentd", "resume"],
+      onPause: ["/usr/local/bin/app", "pause"],
+      onResume: ["/usr/local/bin/app", "resume"],
     })
   })
 

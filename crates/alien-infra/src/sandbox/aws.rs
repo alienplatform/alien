@@ -3850,7 +3850,7 @@ mod tests {
         .expect("extension manifest");
         let mut subject = sandbox();
         subject.image_user = Some(0);
-        subject.lifecycle.on_pause = Some(vec!["/usr/local/bin/agentd".into(), "pause".into()]);
+        subject.lifecycle.on_pause = Some(vec!["/usr/local/bin/app".into(), "pause".into()]);
         subject.image_permissions = Some(SandboxImagePermissions {
             mounts: vec![SandboxImageMount {
                 mount_type: SandboxImageMountType::Nfs,
@@ -3966,7 +3966,7 @@ mod tests {
                     { "cidr": "10.42.1.4/32", "port": 2049 },
                     { "cidr": "10.42.3.9/32", "port": 2049 }
                 ],
-                "onPause": ["/usr/local/bin/agentd", "pause"]
+                "onPause": ["/usr/local/bin/app", "pause"]
             })
         );
         let controller = executor

@@ -22,7 +22,7 @@ privileged-supervisor = { command-uid = 1000 }
 build = { toolchain = "rust", binary-name = "builder", src = "crates/builder" }
 egress = "none"
 default-policy = "internet"
-session = { max-lifetime = 3600, on-pause = ["/usr/local/bin/agentd", "pause"], on-resume = ["/usr/local/bin/agentd", "resume"] }
+session = { max-lifetime = 3600, on-pause = ["/usr/local/bin/app", "pause"], on-resume = ["/usr/local/bin/app", "resume"] }
 image-permissions = { mounts = [{ type = "nfs", path = "/workspace" }, { type = "tmpfs", path = "/var/lib/acme/scratch", size = "8Gi" }, { type = "bind", from = "/var/lib/acme/scratch", path = "/workspace/tmp" }], connections = [{ to = "workspace-files", port = 2049 }] }
 
 [sandbox.mirror]

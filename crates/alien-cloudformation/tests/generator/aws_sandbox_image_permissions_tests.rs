@@ -42,7 +42,7 @@ fn sandbox(permissions: Option<SandboxImagePermissions>) -> Sandbox {
         .lifecycle(SandboxLifecyclePolicy {
             on_pause: permissions
                 .is_some()
-                .then(|| vec!["/usr/local/bin/agentd".into(), "pause".into()]),
+                .then(|| vec!["/usr/local/bin/app".into(), "pause".into()]),
             ..Default::default()
         })
         .build();
@@ -248,7 +248,7 @@ fn an_image_setup_builds_gets_the_contract() {
                 {"type": "bind", "from": "/var/lib/app/scratch", "path": "/workspace/tmp"}
             ],
             "connections": [],
-            "onPause": ["/usr/local/bin/agentd", "pause"]
+            "onPause": ["/usr/local/bin/app", "pause"]
         })
     );
 }
@@ -371,7 +371,7 @@ fn declared_lifecycle_steps_enable_the_session_hooks_they_need() {
     assert_eq!(microvm_hooks(no_steps.clone()), previous);
 
     let mut pause = no_steps.clone();
-    pause.lifecycle.on_pause = Some(vec!["/usr/local/bin/agentd".into(), "pause".into()]);
+    pause.lifecycle.on_pause = Some(vec!["/usr/local/bin/app".into(), "pause".into()]);
     assert_eq!(
         microvm_hooks(pause.clone()),
         json!({
@@ -382,7 +382,7 @@ fn declared_lifecycle_steps_enable_the_session_hooks_they_need() {
     );
 
     let mut resume = no_steps;
-    resume.lifecycle.on_resume = Some(vec!["/usr/local/bin/agentd".into(), "resume".into()]);
+    resume.lifecycle.on_resume = Some(vec!["/usr/local/bin/app".into(), "resume".into()]);
     assert_eq!(
         microvm_hooks(resume),
         json!({

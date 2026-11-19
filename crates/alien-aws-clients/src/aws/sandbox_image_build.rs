@@ -294,8 +294,8 @@ mod tests {
             })
             .egress(alien_core::SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
-                on_pause: on_pause.then(|| vec!["/usr/local/bin/agentd".into(), "pause".into()]),
-                on_resume: on_resume.then(|| vec!["/usr/local/bin/agentd".into(), "resume".into()]),
+                on_pause: on_pause.then(|| vec!["/usr/local/bin/app".into(), "pause".into()]),
+                on_resume: on_resume.then(|| vec!["/usr/local/bin/app".into(), "resume".into()]),
                 ..Default::default()
             })
             .build()
