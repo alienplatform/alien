@@ -35,8 +35,6 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::{ErrorData, Result};
 
-/// Transport implementation that persists state to the operator's local DB
-/// and re-reads config each step to pick up sync loop changes.
 /// How an apply checkpoint ended.
 #[derive(Debug, PartialEq, Eq)]
 enum ApplyCheckpoint {
@@ -106,6 +104,8 @@ async fn checkpoint_apply(
 /// Tries an apply checkpoint makes against a stored state that keeps changing.
 const APPLY_CHECKPOINT_ATTEMPTS: usize = 5;
 
+/// Transport implementation that persists state to the operator's local DB
+/// and re-reads config each step to pick up sync loop changes.
 struct OperatorTransport {
     db: Arc<OperatorDb>,
     operator_config: OperatorConfig,
