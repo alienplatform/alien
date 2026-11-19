@@ -61,6 +61,20 @@ pub(super) async fn reconcile(
     record: &mut Option<AwsSandboxEgressScaffolding>,
 ) -> Result<ScaffoldingProgress> {
     let sandbox_id = sandbox.id.as_str();
+    // The direct connections are connector rules setup installs; this path does not write them,
+    // so it refuses rather than build a connector that silently lacks them.
+    if sandbox
+        .image_permissions
+        .as_ref()
+        .is_some_and(|permissions| !permissions.connections.is_empty())
+    {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "sandbox image connections are installed by the CloudFormation setup \
+                      package; this setup path does not install them yet"
+                .to_string(),
+            resource_id: Some(sandbox.id.clone()),
+        }));
+    }
     let Some(network) = network_ready(stack_state, network_id, sandbox)? else {
         info!(
             sandbox_id,

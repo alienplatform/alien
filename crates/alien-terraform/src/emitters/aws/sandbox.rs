@@ -78,6 +78,18 @@ pub struct AwsSandboxEmitter;
 impl TfEmitter for AwsSandboxEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
+        // Refused rather than rendered without them: the connector rules and the agent's contract
+        // exist only in the CloudFormation package so far.
+        if sandbox.declares_image_permissions() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox image permissions".into(),
+                reason: format!(
+                    "sandbox '{}' declares imagePermissions or lifecycle steps, which the \
+                     Terraform package does not install yet; use the CloudFormation package",
+                    sandbox.id()
+                ),
+            }));
+        }
         let label = required_label(ctx)?;
         // A sandbox whose controller renders its own bundle reads it through the bundle Storage's
         // grant, and has no published one.

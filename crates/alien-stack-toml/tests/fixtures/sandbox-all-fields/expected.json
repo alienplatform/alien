@@ -59,6 +59,18 @@
       "lifecycle": "live",
       "remoteAccess": true
     },
+    "workspace-files": {
+      "config": {
+        "id": "workspace-files",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
     "builder": {
       "config": {
         "id": "builder",
@@ -73,8 +85,43 @@
         },
         "defaultPolicy": "internet",
         "egress": "none",
+        "imagePermissions": {
+          "connections": [
+            {
+              "port": 2049,
+              "to": {
+                "id": "workspace-files",
+                "type": "storage"
+              }
+            }
+          ],
+          "mounts": [
+            {
+              "path": "/workspace",
+              "type": "nfs"
+            },
+            {
+              "path": "/var/lib/acme/scratch",
+              "size": "8Gi",
+              "type": "tmpfs"
+            },
+            {
+              "from": "/var/lib/acme/scratch",
+              "path": "/workspace/tmp",
+              "type": "bind"
+            }
+          ]
+        },
         "lifecycle": {
-          "maxLifetimeSeconds": 3600
+          "maxLifetimeSeconds": 3600,
+          "onPause": [
+            "/usr/local/bin/agentd",
+            "pause"
+          ],
+          "onResume": [
+            "/usr/local/bin/agentd",
+            "resume"
+          ]
         }
       },
       "dependencies": [],

@@ -301,10 +301,7 @@ impl AwsSandboxController {
             &bundle_uri,
             tier.baseline_memory_mib,
         )
-        .with_agent_environment(alien_core::sandbox_egress::aws_sandbox_agent_environment(
-            ctx.desired_stack,
-            config,
-        ))
+        .with_agent_environment(agent_environment(ctx, config)?)
         .with_receipt()
         .into_alien_error()
         .context(ErrorData::ResourceConfigInvalid {
@@ -430,8 +427,7 @@ impl AwsSandboxController {
         self.image_arn = Some(image_arn);
         self.pending_version = Some(image_version);
         self.pending_bundle_uri = Some(bundle_uri);
-        self.pending_supervisor_environment =
-            alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.desired_stack, config);
+        self.pending_supervisor_environment = agent_environment(ctx, config)?;
         self.region = Some(aws_config.region.clone());
 
         info!(sandbox_id = %config.id, image = %image_name, "MicroVM image build started");
@@ -832,11 +828,7 @@ impl AwsSandboxController {
         let desired_bundle = self.bundle_to_build(ctx, config, &aws_config.region)?.uri();
 
         if self.bundle_uri.as_deref() == Some(desired_bundle.as_str())
-            && self.supervisor_environment
-                == alien_core::sandbox_egress::aws_sandbox_agent_environment(
-                    ctx.desired_stack,
-                    config,
-                )
+            && self.supervisor_environment == agent_environment(ctx, config)?
         {
             info!(sandbox_id = %config.id, "Updated AWS sandbox configuration");
             return Ok(HandlerAction::Continue {
@@ -916,10 +908,7 @@ impl AwsSandboxController {
             &desired_bundle,
             tier.baseline_memory_mib,
         )
-        .with_agent_environment(alien_core::sandbox_egress::aws_sandbox_agent_environment(
-            ctx.desired_stack,
-            config,
-        ))
+        .with_agent_environment(agent_environment(ctx, config)?)
         .for_roll(self.active_version.as_deref())
         .for_retry(self.build_retry_generation)
         .with_receipt()
@@ -977,8 +966,7 @@ impl AwsSandboxController {
         // ACTIVE, so the binding keeps naming the bundle sessions can actually start from.
         self.pending_version = Some(image_version);
         self.pending_bundle_uri = Some(desired_bundle);
-        self.pending_supervisor_environment =
-            alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.desired_stack, config);
+        self.pending_supervisor_environment = agent_environment(ctx, config)?;
         if let Some(arn) = rolled.image_arn {
             self.image_arn = Some(arn);
         }
@@ -2078,6 +2066,58 @@ fn is_remote_resource_absent(error: &AlienError<CloudClientErrorData>) -> bool {
         &error.error,
         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
     )
+}
+
+/// The agent's environment for this sandbox's image: the egress contract and, when the sandbox
+/// declares them, its image permissions with each connection resolved to the address range of
+/// the network setup created.
+fn agent_environment(
+    ctx: &ResourceControllerContext<'_>,
+    config: &Sandbox,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut environment =
+        alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.desired_stack, config);
+    if !config.declares_image_permissions() {
+        return Ok(environment);
+    }
+    let invalid = |message: String| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message,
+            resource_id: Some(config.id.clone()),
+        })
+    };
+    let network_cidr = if config
+        .image_permissions
+        .as_ref()
+        .is_some_and(|permissions| !permissions.connections.is_empty())
+    {
+        alien_core::sandbox_image_permissions::validate_connections(ctx.desired_stack, config)
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "sandbox image connections do not resolve".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+        let network = alien_core::sandbox_egress::sandbox_egress_network(ctx.desired_stack)
+            .map_err(|refusal| invalid(format!("image connections need a network: {refusal}")))?;
+        let controller = ctx.require_dependency::<crate::AwsNetworkController>(
+            &ResourceRef::new(alien_core::Network::RESOURCE_TYPE, network.id),
+        )?;
+        Some(controller.cidr_block.ok_or_else(|| {
+            invalid("the network setup created reports no address range".to_string())
+        })?)
+    } else {
+        None
+    };
+    environment.extend(
+        alien_core::sandbox_image_permissions::image_permissions_environment(
+            config,
+            network_cidr.as_deref(),
+        )
+        .context(ErrorData::ResourceConfigInvalid {
+            message: "cannot build the sandbox image permissions".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?,
+    );
+    Ok(environment)
 }
 
 #[cfg(test)]

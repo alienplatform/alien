@@ -58,11 +58,19 @@ fn designed() -> SandboxImagePermissions {
                 mount_type: SandboxImageMountType::Nfs,
                 path: "/workspace".into(),
                 size: None,
+                from: None,
             },
             SandboxImageMount {
                 mount_type: SandboxImageMountType::Tmpfs,
-                path: "/workspace/tmp".into(),
+                path: "/var/lib/app/scratch".into(),
                 size: Some("8Gi".into()),
+                from: None,
+            },
+            SandboxImageMount {
+                mount_type: SandboxImageMountType::Bind,
+                path: "/workspace/tmp".into(),
+                size: None,
+                from: Some("/var/lib/app/scratch".into()),
             },
         ],
         connections: vec![SandboxImageConnection {
@@ -169,7 +177,8 @@ fn each_connection_is_one_rule_and_the_agent_gets_the_contract() {
         json!({
             "mounts": [
                 {"type": "nfs", "path": "/workspace"},
-                {"type": "tmpfs", "path": "/workspace/tmp", "sizeBytes": 8589934592u64}
+                {"type": "tmpfs", "path": "/var/lib/app/scratch", "sizeBytes": 8589934592u64},
+                {"type": "bind", "from": "/var/lib/app/scratch", "path": "/workspace/tmp"}
             ],
             "connections": [{"cidr": "10.0.0.0/16", "port": 2049}],
             "onPause": ["/usr/local/bin/agentd", "pause"]
@@ -187,7 +196,8 @@ fn each_connection_is_one_rule_and_the_agent_gets_the_contract() {
     let statements = shown[0]["statements"].to_string();
     for expected in [
         "NFS file system at /workspace",
-        "tmpfs of 8Gi at /workspace/tmp",
+        "tmpfs of 8Gi at /var/lib/app/scratch",
+        "place /var/lib/app/scratch again at /workspace/tmp",
         "connect directly to workspace-files on TCP port 2049",
         "bypasses the egress gateway and is not in its connection log",
         "the image vendor's responsibility",

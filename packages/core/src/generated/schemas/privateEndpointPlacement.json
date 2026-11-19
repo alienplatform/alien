@@ -1,0 +1,1 @@
+{"type":"string","description":"Where a resource's private network endpoints are, in terms deployment can resolve to an\naddress range before the resource itself exists.","enum":["stackNetwork"],"x-readme-ref-name":"PrivateEndpointPlacement"}

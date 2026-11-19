@@ -2495,6 +2495,16 @@
         "id": {
           "type": "string"
         },
+        "imagePermissions": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/SandboxImagePermissions"
+            }
+          ]
+        },
         "lifecycle": {
           "$ref": "#/components/schemas/SandboxLifecyclePolicy"
         },
@@ -2647,6 +2657,76 @@
         }
       ]
     },
+    "SandboxImageConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "type": "integer"
+        },
+        "to": {
+          "$ref": "#/components/schemas/ResourceRef"
+        }
+      },
+      "required": [
+        "to",
+        "port"
+      ],
+      "type": "object"
+    },
+    "SandboxImageMount": {
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "size": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/components/schemas/SandboxImageMountType"
+        }
+      },
+      "required": [
+        "type",
+        "path"
+      ],
+      "type": "object"
+    },
+    "SandboxImageMountType": {
+      "enum": [
+        "nfs",
+        "tmpfs",
+        "bind"
+      ],
+      "type": "string"
+    },
+    "SandboxImagePermissions": {
+      "additionalProperties": false,
+      "properties": {
+        "connections": {
+          "items": {
+            "$ref": "#/components/schemas/SandboxImageConnection"
+          },
+          "type": "array"
+        },
+        "mounts": {
+          "items": {
+            "$ref": "#/components/schemas/SandboxImageMount"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "SandboxLifecyclePolicy": {
       "additionalProperties": false,
       "properties": {
@@ -2659,6 +2739,24 @@
         "maxLifetimeSeconds": {
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "onPause": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "onResume": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
             "null"
           ]
         }

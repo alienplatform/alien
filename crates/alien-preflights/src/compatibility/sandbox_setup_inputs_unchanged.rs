@@ -38,16 +38,24 @@ impl SandboxSetupInputsUnchangedCheck {
             };
             let new_inputs =
                 comparable_aws_sandbox_setup_inputs(new_stack, new_sandbox, new_entry.lifecycle);
-            let changed: Vec<&str> = if old_inputs.len() == new_inputs.len() {
-                old_inputs
+            // By name, so an input only one side has (image permissions declared or removed) is
+            // named rather than reported as the whole configuration.
+            let value = |inputs: &[(&'static str, serde_json::Value)], name: &str| {
+                inputs
                     .iter()
-                    .zip(&new_inputs)
-                    .filter(|((_, was), (_, is))| was != is)
-                    .map(|((name, _), _)| *name)
-                    .collect()
-            } else {
-                vec!["configuration"]
+                    .find(|(input, _)| *input == name)
+                    .map(|(_, value)| value.clone())
             };
+            let mut names: Vec<&str> = old_inputs.iter().map(|(name, _)| *name).collect();
+            for (name, _) in &new_inputs {
+                if !names.contains(name) {
+                    names.push(name);
+                }
+            }
+            let changed: Vec<&str> = names
+                .into_iter()
+                .filter(|name| value(&old_inputs, name) != value(&new_inputs, name))
+                .collect();
             for name in changed {
                 errors.push(format!(
                     "Sandbox '{id}' changes its {name}, which setup applies. Rerun setup with \
@@ -152,6 +160,29 @@ mod tests {
             )
             .add(sandbox, ResourceLifecycle::Live)
             .build()
+    }
+
+    /// The customer approved the connector rules and the mounts at setup, so a change to them
+    /// goes through setup again.
+    fn with_image_connection(mut stack: Stack, port: u16) -> Stack {
+        let sandbox = stack
+            .resources
+            .get_mut("agents")
+            .expect("sandbox")
+            .config
+            .downcast_mut::<Sandbox>()
+            .expect("a sandbox");
+        sandbox.image_permissions = Some(alien_core::SandboxImagePermissions {
+            mounts: vec![],
+            connections: vec![alien_core::SandboxImageConnection {
+                to: alien_core::ResourceRef::new(
+                    alien_core::ResourceType::from("acme/files"),
+                    "workspace-files",
+                ),
+                port,
+            }],
+        });
+        stack
     }
 
     async fn run(old: Stack, new: Stack) -> CheckResult {
@@ -311,6 +342,16 @@ mod tests {
             (stack(None, BUNDLE_V1), deny("net-a"), "egress"),
             (deny("net-a"), deny("net-b"), "egress network"),
             (stack(None, BUNDLE_V1), remote, "remote grant"),
+            (
+                deny("net-a"),
+                with_image_connection(deny("net-a"), 2049),
+                "image permissions",
+            ),
+            (
+                with_image_connection(deny("net-a"), 2049),
+                with_image_connection(deny("net-a"), 2050),
+                "image permissions",
+            ),
         ] {
             let result = run(old, new).await;
             assert!(!result.success, "a {input} change must need setup");

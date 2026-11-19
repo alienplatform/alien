@@ -29,6 +29,8 @@ const runner = new alien.Sandbox("runner")
   commandUid: 1000,
 }
 
+const files = new alien.Storage("workspace-files").build()
+
 const builder = new alien.Sandbox("builder")
   .code({
     type: "source",
@@ -37,7 +39,19 @@ const builder = new alien.Sandbox("builder")
   })
   .egress("none")
   .defaultPolicy("internet")
-  .lifecycle({ maxLifetimeSeconds: 3_600 })
+  .lifecycle({
+    maxLifetimeSeconds: 3_600,
+    onPause: ["/usr/local/bin/agentd", "pause"],
+    onResume: ["/usr/local/bin/agentd", "resume"],
+  })
+  .imagePermissions({
+    mounts: [
+      { type: "nfs", path: "/workspace" },
+      { type: "tmpfs", path: "/var/lib/acme/scratch", size: "8Gi" },
+      { type: "bind", from: "/var/lib/acme/scratch", path: "/workspace/tmp" },
+    ],
+    connections: [{ to: files, port: 2049 }],
+  })
   .build()
 
 const mirror = new alien.Sandbox("mirror")
@@ -50,6 +64,7 @@ export default new alien.Stack("acme-sandbox")
   .inputs(inputs)
   .platforms(["aws"])
   .add(runner, "live", { remoteAccess: true })
+  .add(files, "frozen")
   .add(builder, "frozen")
   .add(mirror, "frozen")
   .build()

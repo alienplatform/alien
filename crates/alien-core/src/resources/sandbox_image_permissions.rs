@@ -26,6 +26,9 @@ pub enum SandboxImageMountType {
     Nfs,
     /// Memory-backed scratch space. Requires `size`.
     Tmpfs,
+    /// Another declared mount, or a directory inside one, placed again at `path`. Requires
+    /// `from`.
+    Bind,
 }
 
 impl SandboxImageMountType {
@@ -34,6 +37,7 @@ impl SandboxImageMountType {
         match self {
             Self::Nfs => "nfs",
             Self::Tmpfs => "tmpfs",
+            Self::Bind => "bind",
         }
     }
 }
@@ -54,6 +58,10 @@ pub struct SandboxImageMount {
     /// refused for other types.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<String>,
+    /// Source of a bind mount: the path of another declared `nfs` or `tmpfs` mount, or a path
+    /// inside one. Required for bind and refused for other types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 /// A private service the image's own sockets may reach without the gateway.
@@ -157,26 +165,64 @@ impl SandboxImagePermissions {
                     "declared more than once",
                 ));
             }
-            match (mount.mount_type, &mount.size) {
-                (SandboxImageMountType::Tmpfs, None) => {
-                    return Err(invalid(
-                        "imagePermissions.mounts.size",
+            let refuse = |field: &str, value: &str, reason: &str| {
+                Err(invalid(
+                    &format!("imagePermissions.mounts.{field}"),
+                    value,
+                    reason,
+                ))
+            };
+            match (mount.mount_type, &mount.size, &mount.from) {
+                (SandboxImageMountType::Tmpfs, None, _) => {
+                    return refuse(
+                        "size",
                         &mount.path,
                         "a tmpfs mount needs a size, such as \"8Gi\"",
-                    ))
+                    )
                 }
-                (SandboxImageMountType::Tmpfs, Some(size)) => {
+                (SandboxImageMountType::Tmpfs, Some(size), None) => {
                     tmpfs_size_bytes(size)
                         .map_err(|reason| invalid("imagePermissions.mounts.size", size, &reason))?;
                 }
-                (SandboxImageMountType::Nfs, Some(size)) => {
-                    return Err(invalid(
-                        "imagePermissions.mounts.size",
-                        size,
-                        "only a tmpfs mount takes a size",
-                    ))
+                (SandboxImageMountType::Nfs | SandboxImageMountType::Bind, Some(size), _) => {
+                    return refuse("size", size, "only a tmpfs mount takes a size")
                 }
-                (SandboxImageMountType::Nfs, None) => {}
+                (SandboxImageMountType::Bind, None, None) => {
+                    return refuse(
+                        "from",
+                        &mount.path,
+                        "a bind mount needs `from`, the declared mount it places again",
+                    )
+                }
+                (SandboxImageMountType::Bind, None, Some(from)) => {
+                    if let Err(reason) = check_mount_path(from) {
+                        return refuse("from", from, &reason);
+                    }
+                    // Only from what the agent itself mounted, so a bind can never expose a path
+                    // of the image's own file system somewhere the declaration did not name.
+                    let source = self.mounts.iter().find(|source| {
+                        source.mount_type != SandboxImageMountType::Bind
+                            && is_same_or_under(from, &source.path)
+                    });
+                    if source.is_none() {
+                        return refuse(
+                            "from",
+                            from,
+                            "must be the path of a declared nfs or tmpfs mount, or inside one",
+                        );
+                    }
+                    if is_same_or_under(&mount.path, from) {
+                        return refuse(
+                            "from",
+                            from,
+                            "a bind cannot be placed inside its own source",
+                        );
+                    }
+                }
+                (SandboxImageMountType::Nfs | SandboxImageMountType::Tmpfs, _, Some(from)) => {
+                    return refuse("from", from, "only a bind mount takes `from`")
+                }
+                (SandboxImageMountType::Nfs, None, None) => {}
             }
         }
         let mut connections = std::collections::HashSet::new();
@@ -354,6 +400,7 @@ mod tests {
             mount_type,
             path: path.into(),
             size: size.map(Into::into),
+            from: None,
         }
     }
 
@@ -462,6 +509,89 @@ mod tests {
         assert_eq!(tmpfs_size_bytes("8Gi").unwrap(), 8_589_934_592);
         assert_eq!(tmpfs_size_bytes("512Mi").unwrap(), 536_870_912);
         assert_eq!(tmpfs_size_bytes("2G").unwrap(), 2_000_000_000);
+    }
+
+    fn bind(from: &str, path: &str) -> SandboxImageMount {
+        SandboxImageMount {
+            mount_type: SandboxImageMountType::Bind,
+            path: path.into(),
+            size: None,
+            from: Some(from.into()),
+        }
+    }
+
+    /// The traced layout: a tmpfs outside the NFS mount, bound into it after each NFS mount.
+    #[test]
+    fn a_bind_places_a_declared_mount_again_and_nothing_else() {
+        let tmpfs = || {
+            mount(
+                SandboxImageMountType::Tmpfs,
+                "/var/lib/app/scratch",
+                Some("8Gi"),
+            )
+        };
+        let nfs = || mount(SandboxImageMountType::Nfs, "/workspace", None);
+        permissions(
+            vec![
+                nfs(),
+                tmpfs(),
+                bind("/var/lib/app/scratch", "/workspace/tmp"),
+            ],
+            vec![],
+        )
+        .validate("s")
+        .unwrap();
+        permissions(
+            vec![tmpfs(), bind("/var/lib/app/scratch/a", "/data")],
+            vec![],
+        )
+        .validate("s")
+        .unwrap();
+
+        for (mounts, why) in [
+            (
+                vec![nfs(), bind("/var/lib/app/scratch", "/workspace/tmp")],
+                "undeclared source",
+            ),
+            (vec![nfs(), bind("/etc", "/workspace/etc")], "system source"),
+            (
+                vec![tmpfs(), bind("/var/lib/app", "/data")],
+                "parent of a mount",
+            ),
+            (
+                vec![
+                    tmpfs(),
+                    bind("/var/lib/app/scratch", "/var/lib/app/scratch/x"),
+                ],
+                "inside itself",
+            ),
+            (
+                vec![
+                    tmpfs(),
+                    bind("/data", "/elsewhere"),
+                    bind("/elsewhere", "/x"),
+                ],
+                "from a bind",
+            ),
+            (
+                vec![SandboxImageMount {
+                    mount_type: SandboxImageMountType::Bind,
+                    path: "/x".into(),
+                    size: None,
+                    from: None,
+                }],
+                "no from",
+            ),
+            (
+                vec![SandboxImageMount {
+                    from: Some("/workspace".into()),
+                    ..nfs()
+                }],
+                "from on nfs",
+            ),
+        ] {
+            assert!(permissions(mounts, vec![]).validate("s").is_err(), "{why}");
+        }
     }
 
     #[test]

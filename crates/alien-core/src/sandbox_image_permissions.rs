@@ -94,7 +94,7 @@ pub fn validate_connections(stack: &Stack, sandbox: &Sandbox) -> Result<()> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContractMount {
-    /// `nfs` or `tmpfs`.
+    /// `nfs`, `tmpfs` or `bind`.
     #[serde(rename = "type")]
     pub mount_type: SandboxImageMountType,
     /// Absolute, normalized target path.
@@ -102,6 +102,9 @@ pub struct ContractMount {
     /// Size in bytes; tmpfs only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<u64>,
+    /// Source path; bind only. A declared nfs or tmpfs mount path, or inside one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 /// One direct connection in the agent's startup contract, already resolved to an address range.
@@ -158,6 +161,7 @@ pub fn image_permissions_contract(
                 mount_type: mount.mount_type,
                 path: mount.path.clone(),
                 size_bytes,
+                from: mount.from.clone(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -243,16 +247,21 @@ pub fn approval_statements(sandbox: &Sandbox) -> Vec<String> {
     let mut statements = Vec::new();
     let permissions = sandbox.image_permissions.clone().unwrap_or_default();
     for mount in &permissions.mounts {
-        statements.push(match (&mount.mount_type, &mount.size) {
-            (SandboxImageMountType::Tmpfs, Some(size)) => format!(
+        statements.push(match (&mount.mount_type, &mount.size, &mount.from) {
+            (SandboxImageMountType::Tmpfs, Some(size), _) => format!(
                 "The sandbox image may mount a tmpfs of {size} at {}.",
                 mount.path
             ),
-            (mount_type, _) => format!(
+            (SandboxImageMountType::Bind, _, Some(from)) => format!(
+                "The sandbox image may place {from} again at {}.",
+                mount.path
+            ),
+            (mount_type, _, _) => format!(
                 "The sandbox image may mount {} at {}.",
                 match mount_type {
                     SandboxImageMountType::Nfs => "an NFS file system",
                     SandboxImageMountType::Tmpfs => "a tmpfs",
+                    SandboxImageMountType::Bind => "a bind mount",
                 },
                 mount.path
             ),
@@ -340,11 +349,19 @@ mod tests {
                     mount_type: SandboxImageMountType::Nfs,
                     path: "/workspace".into(),
                     size: None,
+                    from: None,
                 },
                 SandboxImageMount {
                     mount_type: SandboxImageMountType::Tmpfs,
-                    path: "/workspace/tmp".into(),
+                    path: "/var/lib/app/scratch".into(),
                     size: Some("8Gi".into()),
+                    from: None,
+                },
+                SandboxImageMount {
+                    mount_type: SandboxImageMountType::Bind,
+                    path: "/workspace/tmp".into(),
+                    size: None,
+                    from: Some("/var/lib/app/scratch".into()),
                 },
             ],
             connections: vec![SandboxImageConnection {
@@ -437,7 +454,8 @@ mod tests {
             serde_json::json!({
                 "mounts": [
                     {"type": "nfs", "path": "/workspace"},
-                    {"type": "tmpfs", "path": "/workspace/tmp", "sizeBytes": 8589934592u64}
+                    {"type": "tmpfs", "path": "/var/lib/app/scratch", "sizeBytes": 8589934592u64},
+                    {"type": "bind", "from": "/var/lib/app/scratch", "path": "/workspace/tmp"}
                 ],
                 "connections": [{"cidr": "10.0.0.0/16", "port": 2049}],
                 "onPause": ["/usr/local/bin/agentd", "pause"],
@@ -472,7 +490,8 @@ mod tests {
             statements,
             [
                 "The sandbox image may mount an NFS file system at /workspace.",
-                "The sandbox image may mount a tmpfs of 8Gi at /workspace/tmp.",
+                "The sandbox image may mount a tmpfs of 8Gi at /var/lib/app/scratch.",
+                "The sandbox image may place /var/lib/app/scratch again at /workspace/tmp.",
                 "The sandbox image may connect directly to workspace-files on TCP port 2049. \
                  This connection bypasses the egress gateway and is not in its connection log.",
                 "The sandbox image runs its own steps before a pause and after a resume.",
