@@ -423,9 +423,7 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
                 assert!(main.contains("listenerPort     = 443"));
                 assert!(main.contains("provider          = \"gkeGateway\""));
                 assert!(main.contains("mode               = \"managedTlsSecret\""));
-                assert!(main.contains(
-                    "secretNameTemplate = \"deployment-{{ resourceId }}-tls\""
-                ));
+                assert!(main.contains("secretNameTemplate = \"deployment-{{ resourceId }}-tls\""));
                 assert!(!main.contains("mode = \"none\""));
                 assert!(main.contains("gke-gcloud-auth-plugin"));
                 assert!(main.contains("provideClusterInfo = true"));
@@ -438,9 +436,7 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
                 assert!(main.contains("gatewayClassName = \"azure-alb-external\""));
                 assert!(main.contains("listenerPort     = 443"));
                 assert!(main.contains("mode               = \"managedTlsSecret\""));
-                assert!(main.contains(
-                    "secretNameTemplate = \"deployment-{{ resourceId }}-tls\""
-                ));
+                assert!(main.contains("secretNameTemplate = \"deployment-{{ resourceId }}-tls\""));
                 assert!(main.contains(
                     "\"alb.networking.azure.io/alb-namespace\" = var.kubernetes_namespace"
                 ));
@@ -1159,6 +1155,12 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
         .get("helm.tf")
         .expect("registered module with helm install should include helm.tf");
     assert!(helm.contains("acme_app_deployment.this.helm_values"));
+    // The `helm_values` output carries the merged values the release installs with.
+    assert!(helm.contains("output \"helm_values\""));
+    let compact_values = helm.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(compact_values
+        .contains("chart_values_provider = yamldecode(acme_app_deployment.this.helm_values)"));
+    assert!(compact_values.contains("sensitive = true"));
     assert!(!helm.contains("local.helm_values"));
     assert!(helm.contains("resource \"kubernetes_secret_v1\" \"remote_operator_credentials\""));
     assert!(helm.contains("var.remote_operator_sync_token"));
@@ -1250,6 +1252,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     assert!(readme.contains("permanently retires the setup"));
     assert!(readme.contains("disabling it in place is unsupported"));
     assert!(readme.contains("separately managed Helm release"));
+    assert!(readme.contains("terraform output -raw helm_values > values.yaml"));
     assert!(readme.contains("Supply `remote_operator_collector_token` only when"));
     assert!(readme.contains("Keep the credentials required by the chart populated"));
     assert!(readme.contains("terraform apply -replace=terraform_data.remote_operator_ownership"));
