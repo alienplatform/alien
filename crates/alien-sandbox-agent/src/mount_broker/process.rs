@@ -52,8 +52,23 @@ const BROKER_CAPABILITIES: u32 = (1 << 21) | (1 << 18) | (1 << 19) | (1 << 2) | 
 /// write `usermodehelper/bset` and `inheritable`).
 const SEAL_CAPABILITIES: u32 = (1 << 8) | (1 << 16);
 
-/// Where the kernel runs its helpers from; read-only in the image's mount namespace.
-const SYSTEM_BINARIES: &[&str] = &["/usr/sbin", "/sbin"];
+/// Kept until the seal when the agent has it: sets the immutable attribute on `/` and `/usr`.
+const IMMUTABLE_CAPABILITY: u32 = 1 << 9;
+
+/// What the kernel reads when it runs a helper on its own (`/sbin/request-key` and its
+/// configuration, `/sbin/modprobe`); read-only in the image's mount namespace. `/usr/sbin` first:
+/// `/sbin` is often a link to it.
+const SYSTEM_PATHS: &[(&str, ops::SystemPath)] = &[
+    ("/usr/sbin", ops::SystemPath::Directory),
+    ("/sbin", ops::SystemPath::Directory),
+    ("/etc/request-key.conf", ops::SystemPath::File),
+    ("/etc/request-key.d", ops::SystemPath::Directory),
+];
+
+/// Directories whose entries the image must not create, remove or rename: the image could
+/// otherwise move `/usr` or `/etc` aside and put its own `sbin` or `request-key.conf` in their
+/// place, outside the read-only binds.
+const IMMUTABLE_DIRECTORIES: &[&str] = &["/", "/usr"];
 
 /// The kernel settings for the programs it runs on its own (`request-key`, `modprobe`). The
 /// image's NFS server can make the kernel call `request-key` (an ID mapping or a DNS referral), and
@@ -86,6 +101,8 @@ pub struct Config {
     pub deadline: Duration,
     /// Host-wide kernel settings; tests point them elsewhere.
     pub helpers: HelperSettings,
+    /// The image's `/` for [`SYSTEM_PATHS`] and [`IMMUTABLE_DIRECTORIES`]; tests use a stand-in.
+    pub system_root: PathBuf,
 }
 
 impl Default for Config {
@@ -95,6 +112,7 @@ impl Default for Config {
             cgroup_name: IMAGE_CGROUP_NAME.into(),
             deadline: REQUEST_DEADLINE,
             helpers: HelperSettings::default(),
+            system_root: "/".into(),
         }
     }
 }
@@ -670,7 +688,9 @@ fn broker_main(
     close_other_fds(&[control.as_raw_fd(), join.as_raw_fd()]);
     // The seal's capabilities only where the agent has them: without them the seal fails, by
     // name, when the image is about to start.
-    crate::privilege::restrict_capabilities(BROKER_CAPABILITIES | (SEAL_CAPABILITIES & permitted))?;
+    crate::privilege::restrict_capabilities(
+        BROKER_CAPABILITIES | ((SEAL_CAPABILITIES | IMMUTABLE_CAPABILITY) & permitted),
+    )?;
     deny_network()?;
     let one: libc::c_int = 1;
     // SAFETY: a valid descriptor and option.
@@ -852,10 +872,12 @@ impl Loop<'_> {
         };
     }
 
-    /// Before the image first starts: loads the filesystems the broker mounts, makes the kernel's
-    /// helper directories read-only in the image's mount namespace, empties the capability sets
-    /// of every program the kernel runs on its own and stops module loading by program, then drops
-    /// the capabilities that took. Any failure keeps the image from starting.
+    /// Before the image first starts: loads the filesystems the broker mounts, makes what the
+    /// kernel reads to run a helper ([`SYSTEM_PATHS`]) read-only in the image's mount namespace,
+    /// sets the immutable attribute on [`IMMUTABLE_DIRECTORIES`] (best effort, reported), empties
+    /// the capability sets of every program the kernel runs on its own and stops module loading
+    /// by program, then drops the capabilities that took. Any other failure keeps the image from
+    /// starting.
     fn seal(&mut self, namespace: RawFd) -> Result<(), String> {
         if self.sealed {
             return Ok(());
@@ -875,7 +897,7 @@ impl Loop<'_> {
         // SAFETY: a two-element buffer for pipe2.
         if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
             return Err(format!(
-                "step read-only system binaries: pipe: {}",
+                "step read-only system paths: pipe: {}",
                 io::Error::last_os_error()
             ));
         }
@@ -886,7 +908,7 @@ impl Loop<'_> {
         let pid = unsafe { libc::fork() };
         if pid < 0 {
             return Err(format!(
-                "step read-only system binaries: fork: {}",
+                "step read-only system paths: fork: {}",
                 io::Error::last_os_error()
             ));
         }
@@ -899,9 +921,27 @@ impl Loop<'_> {
                     io::Error::last_os_error()
                 ))
             } else {
-                ops::protect_system_binaries(SYSTEM_BINARIES)
-                    .err()
-                    .map(|(_, reason)| reason)
+                let root = self.config.system_root.to_string_lossy();
+                match ops::protect_system_paths(&root, SYSTEM_PATHS) {
+                    // Created what was missing first: nothing new is needed at the top level now.
+                    Ok(protected) => {
+                        let mut report = format!("read-only: {}", protected.join(", "));
+                        for line in ops::make_immutable(&root, IMMUTABLE_DIRECTORIES) {
+                            report.push_str("; ");
+                            report.push_str(&line);
+                        }
+                        // SAFETY: writing from a buffer we own to our pipe.
+                        unsafe {
+                            libc::write(
+                                write_end.as_raw_fd(),
+                                report.as_ptr().cast(),
+                                report.len().min(1000),
+                            )
+                        };
+                        None
+                    }
+                    Err(reason) => Some(reason),
+                }
             };
             let code = match failure {
                 None => 0,
@@ -925,26 +965,27 @@ impl Loop<'_> {
         // SAFETY: waiting for our own child (local filesystem calls only).
         if unsafe { libc::waitpid(pid, &mut status, 0) } < 0 {
             return Err(format!(
-                "step read-only system binaries: wait: {}",
+                "step read-only system paths: wait: {}",
                 io::Error::last_os_error()
             ));
         }
+        let mut report = String::new();
+        let _ = std::fs::File::from(read_end).read_to_string(&mut report);
         if !libc::WIFEXITED(status) || libc::WEXITSTATUS(status) != 0 {
-            let mut reason = String::new();
-            let _ = std::fs::File::from(read_end).read_to_string(&mut reason);
             return Err(format!(
-                "step read-only system binaries ({}): {}",
-                SYSTEM_BINARIES.join(", "),
-                if reason.is_empty() {
+                "step read-only system paths: {}",
+                if report.is_empty() {
                     "the helper failed"
                 } else {
-                    &reason
+                    &report
                 }
             ));
         }
+        eprintln!("mount broker: sealed: {report}");
         seal_helper_settings(&self.config.helpers)?;
-        crate::privilege::restrict_capabilities(BROKER_CAPABILITIES)
-            .map_err(|error| format!("step drop SETPCAP and SYS_MODULE: {error}"))?;
+        crate::privilege::restrict_capabilities(BROKER_CAPABILITIES).map_err(|error| {
+            format!("step drop SETPCAP, SYS_MODULE and LINUX_IMMUTABLE: {error}")
+        })?;
         self.sealed = true;
         Ok(())
     }
@@ -1167,7 +1208,8 @@ impl Loop<'_> {
         Ok((pid, std::fs::File::from(read)))
     }
 
-    /// Detaches every NFS mount at a declared path, in a helper bound by the request deadline.
+    /// Detaches every NFS mount in the image's mount namespace, wherever it is, in a helper bound
+    /// by the detach deadline.
     /// Used when the image's own pause step fails: an NFS connection does not survive the
     /// snapshot. A request still in flight is ended first, so its mount cannot land afterwards.
     fn detach_nfs(&mut self) {

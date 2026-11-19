@@ -161,6 +161,178 @@ fn broker_allows_declared_mounts_and_refuses_everything_else() {
     );
 }
 
+/// A fresh filesystem of type `fs` at `path`, standing in for the image's `/`: the seal changes
+/// what it protects there, and these are disposable (the container's own `/` is not).
+fn stand_in_root(path: &str, fs: &str) {
+    std::fs::create_dir_all(path).unwrap();
+    let status = Command::new("mount")
+        .args(["-t", fs, fs, path])
+        .status()
+        .unwrap();
+    assert!(status.success(), "mount {fs} at {path}");
+}
+
+/// Whether the immutable attribute is set on `path`.
+fn immutable(path: &str) -> bool {
+    let file = std::fs::File::open(path).unwrap();
+    let mut flags: libc::c_int = 0;
+    // SAFETY: valid descriptor and an int for FS_IOC_GETFLAGS.
+    let rc = unsafe {
+        libc::ioctl(
+            std::os::fd::AsRawFd::as_raw_fd(&file),
+            0x8008_6601_u32 as _,
+            &mut flags,
+        )
+    };
+    rc == 0 && flags & 0x10 != 0
+}
+
+fn read_only(path: &str) -> bool {
+    let name = std::ffi::CString::new(path).unwrap();
+    // SAFETY: a zeroed statvfs for statvfs to fill.
+    let mut fs: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: valid path and buffer.
+    unsafe { libc::statvfs(name.as_ptr(), &mut fs) == 0 && fs.f_flag & libc::ST_RDONLY != 0 }
+}
+
+/// The request-key paths for an image that has them, lacks them, reaches them through links
+/// (also ones that try to leave the root), or has a link that leads nowhere.
+fn system_path_variants() {
+    use super::ops::{self, SystemPath};
+    let paths: &[(&str, SystemPath)] = &[
+        ("/usr/sbin", SystemPath::Directory),
+        ("/sbin", SystemPath::Directory),
+        ("/etc/request-key.conf", SystemPath::File),
+        ("/etc/request-key.d", SystemPath::Directory),
+    ];
+    let all_read_only = |root: &str| {
+        for (path, _) in paths {
+            let full = format!("{root}{path}");
+            assert!(read_only(&full), "{full} is not read-only");
+        }
+    };
+
+    // Present.
+    let root = "/tmp/variants/present";
+    stand_in_root(root, "tmpfs");
+    for dir in ["usr/sbin", "sbin", "etc/request-key.d"] {
+        std::fs::create_dir_all(format!("{root}/{dir}")).unwrap();
+    }
+    std::fs::write(format!("{root}/etc/request-key.conf"), "").unwrap();
+    let done = ops::protect_system_paths(root, paths).expect("present");
+    assert_eq!(
+        done,
+        [
+            "/usr/sbin",
+            "/sbin",
+            "/etc/request-key.conf",
+            "/etc/request-key.d"
+        ]
+    );
+    all_read_only(root);
+
+    // Absent (an image FROM scratch): created first, root-owned, then protected.
+    let root = "/tmp/variants/absent";
+    stand_in_root(root, "tmpfs");
+    ops::protect_system_paths(root, paths).expect("absent");
+    all_read_only(root);
+    for (path, mode, dir) in [
+        ("/usr/sbin", 0o755, true),
+        ("/sbin", 0o755, true),
+        ("/etc/request-key.conf", 0o644, false),
+        ("/etc/request-key.d", 0o755, true),
+    ] {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::symlink_metadata(format!("{root}{path}")).unwrap();
+        assert_eq!(meta.is_dir(), dir, "{path}");
+        assert_eq!(meta.mode() & 0o7777, mode, "{path}");
+        assert_eq!((meta.uid(), meta.gid()), (0, 0), "{path}");
+    }
+
+    // Linked (`/sbin -> usr/sbin` as on AL2023, absolute links, a link that tries to leave the
+    // root): each resolves inside the root and its target is protected; the links stay.
+    let root = "/tmp/variants/linked";
+    stand_in_root(root, "tmpfs");
+    for dir in ["usr/sbin", "etc/keys/request-key.d"] {
+        std::fs::create_dir_all(format!("{root}/{dir}")).unwrap();
+    }
+    std::fs::write(format!("{root}/etc/keys/request-key.conf"), "").unwrap();
+    symlink("usr/sbin", format!("{root}/sbin")).unwrap();
+    symlink(
+        "/etc/keys/request-key.conf",
+        format!("{root}/etc/request-key.conf"),
+    )
+    .unwrap();
+    symlink(
+        "../../../../../etc/keys/request-key.d",
+        format!("{root}/etc/request-key.d"),
+    )
+    .unwrap();
+    let done = ops::protect_system_paths(root, paths).expect("linked");
+    assert_eq!(
+        done,
+        [
+            "/usr/sbin",
+            "/sbin -> /usr/sbin",
+            "/etc/request-key.conf -> /etc/keys/request-key.conf",
+            "/etc/request-key.d -> /etc/keys/request-key.d",
+        ]
+    );
+    // Checked at the targets: from here (outside the root) the absolute links lead elsewhere.
+    for target in [
+        "/usr/sbin",
+        "/etc/keys/request-key.conf",
+        "/etc/keys/request-key.d",
+    ] {
+        assert!(read_only(&format!("{root}{target}")), "{target}");
+    }
+    assert!(std::fs::symlink_metadata(format!("{root}/sbin"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    // Nothing outside the root was touched.
+    assert!(!read_only("/etc/keys"), "outside the root");
+
+    // A link that leads nowhere: refused by name, nothing created through it.
+    let root = "/tmp/variants/dangling";
+    stand_in_root(root, "tmpfs");
+    std::fs::create_dir_all(format!("{root}/usr/sbin")).unwrap();
+    symlink("/nowhere/sbin", format!("{root}/sbin")).unwrap();
+    let error = ops::protect_system_paths(root, paths).expect_err("dangling");
+    assert!(
+        error.contains("/sbin is a symbolic link to nothing"),
+        "{error}"
+    );
+    assert!(!Path::new(&format!("{root}/nowhere")).exists());
+
+    // A non-directory where a directory is expected: protected as it is.
+    let root = "/tmp/variants/file";
+    stand_in_root(root, "tmpfs");
+    std::fs::create_dir_all(format!("{root}/usr/sbin")).unwrap();
+    std::fs::write(format!("{root}/sbin"), "").unwrap();
+    ops::protect_system_paths(root, paths).expect("a file at /sbin");
+    all_read_only(root);
+
+    // The immutable attribute where the filesystem has it, and skipped by name where it has
+    // not (ramfs: no attributes at all).
+    let lines = ops::make_immutable("/tmp/variants/present", &["/", "/usr"]);
+    assert_eq!(
+        lines,
+        ["immutable: / set", "immutable: /usr set"],
+        "{lines:?}"
+    );
+    assert!(immutable("/tmp/variants/present"));
+    let root = "/tmp/variants/ramfs";
+    stand_in_root(root, "ramfs");
+    std::fs::create_dir_all(format!("{root}/usr")).unwrap();
+    let lines = ops::make_immutable(root, &["/", "/usr"]);
+    assert!(
+        lines.iter().all(|line| line.contains("skipped")),
+        "{lines:?}"
+    );
+    println!("system path variants: {lines:?}");
+}
+
 /// In a forked child (single-threaded, as the agent at boot) that drops `capability` first: the
 /// broker's start or its seal fails with `expect` in the error, before anything is mounted.
 fn missing_capability_is_named(capability: u32, at: &str, expect: &str) {
@@ -169,7 +341,7 @@ fn missing_capability_is_named(capability: u32, at: &str, expect: &str) {
     assert!(pid >= 0, "fork");
     if pid == 0 {
         let passed = std::panic::catch_unwind(|| {
-            privilege::restrict_capabilities(u32::MAX & !(1 << capability)).expect("drop");
+            privilege::restrict_capabilities(!(1 << capability)).expect("drop");
             let declared = image_permissions::parse(DECLARATION).expect("declaration");
             let mounts_before = std::fs::read_to_string("/proc/self/mountinfo").unwrap();
             let started = mount_broker::start(
@@ -216,7 +388,16 @@ fn missing_capability_is_named(capability: u32, at: &str, expect: &str) {
 }
 
 fn scenario() {
+    system_path_variants();
     let declared = image_permissions::parse(DECLARATION).expect("declaration");
+    // The image's `/` for the seal: as on AL2023 (`/sbin -> usr/sbin`), without the request-key
+    // configuration. On ramfs in the second run: a filesystem without the immutable attribute.
+    let ramfs = std::env::var_os("ALIEN_BROKER_ROOT_RAMFS").is_some();
+    stand_in_root("/tmp/sysroot", if ramfs { "ramfs" } else { "tmpfs" });
+    std::fs::create_dir_all("/tmp/sysroot/usr/sbin").unwrap();
+    std::fs::create_dir_all("/tmp/sysroot/etc").unwrap();
+    std::fs::write("/tmp/sysroot/usr/sbin/nologin", "").unwrap();
+    symlink("usr/sbin", "/tmp/sysroot/sbin").unwrap();
     std::fs::create_dir_all(mount_broker::IMAGE_CGROUP).expect("image cgroup");
     // The kernel's helper settings are host-wide and can only be lowered until reboot: the test
     // points the broker at stand-ins and checks what it writes.
@@ -242,6 +423,7 @@ fn scenario() {
                 inheritable: "/tmp/helpers/inheritable".into(),
                 modprobe: modprobe.into(),
             },
+            system_root: "/tmp/sysroot".into(),
             ..Default::default()
         },
     )
@@ -286,15 +468,25 @@ fn scenario() {
         assert_eq!(std::fs::read_to_string(modprobe).unwrap(), "\n");
     }
     assert_eq!(
-        capabilities(broker) & ((1 << 8) | (1 << 16)),
+        capabilities(broker) & ((1 << 8) | (1 << 9) | (1 << 16)),
         0,
-        "the broker dropped SETPCAP and SYS_MODULE"
+        "the broker dropped SETPCAP, LINUX_IMMUTABLE and SYS_MODULE"
     );
-    assert!(
-        mount_line("/usr/sbin").is_some_and(|line| line.contains(" ro,") || line.contains(" ro ")),
-        "{:?}",
-        mount_line("/usr/sbin")
+    for path in [
+        "/tmp/sysroot/usr/sbin",
+        "/tmp/sysroot/etc/request-key.conf",
+        "/tmp/sysroot/etc/request-key.d",
+    ] {
+        assert!(read_only(path), "{path}: {:?}", mount_line(path));
+    }
+    assert_eq!(
+        (immutable("/tmp/sysroot"), immutable("/tmp/sysroot/usr")),
+        (!ramfs, !ramfs),
+        "the immutable attribute where the filesystem has it"
     );
+    // A declared path whose parent is immutable, as `/` is after the seal: the broker still
+    // mounts there (a disposable tmpfs parent, not the container's own filesystem).
+    stand_in_root("/var/lib/app", "tmpfs");
     for directory in [
         "/workspace",
         "/var/lib/app/scratch",
@@ -303,6 +495,10 @@ fn scenario() {
     ] {
         std::fs::create_dir_all(directory).unwrap();
     }
+    assert_eq!(
+        super::ops::make_immutable("/var/lib/app", &["/"]),
+        ["immutable: / set"]
+    );
     std::fs::write("/tmp/forward.py", FORWARD).unwrap();
 
     // The image's loopback proxy, a foreign one (not in the image cgroup), a hung one and a slow
@@ -354,22 +550,60 @@ def attempt(name, action):
         print(name, "OK")
     except OSError as error:
         print(name, errno.errorcode[error.errno])
-attempt("write", lambda: open("/usr/sbin/request-key", "w"))
-attempt("replace", lambda: os.rename(os.path.realpath("/usr/sbin/nologin"), "/usr/sbin/request-key"))
-attempt("move-in", lambda: os.rename("/tmp/planted", "/usr/sbin/request-key"))
-attempt("rename", lambda: os.rename("/usr/sbin", "/usr/sbin-moved"))
-attempt("remove", lambda: os.unlink("/usr/sbin/nologin"))
+r = "/tmp/sysroot"
+attempt("write", lambda: open(r + "/usr/sbin/request-key", "w"))
+attempt("write-link", lambda: open(r + "/sbin/request-key", "w"))
+attempt("replace", lambda: os.rename(r + "/usr/sbin/nologin", r + "/usr/sbin/request-key"))
+attempt("move-in", lambda: os.rename("/tmp/planted", r + "/usr/sbin/request-key"))
+attempt("rename", lambda: os.rename(r + "/usr/sbin", r + "/usr/sbin-moved"))
+attempt("remove", lambda: os.unlink(r + "/usr/sbin/nologin"))
+attempt("conf-write", lambda: open(r + "/etc/request-key.conf", "w"))
+attempt("conf-dir-add", lambda: open(r + "/etc/request-key.d/x.conf", "w"))
+open(r + "/etc/planted.conf", "w").close()
+attempt("conf-replace", lambda: os.rename(r + "/etc/planted.conf", r + "/etc/request-key.conf"))
+attempt("conf-remove", lambda: os.unlink(r + "/etc/request-key.conf"))
+attempt("link-replace", lambda: os.unlink(r + "/sbin"))
+attempt("mkdir-top", lambda: os.mkdir(r + "/newdir"))
+attempt("rename-etc", lambda: os.rename(r + "/etc", r + "/etc-moved"))
+attempt("rename-usr", lambda: os.rename(r + "/usr", r + "/usr-moved"))
 '"#,
     );
     let attempts = String::from_utf8_lossy(&attempts.stdout).to_string();
     println!("{attempts}");
-    for expected in [
+    let mut expected = vec![
         "write EROFS",
+        "write-link EROFS",
         "replace EROFS",
         "move-in EXDEV",
-        "rename EBUSY",
+        // The immutable `/usr` refuses first; without it the mount point does.
+        if ramfs {
+            "rename EBUSY"
+        } else {
+            "rename EPERM"
+        },
         "remove EROFS",
-    ] {
+        "conf-write EROFS",
+        "conf-dir-add EROFS",
+        "conf-replace EBUSY",
+        "conf-remove EBUSY",
+    ];
+    if ramfs {
+        // Without the attribute: the documented residual (an ancestor can move).
+        expected.extend([
+            "link-replace OK",
+            "mkdir-top OK",
+            "rename-etc OK",
+            "rename-usr OK",
+        ]);
+    } else {
+        expected.extend([
+            "link-replace EPERM",
+            "mkdir-top EPERM",
+            "rename-etc EPERM",
+            "rename-usr EPERM",
+        ]);
+    }
+    for expected in expected {
         assert!(
             attempts.lines().any(|l| l == expected),
             "{expected}: {attempts}"

@@ -285,58 +285,309 @@ fn wait_for_renames_in_parent(target: &OwnedFd) -> Result<(), Refusal> {
 /// `mount_setattr` flag for a read-only mount.
 const MOUNT_ATTR_RDONLY: u64 = 0x1;
 
-/// Directories the kernel runs its helpers from (`/sbin/request-key`, `/sbin/modprobe`), made
-/// read-only in the image's mount namespace before the image starts. The image holds no
-/// `SYS_ADMIN`, so it can neither remount nor unmount them, and renaming one gives `EBUSY`. A
-/// path that is a symbolic link (`/sbin -> usr/sbin`) or absent is left as it is; the link's
-/// target is in the list. Returns the paths it protected.
-pub fn protect_system_binaries(paths: &[&str]) -> Result<Vec<String>, Refusal> {
-    let mut protected = Vec::new();
-    for path in paths {
-        match std::fs::symlink_metadata(path) {
-            Ok(meta) if meta.file_type().is_dir() => {}
-            Ok(_) => continue,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(_) => return Err(os_error(&format!("cannot inspect {path}"))),
+const RESOLVE_IN_ROOT: u64 = 0x10;
+/// `FS_IOC_GETFLAGS` / `FS_IOC_SETFLAGS` (`_IOR('f', 1, long)` / `_IOW('f', 2, long)`).
+const FS_IOC_GETFLAGS: libc::c_ulong = 0x8008_6601;
+const FS_IOC_SETFLAGS: libc::c_ulong = 0x4008_6602;
+const FS_IMMUTABLE_FL: libc::c_int = 0x10;
+
+/// What a path the kernel reads on its own must be when the image does not provide it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemPath {
+    /// Created as an empty `0755` directory.
+    Directory,
+    /// Created as an empty `0644` file.
+    File,
+}
+
+/// Opens `path` under `root` as the image would see it with `root` as `/`: symbolic links are
+/// followed but never leave `root`, magic links are refused.
+fn open_in_root(root: &OwnedFd, path: &str, flags: libc::c_int) -> io::Result<OwnedFd> {
+    let name = CString::new(path.trim_start_matches('/'))
+        .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
+    let name = if name.as_bytes().is_empty() {
+        c".".to_owned()
+    } else {
+        name
+    };
+    let how = OpenHow {
+        flags: (flags | libc::O_CLOEXEC) as u64,
+        mode: 0,
+        resolve: RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS,
+    };
+    // SAFETY: valid path and a correctly sized open_how.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            root.as_raw_fd(),
+            name.as_ptr(),
+            &how as *const OpenHow,
+            size_of::<OpenHow>(),
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a descriptor the kernel just returned that nothing else owns.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd as RawFd) })
+}
+
+fn fstat(fd: &OwnedFd) -> io::Result<libc::stat> {
+    // SAFETY: a zeroed stat for fstat to fill.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: valid descriptor and buffer.
+    if unsafe { libc::fstat(fd.as_raw_fd(), &mut stat) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(stat)
+}
+
+/// Creates `path` under `root` (and its missing parents, as directories) when nothing is there.
+/// A symbolic link that leads nowhere is not followed into a new file: that fails.
+fn create_in_root(root: &OwnedFd, path: &str, kind: SystemPath) -> Result<(), String> {
+    let trimmed = path.trim_matches('/');
+    let (parent, name) = match trimmed.rsplit_once('/') {
+        Some((parent, name)) => (parent, name),
+        None => ("", trimmed),
+    };
+    let parent_fd = match open_in_root(root, parent, libc::O_PATH | libc::O_DIRECTORY) {
+        Ok(fd) => fd,
+        Err(error) if error.raw_os_error() == Some(libc::ENOENT) && !parent.is_empty() => {
+            create_in_root(root, parent, SystemPath::Directory)?;
+            open_in_root(root, parent, libc::O_PATH | libc::O_DIRECTORY)
+                .map_err(|error| format!("cannot open /{parent}: {error}"))?
         }
-        let at = open_dir(libc::AT_FDCWD, path, false)?;
-        let empty = c("")?;
-        // SAFETY: valid descriptor, empty path with AT_EMPTY_PATH.
-        let tree = owned(
-            unsafe {
-                libc::syscall(
-                    libc::SYS_open_tree,
-                    at.as_raw_fd(),
-                    empty.as_ptr(),
-                    OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | libc::AT_EMPTY_PATH as u32,
+        Err(error) => return Err(format!("cannot open /{parent}: {error}")),
+    };
+    let name_c = CString::new(name).map_err(|_| "a NUL byte".to_string())?;
+    // SAFETY: a zeroed stat for fstatat to fill; valid descriptor and name.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe {
+        libc::fstatat(
+            parent_fd.as_raw_fd(),
+            name_c.as_ptr(),
+            &mut stat,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } == 0
+    {
+        return Err(format!(
+            "/{trimmed} is a symbolic link to nothing in the image; it is left alone and cannot be protected"
+        ));
+    }
+    // O_PATH descriptors cannot create: reopen the parent for that.
+    let parent_dir = open_in_root(root, parent, libc::O_RDONLY | libc::O_DIRECTORY)
+        .map_err(|error| format!("cannot open /{parent}: {error}"))?;
+    let created = match kind {
+        // SAFETY: valid descriptor and name.
+        SystemPath::Directory => unsafe {
+            libc::mkdirat(parent_dir.as_raw_fd(), name_c.as_ptr(), 0o755) == 0
+                && libc::fchmodat(parent_dir.as_raw_fd(), name_c.as_ptr(), 0o755, 0) == 0
+        },
+        SystemPath::File => {
+            // SAFETY: valid descriptor and name; the new file is closed at once.
+            let fd = unsafe {
+                libc::openat(
+                    parent_dir.as_raw_fd(),
+                    name_c.as_ptr(),
+                    libc::O_WRONLY
+                        | libc::O_CREAT
+                        | libc::O_EXCL
+                        | libc::O_NOFOLLOW
+                        | libc::O_CLOEXEC,
+                    0o644,
                 )
-            },
-            &format!("cannot copy {path}"),
-        )?;
-        let attr = MountAttr {
-            attr_set: MOUNT_ATTR_RDONLY,
-            attr_clr: 0,
-            propagation: 0,
-            userns_fd: 0,
-        };
-        // SAFETY: valid descriptor and a correctly sized mount_attr.
-        if unsafe {
-            libc::syscall(
-                libc::SYS_mount_setattr,
-                tree.as_raw_fd(),
-                empty.as_ptr(),
-                libc::AT_EMPTY_PATH,
-                &attr as *const MountAttr,
-                size_of::<MountAttr>(),
-            )
-        } != 0
-        {
-            return Err(os_error(&format!("cannot make {path} read-only")));
+            };
+            // SAFETY: as above.
+            fd >= 0 && unsafe { libc::fchmod(fd, 0o644) == 0 && libc::close(fd) == 0 }
         }
-        attach(&tree, &at, path)?;
-        protected.push(path.to_string());
+    };
+    if !created {
+        return Err(format!(
+            "cannot create /{trimmed}: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+/// Makes what `path` names under `root` read-only in this mount namespace: a read-only bind of
+/// it onto itself. The image holds no `SYS_ADMIN`, so it can neither remount nor unmount it, and
+/// renaming or removing a mount point gives `EBUSY`.
+fn bind_read_only(object: &OwnedFd, path: &str) -> Result<(), String> {
+    let empty = c"";
+    // SAFETY: valid descriptor, empty path with AT_EMPTY_PATH.
+    let tree = unsafe {
+        libc::syscall(
+            libc::SYS_open_tree,
+            object.as_raw_fd(),
+            empty.as_ptr(),
+            OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | libc::AT_EMPTY_PATH as u32,
+        )
+    };
+    if tree < 0 {
+        return Err(format!(
+            "cannot copy {path}: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: a descriptor the kernel just returned that nothing else owns.
+    let tree = unsafe { OwnedFd::from_raw_fd(tree as RawFd) };
+    let attr = MountAttr {
+        attr_set: MOUNT_ATTR_RDONLY,
+        attr_clr: 0,
+        propagation: 0,
+        userns_fd: 0,
+    };
+    // SAFETY: valid descriptor and a correctly sized mount_attr.
+    if unsafe {
+        libc::syscall(
+            libc::SYS_mount_setattr,
+            tree.as_raw_fd(),
+            empty.as_ptr(),
+            libc::AT_EMPTY_PATH,
+            &attr as *const MountAttr,
+            size_of::<MountAttr>(),
+        )
+    } != 0
+    {
+        return Err(format!(
+            "cannot make {path} read-only: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: valid descriptors and empty paths with the EMPTY_PATH flags.
+    if unsafe {
+        libc::syscall(
+            libc::SYS_move_mount,
+            tree.as_raw_fd(),
+            empty.as_ptr(),
+            object.as_raw_fd(),
+            empty.as_ptr(),
+            MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH,
+        )
+    } != 0
+    {
+        return Err(format!(
+            "cannot attach the read-only copy of {path}: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+/// The paths the kernel reads when it runs a helper on its own (`/sbin/request-key`, its
+/// configuration, `/sbin/modprobe`), made read-only in the image's mount namespace before the
+/// image starts. `root` is `/` except in tests.
+///
+/// Each path is resolved as the image would resolve it, with symbolic links followed but never out
+/// of `root` (`/sbin -> usr/sbin` protects `/usr/sbin`). A path the image does not have is created
+/// first (an empty directory or file), so the image cannot create it later; a symbolic link that
+/// leads nowhere fails, by name. Then each is checked to be on a read-only mount. Returns what
+/// was protected, as `path` or `path -> target`.
+pub fn protect_system_paths(
+    root: &str,
+    paths: &[(&str, SystemPath)],
+) -> Result<Vec<String>, String> {
+    let root_fd = {
+        let name = CString::new(root).map_err(|_| "a NUL byte".to_string())?;
+        // SAFETY: a valid path; the descriptor is owned below.
+        let fd = unsafe {
+            libc::open(
+                name.as_ptr(),
+                libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(format!(
+                "cannot open {root}: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: a descriptor the kernel just returned that nothing else owns.
+        unsafe { OwnedFd::from_raw_fd(fd) }
+    };
+    let mut done: Vec<(libc::dev_t, libc::ino_t)> = Vec::new();
+    let mut protected = Vec::new();
+    for &(path, kind) in paths {
+        let object = match open_in_root(&root_fd, path, libc::O_PATH) {
+            Ok(fd) => fd,
+            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
+                create_in_root(&root_fd, path, kind)?;
+                open_in_root(&root_fd, path, libc::O_PATH)
+                    .map_err(|error| format!("cannot open {path} after creating it: {error}"))?
+            }
+            Err(error) => return Err(format!("cannot open {path}: {error}")),
+        };
+        let stat = fstat(&object).map_err(|error| format!("cannot inspect {path}: {error}"))?;
+        let target = std::fs::read_link(format!("/proc/self/fd/{}", object.as_raw_fd()))
+            .map(|link| link.display().to_string())
+            .unwrap_or_default();
+        let shown = match target.strip_prefix(root.trim_end_matches('/')) {
+            Some(inside) if inside != path && !inside.is_empty() => format!("{path} -> {inside}"),
+            _ => path.to_string(),
+        };
+        if !done.contains(&(stat.st_dev, stat.st_ino)) {
+            bind_read_only(&object, path)?;
+            done.push((stat.st_dev, stat.st_ino));
+        }
+        // What the image now finds at the path is on a read-only mount.
+        let check = open_in_root(&root_fd, path, libc::O_PATH)
+            .map_err(|error| format!("cannot open {path} after protecting it: {error}"))?;
+        // SAFETY: a zeroed statvfs for fstatvfs to fill; valid descriptor.
+        let mut fs: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatvfs(check.as_raw_fd(), &mut fs) } != 0
+            || fs.f_flag & libc::ST_RDONLY == 0
+        {
+            return Err(format!("{shown} is not read-only after protecting it"));
+        }
+        protected.push(shown);
     }
     Ok(protected)
+}
+
+/// Sets the immutable attribute on each directory (resolved under `root` as above), so no entry in
+/// it can be created, removed or renamed by anyone without `CAP_LINUX_IMMUTABLE` (the image never
+/// holds it). Best effort: a filesystem without the attribute, or a process without the
+/// capability, is reported and skipped. Returns one line per directory.
+pub fn make_immutable(root: &str, directories: &[&str]) -> Vec<String> {
+    let root_fd = match CString::new(root).ok().map(|name| {
+        // SAFETY: a valid path.
+        unsafe {
+            libc::open(
+                name.as_ptr(),
+                libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        }
+    }) {
+        // SAFETY: a descriptor the kernel just returned that nothing else owns.
+        Some(fd) if fd >= 0 => unsafe { OwnedFd::from_raw_fd(fd) },
+        _ => return vec![format!("immutable: skipped, cannot open {root}")],
+    };
+    directories
+        .iter()
+        .map(|directory| {
+            let set = open_in_root(&root_fd, directory, libc::O_RDONLY | libc::O_DIRECTORY)
+                .and_then(|fd| {
+                    let mut flags: libc::c_int = 0;
+                    // SAFETY: valid descriptor and an int for the flags.
+                    if unsafe { libc::ioctl(fd.as_raw_fd(), FS_IOC_GETFLAGS as _, &mut flags) } != 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    flags |= FS_IMMUTABLE_FL;
+                    // SAFETY: as above.
+                    if unsafe { libc::ioctl(fd.as_raw_fd(), FS_IOC_SETFLAGS as _, &flags) } != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            match set {
+                Ok(()) => format!("immutable: {directory} set"),
+                Err(error) => format!("immutable: {directory} skipped ({error})"),
+            }
+        })
+        .collect()
 }
 
 /// Asks the kernel for the filesystem types the broker mounts, so their modules load while the
