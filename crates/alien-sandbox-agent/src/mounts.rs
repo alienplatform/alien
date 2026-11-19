@@ -471,8 +471,12 @@ pub fn fork_helper() -> std::io::Result<HelperClient> {
         -1 => Err(std::io::Error::last_os_error()),
         0 => {
             drop(parent);
-            // SAFETY: plain prctl call; the helper dies with the agent.
-            unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) };
+            // SAFETY: plain prctl calls; the helper dies with the agent, and no one without
+            // CAP_SYS_PTRACE can read its memory or descriptors through /proc.
+            unsafe {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+            }
             helper_loop(child);
             std::process::exit(0);
         }
@@ -491,9 +495,19 @@ fn helper_loop(stream: std::os::unix::net::UnixStream) {
     let mut writer = stream.try_clone().expect("socket clone");
     let reader = BufReader::new(stream);
     let mut helper = crate::s3files_mount::Helper::new(CREDENTIALS_DIR.into());
+    let mut in_agent_namespace = false;
     for line in reader.lines() {
         let Ok(line) = line else { return };
         let error = match serde_json::from_str::<HelperRequest>(&line) {
+            // The agent moves into a private mount namespace after this process was forked, and
+            // what the guest sees is what that namespace holds. Mount there, not here.
+            Ok(request) if !in_agent_namespace => match join_agent_mount_namespace() {
+                Ok(()) => {
+                    in_agent_namespace = true;
+                    perform(&mut helper, &request).err()
+                }
+                Err(reason) => Some(reason),
+            },
             Ok(request) => perform(&mut helper, &request).err(),
             Err(_) => Some("unreadable request".to_string()),
         };
@@ -502,6 +516,32 @@ fn helper_loop(stream: std::os::unix::net::UnixStream) {
             return;
         }
     }
+}
+
+/// `setns` into the mount namespace of the agent, this process's parent. Needs CAP_SYS_ADMIN and a
+/// single thread, both true of the helper.
+#[cfg(target_os = "linux")]
+fn join_agent_mount_namespace() -> Result<(), String> {
+    // SAFETY: getppid has no arguments and cannot fail.
+    let parent = unsafe { libc::getppid() };
+    let path = c_string(&format!("/proc/{parent}/ns/mnt"))?;
+    // SAFETY: valid NUL-terminated path; the descriptor is closed below.
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(format!(
+            "cannot open the agent's mount namespace: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: fd is a namespace descriptor just opened.
+    let rc = unsafe { libc::setns(fd, libc::CLONE_NEWNS) };
+    let error = std::io::Error::last_os_error();
+    // SAFETY: fd is open and owned here.
+    unsafe { libc::close(fd) };
+    if rc != 0 {
+        return Err(format!("cannot join the agent's mount namespace: {error}"));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -775,6 +815,86 @@ mod tests {
             ]
         );
         assert!(!mounts.ready());
+    }
+
+    /// Runs the real helper: forked before the agent unshares its mount namespace, it must mount
+    /// inside the namespace of its parent, where commands will look. The scenario runs in a forked
+    /// child because a mount namespace belongs to one thread and the test harness has many.
+    /// Run with `unshare --user --map-root-user --mount -- <test binary> --ignored`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs mount privileges, e.g. unshare --user --map-root-user --mount"]
+    fn the_helper_mounts_a_capped_tmpfs_where_the_parent_sees_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("scratch");
+        // SAFETY: the child only runs the scenario below and exits without returning.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0);
+        if child == 0 {
+            let outcome = std::panic::catch_unwind(|| capped_tmpfs_scenario(&target));
+            if let Err(panic) = &outcome {
+                let text = panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("panic");
+                eprintln!("SCENARIO FAILED: {text}");
+            }
+            // SAFETY: leave the forked copy of the test harness without running its destructors.
+            unsafe { libc::_exit(if outcome.is_ok() { 0 } else { 1 }) };
+        }
+        let mut status = 0;
+        // SAFETY: waiting for the child just forked.
+        assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+        assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0, "scenario failed");
+    }
+
+    #[cfg(target_os = "linux")]
+    fn capped_tmpfs_scenario(target: &Path) {
+        use std::os::unix::fs::MetadataExt;
+        let helper = fork_helper().expect("forks the helper");
+        // Only after the fork, as the agent does: a private mount namespace of its own.
+        assert_eq!(unsafe { libc::unshare(libc::CLONE_NEWNS) }, 0);
+        assert_eq!(
+            unsafe {
+                libc::mount(
+                    std::ptr::null(),
+                    c"/".as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_REC | libc::MS_PRIVATE,
+                    std::ptr::null(),
+                )
+            },
+            0
+        );
+        helper
+            .request(&HelperRequest::Tmpfs {
+                path: target.to_str().unwrap().into(),
+                size_bytes: 4 << 20,
+                // Only root is mapped in the test's user namespace.
+                uid: 0,
+                gid: 0,
+            })
+            .expect("mounts");
+        let stat = std::fs::metadata(target).unwrap();
+        assert_eq!((stat.uid(), stat.gid()), (0, 0));
+        let table = std::fs::read_to_string("/proc/self/mountinfo").unwrap();
+        let line = table
+            .lines()
+            .find(|l| l.contains(target.to_str().unwrap()))
+            .expect("the mount is in this process's namespace");
+        assert!(line.contains("nosuid") && line.contains("nodev"), "{line}");
+        assert!(line.contains("size=4096k"), "{line}");
+        // The cap is enforced: a write past it fails with "no space left".
+        let error = std::fs::write(target.join("fill"), vec![0u8; 8 << 20])
+            .expect_err("a write past the cap must fail");
+        assert_eq!(error.raw_os_error(), Some(libc::ENOSPC), "{error}");
+        helper
+            .request(&HelperRequest::Unmount {
+                path: target.to_str().unwrap().into(),
+            })
+            .expect("unmounts");
+        assert!(!target.join("fill").exists(), "the unmount removed the mount");
     }
 
     #[test]

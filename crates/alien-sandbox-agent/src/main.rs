@@ -122,6 +122,31 @@ fn main() -> Result<()> {
         ));
     }
     let state = Arc::new(load_state()?);
+    // Mounts need SYS_ADMIN, which the supervisor drops later. A helper keeps it. It is forked
+    // first, before the agent joins the guest cgroup, so neither it nor the proxy it starts carry
+    // the guest socket mark, and before any thread exists.
+    #[cfg(target_os = "linux")]
+    if unsafe { libc::geteuid() } == 0 {
+        let declared = alien_sandbox_agent::mounts::parse_declared(
+            std::env::var(alien_sandbox_agent::mounts::ENV_MOUNTS).ok().as_deref(),
+        )
+        .map_err(|reason| invalid(alien_sandbox_agent::mounts::ENV_MOUNTS, &reason))?;
+        if !declared.is_empty() {
+            let helper = alien_sandbox_agent::mounts::fork_helper()
+                .into_alien_error()
+                .context(failed(
+                    "start the mount helper",
+                    "cannot fork the helper".to_string(),
+                ))?;
+            alien_sandbox_agent::mounts::install(alien_sandbox_agent::mounts::Mounts::new(
+                declared,
+                state.exec_identity.uid,
+                state.exec_identity.gid,
+                alien_sandbox_agent::mounts::CREDENTIALS_DIR.into(),
+                Box::new(helper),
+            ));
+        }
+    }
     let port: u16 = parse(ENV_PORT)?;
     state.preview.set_own_ports(&[port]);
     let network_admin = (std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() || aws_image_transport)
@@ -169,29 +194,11 @@ fn main() -> Result<()> {
                             .into(),
                     ))?;
             }
-            // Mounts need SYS_ADMIN, which the supervisor drops below. A helper keeps it.
-            let declared = alien_sandbox_agent::mounts::parse_declared(
-                std::env::var(alien_sandbox_agent::mounts::ENV_MOUNTS).ok().as_deref(),
-            )
-            .map_err(|reason| invalid(alien_sandbox_agent::mounts::ENV_MOUNTS, &reason))?;
-            if !declared.is_empty() {
-                let helper = alien_sandbox_agent::mounts::fork_helper()
-                    .into_alien_error()
-                    .context(failed(
-                        "start the mount helper",
-                        "cannot fork the helper".to_string(),
-                    ))?;
-                alien_sandbox_agent::mounts::install(alien_sandbox_agent::mounts::Mounts::new(
-                    declared,
-                    state.exec_identity.uid,
-                    state.exec_identity.gid,
-                    alien_sandbox_agent::mounts::CREDENTIALS_DIR.into(),
-                    Box::new(helper),
-                ));
-                // Mounts that need no credentials (a tmpfs outside any file system) come up now.
-                if let Some(mounts) = alien_sandbox_agent::mounts::global() {
-                    mounts.advance(&std::collections::BTreeMap::new());
-                }
+            // Mounts that need no credentials (a tmpfs outside any file system) come up now, in the
+            // agent's own mount namespace, which exists once the protected files are in place.
+            #[cfg(target_os = "linux")]
+            if let Some(mounts) = alien_sandbox_agent::mounts::global() {
+                mounts.advance(&std::collections::BTreeMap::new());
             }
             alien_sandbox_agent::privilege::restrict_supervisor(network_admin)
                 .into_alien_error()
