@@ -181,7 +181,8 @@ pub(crate) struct RetryOutcome {
 /// replaces it: resuming a failed create with a new config would finish it with a mix of both.
 /// One the stack no longer declares is not resumed either, and the executor deletes it. Failed
 /// deletes always resume, because the planner does not restart a delete that has failed, and
-/// failed refreshes always resume, because a refresh only reads.
+/// A failed refresh resumes only when unchanged: resuming applies the config it recorded, and
+/// the planner does not apply a newer one over that update.
 ///
 /// "Unchanged" is [`alien_infra::retry_config_unchanged`], the comparison the update executor
 /// also uses: deployer-secret metadata is ignored. A resumed flow runs on the metadata recorded
@@ -208,10 +209,7 @@ pub(crate) fn resume_unchanged_failed_resources(
             alien_infra::retry_config_unchanged(&resource_state.config, &entry.config)
                 && entry.combined_dependencies() == resource_state.dependencies
         });
-        let always_resumes = matches!(
-            resource_state.status,
-            ResourceStatus::DeleteFailed | ResourceStatus::RefreshFailed
-        );
+        let always_resumes = resource_state.status == ResourceStatus::DeleteFailed;
         if !unchanged && !always_resumes {
             outcome.unresumed.push(UnresumedFailure {
                 resource_id: resource_id.clone(),
@@ -236,7 +234,7 @@ pub(crate) fn resume_unchanged_failed_resources(
 /// deployment, against the stack prepared in `runtime_metadata`.
 ///
 /// Every failure whose config is unchanged resumes its saved checkpoint, setup-owned or not,
-/// as do failed deletes and refreshes. The others are returned in `unresumed` for the caller
+/// as do failed deletes. The others are returned in `unresumed` for the caller
 /// to hand to the planner or report.
 pub(crate) fn retry_failed_runtime_resources(
     stack_state: &mut StackState,
@@ -2284,6 +2282,32 @@ mod tests {
             .expect("retry");
         assert!(outcome.retried.is_empty());
         assert_eq!(outcome.unresumed.len(), 1, "a new image is a real change");
+    }
+
+    /// A refresh-failed workload whose target config changed is left for the planner. Resuming
+    /// it would re-apply the OLD config (the planner skips config changes on a resource that is
+    /// already updating), so a fix release over a crash-looping workload would redeploy the
+    /// broken spec.
+    #[test]
+    fn retry_leaves_a_refresh_failed_resource_with_a_changed_config_to_the_planner() {
+        let (_, mut recorded) = failed_worker_with_deployer_secret("api:v1", "1");
+        recorded.status = ResourceStatus::RefreshFailed;
+
+        let (same, _) = failed_worker_with_deployer_secret("api:v1", "1");
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert("api".to_string(), recorded.clone());
+        let outcome = resume_unchanged_failed_resources(&mut state, &stack_with(same), |_| true)
+            .expect("retry");
+        assert_eq!(outcome.retried, ["api"], "an unchanged refresh failure resumes");
+
+        let (fixed, _) = failed_worker_with_deployer_secret("api:v2", "1");
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert("api".to_string(), recorded);
+        let outcome = resume_unchanged_failed_resources(&mut state, &stack_with(fixed), |_| true)
+            .expect("retry");
+        assert!(outcome.retried.is_empty(), "a changed config is not re-applied as it was");
+        assert_eq!(state.resources["api"].status, ResourceStatus::RefreshFailed);
+        assert_eq!(outcome.unresumed.len(), 1);
     }
 
     fn make_snapshot(
