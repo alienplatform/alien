@@ -384,6 +384,22 @@ impl Helper {
         Ok(())
     }
 
+    /// Registers a stand-in proxy process for a path, for tests of the unmount order.
+    #[cfg(test)]
+    pub(crate) fn attach_stub(&mut self, path: &str, proxy: Child) {
+        self.attached.insert(
+            path.to_string(),
+            Attached {
+                dir: PathBuf::new(),
+                proxy,
+                fs_id: String::new(),
+                access_point_id: String::new(),
+                region: String::new(),
+                port: 0,
+            },
+        );
+    }
+
     /// Stops the proxy of a mount that is being unmounted.
     pub fn stop_proxy(&mut self, path: &str) {
         if let Some(mut attached) = self.attached.remove(path) {

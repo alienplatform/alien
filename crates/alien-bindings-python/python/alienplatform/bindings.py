@@ -611,7 +611,12 @@ EgressPolicy = Literal["internet"] | SandboxAllowEgress
 
 
 class MountCredentials(TypedDict):
-    """Short-lived credentials for one mount. ``expiration`` is RFC 3339."""
+    """Short-lived credentials for one mount. ``expiration`` is RFC 3339.
+
+    They must allow the one access point this mount is made for and nothing else. The caller
+    mints them (for example a session limited to that access point); the agent mounts with
+    whatever it is given and does not narrow them.
+    """
 
     accessKeyId: str
     secretAccessKey: str

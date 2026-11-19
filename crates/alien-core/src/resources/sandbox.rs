@@ -1131,15 +1131,6 @@ impl Sandbox {
                 format!("a sandbox may declare at most {MAX_SANDBOX_MOUNTS} mounts"),
             ));
         }
-        // A command running as root keeps file-access and signal capabilities that reach the mount
-        // credentials and the helper that holds them, so mounts need a non-root image user.
-        if self.image_user == Some(0) {
-            return Err(invalid(
-                "mounts".into(),
-                "root image USER",
-                "mounts are not supported with an image that runs as root; use a non-root image USER".into(),
-            ));
-        }
         let mut seen: Vec<&str> = Vec::new();
         for (index, mount) in self.mounts.iter().enumerate() {
             let field = format!("mounts[{index}].path");
@@ -3533,25 +3524,6 @@ mod label_format_tests {
         ] {
             assert!(mount_path_is_reserved(path), "{path}");
         }
-    }
-
-    #[test]
-    fn mounts_are_refused_for_an_image_that_runs_as_root() {
-        let mut sandbox =
-            mounts_sandbox(serde_json::json!([{"type": "s3files", "path": "/workspace"}]));
-        sandbox
-            .validate_for_platform(Platform::Aws)
-            .expect("non-root image");
-        sandbox.image_user = Some(0);
-        let error = sandbox
-            .validate_for_platform(Platform::Aws)
-            .expect_err("root image with mounts");
-        assert_eq!(error.code, "SANDBOX_LIMIT_INVALID");
-        assert!(
-            error.message.contains("non-root image USER"),
-            "{}",
-            error.message
-        );
     }
 
     #[test]

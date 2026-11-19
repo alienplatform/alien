@@ -1271,6 +1271,10 @@ pub trait Container: Binding {
 
 /// Short-lived credentials the agent's mount helper uses to talk to a file system.
 ///
+/// The credentials must allow the one access point this mount is made for and nothing else. The
+/// caller mints them (for example a session limited to that access point); the agent mounts with
+/// whatever it is given and does not narrow them.
+///
 /// Debug output never shows the values: they must not reach logs.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]

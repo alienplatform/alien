@@ -283,8 +283,9 @@ pub fn defer_to_run_hook() -> Result<bool> {
     }
 }
 
-/// True when the image's own `USER` is root, so its command would run as uid 0. An image that
-/// records no user runs under the exec identity and is not root.
+/// True when the image has a command to start and its own `USER` is root, so that command would
+/// run as uid 0. An image with no command starts nothing (commands sent to the sandbox run as the
+/// exec identity), and an image that records no user runs under the exec identity.
 pub fn image_runs_as_root() -> Result<bool> {
     image_runs_as_root_from(Path::new(IMAGE_COMMAND_PATH))
 }
@@ -302,6 +303,9 @@ fn image_runs_as_root_from(path: &Path) -> Result<bool> {
     let Some(user) = image.user.as_deref() else {
         return Ok(false);
     };
+    if image.command.is_empty() {
+        return Ok(false);
+    }
     let passwd =
         fs::read_to_string("/etc/passwd").map_err(|_| failed("/etc/passwd is unreadable"))?;
     let group = fs::read_to_string("/etc/group").map_err(|_| failed("/etc/group is unreadable"))?;
@@ -471,6 +475,7 @@ mod tests {
             let path = dir.path().join("image-command.json");
             let image = SandboxImageCommand {
                 user: user.map(str::to_string),
+                command: vec!["/bin/app".into()],
                 working_directory: "/".into(),
                 ..Default::default()
             };
@@ -481,6 +486,15 @@ mod tests {
         assert!(image_runs_as_root_from(&metadata(Some("root"))).unwrap());
         assert!(!image_runs_as_root_from(&metadata(Some("60000:60000"))).unwrap());
         assert!(!image_runs_as_root_from(&metadata(None)).unwrap());
+        // No command: nothing runs as the image user, whatever it is.
+        let path = dir.path().join("image-command.json");
+        let image = SandboxImageCommand {
+            user: Some("0:0".into()),
+            working_directory: "/".into(),
+            ..Default::default()
+        };
+        fs::write(&path, serde_json::to_vec(&image).unwrap()).unwrap();
+        assert!(!image_runs_as_root_from(&path).unwrap());
         image_runs_as_root_from(&dir.path().join("missing"))
             .expect_err("unreadable metadata is not an answer");
     }

@@ -953,8 +953,11 @@ fn perform(
         ),
         HelperRequest::Refresh { path } => helper.refresh(path),
         HelperRequest::Unmount { path } => {
+            // The directory is opened first: looking at a mounted file system whose proxy is gone
+            // can wait on the server forever, and this helper has one thread.
+            let point = crate::mount_point::open(path, false, 0, declared_paths)?;
             helper.stop_proxy(path);
-            unmount(path, declared_paths)
+            unmount(&point)
         }
     }
 }
@@ -994,20 +997,18 @@ fn mount_tmpfs(
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn unmount(path: &str, declared_paths: &[String]) -> Result<(), String> {
-    // The path is walked without following links first, so a name the workload has since turned
-    // into a link is refused; the last component is refused by UMOUNT_NOFOLLOW itself.
-    crate::mount_point::open(path, false, 0, declared_paths)?;
-    let target = c_string(path)?;
+pub(crate) fn unmount(point: &crate::mount_point::MountPoint) -> Result<(), String> {
+    // By the descriptor opened without following links, not by name: the name may have been
+    // swapped since. (UMOUNT_NOFOLLOW would refuse the descriptor's own /proc link.)
+    let target = c_string(&point.target())?;
     // SAFETY: valid NUL-terminated path.
-    if unsafe { libc::umount2(target.as_ptr(), libc::UMOUNT_NOFOLLOW) } != 0 {
+    if unsafe { libc::umount2(target.as_ptr(), 0) } != 0 {
         let error = std::io::Error::last_os_error();
         // A process still holding a file open must not keep the VM from suspending: detach, and
         // the mount goes once the last file closes.
         // SAFETY: as above.
         if error.raw_os_error() == Some(libc::EBUSY)
-            && unsafe { libc::umount2(target.as_ptr(), libc::MNT_DETACH | libc::UMOUNT_NOFOLLOW) }
-                == 0
+            && unsafe { libc::umount2(target.as_ptr(), libc::MNT_DETACH) } == 0
         {
             return Ok(());
         }
@@ -1759,5 +1760,60 @@ mod tests {
             libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
             "scenario failed"
         );
+    }
+
+    /// The directory is looked at before the proxy is stopped: a path that is refused leaves the
+    /// proxy running, so a mount that is still in use is not cut off by a request that fails.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_unmount_refused_at_the_path_leaves_the_proxy_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let mut helper = crate::s3files_mount::Helper::new(dir.path().to_path_buf());
+        let proxy = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = proxy.id() as i32;
+        helper.attach_stub(link.to_str().unwrap(), proxy);
+        let trusted = vec![
+            "/".to_string(),
+            "/tmp".to_string(),
+            dir.path().to_str().unwrap().into(),
+        ];
+        let error = perform(
+            &mut helper,
+            &HelperRequest::Unmount {
+                path: link.to_str().unwrap().into(),
+            },
+            &trusted,
+        )
+        .expect_err("a link is refused");
+        assert!(error.contains("symbolic link"), "{error}");
+        // SAFETY: signal 0 only checks that the process exists.
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "the proxy is still running"
+        );
+        // A real directory (nothing mounted there): the proxy is stopped, the unmount reports.
+        helper.attach_stub(
+            real.to_str().unwrap(),
+            std::process::Command::new("sleep")
+                .arg("30")
+                .spawn()
+                .unwrap(),
+        );
+        let _ = perform(
+            &mut helper,
+            &HelperRequest::Unmount {
+                path: real.to_str().unwrap().into(),
+            },
+            &trusted,
+        );
+        helper.stop_proxy(link.to_str().unwrap());
     }
 }

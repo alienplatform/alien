@@ -497,7 +497,13 @@ export interface ResolvedSandbox {
 }
 
 /** What a sandbox is created with. */
-/** Short-lived credentials the agent's mount helper uses to talk to a file system. */
+/**
+ * Short-lived credentials the agent's mount helper uses to talk to a file system.
+ *
+ * They must allow the one access point this mount is made for and nothing else. The caller mints
+ * them (for example a session limited to that access point); the agent mounts with whatever it
+ * is given and does not narrow them.
+ */
 export interface SandboxMountCredentials {
   accessKeyId: string
   secretAccessKey: string

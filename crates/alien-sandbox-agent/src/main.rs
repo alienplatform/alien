@@ -165,7 +165,7 @@ fn main() -> Result<()> {
             {
                 return Err(invalid(
                     alien_sandbox_agent::mounts::ENV_MOUNTS,
-                    "mounts are not supported with an image that runs as root; use a non-root image USER",
+                    "mounts are not supported when the image starts a command as root; use a non-root image USER",
                 ));
             }
             let helper = alien_sandbox_agent::mounts::fork_helper(
