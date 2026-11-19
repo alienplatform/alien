@@ -279,6 +279,9 @@ async fn process_command_with_budget(
     }
 }
 
+/// The shortest read timeout the forwarding client uses, whatever the Worker is configured with.
+pub const FORWARD_READ_TIMEOUT_FLOOR: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Create a shared reqwest client for forwarding HTTP requests.
 ///
 /// This client is meant to be created once and reused across all requests
@@ -287,9 +290,6 @@ async fn process_command_with_budget(
 /// and disabled TCP user timeout (gVisor on Cloud Run Gen2 can prematurely
 /// close idle connections with the default settings).
 ///
-/// The shortest read timeout the forwarding client uses, whatever the Worker is configured with.
-pub const FORWARD_READ_TIMEOUT_FLOOR: std::time::Duration = std::time::Duration::from_secs(300);
-
 /// The longest a request may wait without receiving a byte (including the wait for response
 /// headers) is the larger of `configured` (the Worker's configured timeout) and
 /// [`FORWARD_READ_TIMEOUT_FLOOR`]. A Worker configured below the floor keeps the 300 s behavior; a

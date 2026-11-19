@@ -393,7 +393,7 @@ async fn a_response_that_keeps_sending_outlives_the_read_timeout() {
     );
 }
 
-// The floor is scaled down to 300 ms in these two tests (the real one is 300 s).
+// These tests scale the floor down (the real one is 300 s) so they run in seconds.
 #[tokio::test]
 async fn a_worker_configured_below_the_floor_keeps_the_floor() {
     // Configured 100 ms, floor 3 s, upstream silent 1.5 s: answered, not cut at 100 ms.
