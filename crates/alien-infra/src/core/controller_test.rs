@@ -866,6 +866,7 @@ pub struct SingleControllerExecutorBuilder {
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
     dependency_lifecycles: HashMap<String, ResourceLifecycle>,
     stack_resources: Vec<(Resource, ResourceLifecycle)>,
+    stack_resource_outputs: HashMap<String, ResourceOutputs>,
     stack_inputs: Vec<alien_core::StackInputDefinition>,
     resource_gates: HashMap<String, String>,
     management_permissions: alien_core::permissions::ManagementPermissions,
@@ -911,6 +912,7 @@ impl SingleControllerExecutorBuilder {
             dependencies: Vec::new(),
             dependency_lifecycles: HashMap::new(),
             stack_resources: Vec::new(),
+            stack_resource_outputs: HashMap::new(),
             stack_inputs: Vec::new(),
             resource_gates: HashMap::new(),
             management_permissions: alien_core::permissions::ManagementPermissions::Auto,
@@ -1128,6 +1130,14 @@ impl SingleControllerExecutorBuilder {
     ) -> Self {
         self.stack_resources
             .push((Resource::new(resource), lifecycle));
+        self
+    }
+
+    /// Records `outputs` for a stack resource added with [`Self::with_stack_resource`], as if
+    /// its controller had already published them.
+    pub fn stack_resource_outputs(mut self, resource_id: &str, outputs: ResourceOutputs) -> Self {
+        self.stack_resource_outputs
+            .insert(resource_id.to_owned(), outputs);
         self
     }
 
@@ -1399,15 +1409,14 @@ impl SingleControllerExecutorBuilder {
                     enabled_when: self.resource_gates.get(other.id()).cloned(),
                 },
             );
-            stack_state.resources.insert(
-                other.id().to_string(),
-                StackResourceState::new_pending(
-                    other.resource_type().to_string(),
-                    other.clone(),
-                    Some(*lifecycle),
-                    vec![],
-                ),
+            let mut state = StackResourceState::new_pending(
+                other.resource_type().to_string(),
+                other.clone(),
+                Some(*lifecycle),
+                vec![],
             );
+            state.outputs = self.stack_resource_outputs.get(other.id()).cloned();
+            stack_state.resources.insert(other.id().to_string(), state);
         }
 
         // Add the main resource

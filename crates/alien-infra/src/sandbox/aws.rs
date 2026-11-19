@@ -2075,8 +2075,8 @@ fn is_remote_resource_absent(error: &AlienError<CloudClientErrorData>) -> bool {
 }
 
 /// The agent's environment for this sandbox's image: the egress contract and, when the sandbox
-/// declares them, its image permissions with each connection resolved to the address range of
-/// the network setup created.
+/// declares them, its image permissions, with each connection narrowed to the addresses its
+/// target published (a dependency, so it exists before this image is built).
 fn agent_environment(
     ctx: &ResourceControllerContext<'_>,
     config: &Sandbox,
@@ -2086,13 +2086,7 @@ fn agent_environment(
     if !config.declares_image_permissions() {
         return Ok(environment);
     }
-    let invalid = |message: String| {
-        AlienError::new(ErrorData::ResourceConfigInvalid {
-            message,
-            resource_id: Some(config.id.clone()),
-        })
-    };
-    let network_cidr = if config
+    if config
         .image_permissions
         .as_ref()
         .is_some_and(|permissions| !permissions.connections.is_empty())
@@ -2102,26 +2096,26 @@ fn agent_environment(
                 message: "sandbox image connections do not resolve".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
-        let network = alien_core::sandbox_egress::sandbox_egress_network(ctx.desired_stack)
-            .map_err(|refusal| invalid(format!("image connections need a network: {refusal}")))?;
-        let controller = ctx.require_dependency::<crate::AwsNetworkController>(
-            &ResourceRef::new(alien_core::Network::RESOURCE_TYPE, network.id),
-        )?;
-        Some(controller.cidr_block.ok_or_else(|| {
-            invalid("the network setup created reports no address range".to_string())
-        })?)
-    } else {
-        None
+    }
+    let published = |connection: &alien_core::SandboxImageConnection| {
+        let outputs = ctx
+            .state
+            .resources
+            .get(&connection.to.id)
+            .and_then(|state| state.outputs.as_ref())
+            .and_then(|outputs| serde_json::to_value(outputs).ok());
+        alien_core::sandbox_image_permissions::published_connection_addresses(
+            config,
+            connection,
+            outputs.as_ref(),
+        )
     };
     environment.extend(
-        alien_core::sandbox_image_permissions::image_permissions_environment(
-            config,
-            network_cidr.as_deref(),
-        )
-        .context(ErrorData::ResourceConfigInvalid {
-            message: "cannot build the sandbox image permissions".to_string(),
-            resource_id: Some(config.id.clone()),
-        })?,
+        alien_core::sandbox_image_permissions::image_permissions_environment(config, published)
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "cannot build the sandbox image permissions".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?,
     );
     Ok(environment)
 }
@@ -3912,6 +3906,16 @@ mod tests {
                 .unwrap(),
                 alien_core::ResourceLifecycle::Live,
             )
+            .stack_resource_outputs(
+                "workspace-files",
+                alien_core::ResourceOutputs::new(
+                    alien_core::CustomResourceOutputs::from_untagged(
+                        "acme/files",
+                        serde_json::json!({ "privateIpv4Addresses": ["10.42.3.9", "10.42.1.4"] }),
+                    )
+                    .unwrap(),
+                ),
+            )
             .with_dependency(
                 Network::new("default-network".to_string())
                     .settings(NetworkSettings::Create {
@@ -3958,7 +3962,10 @@ mod tests {
             contract,
             serde_json::json!({
                 "mounts": [{ "type": "nfs", "path": "/workspace" }],
-                "connections": [{ "cidr": "10.42.0.0/16", "port": 2049 }],
+                "connections": [
+                    { "cidr": "10.42.1.4/32", "port": 2049 },
+                    { "cidr": "10.42.3.9/32", "port": 2049 }
+                ],
                 "onPause": ["/usr/local/bin/agentd", "pause"]
             })
         );

@@ -901,7 +901,12 @@ fn environment_variables(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<CfE
             ])
         })
         .collect();
-    if let Some(contract) = image_permissions_value(ctx, sandbox)? {
+    // A sandbox provisioned at runtime gets its contract from its controller, once the targets
+    // of its connections have published their addresses; this image is not emitted for it.
+    if provisioned_at_runtime(ctx) {
+        return Ok(CfExpression::list(variables));
+    }
+    if let Some(contract) = image_permissions_value(sandbox)? {
         variables.push(CfExpression::object([
             ("Key", CfExpression::from(ENV_IMAGE_PERMISSIONS)),
             ("Value", contract),
@@ -913,9 +918,6 @@ fn environment_variables(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<CfE
 /// Metadata key on the connector's security group listing, in plain language, what the
 /// sandbox's image may do beyond the default grant. The generator gathers it for the template.
 pub(crate) const IMAGE_PERMISSIONS_METADATA: &str = "AlienSandboxImagePermissions";
-
-/// Stands in for the network's address range in the contract text until `Fn::Sub` resolves it.
-const CIDR_VARIABLE: &str = "ImageConnectionCidr";
 
 /// The address range every connection resolves to: the VPC setup creates. A template rule refuses
 /// any other network mode for a stack that declares connections; the other branch names loopback,
@@ -1005,16 +1007,20 @@ fn with_rules(rules: CfExpression, extra: &[CfExpression]) -> CfExpression {
     }
 }
 
-/// `ALIEN_SANDBOX_IMAGE_PERMISSIONS` as an `Fn::Sub` over the contract text, so each connection
-/// carries the VPC's address range once CloudFormation knows it.
-fn image_permissions_value(
-    ctx: &EmitContext<'_>,
-    sandbox: &Sandbox,
-) -> Result<Option<CfExpression>> {
-    const PLACEHOLDER: &str = "ALIEN-IMAGE-CONNECTION-CIDR";
+/// `ALIEN_SANDBOX_IMAGE_PERMISSIONS` for an image setup builds. Such a sandbox declares no
+/// connections (refused at plan time: the target's addresses exist only after setup), so the
+/// contract is fixed text.
+fn image_permissions_value(sandbox: &Sandbox) -> Result<Option<CfExpression>> {
     let Some(contract) =
-        alien_core::sandbox_image_permissions::image_permissions_contract(sandbox, |_| {
-            PLACEHOLDER.to_string()
+        alien_core::sandbox_image_permissions::image_permissions_contract(sandbox, |connection| {
+            Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox image connections".into(),
+                reason: format!(
+                    "sandbox '{}' connects to '{}', which needs a sandbox provisioned at runtime",
+                    sandbox.id(),
+                    connection.to.id
+                ),
+            }))
         })?
     else {
         return Ok(None);
@@ -1034,25 +1040,7 @@ fn image_permissions_value(
         .context(ErrorData::GenericError {
             message: "serializing the sandbox image permissions".into(),
         })?;
-    if contract.connections.is_empty() {
-        return Ok(Some(CfExpression::from(text.as_str())));
-    }
-    if text.matches(PLACEHOLDER).count() != contract.connections.len() {
-        return Err(AlienError::new(ErrorData::GenericError {
-            message: format!(
-                "sandbox '{}' lifecycle steps contain a reserved word",
-                sandbox.id()
-            ),
-        }));
-    }
-    // `${` in a declared value must reach the agent literally; `${!` is how `Fn::Sub` writes it.
-    let escaped = text
-        .replace("${", "${!")
-        .replace(PLACEHOLDER, &format!("${{{CIDR_VARIABLE}}}"));
-    Ok(Some(CfExpression::sub_with(
-        escaped,
-        [(CIDR_VARIABLE, image_connection_cidr(ctx)?)],
-    )))
+    Ok(Some(CfExpression::from(text.as_str())))
 }
 
 /// Resolves the S3 bundle the MicroVM image is built from.

@@ -1544,8 +1544,14 @@ impl ResourceDefinition for Sandbox {
         false
     }
 
+    /// The resources the image connects to directly: their published addresses decide the
+    /// connection, so they exist first. None for a sandbox without connections.
     fn get_dependencies(&self) -> Vec<ResourceRef> {
-        Vec::new()
+        self.image_permissions
+            .iter()
+            .flat_map(|permissions| &permissions.connections)
+            .map(|connection| connection.to.clone())
+            .collect()
     }
 
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()> {

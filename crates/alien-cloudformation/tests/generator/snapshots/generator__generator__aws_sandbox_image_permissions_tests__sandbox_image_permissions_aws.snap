@@ -3,7 +3,7 @@ source: crates/alien-cloudformation/tests/generator/aws_sandbox_image_permission
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
-Description: sandbox image permissions. A sandbox image in this application may mount file systems or connect directly to private services outside the egress gateway and its connection log; Metadata.SandboxImagePermissions lists each one.
+Description: sandbox image permissions. The sandbox image is built after the deployment registers, so a completed stack does not mean the sandbox can accept sessions yet. A sandbox image in this application may mount file systems or connect directly to private services outside the egress gateway and its connection log; Metadata.SandboxImagePermissions lists each one.
 Metadata:
   SandboxImagePermissions:
   - sandbox: agents
@@ -11,7 +11,7 @@ Metadata:
     - The sandbox image may mount an NFS file system at /workspace.
     - The sandbox image may mount a tmpfs of 8Gi at /var/lib/app/scratch.
     - The sandbox image may place /var/lib/app/scratch again at /workspace/tmp.
-    - The sandbox image may connect directly to workspace-files on TCP port 2049. This connection bypasses the egress gateway and is not in its connection log.
+    - The sandbox image may connect directly to workspace-files on TCP port 2049. Setup allows that port to the network's address range; the sandbox narrows it to the addresses workspace-files publishes. This connection bypasses the egress gateway and is not in its connection log.
     - The sandbox image runs its own steps before a pause and after a resume.
     - Isolation between workloads inside the sandbox image is the image vendor's responsibility.
   Extensions:
@@ -704,12 +704,12 @@ Resources:
         PolicyDocument:
           Version: 2012-10-17
           Statement:
-          - Sid: ReadSandboxBundle
+          - Sid: ReadSandboxBundlePrefix
             Effect: Allow
             Action:
             - s3:GetObject
             Resource:
-              Fn::Sub: arn:${AWS::Partition}:s3:::acme-artifacts/agents/bundle.zip
+              Fn::Sub: arn:${AWS::Partition}:s3:::acme-artifacts/sandbox-bundle/*
       Tags:
       - Key: managed-by
         Value: setup
@@ -800,7 +800,7 @@ Resources:
       - The sandbox image may mount an NFS file system at /workspace.
       - The sandbox image may mount a tmpfs of 8Gi at /var/lib/app/scratch.
       - The sandbox image may place /var/lib/app/scratch again at /workspace/tmp.
-      - The sandbox image may connect directly to workspace-files on TCP port 2049. This connection bypasses the egress gateway and is not in its connection log.
+      - The sandbox image may connect directly to workspace-files on TCP port 2049. Setup allows that port to the network's address range; the sandbox narrows it to the addresses workspace-files publishes. This connection bypasses the egress gateway and is not in its connection log.
       - The sandbox image runs its own steps before a pause and after a resume.
       - Isolation between workloads inside the sandbox image is the image vendor's responsibility.
   AgentsEgressConnector:
@@ -834,81 +834,6 @@ Resources:
           - Fn::GetAtt:
             - AgentsEgressSecurityGroup
             - GroupId
-      Tags:
-      - Key: managed-by
-        Value: setup
-      - Key: deployment
-        Value:
-          Ref: AWS::StackName
-      - Key: resource
-        Value: agents
-      - Key: resource-type
-        Value: sandbox
-  Agents:
-    Type: AWS::Lambda::MicrovmImage
-    Properties:
-      Name:
-        Fn::Sub: ${AWS::StackName}-agents
-      Description: Sandbox agents
-      BaseImageArn:
-        Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:aws:microvm-image:al2023-1
-      BaseImageVersion: '1'
-      BuildRoleArn:
-        Fn::GetAtt:
-        - AgentsBuildRole
-        - Arn
-      CodeArtifact:
-        Uri: s3://acme-artifacts/agents/bundle.zip
-      Logging:
-        Disabled: true
-      EgressNetworkConnectors:
-      - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS
-      CpuConfigurations:
-      - Architecture: ARM_64
-      Resources:
-      - MinimumMemoryInMiB: 2048
-      AdditionalOsCapabilities:
-      - ALL
-      Hooks:
-        Port: 8971
-        MicrovmImageHooks:
-          Ready: ENABLED
-          ReadyTimeoutInSeconds: 120
-          Validate: ENABLED
-          ValidateTimeoutInSeconds: 30
-        MicrovmHooks:
-          Run: ENABLED
-          RunTimeoutInSeconds: 30
-          Resume: ENABLED
-          ResumeTimeoutInSeconds: 30
-          Suspend: ENABLED
-          SuspendTimeoutInSeconds: 60
-      EnvironmentVariables:
-      - Key: ALIEN_SANDBOX_ROOT
-        Value: /sandbox
-      - Key: ALIEN_SANDBOX_PORT
-        Value: '8971'
-      - Key: ALIEN_SANDBOX_AUTHORIZATION
-        Value: transport
-      - Key: ALIEN_SANDBOX_EGRESS
-        Value: '"none"'
-      - Key: ALIEN_SANDBOX_EGRESS_RUN_HOOK
-        Value: 'true'
-      - Key: ALIEN_SANDBOX_IMAGE_COMMAND
-        Value: image-permissions-v1
-      - Key: ALIEN_SANDBOX_IMAGE_PERMISSIONS_V
-        Value: '1'
-      - Key: ALIEN_SANDBOX_IMAGE_PERMISSIONS
-        Value:
-          Fn::Sub:
-          - '{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/var/lib/app/scratch","sizeBytes":8589934592},{"type":"bind","path":"/workspace/tmp","from":"/var/lib/app/scratch"}],"connections":[{"cidr":"${ImageConnectionCidr}","port":2049}],"onPause":["/usr/local/bin/agentd","pause"]}'
-          - ImageConnectionCidr:
-              Fn::If:
-              - NetworkModeCreate
-              - Fn::GetAtt:
-                - DefaultNetworkVpc
-                - CidrBlock
-              - 127.0.0.1/32
       Tags:
       - Key: managed-by
         Value: setup
@@ -1092,18 +1017,11 @@ Resources:
             - AgentsEgressConnector
             - Arn
           allowEgress: false
-          imageIdentifier:
+          buildRoleArn:
             Fn::GetAtt:
-            - Agents
-            - ImageArn
-          imageArn:
-            Fn::GetAtt:
-            - Agents
-            - ImageArn
-          imageVersion:
-            Fn::GetAtt:
-            - Agents
-            - LatestActiveImageVersion
+            - AgentsBuildRole
+            - Arn
+          bundleUri: s3://acme-artifacts/sandbox-bundle/v1/bundle.zip
       ConditionalDependencies:
       - Fn::If:
         - NetworkModeCreate
@@ -1210,7 +1128,6 @@ Resources:
     - AgentsEgressOperatorRole
     - AgentsEgressSecurityGroup
     - AgentsEgressConnector
-    - Agents
   DeploymentSetupStarted:
     Type: AWS::CloudFormation::CustomResource
     Properties:

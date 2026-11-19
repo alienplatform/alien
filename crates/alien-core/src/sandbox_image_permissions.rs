@@ -57,6 +57,20 @@ pub fn validate_connections(stack: &Stack, sandbox: &Sandbox) -> Result<()> {
         })
     };
     for connection in &permissions.connections {
+        // The target's addresses exist only once it does, after setup; a sandbox whose image
+        // setup builds would have to carry a range wider than the target.
+        if stack
+            .resources
+            .get(&sandbox.id)
+            .is_some_and(|entry| entry.lifecycle != crate::ResourceLifecycle::Live)
+        {
+            return Err(refuse(
+                connection,
+                "a direct connection needs a sandbox provisioned at runtime (live), which \
+                 narrows it to the addresses the target publishes once it exists"
+                    .to_string(),
+            ));
+        }
         if private_endpoint_placement(stack, &connection.to).is_none() {
             return Err(refuse(
                 connection,
@@ -129,11 +143,72 @@ pub struct ImagePermissionsContract {
     pub on_resume: Option<Vec<String>>,
 }
 
-/// The contract for `sandbox`, with each connection's range given by `cidr`. `None` when the
-/// sandbox declares no image permissions and no lifecycle steps.
+/// The output field a connection target publishes its private IPv4 addresses in, once it exists.
+/// Deployment narrows each connection to exactly these addresses (`/32` each) and the port.
+pub const PRIVATE_IPV4_ADDRESSES_OUTPUT: &str = "privateIpv4Addresses";
+
+/// The `/32` ranges of the addresses a connection target published in its outputs
+/// ([`PRIVATE_IPV4_ADDRESSES_OUTPUT`]). Refuses a target that published none, or anything but
+/// private IPv4 addresses, rather than open a wider range.
+pub fn published_connection_addresses(
+    sandbox: &Sandbox,
+    connection: &SandboxImageConnection,
+    outputs: Option<&serde_json::Value>,
+) -> Result<Vec<String>> {
+    let refuse = |reason: String| {
+        AlienError::new(ErrorData::SandboxLimitInvalid {
+            resource_id: sandbox.id.clone(),
+            field: "imagePermissions.connections.to".to_string(),
+            value: format!("{}:{}", connection.to.id, connection.port),
+            reason,
+        })
+    };
+    let Some(published) = outputs.and_then(|outputs| outputs.get(PRIVATE_IPV4_ADDRESSES_OUTPUT))
+    else {
+        return Err(refuse(format!(
+            "'{}' has not published its private addresses ({PRIVATE_IPV4_ADDRESSES_OUTPUT}) yet",
+            connection.to.id
+        )));
+    };
+    let entries = published.as_array().ok_or_else(|| {
+        refuse(format!(
+            "'{}' published {PRIVATE_IPV4_ADDRESSES_OUTPUT} that is not a list",
+            connection.to.id
+        ))
+    })?;
+    let mut addresses = std::collections::BTreeSet::new();
+    for entry in entries {
+        let address = entry
+            .as_str()
+            .and_then(|text| text.parse::<std::net::Ipv4Addr>().ok())
+            .filter(std::net::Ipv4Addr::is_private)
+            .ok_or_else(|| {
+                refuse(format!(
+                    "'{}' published {entry} in {PRIVATE_IPV4_ADDRESSES_OUTPUT}, which is not a \
+                     private IPv4 address",
+                    connection.to.id
+                ))
+            })?;
+        addresses.insert(address);
+    }
+    if addresses.is_empty() {
+        return Err(refuse(format!(
+            "'{}' published no private addresses",
+            connection.to.id
+        )));
+    }
+    Ok(addresses
+        .into_iter()
+        .map(|address| format!("{address}/32"))
+        .collect())
+}
+
+/// The contract for `sandbox`, with each connection resolved by `addresses` to the ranges it may
+/// reach (one contract entry per range). `None` when the sandbox declares no image permissions
+/// and no lifecycle steps.
 pub fn image_permissions_contract(
     sandbox: &Sandbox,
-    cidr: impl Fn(&SandboxImageConnection) -> String,
+    addresses: impl Fn(&SandboxImageConnection) -> Result<Vec<String>>,
 ) -> Result<Option<ImagePermissionsContract>> {
     if !sandbox.declares_image_permissions() {
         return Ok(None);
@@ -170,10 +245,18 @@ pub fn image_permissions_contract(
         connections: permissions
             .connections
             .iter()
-            .map(|connection| ContractConnection {
-                cidr: cidr(connection),
-                port: connection.port,
+            .map(|connection| {
+                Ok(addresses(connection)?
+                    .into_iter()
+                    .map(|cidr| ContractConnection {
+                        cidr,
+                        port: connection.port,
+                    })
+                    .collect::<Vec<_>>())
             })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
             .collect(),
         on_pause: sandbox.lifecycle.on_pause.clone(),
         on_resume: sandbox.lifecycle.on_resume.clone(),
@@ -245,16 +328,12 @@ pub fn image_permissions_markers() -> BTreeMap<String, String> {
     ])
 }
 
-/// The full environment for a sandbox whose connections all resolve to `network_cidr`, the
-/// address range of the network setup created. Empty when nothing is declared.
+/// The full environment for a sandbox, with each connection resolved by `addresses` (see
+/// [`published_connection_addresses`]). Empty when nothing is declared.
 pub fn image_permissions_environment(
     sandbox: &Sandbox,
-    network_cidr: Option<&str>,
+    addresses: impl Fn(&SandboxImageConnection) -> Result<Vec<String>>,
 ) -> Result<BTreeMap<String, String>> {
-    let has_connections = sandbox
-        .image_permissions
-        .as_ref()
-        .is_some_and(|permissions| !permissions.connections.is_empty());
     if sandbox.declares_image_permissions() && sandbox.image_user.is_none() {
         return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
             resource_id: sandbox.id.clone(),
@@ -264,19 +343,7 @@ pub fn image_permissions_environment(
                 .to_string(),
         }));
     }
-    let cidr = match (has_connections, network_cidr) {
-        (true, None) => {
-            return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
-                resource_id: sandbox.id.clone(),
-                field: "imagePermissions.connections".to_string(),
-                value: "network".to_string(),
-                reason: "the stack's network has no address range to resolve connections to"
-                    .to_string(),
-            }))
-        }
-        (_, cidr) => cidr.unwrap_or_default().to_string(),
-    };
-    let Some(contract) = image_permissions_contract(sandbox, |_| cidr.clone())? else {
+    let Some(contract) = image_permissions_contract(sandbox, addresses)? else {
         return Ok(BTreeMap::new());
     };
     let mut environment = image_permissions_markers();
@@ -315,9 +382,11 @@ pub fn approval_statements(sandbox: &Sandbox) -> Vec<String> {
     }
     for connection in &permissions.connections {
         statements.push(format!(
-            "The sandbox image may connect directly to {} on TCP port {}. This connection \
-             bypasses the egress gateway and is not in its connection log.",
-            connection.to.id, connection.port
+            "The sandbox image may connect directly to {} on TCP port {}. Setup allows that port \
+             to the network's address range; the sandbox narrows it to the addresses {} \
+             publishes. This connection bypasses the egress gateway and is not in its \
+             connection log.",
+            connection.to.id, connection.port, connection.to.id
         ));
     }
     if sandbox.lifecycle.on_pause.is_some() || sandbox.lifecycle.on_resume.is_some() {
@@ -418,13 +487,27 @@ mod tests {
     }
 
     fn stack(settings: NetworkSettings, private_endpoints: bool, sandbox: Sandbox) -> Stack {
+        stack_with(
+            settings,
+            private_endpoints,
+            sandbox,
+            ResourceLifecycle::Live,
+        )
+    }
+
+    fn stack_with(
+        settings: NetworkSettings,
+        private_endpoints: bool,
+        sandbox: Sandbox,
+        lifecycle: ResourceLifecycle,
+    ) -> Stack {
         let mut stack = Stack::new("app".to_string())
             .add(
                 Network::new("net".to_string()).settings(settings).build(),
                 ResourceLifecycle::Frozen,
             )
             .add(files(), ResourceLifecycle::Live)
-            .add(sandbox, ResourceLifecycle::Live)
+            .add(sandbox, lifecycle)
             .build();
         stack.extensions = vec![serde_json::from_value(manifest(private_endpoints)).unwrap()];
         stack
@@ -483,11 +566,75 @@ mod tests {
         assert!(error.to_string().contains("brings"), "{error}");
     }
 
+    /// A sandbox whose image setup builds cannot wait for the target's addresses.
+    #[test]
+    fn a_connection_needs_a_sandbox_provisioned_at_runtime() {
+        let declared = sandbox(SandboxEgress::None, designed());
+        let frozen = stack_with(created(), true, declared.clone(), ResourceLifecycle::Frozen);
+        let error = validate_connections(&frozen, &declared).unwrap_err();
+        assert!(
+            error.to_string().contains("provisioned at runtime"),
+            "{error}"
+        );
+
+        let mut mounts_only = designed();
+        mounts_only.connections.clear();
+        let declared = sandbox(SandboxEgress::None, mounts_only);
+        let frozen = stack_with(created(), true, declared.clone(), ResourceLifecycle::Frozen);
+        validate_connections(&frozen, &declared).unwrap();
+    }
+
+    fn resolve(sandbox: &Sandbox, outputs: serde_json::Value) -> Result<BTreeMap<String, String>> {
+        image_permissions_environment(sandbox, |connection| {
+            published_connection_addresses(sandbox, connection, Some(&outputs))
+        })
+    }
+
+    /// Each connection is the target's own addresses, one `/32` each, never a wider range.
+    #[test]
+    fn a_connection_resolves_to_each_published_address() {
+        let declared = sandbox(SandboxEgress::Internet, designed());
+        let environment = resolve(
+            &declared,
+            serde_json::json!({ "privateIpv4Addresses": ["10.0.2.7", "10.0.1.5", "10.0.1.5"] }),
+        )
+        .unwrap();
+        let contract: serde_json::Value =
+            serde_json::from_str(&environment["ALIEN_SANDBOX_IMAGE_PERMISSIONS"]).unwrap();
+        assert_eq!(
+            contract["connections"],
+            serde_json::json!([
+                {"cidr": "10.0.1.5/32", "port": 2049},
+                {"cidr": "10.0.2.7/32", "port": 2049}
+            ])
+        );
+
+        for outputs in [
+            serde_json::json!({}),
+            serde_json::json!({ "privateIpv4Addresses": [] }),
+            serde_json::json!({ "privateIpv4Addresses": "10.0.1.5" }),
+            serde_json::json!({ "privateIpv4Addresses": ["10.0.0.0/16"] }),
+            serde_json::json!({ "privateIpv4Addresses": ["8.8.8.8"] }),
+            serde_json::json!({ "privateIpv4Addresses": ["fd00::1"] }),
+            serde_json::json!({ "privateIpv4Addresses": [17] }),
+        ] {
+            assert!(resolve(&declared, outputs.clone()).is_err(), "{outputs}");
+        }
+        assert!(image_permissions_environment(&declared, |connection| {
+            published_connection_addresses(&declared, connection, None)
+        })
+        .is_err());
+    }
+
     /// The exact value the agent box parses, from the shared contract.
     #[test]
     fn the_environment_is_the_shared_contract() {
         let declared = sandbox(SandboxEgress::Internet, designed());
-        let environment = image_permissions_environment(&declared, Some("10.0.0.0/16")).unwrap();
+        let environment = resolve(
+            &declared,
+            serde_json::json!({ "privateIpv4Addresses": ["10.0.1.5"] }),
+        )
+        .unwrap();
         assert_eq!(
             environment["ALIEN_SANDBOX_IMAGE_COMMAND"],
             "image-permissions-v1"
@@ -503,7 +650,7 @@ mod tests {
                     {"type": "tmpfs", "path": "/var/lib/app/scratch", "sizeBytes": 8589934592u64},
                     {"type": "bind", "from": "/var/lib/app/scratch", "path": "/workspace/tmp"}
                 ],
-                "connections": [{"cidr": "10.0.0.0/16", "port": 2049}],
+                "connections": [{"cidr": "10.0.1.5/32", "port": 2049}],
                 "onPause": ["/usr/local/bin/agentd", "pause"],
                 "onResume": ["/usr/local/bin/agentd", "resume"]
             })
@@ -516,17 +663,23 @@ mod tests {
         let mut plain = sandbox(SandboxEgress::Internet, designed());
         plain.image_permissions = None;
         plain.lifecycle = SandboxLifecyclePolicy::default();
-        assert!(image_permissions_environment(&plain, None)
-            .unwrap()
-            .is_empty());
+        assert!(
+            image_permissions_environment(&plain, |_| unreachable!("nothing to resolve"))
+                .unwrap()
+                .is_empty()
+        );
         assert!(approval_statements(&plain).is_empty());
 
         let declared = sandbox(SandboxEgress::Internet, designed());
-        assert!(image_permissions_environment(&declared, None).is_err());
+        assert!(resolve(&declared, serde_json::json!({})).is_err());
 
         let mut legacy = declared.clone();
         legacy.image_user = None;
-        assert!(image_permissions_environment(&legacy, Some("10.0.0.0/16")).is_err());
+        assert!(resolve(
+            &legacy,
+            serde_json::json!({ "privateIpv4Addresses": ["10.0.1.5"] })
+        )
+        .is_err());
     }
 
     #[test]
@@ -539,7 +692,9 @@ mod tests {
                 "The sandbox image may mount a tmpfs of 8Gi at /var/lib/app/scratch.",
                 "The sandbox image may place /var/lib/app/scratch again at /workspace/tmp.",
                 "The sandbox image may connect directly to workspace-files on TCP port 2049. \
-                 This connection bypasses the egress gateway and is not in its connection log.",
+                 Setup allows that port to the network's address range; the sandbox narrows it \
+                 to the addresses workspace-files publishes. This connection bypasses the egress \
+                 gateway and is not in its connection log.",
                 "The sandbox image runs its own steps before a pause and after a resume.",
                 "Isolation between workloads inside the sandbox image is the image vendor's \
                  responsibility.",

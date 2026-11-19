@@ -35,7 +35,7 @@ fn manifest() -> Value {
 fn sandbox(permissions: Option<SandboxImagePermissions>) -> Sandbox {
     let mut sandbox = Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
-            image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+            image: "s3://acme-artifacts/sandbox-bundle/v1/bundle.zip".to_string(),
             bundled_from: None,
         })
         .egress(SandboxEgress::None)
@@ -80,7 +80,25 @@ fn designed() -> SandboxImagePermissions {
     }
 }
 
+/// A sandbox with connections is provisioned at runtime; setup writes its connector's rules.
 fn stack(sandbox: Sandbox, network: NetworkSettings) -> (Stack, StackSettings) {
+    let lifecycle = if sandbox
+        .image_permissions
+        .as_ref()
+        .is_some_and(|permissions| !permissions.connections.is_empty())
+    {
+        ResourceLifecycle::Live
+    } else {
+        ResourceLifecycle::Frozen
+    };
+    stack_with(sandbox, network, lifecycle)
+}
+
+fn stack_with(
+    sandbox: Sandbox,
+    network: NetworkSettings,
+    lifecycle: ResourceLifecycle,
+) -> (Stack, StackSettings) {
     let settings = StackSettings {
         network: Some(network.clone()),
         ..StackSettings::default()
@@ -97,7 +115,7 @@ fn stack(sandbox: Sandbox, network: NetworkSettings) -> (Stack, StackSettings) {
                 .unwrap(),
             ResourceLifecycle::Live,
         )
-        .add(sandbox, ResourceLifecycle::Frozen)
+        .add(sandbox, lifecycle)
         .build();
     stack.extensions = vec![serde_json::from_value(manifest()).unwrap()];
     (stack, settings)
@@ -150,40 +168,8 @@ fn each_connection_is_one_rule_and_the_agent_gets_the_contract() {
         .iter()
         .any(|rule| rule["CidrIp"] == "127.0.0.1/32" && rule["IpProtocol"] == "-1"));
 
-    let variables = json_of(&template.resources["Agents"].properties["EnvironmentVariables"]);
-    let value = |key: &str| {
-        variables
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|variable| variable["Key"] == key)
-            .map(|variable| variable["Value"].clone())
-    };
-    assert_eq!(
-        value("ALIEN_SANDBOX_IMAGE_COMMAND"),
-        Some(json!("image-permissions-v1"))
-    );
-    assert_eq!(value("ALIEN_SANDBOX_IMAGE_PERMISSIONS_V"), Some(json!("1")));
-    let contract = value("ALIEN_SANDBOX_IMAGE_PERMISSIONS").expect("the contract is set");
-    let (text, variables) = (
-        contract["Fn::Sub"][0].as_str().unwrap(),
-        &contract["Fn::Sub"][1],
-    );
-    assert_eq!(variables["ImageConnectionCidr"], vpc_cidr);
-    let resolved: Value =
-        serde_json::from_str(&text.replace("${ImageConnectionCidr}", "10.0.0.0/16")).unwrap();
-    assert_eq!(
-        resolved,
-        json!({
-            "mounts": [
-                {"type": "nfs", "path": "/workspace"},
-                {"type": "tmpfs", "path": "/var/lib/app/scratch", "sizeBytes": 8589934592u64},
-                {"type": "bind", "from": "/var/lib/app/scratch", "path": "/workspace/tmp"}
-            ],
-            "connections": [{"cidr": "10.0.0.0/16", "port": 2049}],
-            "onPause": ["/usr/local/bin/agentd", "pause"]
-        })
-    );
+    // The image is built at runtime, which narrows the connection to the target's addresses.
+    assert!(!template.resources.contains_key("Agents"));
 
     // Where the customer approves: the network mode they could pick, and what the image may do.
     assert_eq!(
@@ -199,6 +185,8 @@ fn each_connection_is_one_rule_and_the_agent_gets_the_contract() {
         "tmpfs of 8Gi at /var/lib/app/scratch",
         "place /var/lib/app/scratch again at /workspace/tmp",
         "connect directly to workspace-files on TCP port 2049",
+        "Setup allows that port to the network's address range",
+        "narrows it to the addresses workspace-files publishes",
         "bypasses the egress gateway and is not in its connection log",
         "the image vendor's responsibility",
     ] {
@@ -212,10 +200,63 @@ fn each_connection_is_one_rule_and_the_agent_gets_the_contract() {
     insta::assert_snapshot!("sandbox_image_permissions_aws", yaml);
 }
 
-/// `${` in a declared argument reaches the agent literally rather than as a substitution.
+fn mounts_only() -> SandboxImagePermissions {
+    let mut permissions = designed();
+    permissions.connections.clear();
+    permissions
+}
+
+fn environment_value(template: &alien_cloudformation::CfTemplate, key: &str) -> Option<Value> {
+    json_of(&template.resources["Agents"].properties["EnvironmentVariables"])
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|variable| variable["Key"] == key)
+        .map(|variable| variable["Value"].clone())
+}
+
+/// An image setup builds gets the contract as fixed text: mounts and steps, no connections.
+#[test]
+fn an_image_setup_builds_gets_the_contract() {
+    let (stack, settings) = stack(sandbox(Some(mounts_only())), created());
+    let template = try_render_built_ins(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "contract",
+    )
+    .unwrap();
+    assert_eq!(
+        environment_value(&template, "ALIEN_SANDBOX_IMAGE_COMMAND"),
+        Some(json!("image-permissions-v1"))
+    );
+    assert_eq!(
+        environment_value(&template, "ALIEN_SANDBOX_IMAGE_PERMISSIONS_V"),
+        Some(json!("1"))
+    );
+    let contract = environment_value(&template, "ALIEN_SANDBOX_IMAGE_PERMISSIONS")
+        .expect("the contract is set");
+    let resolved: Value = serde_json::from_str(contract.as_str().unwrap()).unwrap();
+    assert_eq!(
+        resolved,
+        json!({
+            "mounts": [
+                {"type": "nfs", "path": "/workspace"},
+                {"type": "tmpfs", "path": "/var/lib/app/scratch", "sizeBytes": 8589934592u64},
+                {"type": "bind", "from": "/var/lib/app/scratch", "path": "/workspace/tmp"}
+            ],
+            "connections": [],
+            "onPause": ["/usr/local/bin/agentd", "pause"]
+        })
+    );
+}
+
+/// `${` in a declared argument reaches the agent literally: the value is not an `Fn::Sub`.
 #[test]
 fn a_dollar_brace_in_a_lifecycle_step_is_not_substituted() {
-    let mut declared = sandbox(Some(designed()));
+    let mut declared = sandbox(Some(mounts_only()));
     declared.lifecycle.on_pause = Some(vec!["/bin/sh".into(), "-c".into(), "echo ${HOME}".into()]);
     let (stack, settings) = stack(declared, created());
     let template = try_render_built_ins(
@@ -227,17 +268,31 @@ fn a_dollar_brace_in_a_lifecycle_step_is_not_substituted() {
         "escape",
     )
     .unwrap();
-    let variables = json_of(&template.resources["Agents"].properties["EnvironmentVariables"]);
-    let text = variables
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|variable| variable["Key"] == "ALIEN_SANDBOX_IMAGE_PERMISSIONS")
-        .unwrap()["Value"]["Fn::Sub"][0]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(text.contains("echo ${!HOME}"), "{text}");
+    let text = environment_value(&template, "ALIEN_SANDBOX_IMAGE_PERMISSIONS").unwrap();
+    assert!(text.as_str().unwrap().contains("echo ${HOME}"), "{text}");
+}
+
+/// The target's addresses exist only after setup, so an image setup builds cannot connect.
+#[test]
+fn a_connection_from_an_image_setup_builds_is_refused() {
+    let (stack, settings) = stack_with(
+        sandbox(Some(designed())),
+        created(),
+        ResourceLifecycle::Frozen,
+    );
+    let error = try_render_built_ins(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "frozen connection",
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("provisioned at runtime"),
+        "{error}"
+    );
 }
 
 #[test]
