@@ -3,6 +3,8 @@ pub mod confine;
 pub mod error;
 pub mod exec;
 pub mod files;
+#[cfg(target_os = "linux")]
+pub mod image_lifecycle;
 pub mod image_permissions;
 pub mod interactive;
 pub mod jobs;

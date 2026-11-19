@@ -57,7 +57,42 @@ pub(super) async fn install_at_run() -> io::Result<()> {
     crate::netfilter::apply(install_rules()).await
 }
 
+fn image_mark(op: CmpOp) -> [Expr; 2] {
+    [
+        Expr::Meta {
+            dreg: Register::R0,
+            key: MetaKey::Mark,
+        },
+        Expr::Cmp {
+            sreg: Register::R0,
+            op,
+            data: crate::mount_broker::IMAGE_MARK.to_ne_bytes().to_vec(),
+        },
+    ]
+}
+
+/// One rule per declared connection: TCP from the image's sockets (its own mark) to that network
+/// and port takes `verdict` (skip the redirect; pass the filter). Empty without a declaration.
+fn image_exemptions(rule: impl Fn() -> Rule, verdict: Expr) -> Vec<Rule> {
+    crate::image_permissions::declared()
+        .map(|declared| declared.destinations.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(address, prefix, port)| {
+            let [meta, cmp] = image_mark(CmpOp::Eq);
+            rule()
+                .expr(meta)
+                .expr(cmp)
+                .match_daddr_v4(address, prefix)
+                .match_l4proto(libc::IPPROTO_TCP as u8)
+                .match_tcp_dport(port)
+                .expr(verdict.clone())
+        })
+        .collect()
+}
+
 async fn install_rules() -> nlink::netlink::Result<()> {
+    let image = crate::image_permissions::declared().is_some();
     let conn = Connection::<Nftables>::new()?;
     let tables = conn.list_tables().await?;
     let mut batch = conn.transaction();
@@ -74,17 +109,25 @@ async fn install_rules() -> nlink::netlink::Result<()> {
     let filter = || Rule::new("alien_gateway", "filter").family(Family::Ip);
     let returning = Expr::Verdict(Verdict::Return);
     let system = |rule: Rule| {
-        rule.expr(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::Mark,
-        })
-        .expr(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Neq,
-            data: GUEST_MARK.to_ne_bytes().to_vec(),
-        })
+        let rule = rule
+            .expr(Expr::Meta {
+                dreg: Register::R0,
+                key: MetaKey::Mark,
+            })
+            .expr(Expr::Cmp {
+                sreg: Register::R0,
+                op: CmpOp::Neq,
+                data: GUEST_MARK.to_ne_bytes().to_vec(),
+            });
+        // The image's sockets are guest traffic too, apart from their declared connections.
+        if image {
+            let [_, cmp] = image_mark(CmpOp::Neq);
+            rule.expr(cmp)
+        } else {
+            rule
+        }
     };
-    batch
+    batch = batch
         .add_chain(
             Chain::new("alien_gateway", "guest_tcp")?
                 .family(Family::Ip)
@@ -93,7 +136,11 @@ async fn install_rules() -> nlink::netlink::Result<()> {
                 .priority(Priority::DstNat)
                 .policy(Policy::Accept),
         )
-        .add_rule(system(nat()).expr(returning.clone()))
+        .add_rule(system(nat()).expr(returning.clone()));
+    for rule in image_exemptions(nat, returning.clone()) {
+        batch = batch.add_rule(rule);
+    }
+    batch = batch
         .add_rule(
             nat()
                 .match_ct_direction(CtDirection::Reply)
@@ -130,8 +177,37 @@ async fn install_rules() -> nlink::netlink::Result<()> {
                 .hook(Hook::Output)
                 .priority(Priority::Filter)
                 .policy(Policy::Drop),
-        )
-        .add_rule(system(filter()).accept())
+        );
+    if image {
+        // NFS leaves the guest only through the image's own proxy: TCP 2049 to anything but
+        // loopback is dropped unless the socket carries the image mark. This covers the kernel's
+        // NFS client (whose sockets carry no mark), so a mount cannot bypass the loopback proxy
+        // through a referral or a second address.
+        let [meta, cmp] = image_mark(CmpOp::Neq);
+        batch = batch
+            .add_rule(
+                filter()
+                    .expr(meta.clone())
+                    .expr(cmp.clone())
+                    .match_daddr_v4(Ipv4Addr::new(127, 0, 0, 0), 8)
+                    .match_l4proto(libc::IPPROTO_TCP as u8)
+                    .match_tcp_dport(2049)
+                    .accept(),
+            )
+            .add_rule(
+                filter()
+                    .expr(meta)
+                    .expr(cmp)
+                    .match_l4proto(libc::IPPROTO_TCP as u8)
+                    .match_tcp_dport(2049)
+                    .expr(Expr::Verdict(Verdict::Drop)),
+            );
+    }
+    batch = batch.add_rule(system(filter()).accept());
+    for rule in image_exemptions(filter, Expr::Verdict(Verdict::Accept)) {
+        batch = batch.add_rule(rule);
+    }
+    batch
         // External inbound sockets must not become an uninspected outbound channel.
         // Preview traffic reaches command listeners through the agent's loopback proxy.
         .add_rule(filter().match_daddr_v4(Ipv4Addr::LOCALHOST, 32).accept())

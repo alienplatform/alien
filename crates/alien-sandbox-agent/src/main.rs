@@ -49,6 +49,17 @@ const ENV_IMAGE_COMMAND: &str = "ALIEN_SANDBOX_IMAGE_COMMAND";
 const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
 
 fn main() -> Result<()> {
+    // `/opt/alien/bin/mount.nfs4` and friends are this binary: the image's way to the mount broker.
+    #[cfg(unix)]
+    if let Some(name) = std::env::args()
+        .next()
+        .as_deref()
+        .and_then(alien_sandbox_agent::mount_broker::shim::shim_name)
+    {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        std::process::exit(alien_sandbox_agent::mount_broker::shim::main(name, &args));
+    }
+
     #[cfg(target_os = "linux")]
     if std::env::args().nth(1).as_deref() == Some("--egress-path-check") {
         std::process::exit(alien_sandbox_agent::gateway_egress::command_path_check(
@@ -99,6 +110,40 @@ fn main() -> Result<()> {
 
     tracing_subscriber::fmt::init();
 
+    // An image that declares permissions gets the mount broker. It is forked first, while the
+    // agent is single-threaded, outside the guest cgroup and still holds its full grant.
+    // Without the declaration nothing below changes.
+    let image_permissions = alien_sandbox_agent::image_permissions::load_from_env()?;
+    if let Some(declared) = image_permissions {
+        #[cfg(target_os = "linux")]
+        {
+            if unsafe { libc::geteuid() } != 0 {
+                return Err(invalid(
+                    alien_sandbox_agent::image_permissions::ENV_PERMISSIONS,
+                    "image permissions need the agent to start as root",
+                ));
+            }
+            alien_sandbox_agent::mount_broker::start(
+                declared,
+                alien_sandbox_agent::mount_broker::Config::default(),
+            )
+            .into_alien_error()
+            .context(failed(
+                "start the mount broker",
+                "cannot fork the broker".to_string(),
+            ))?;
+            alien_sandbox_agent::privilege::filter_image_mounts();
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = declared;
+            return Err(invalid(
+                alien_sandbox_agent::image_permissions::ENV_PERMISSIONS,
+                "image permissions need Linux",
+            ));
+        }
+    }
+
     // Azure `internet`: the proxy address commands use is a loopback forwarder over both gateway
     // replicas. It must listen before the gate and the workload.
     if let Err(message) = alien_sandbox_agent::proxy_failover::spawn_from_env() {
@@ -121,7 +166,20 @@ fn main() -> Result<()> {
             "native-file cannot be combined with AWS Run-hook transport",
         ));
     }
+    if image_permissions.is_some() && !aws_image_transport {
+        return Err(invalid(
+            alien_sandbox_agent::image_permissions::ENV_PERMISSIONS,
+            "image permissions are supported only on AWS sandboxes that start the image command",
+        ));
+    }
     let state = Arc::new(load_state()?);
+    #[cfg(target_os = "linux")]
+    if image_permissions.is_some() && state.gateway_egress.is_none() {
+        return Err(invalid(
+            alien_sandbox_agent::image_permissions::ENV_PERMISSIONS,
+            "image permissions need the guest network (internet or none egress)",
+        ));
+    }
     let port: u16 = parse(ENV_PORT)?;
     state.preview.set_own_ports(&[port]);
     let network_admin = (std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() || aws_image_transport)
@@ -151,6 +209,18 @@ fn main() -> Result<()> {
                 "prepare declared command identity",
                 "cannot write the image's passwd/group entries".to_string(),
             ))?;
+            #[cfg(target_os = "linux")]
+            if image_permissions.is_some() {
+                alien_sandbox_agent::mount_broker::link_shims(&state.agent_binary)
+                    .into_alien_error()
+                    .context(failed(
+                        "install the mount commands",
+                        format!(
+                            "cannot link the mount commands in {}",
+                            alien_sandbox_agent::mount_broker::shim::DIRECTORY
+                        ),
+                    ))?;
+            }
             if image_command_enabled()? {
                 // The flag only selects who provides the protection. Either way the agent
                 // refuses to continue unless it is in place.
@@ -380,8 +450,15 @@ fn enforce_exec_identity(
 fn image_command_enabled() -> Result<bool> {
     match std::env::var(ENV_IMAGE_COMMAND) {
         Ok(value) if value == "true" => Ok(true),
+        // The same contract plus image permissions, checked by `image_permissions`.
+        Ok(value) if value == alien_core::sandbox_image::IMAGE_COMMAND_WITH_IMAGE_PERMISSIONS => {
+            Ok(true)
+        }
         Err(std::env::VarError::NotPresent) => Ok(false),
-        _ => Err(invalid(ENV_IMAGE_COMMAND, "must be true when set")),
+        _ => Err(invalid(
+            ENV_IMAGE_COMMAND,
+            "must be true or image-permissions-v1 when set",
+        )),
     }
 }
 

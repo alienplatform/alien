@@ -794,3 +794,43 @@ pub fn call(path: &Path, request: &request::Request, timeout: Duration) -> io::R
     serde_json::from_slice(answer.split(|b| *b == b'\n').next().unwrap_or_default())
         .map_err(io::Error::other)
 }
+
+/// Links the shims to the agent binary in [`super::shim::DIRECTORY`]. Runs as root before the
+/// agent's files are protected and before any image code exists.
+pub fn link_shims(agent: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let directory = Path::new(super::shim::DIRECTORY);
+    std::fs::create_dir_all(directory)?;
+    let meta = std::fs::symlink_metadata(directory)?;
+    if !meta.is_dir() || meta.uid() != 0 {
+        return Err(io::Error::other(format!(
+            "{} must be a root-owned directory",
+            directory.display()
+        )));
+    }
+    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755))?;
+    for name in super::shim::NAMES {
+        let link = directory.join(name);
+        match std::fs::remove_file(&link) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        std::os::unix::fs::symlink(agent, &link)?;
+    }
+    Ok(())
+}
+
+static IMAGE_LEADER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Records the image command's process, whose environment lifecycle steps start from.
+pub fn set_image_leader(pid: u32) {
+    IMAGE_LEADER.store(pid, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn image_leader() -> Option<u32> {
+    match IMAGE_LEADER.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        pid => Some(pid),
+    }
+}

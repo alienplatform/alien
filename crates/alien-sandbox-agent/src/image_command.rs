@@ -176,6 +176,10 @@ impl ImageProcess {
             return Ok(());
         };
         *status = ImageStatus::Running;
+        #[cfg(target_os = "linux")]
+        if let Some(pid) = child.id() {
+            crate::mount_broker::set_image_leader(pid);
+        }
         let shared = Arc::clone(&self.status);
         let mut shutdown = self.shutdown.subscribe();
         let monitor = tokio::spawn(async move {
@@ -358,6 +362,28 @@ fn start_from_with_env(
             reason: "root image USER cannot run with legacy UID-scoped egress; rebuild with a gateway-backed policy".into(),
         }));
     }
+    // With image permissions the image reaches the mount broker as root through a root-only
+    // socket, and runs in the image cgroup the broker moves it into before `exec`.
+    #[cfg(target_os = "linux")]
+    let brokered = crate::mount_broker::active();
+    #[cfg(target_os = "linux")]
+    if brokered {
+        if !image_user || image_identity.uid != 0 {
+            return Err(AlienError::new(ErrorData::ConfigInvalid {
+                setting: crate::image_permissions::ENV_PERMISSIONS.into(),
+                reason: "an image with image permissions must start its command as root (USER root or no USER)".into(),
+            }));
+        }
+        crate::mount_broker::serve_socket(Path::new(crate::mount_broker::SOCKET_PATH))
+            .into_alien_error()
+            .context(ErrorData::OperationFailed {
+                operation: "start image command".to_string(),
+                reason: format!(
+                    "cannot serve the mount broker at {}",
+                    crate::mount_broker::SOCKET_PATH
+                ),
+            })?;
+    }
     // Docker supplies these defaults even when the image config omits them.
     // Explicit image or create-time variables retain precedence.
     let passwd = fs::read_to_string("/etc/passwd")
@@ -406,6 +432,10 @@ fn start_from_with_env(
     }
     unsafe {
         command.pre_exec(move || {
+            #[cfg(target_os = "linux")]
+            if brokered {
+                crate::mount_broker::join_image_cgroup()?;
+            }
             if image_user {
                 #[cfg(target_os = "linux")]
                 crate::privilege::drop_image_to(image_identity)?;

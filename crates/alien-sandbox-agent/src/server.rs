@@ -340,10 +340,7 @@ pub fn router(state: Arc<AgentState>) -> Router {
             &hook_path("resume"),
             get(resume_egress_hook).post(resume_egress_hook),
         )
-        .route(
-            &hook_path("suspend"),
-            get(hook_lifecycle).post(hook_lifecycle),
-        )
+        .route(&hook_path("suspend"), get(suspend_hook).post(suspend_hook))
         .route(
             &hook_path("terminate"),
             get(hook_lifecycle).post(hook_lifecycle),
@@ -544,9 +541,67 @@ async fn resume_egress_hook(
         authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
         egress.resume().await?;
     }
+    // After the network is back: the image's own resume step (a remount) needs it.
+    #[cfg(target_os = "linux")]
+    run_image_step(&state, peer, &headers, Step::OnResume).await?;
     #[cfg(not(target_os = "linux"))]
     let _ = (state, peer, headers);
     Ok(StatusCode::OK)
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum Step {
+    OnPause,
+    OnResume,
+}
+
+/// Before the provider pauses the sandbox, the image's declared `onPause` runs (an unmount:
+/// network file system connections do not survive the snapshot). Without one the hook only
+/// acknowledges, as before.
+async fn suspend_hook(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> std::result::Result<StatusCode, ApiError> {
+    #[cfg(target_os = "linux")]
+    run_image_step(&state, peer, &headers, Step::OnPause).await?;
+    #[cfg(not(target_os = "linux"))]
+    let _ = (state, peer, headers);
+    Ok(StatusCode::OK)
+}
+
+/// One step at a time, and only on the platform's own call: a workload that could reach this
+/// port must not be able to make the image unmount or remount. A failed step fails the hook.
+#[cfg(target_os = "linux")]
+async fn run_image_step(
+    state: &Arc<AgentState>,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    step: Step,
+) -> std::result::Result<(), ApiError> {
+    static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let Some(declared) = crate::image_permissions::declared() else {
+        return Ok(());
+    };
+    let (name, command) = match step {
+        Step::OnPause => ("onPause", declared.permissions.on_pause.as_ref()),
+        Step::OnResume => ("onResume", declared.permissions.on_resume.as_ref()),
+    };
+    let Some(command) = command else {
+        return Ok(());
+    };
+    authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
+    let _serial = SERIAL.lock().await;
+    crate::image_lifecycle::run(name, command, declared.lifecycle_deadline)
+        .await
+        .map_err(|reason| {
+            tracing::error!(%reason, "image lifecycle step failed");
+            ApiError::from(AlienError::new(ErrorData::OperationFailed {
+                operation: format!("image {name}"),
+                reason,
+            }))
+        })
 }
 
 async fn run_command(
