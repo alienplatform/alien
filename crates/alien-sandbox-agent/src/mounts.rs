@@ -764,8 +764,12 @@ pub fn fork_helper(prepare_key: bool) -> std::io::Result<HelperClient> {
                         .find(|l| l.starts_with("CapEff:"))
                         .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
                 });
+            // The helper must sit outside the guest cgroup, or its sockets carry the guest mark.
+            let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
+                .map(|text| text.trim().to_string())
+                .unwrap_or_else(|_| "cgroup unknown".to_string());
             crate::report::log(&format!(
-                "alien-sandbox-agent: mounts: helper forked (pid {pid}, {})",
+                "alien-sandbox-agent: mounts: helper forked (pid {pid}, {}, cgroup {cgroup})",
                 capabilities.as_deref().unwrap_or("capabilities unknown")
             ));
             crate::report::update(|s| {

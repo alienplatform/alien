@@ -121,10 +121,13 @@ fn main() -> Result<()> {
             "native-file cannot be combined with AWS Run-hook transport",
         ));
     }
-    let state = Arc::new(load_state()?);
     // Mounts need SYS_ADMIN, which the supervisor drops later. A helper keeps it. It is forked
-    // first, before the agent joins the guest cgroup, so neither it nor the proxy it starts carry
-    // the guest socket mark, and before any thread exists.
+    // before `load_state`, because loading the gateway egress state moves the agent into the guest
+    // cgroup (`GatewayEgress::from_env` -> `isolate_control_callers`); a helper forked after that
+    // would carry the guest socket mark, and so would the proxy it starts, so their connections to
+    // the mount target would be redirected like a command's and refused.
+    #[cfg(target_os = "linux")]
+    let mut mount_helper = None;
     #[cfg(target_os = "linux")]
     if unsafe { libc::geteuid() } == 0 {
         let raw = std::env::var(alien_sandbox_agent::mounts::ENV_MOUNTS).ok();
@@ -160,14 +163,19 @@ fn main() -> Result<()> {
                 "start the mount helper",
                 "cannot fork the helper".to_string(),
             ))?;
-            alien_sandbox_agent::mounts::install(alien_sandbox_agent::mounts::Mounts::new(
-                declared,
-                state.exec_identity.uid,
-                state.exec_identity.gid,
-                alien_sandbox_agent::mounts::CREDENTIALS_DIR.into(),
-                Box::new(helper),
-            ));
+            mount_helper = Some((declared, helper));
         }
+    }
+    let state = Arc::new(load_state()?);
+    #[cfg(target_os = "linux")]
+    if let Some((declared, helper)) = mount_helper {
+        alien_sandbox_agent::mounts::install(alien_sandbox_agent::mounts::Mounts::new(
+            declared,
+            state.exec_identity.uid,
+            state.exec_identity.gid,
+            alien_sandbox_agent::mounts::CREDENTIALS_DIR.into(),
+            Box::new(helper),
+        ));
     }
     let port: u16 = parse(ENV_PORT)?;
     state.preview.set_own_ports(&[port]);
