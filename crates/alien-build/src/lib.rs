@@ -1655,9 +1655,11 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
                             "sandbox",
                             path.clone(),
                         );
-                        if sandbox.mounts.iter().any(|mount| {
-                            matches!(mount, alien_core::SandboxMount::S3files { .. })
-                        }) {
+                        if sandbox
+                            .mounts
+                            .iter()
+                            .any(|mount| matches!(mount, alien_core::SandboxMount::S3files { .. }))
+                        {
                             if let Some(target) =
                                 push_target_for_local_image(&mut targets, "sandbox", &path)
                             {

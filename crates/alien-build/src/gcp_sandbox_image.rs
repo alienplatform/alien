@@ -980,7 +980,9 @@ mod tests {
         .err()
         .expect("the build is refused");
         assert!(
-            error.to_string().contains("/opt/alien/mount-proxy/efs-proxy"),
+            error
+                .to_string()
+                .contains("/opt/alien/mount-proxy/efs-proxy"),
             "{error}"
         );
     }
