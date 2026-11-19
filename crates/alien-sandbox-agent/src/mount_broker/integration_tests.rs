@@ -636,6 +636,36 @@ print(results)
         String::from_utf8_lossy(&left.stdout)
     );
     println!("STEP     a step past its 2s deadline: {error}; nothing left behind");
+
+    // A step that remounts: it starts its own proxy and mounts through it. The proxy then joins
+    // the image's own processes, and a later step's deadline does not kill it.
+    step(
+        &["/bin/sh", "-c", "python3 /tmp/forward.py 20128 2049 >/dev/null 2>&1 & /opt/alien/bin/mount.nfs4 127.0.0.1:/ /workspace -o nfsvers=4.2,port=20128,soft,timeo=20,retrans=1 && cat /workspace/hello.txt"],
+        10,
+    )
+    .expect("a step that starts its proxy and mounts");
+    let proxy_pid = String::from_utf8(
+        Command::new("pgrep")
+            .args(["-f", "forward.py 20128"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    assert!(!proxy_pid.is_empty(), "the step's proxy is running");
+    let cgroup = std::fs::read_to_string(format!("/proc/{proxy_pid}/cgroup")).unwrap();
+    assert!(cgroup.contains("0::/alien-guest/image\n"), "{cgroup}");
+    step(&["/bin/sh", "-c", "sleep 300"], 1).unwrap_err();
+    assert!(
+        Path::new(&format!("/proc/{proxy_pid}")).exists(),
+        "a later step's deadline killed the earlier step's proxy"
+    );
+    allowed("/opt/alien/bin/alien-mount umount /workspace");
+    // SAFETY: signalling the proxy this test started.
+    unsafe { libc::kill(proxy_pid.parse().unwrap(), libc::SIGKILL) };
+    println!("STEP     a step's own proxy served its remount and outlived a later step's deadline");
     allowed(&format!(
         "/opt/alien/bin/mount.nfs4 127.0.0.1:/ /workspace -o {options}"
     ));

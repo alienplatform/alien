@@ -444,7 +444,11 @@ pub fn run(
 pub const LISTENER_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// [`port_held_by`], polled until it holds or `until`, then its last answer.
-pub fn wait_for_port(port: u16, procs: &str, until: Instant) -> Result<(), Refusal> {
+pub fn wait_for_port(
+    port: u16,
+    procs: &[std::path::PathBuf],
+    until: Instant,
+) -> Result<(), Refusal> {
     loop {
         match port_held_by(port, procs) {
             Ok(()) => return Ok(()),
@@ -454,9 +458,9 @@ pub fn wait_for_port(port: u16, procs: &str, until: Instant) -> Result<(), Refus
     }
 }
 
-/// Whether a TCP listener on loopback `port` belongs to a process in the image cgroup, whose
-/// member list is `procs` (a `cgroup.procs` file).
-pub fn port_held_by(port: u16, procs: &str) -> Result<(), Refusal> {
+/// Whether a TCP listener on loopback `port` belongs to a process in the image's cgroups, whose
+/// member lists are `procs` (`cgroup.procs` files; one that does not exist yet is skipped).
+pub fn port_held_by(port: u16, procs: &[std::path::PathBuf]) -> Result<(), Refusal> {
     let refused = |why: String| Err((Errno::Eperm, why));
     let table = std::fs::read_to_string("/proc/net/tcp")
         .map_err(|e| (Errno::Eio, format!("cannot read the socket table: {e}")))?;
@@ -477,8 +481,14 @@ pub fn port_held_by(port: u16, procs: &str) -> Result<(), Refusal> {
     if inodes.is_empty() {
         return refused(format!("nothing listens on 127.0.0.1:{port}"));
     }
-    let members = std::fs::read_to_string(procs)
-        .map_err(|e| (Errno::Eio, format!("cannot read the image cgroup: {e}")))?;
+    let mut members = String::new();
+    for file in procs {
+        match std::fs::read_to_string(file) {
+            Ok(text) => members.push_str(&text),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err((Errno::Eio, format!("cannot read the image cgroup: {e}"))),
+        }
+    }
     for pid in members.lines().filter(|l| !l.is_empty()) {
         let Ok(entries) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
             continue;

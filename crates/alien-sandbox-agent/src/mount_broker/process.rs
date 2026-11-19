@@ -449,6 +449,11 @@ pub fn kill_steps() -> io::Result<()> {
     control_message(b'K', "to kill the steps", Duration::from_secs(5))
 }
 
+/// After a step: what it left running joins the image's own processes.
+pub fn end_steps() -> io::Result<()> {
+    control_message(b'E', "to end the step", Duration::from_secs(5))
+}
+
 /// Moves the calling process into the image cgroup, through the broker.
 ///
 /// # Safety
@@ -734,9 +739,10 @@ impl Loop<'_> {
             b'Q' => self.paused = true,
             b'R' => self.paused = false,
             b'K' => self.kill_steps(),
+            b'E' => self.end_steps(),
             _ => {}
         }
-        let mut ok = matches!(message.tag, b'D' | b'Q' | b'R' | b'K')
+        let mut ok = matches!(message.tag, b'D' | b'Q' | b'R' | b'K' | b'E')
             || (message.tag == b'S' && message.fds.len() == 2);
         if message.tag == b'S' && ok {
             if let Err(error) = self.seal(message.fds[1].as_raw_fd()) {
@@ -835,6 +841,18 @@ impl Loop<'_> {
                 unsafe { libc::kill(pid, libc::SIGKILL) };
             }
             std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// After a step: what it left running (a proxy it started, say) joins the image's own
+    /// processes, so a later step's deadline does not kill it.
+    fn end_steps(&mut self) {
+        let steps = self.config.cgroup_dir.join(STEPS_CGROUP);
+        let Ok(procs) = std::fs::read_to_string(steps.join("cgroup.procs")) else {
+            return;
+        };
+        for pid in procs.lines().filter(|l| !l.is_empty()) {
+            let _ = std::fs::write(self.config.cgroup_dir.join("cgroup.procs"), pid);
         }
     }
 
@@ -1195,9 +1213,14 @@ fn helper(
                     .checked_sub(ops::ATTACH_MARGIN * 2)
                     .unwrap_or(deadline),
             );
+            // The image's own processes, and a step's (an `onResume` that remounts starts its proxy
+            // there).
             ops::wait_for_port(
                 *port,
-                &cgroup_dir.join("cgroup.procs").to_string_lossy(),
+                &[
+                    cgroup_dir.join("cgroup.procs"),
+                    cgroup_dir.join(STEPS_CGROUP).join("cgroup.procs"),
+                ],
                 until,
             )?;
         }

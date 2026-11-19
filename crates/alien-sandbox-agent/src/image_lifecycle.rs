@@ -73,6 +73,24 @@ pub async fn run(name: &str, command: &[String], deadline: Duration) -> Result<(
     let (mut child, _registration) = crate::children::spawn(&mut process)
         .map_err(|error| format!("{name}: cannot start {program:?}: {error}"))?;
     let group = child.id().map(|pid| pid as i32);
+    let outcome = finish(name, &mut child, group, deadline).await;
+    // What the step left running (a proxy for a remount, say) joins the image's own processes.
+    if let Err(error) = tokio::task::spawn_blocking(crate::mount_broker::end_steps)
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|result| result)
+    {
+        tracing::error!(%error, step = name, "cannot hand the step's processes to the image");
+    }
+    outcome
+}
+
+async fn finish(
+    name: &str,
+    child: &mut tokio::process::Child,
+    group: Option<i32>,
+    deadline: Duration,
+) -> Result<(), String> {
     match tokio::time::timeout(deadline, child.wait()).await {
         Ok(Ok(status)) if status.success() => Ok(()),
         Ok(Ok(status)) => Err(format!("{name} exited with {status}")),
