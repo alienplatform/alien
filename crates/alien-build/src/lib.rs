@@ -8101,6 +8101,7 @@ mod sandbox_push_tests {
         SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         }
     }
 
