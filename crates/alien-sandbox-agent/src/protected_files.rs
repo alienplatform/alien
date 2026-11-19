@@ -46,7 +46,103 @@ pub fn protect(binary: &Path, metadata: &Path) -> io::Result<()> {
         bind(&parent, false)?;
     }
     bind(binary, true)?;
-    bind(metadata, true)
+    bind(metadata, true)?;
+    for path in READ_ONLY_KERNEL_PATHS {
+        read_only_tree(Path::new(path))
+            .map_err(|error| io::Error::new(error.kind(), format!("{path}: {error}")))?;
+    }
+    Ok(())
+}
+
+/// Kernel settings the image could otherwise write as root without any capability: `/proc/sys`
+/// files are root-writable by mode, and so is `/proc/sysrq-trigger`. Both act on the whole VM (a
+/// `kernel.core_pattern` pipe helper runs as root in the VM's own namespaces). They are bound
+/// read-only in this private mount namespace, as container runtimes do; reading still works. The
+/// image never holds `SYS_ADMIN`, so it cannot undo the binds. Processes outside this namespace
+/// (the provider's, and the mount broker, which writes its own settings) keep their view.
+const READ_ONLY_KERNEL_PATHS: [&str; 2] = ["/proc/sys", "/proc/sysrq-trigger"];
+
+/// Binds `path` over itself with every mount below it, then makes each of those mounts read-only.
+/// Recursive, because a user namespace refuses a plain bind that would uncover locked mounts
+/// below (such as `fs/binfmt_misc`), and those must not stay writable either. The flags each
+/// mount already has are kept (proc is `noexec`): a user namespace refuses a remount that clears
+/// a flag its parent locked. They are read from the mount table rather than by `statvfs`, which
+/// would trigger an automount point below.
+fn read_only_tree(path: &Path) -> io::Result<()> {
+    let target = CString::new(path.as_os_str().as_bytes())?;
+    if unsafe {
+        libc::mount(
+            target.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND | libc::MS_REC,
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // This thread's namespace: `self` would name the thread-group leader's.
+    let table = fs::read_to_string("/proc/thread-self/mountinfo")?;
+    for (point, flags) in mounts_within(&table, path.as_os_str().as_bytes()) {
+        let point = CString::new(point)?;
+        if unsafe {
+            libc::mount(
+                std::ptr::null(),
+                point.as_ptr(),
+                std::ptr::null(),
+                libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | flags,
+                std::ptr::null(),
+            )
+        } != 0
+        {
+            let error = io::Error::last_os_error();
+            return Err(io::Error::new(
+                error.kind(),
+                format!(
+                    "read-only remount of {}: {error}",
+                    String::from_utf8_lossy(point.as_bytes())
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The mount points at or below `root`, each once, parents first, with the remount flags to keep
+/// (always `nosuid` and `nodev`).
+fn mounts_within(table: &str, root: &[u8]) -> Vec<(Vec<u8>, libc::c_ulong)> {
+    let mut found: Vec<(Vec<u8>, libc::c_ulong)> = Vec::new();
+    for line in table.lines() {
+        let mut fields = line.split(' ');
+        let (Some(point), Some(options)) = (fields.nth(4), fields.next()) else {
+            continue;
+        };
+        let point = crate::read_only_mounts::unescape(point);
+        let below =
+            point.len() > root.len() && point.starts_with(root) && point[root.len()] == b'/';
+        if point != root && !below {
+            continue;
+        }
+        let mut flags = libc::MS_NOSUID | libc::MS_NODEV;
+        for option in options.split(',') {
+            flags |= match option {
+                "noexec" => libc::MS_NOEXEC,
+                "noatime" => libc::MS_NOATIME,
+                "nodiratime" => libc::MS_NODIRATIME,
+                "relatime" => libc::MS_RELATIME,
+                _ => 0,
+            };
+        }
+        // A later entry at the same point covers the earlier one: only it can be remounted.
+        if let Some(entry) = found.iter_mut().find(|(seen, _)| *seen == point) {
+            entry.1 = flags;
+        } else {
+            found.push((point, flags));
+        }
+    }
+    found.sort_by_key(|(point, _)| point.len());
+    found
 }
 
 fn bind(path: &Path, readonly: bool) -> io::Result<()> {
@@ -166,6 +262,30 @@ fn private_mount_namespace() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mounts_within_lists_each_point_below_once_with_its_flags() {
+        let table = "\
+25 1 0:23 / /proc rw,nosuid,nodev,noexec,relatime shared:12 - proc proc rw
+37 25 0:31 / /proc/sys/fs/binfmt_misc rw,relatime shared:13 - autofs systemd-1 rw,fd=32
+36 37 0:39 / /proc/sys/fs/binfmt_misc rw,nosuid,nodev,noexec,relatime shared:45 - binfmt_misc binfmt_misc rw
+90 25 0:23 /sys /proc/sys rw,nosuid,nodev,noexec,relatime - proc proc rw
+91 25 0:23 /sysrq-trigger /proc/sysrq-trigger rw,nosuid,nodev,noexec,relatime - proc proc rw
+92 25 0:40 / /proc/sys\040x rw,noatime - tmpfs tmpfs rw
+";
+        let keep = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC | libc::MS_RELATIME;
+        assert_eq!(
+            mounts_within(table, b"/proc/sys"),
+            vec![
+                (b"/proc/sys".to_vec(), keep),
+                (b"/proc/sys/fs/binfmt_misc".to_vec(), keep),
+            ]
+        );
+        assert_eq!(
+            mounts_within(table, b"/proc/sysrq-trigger"),
+            vec![(b"/proc/sysrq-trigger".to_vec(), keep)]
+        );
+    }
     use crate::{exec::ExecIdentity, privilege};
     use std::{
         io::{Read, Seek, SeekFrom, Write},
@@ -213,6 +333,26 @@ for path in [binary, metadata, ancestor]:
     except OSError as e: assert e.errno in [errno.EBUSY, errno.EROFS, errno.EPERM], e
     else: raise AssertionError(f'root renamed {path}')
 assert (metadata / 'ca.pem').read_bytes() == b'new'
+# VM-wide kernel settings: opening for writing is refused, so nothing is ever written even when
+# the protection is missing (a write to sysrq-trigger would act at once).
+for path in ['/proc/sys/kernel/core_pattern', '/proc/sys/net/core/somaxconn', '/proc/sysrq-trigger']:
+    try: fd = os.open(path, os.O_WRONLY)
+    except OSError as e: assert e.errno == errno.EROFS, (path, e)
+    else:
+        os.close(fd)
+        raise AssertionError(f'root opened {path} for writing')
+# Mounts below /proc/sys are read-only too (binfmt_misc registers interpreters for every exec).
+# Only the last entry at a mount point is reachable; earlier ones are covered.
+visible = {}
+for line in open('/proc/self/mountinfo'):
+    fields = line.split()
+    visible[fields[4]] = fields[5].split(',')
+for point, options in visible.items():
+    if point.startswith('/proc/sys/'):
+        assert 'ro' in options, (point, options)
+# Reading still works.
+for path in ['kernel/osrelease', 'net/core/somaxconn', 'vm/overcommit_memory']:
+    assert pathlib.Path('/proc/sys', path).read_text().strip(), path
 # The inherited descriptor is CLOEXEC, and root cannot reopen the agent's FD.
 try: os.open(f'/proc/{sys.argv[4]}/fd/{sys.argv[5]}', os.O_WRONLY)
 except OSError as e: assert e.errno in [errno.EACCES, errno.EPERM], e

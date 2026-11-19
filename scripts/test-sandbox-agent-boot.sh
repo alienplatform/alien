@@ -69,7 +69,14 @@ echo "exec: ${exec_body:0:400}"
 fail() { echo "FAIL ($variant): $*"; echo '--- agent log'; tail -40 /tmp/agent.log; exit 1; }
 [ "$code" = 200 ] || fail "the run hook answered $code"
 if [ "$variant" = started ]; then
-  pgrep -f '^/bin/sleep 3601$' >/dev/null || fail "the image did not start"
+  image_pid=$(pgrep -f '^/bin/sleep 3601$') || fail "the image did not start"
+  # The image's mount namespace: kernel settings are read-only there, and only there.
+  for point in /proc/sys /proc/sysrq-trigger; do
+    awk -v p="$point" '$5 == p { o = $6 } END { exit !(o ~ /^ro,/) }' "/proc/$image_pid/mountinfo" \
+      || fail "$point is not read-only in the image's mount namespace"
+  done
+  ! nsenter -t "$image_pid" -m sh -c 'exec 3>>/proc/sys/kernel/core_pattern' 2>/dev/null \
+    || fail "/proc/sys/kernel/core_pattern opens for writing in the image's mount namespace"
   [ ! -e /run/alien/boot-error ] || fail "boot error without a failure: $(cat /run/alien/boot-error)"
   grep -q '"data":"ZXhlYy1yYW4K"' <<<"$exec_body" || fail "exec did not run"
   grep -q 'mount broker: sealed:.*created: /var/lib/app/scratch' /tmp/agent.log \
