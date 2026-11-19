@@ -451,7 +451,17 @@ attempt("remove", lambda: os.unlink("/usr/sbin/nologin"))
                     text(&output)
                 );
             }
-            let output = image("/opt/alien/bin/alien-mount umount /scratch");
+            // The racer's own path walks pass through the mount and hold it for an instant, so
+            // a plain unmount can see it busy (EBUSY); that is the kernel's answer, not the
+            // broker's. Ask again.
+            let mut output = image("/opt/alien/bin/alien-mount umount /scratch");
+            for _ in 0..50 {
+                if output.status.success() || !text(&output).contains("EBUSY") {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+                output = image("/opt/alien/bin/alien-mount umount /scratch");
+            }
             assert!(output.status.success(), "{}", text(&output));
         } else {
             refusals += 1;
@@ -634,7 +644,11 @@ print(results)
     )
     .unwrap_err();
     assert!(error.contains("its processes were killed"), "{error}");
-    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the step was killed after {:?}: {error}",
+        started.elapsed()
+    );
     std::thread::sleep(Duration::from_millis(300));
     let left = Command::new("pgrep")
         .args(["-f", "sleep 30[012]"])
