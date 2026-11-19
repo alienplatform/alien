@@ -1,5 +1,6 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
+assertion_line: 262
 expression: buf
 ---
 === versions.tf ===
@@ -286,8 +287,7 @@ locals {
       }
     }
     certificate = {
-      mode = "managedAcmImport"
-      tags = {}
+      mode = "none"
     }
   }
   kubernetes_exposure            = jsondecode(var.custom_domain_name == "" ? jsonencode(local.generated_kubernetes_exposure) : jsonencode(merge(local.generated_kubernetes_exposure, { mode = "custom", domain = var.custom_domain_name, certificate = { mode = "awsAcmArn", certificateArn = var.custom_domain_certificate_arn } })))

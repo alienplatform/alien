@@ -115,8 +115,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
     }}
   }}
   certificate = {{
-    mode = "managedAcmImport"
-    tags = {{}}
+    mode = "none"
   }}
 }}"#,
                     public_subnet_ids = eks_subnet_ids_expr(ctx, label, false),
