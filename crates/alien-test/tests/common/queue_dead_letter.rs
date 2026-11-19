@@ -162,6 +162,7 @@ pub async fn check_dead_letter(
         sleep(Duration::from_secs(15)).await;
     }
 
+    info!(?counts, "dead-letter delivery counts");
     for n in 0..POISON {
         let id = format!("{prefix}-poison-{n}");
         let entry = failed
@@ -172,16 +173,19 @@ pub async fn check_dead_letter(
             json!({"id": id, "poison": true}),
             "payload intact"
         );
+        // Pub/Sub counts every push attempt, including one that failed before it reached the
+        // Worker (a cold start answering 5xx), which the Worker cannot record. So the recorded
+        // count can be one short of `MAX_ATTEMPTS`; a real run recorded 4 for a message that was
+        // moved after 5 attempts.
         let attempts = counts[&id] as u64;
         assert!(
-            (MAX_ATTEMPTS..=MAX_ATTEMPTS + 2).contains(&attempts),
+            (MAX_ATTEMPTS - 1..=MAX_ATTEMPTS + 2).contains(&attempts),
             "{id} was delivered {attempts} times; about {MAX_ATTEMPTS} expected"
         );
     }
     for n in 0..GOOD {
         assert!(counts[&format!("{prefix}-good-{n}")] >= 1);
     }
-    info!(?counts, "dead-letter delivery counts");
     if peek_tasks {
         // `tasks` ends empty: nothing is left to receive. (On GCP the queue's default pull
         // subscription also holds a copy of every message for `receive` consumers, so the
