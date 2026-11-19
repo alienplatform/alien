@@ -591,22 +591,6 @@ pub(crate) fn render_terraform_module(
         ));
     }
 
-    // The deployer secrets vault is a Kubernetes Secret binding on a Kubernetes target, so no
-    // module creates a cloud store for it. An install from an earlier release may have one with
-    // values in it: Terraform must forget it, not destroy it.
-    if target == TerraformTarget::Aks {
-        if let (Some(label), Some(_)) = (
-            labels.get(alien_core::DEPLOYER_SECRETS_VAULT_ID),
-            stack.resources.get(alien_core::DEPLOYER_SECRETS_VAULT_ID),
-        ) {
-            per_resource
-                .entry(alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string())
-                .or_default()
-                .moved_blocks
-                .extend(crate::emitters::azure::vault::forget_vault_blocks(label));
-        }
-    }
-
     if target.is_kubernetes() {
         crate::k8s_identity::overlay_per_resource(
             stack,

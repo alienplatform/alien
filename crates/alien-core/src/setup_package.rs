@@ -2,7 +2,7 @@ use crate::{
     is_prepared_cluster, ownership_policy_for_resource_type, ComputeCluster, ErrorData, Key,
     KubernetesCluster, KubernetesClusterOwnership, ManagementPermissions, NetworkSettings,
     Platform, ResourceEntry, ResourceLifecycle, Result, Sandbox, SetupManagement, Stack,
-    StackSettings, Storage, Vault,
+    StackSettings, Storage,
 };
 use alien_error::AlienError;
 
@@ -139,24 +139,15 @@ impl SetupTarget {
     }
 }
 
-/// Whether the resource is one a Kubernetes target runs on the cluster itself: a
+/// Whether the resource type is one a Kubernetes target runs on the cluster itself: a
 /// `ComputeCluster` is a set of logical pools the Operator validates and a `Sandbox` is a pod.
 /// Setup creates no cloud infrastructure for either, and runtime provisioning verifies them
 /// through the Kubernetes controllers rather than a cloud controller.
 ///
-/// The `deployer-secrets` vault is the same on a Kubernetes target, whatever cloud the cluster
-/// runs in: pods read deployer secrets from Kubernetes Secrets in the release namespace, so the
-/// vault is a Kubernetes Secret binding and setup creates no cloud store for it.
-///
 /// Setup's emit rule ([`emits_package_scaffolding`]) and the executor's choice of controller
 /// both ask this, so they cannot disagree.
-pub fn is_kubernetes_native_resource(resource: &crate::Resource) -> bool {
-    let resource_type = resource.resource_type();
-    resource_type == Sandbox::RESOURCE_TYPE
-        || resource_type == ComputeCluster::RESOURCE_TYPE
-        || resource
-            .downcast_ref::<Vault>()
-            .is_some_and(|vault| vault.id == crate::DEPLOYER_SECRETS_VAULT_ID)
+pub fn is_kubernetes_native_resource_type(resource_type: &crate::ResourceType) -> bool {
+    *resource_type == Sandbox::RESOURCE_TYPE || *resource_type == ComputeCluster::RESOURCE_TYPE
 }
 
 /// Whether this resource is a cloud database (Postgres or Redis) whose private endpoint needs a
@@ -292,7 +283,7 @@ pub fn emits_package_scaffolding(
     target: SetupTarget,
 ) -> bool {
     let resource_type = entry.config.resource_type();
-    if target.is_kubernetes() && is_kubernetes_native_resource(&entry.config) {
+    if target.is_kubernetes() && is_kubernetes_native_resource_type(&resource_type) {
         return false;
     }
     if management == SetupManagement::Automatic {

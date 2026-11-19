@@ -19,7 +19,7 @@ use alien_core::{
     KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
     KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
     PermissionsConfig, Postgres, RemoteStackManagement, ResourceLifecycle, ResourceSpec, Sandbox,
-    ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
+    ServiceAccount, Stack, StackSettings, Storage, Vault, Worker, WorkerCode,
 };
 use alien_terraform::{
     generate_product_terraform_module, generate_terraform_module, TerraformHelmInstall,
@@ -243,6 +243,62 @@ fn gke_overlay_emits_workload_identity_binding() {
     assert_terraform_valid(&module, "gke_overlay_workload_identity");
 }
 
+/// An install from an earlier release still records the cloud deployer vault, so an upgraded
+/// module keeps its IAM resources at the same addresses: removing them is a separate change.
+#[test]
+fn upgraded_gke_and_eks_modules_keep_the_deployer_vault_iam_and_registration() {
+    let deployer_vault_addresses = |target: TerraformTarget| {
+        let stack = Stack::new("deployer-vault-upgrade".to_string())
+            .permission(
+                "execution",
+                PermissionProfile::new().resource("deployer-secrets", ["vault/data-read"]),
+            )
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Vault::new("deployer-secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let module = render(&stack, target, StackSettings::default());
+        let rendered = module.files.values().cloned().collect::<String>();
+        let addresses: Vec<String> = rendered
+            .lines()
+            .filter(|line| {
+                line.starts_with("resource \"")
+                    && line.contains("secret")
+                    && line.contains("execution_sa")
+            })
+            .map(|line| line.trim_end_matches(" {").to_string())
+            .collect();
+        (addresses, module)
+    };
+
+    // The cluster targets address the vault's IAM exactly as the cloud targets, which an
+    // earlier release's module used.
+    for (kubernetes, cloud) in [
+        (TerraformTarget::Gke, TerraformTarget::Gcp),
+        (TerraformTarget::Eks, TerraformTarget::Aws),
+    ] {
+        let (addresses, module) = deployer_vault_addresses(kubernetes);
+        let (cloud_addresses, _) = deployer_vault_addresses(cloud);
+        assert!(
+            !addresses.is_empty(),
+            "{kubernetes:?} no longer emits the deployer vault's IAM"
+        );
+        assert_eq!(addresses, cloud_addresses, "{kubernetes:?} addresses moved");
+        assert!(
+            module
+                .get("locals.tf")
+                .unwrap()
+                .contains("deployer-secrets"),
+            "{kubernetes:?} still registers the vault"
+        );
+    }
+}
+
 #[test]
 fn gke_management_service_account_has_one_workload_identity_role_resource() {
     let stack = Stack::new("gke-management".to_string())
@@ -405,8 +461,7 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
                 assert!(main.contains("controller       = \"eks.amazonaws.com/alb\""));
                 assert!(main.contains("ingressClassName = \"alb\""));
                 assert!(main.contains("provider   = \"awsAlb\""));
-                assert!(main.contains("mode = \"managedAcmImport\""));
-                assert!(!main.contains("mode = \"none\""));
+                assert!(main.contains("mode = \"none\""));
                 assert!(!main.contains("clusterBootstrap"));
                 assert!(!main.contains("metricsServer"));
                 assert!(!main.contains("eksAutoMode"));

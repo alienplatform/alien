@@ -12,7 +12,7 @@
 //!   module doesn't need an extra customer-supplied variable.
 
 use crate::{
-    block::{attr, block, data_block, nested, resource_block},
+    block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         downcast, permission_context, remote_stack_management_label, required_label,
@@ -121,32 +121,6 @@ impl TfEmitter for AzureVaultEmitter {
             ),
         ])))
     }
-}
-
-/// `removed` blocks that forget the Key Vault an earlier release's module created for `label`,
-/// without destroying it. An AKS module no longer creates the deployer secrets vault (pods read
-/// Kubernetes Secrets), but an existing install's vault may hold values the deployer wrote;
-/// dropping its address from the configuration would make the next apply destroy it. The
-/// name suffix is forgotten with it, so a later reinstall into the same state cannot rename it.
-pub fn forget_vault_blocks(label: &str) -> Vec<hcl::Block> {
-    [
-        ("azurerm_key_vault", label.to_string()),
-        ("random_id", vault_name_suffix_label(label)),
-    ]
-    .into_iter()
-    .map(|(kind, address)| {
-        block(
-            "removed",
-            [
-                attr("from", expr::traversal([kind, address.as_str()])),
-                nested(block(
-                    "lifecycle",
-                    [attr("destroy", Expression::Bool(false))],
-                )),
-            ],
-        )
-    })
-    .collect()
 }
 
 /// Key Vault names are 3-24 alphanumeric-or-dash characters and globally
