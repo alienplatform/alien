@@ -2454,6 +2454,7 @@ impl KubernetesContainerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         self.update_timeout_reason = None;
+        self.ready_hold.clear_restart_check();
         self.recovering = true;
         let checked = self.ready(ctx).await;
         self.recovering = false;
@@ -2463,7 +2464,10 @@ impl KubernetesContainerController {
                 suggested_delay,
             }) => {
                 // A pod that is ready for a moment on each restart is not recovered.
-                let restart_free = self.restart_free(ctx).await;
+                let restart_free = match self.ready_hold.take_restart_check() {
+                    Some(already_checked) => already_checked,
+                    None => self.restart_free(ctx).await,
+                };
                 if recovery_check(
                     &mut self.recovery_checks,
                     &mut self.last_recovery_check_unix,
@@ -4349,6 +4353,74 @@ mod tests {
         assert_eq!(error.code, "WORKLOAD_NOT_READY");
         assert_eq!(controller.recovery_checks, 0);
         assert_eq!(controller.get_status(), ResourceStatus::RefreshFailed);
+    }
+
+    #[tokio::test]
+    async fn a_pod_restarting_between_every_recovery_check_never_recovers() {
+        let config = manifest_test_container(&[], false);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let mut controller = manifest_test_controller();
+        let labels = {
+            let ctx = harness.ctx();
+            controller.workload_labels(&ctx, "web", controller.build_labels("web"))
+        };
+        let server = httpmock::MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/deployments/web");
+            then.status(200).json_body(serde_json::json!({
+                "apiVersion":"apps/v1", "kind":"Deployment",
+                "metadata":{"name":"web", "generation":3, "labels":labels},
+                "spec":{"replicas":1,"selector":{"matchLabels":{"app":"web"}},"template":{"spec":{"containers":[]}}},
+                "status":{"replicas":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1,
+                    "observedGeneration":3,
+                    "conditions":[{"type":"Progressing","status":"True","reason":"NewReplicaSetAvailable"}]}
+            }));
+        });
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/api/v1/namespaces/test-ns/events");
+            then.status(200).json_body(
+                serde_json::json!({"apiVersion":"v1","kind":"EventList","metadata":{},"items":[]}),
+            );
+        });
+        let mut ctx = harness.ctx();
+        point_at(&mut ctx, &server);
+        controller.state = KubernetesContainerState::RefreshFailed;
+
+        // The pod looks ready each time it is read, but it restarted since the last check.
+        for restarts in 1..=2 * crate::kubernetes_workload_heartbeat::RECOVERY_HEALTHY_CHECKS {
+            let mut pods = server.mock(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/api/v1/namespaces/test-ns/pods");
+                then.status(200).json_body(serde_json::json!({
+                    "apiVersion":"v1","kind":"PodList","metadata":{},
+                    "items":[{
+                        "metadata":{"name":"web-1","namespace":"test-ns"},
+                        "status":{
+                            "conditions":[{"type":"Ready","status":"True"}],
+                            "containerStatuses":[{"name":"web","ready":true,"image":"i","imageID":"i",
+                                "restartCount":restarts,"state":{"running":{}}}]
+                        }
+                    }]
+                }));
+            });
+            // A not-ready period is active, as after a failed health check.
+            controller.not_ready = crate::kubernetes_workload_heartbeat::NotReadyObservations::since(
+                chrono::Utc::now().timestamp() - 5,
+            );
+            let result = controller.step(&ctx).await;
+            assert!(result.is_ok(), "{result:?}");
+            assert_eq!(
+                controller.get_status(),
+                ResourceStatus::RefreshFailed,
+                "restart {restarts}"
+            );
+            controller.last_recovery_check_unix = controller
+                .last_recovery_check_unix
+                .map(|t| t - crate::kubernetes_workload_heartbeat::RECOVERY_CHECK_MIN_GAP_SECS);
+            pods.delete();
+        }
     }
 
     #[tokio::test]

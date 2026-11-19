@@ -637,9 +637,22 @@ pub(crate) struct ReadyHold {
     /// Restart count of each ready pod at the last ready poll.
     #[serde(default)]
     restarts: std::collections::BTreeMap<String, i32>,
+    /// Result of the restart check made by the current refresh check, so the check that
+    /// follows it in the same pass reuses it: a second look would see unchanged counts.
+    #[serde(default)]
+    restart_checked: Option<bool>,
 }
 
 impl ReadyHold {
+    pub(crate) fn clear_restart_check(&mut self) {
+        self.restart_checked = None;
+    }
+
+    /// The restart check already made in this pass, consumed once.
+    pub(crate) fn take_restart_check(&mut self) -> Option<bool> {
+        self.restart_checked.take()
+    }
+
     /// Whether a ready pod's restart count is higher than at the last ready poll.
     fn restarted(&self, ready_pod_restarts: &std::collections::BTreeMap<String, i32>) -> bool {
         ready_pod_restarts
@@ -720,11 +733,13 @@ pub(crate) async fn recovery_restart_free(
     }
     .await;
     let Some(pods) = pods else {
+        hold.restart_checked = Some(false);
         return false;
     };
     let restarts = ready_pod_restarts(&pods.items);
     let restarted = hold.restarted(&restarts);
     hold.restarts = restarts;
+    hold.restart_checked = Some(!restarted);
     !restarted
 }
 

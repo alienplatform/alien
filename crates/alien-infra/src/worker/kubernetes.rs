@@ -1425,6 +1425,7 @@ impl KubernetesWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         self.update_timeout_reason = None;
+        self.ready_hold.clear_restart_check();
         self.recovering = true;
         let checked = self.ready(ctx).await;
         self.recovering = false;
@@ -1434,7 +1435,10 @@ impl KubernetesWorkerController {
                 suggested_delay,
             }) => {
                 // A pod that is ready for a moment on each restart is not recovered.
-                let restart_free = self.restart_free(ctx).await;
+                let restart_free = match self.ready_hold.take_restart_check() {
+                    Some(already_checked) => already_checked,
+                    None => self.restart_free(ctx).await,
+                };
                 if recovery_check(
                     &mut self.recovery_checks,
                     &mut self.last_recovery_check_unix,
