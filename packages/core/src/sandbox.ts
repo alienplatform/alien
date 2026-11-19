@@ -134,10 +134,10 @@ export class Sandbox extends ResourceBuilder {
   /**
    * Lets the sandbox's own image mount file systems and reach private services directly.
    *
-   * Mounts are performed by Alien's agent on the image's behalf at the declared absolute paths;
-   * the image never gets `SYS_ADMIN`. Each connection names a stack resource with private network
-   * endpoints, is resolved to its address range at deploy, and adds exactly one security group
-   * rule. Connections bypass the egress gateway and its connection log, and isolation between
+   * Mounts (`nfs`, `tmpfs`, and `bind` to place a declared mount again) are performed by Alien's
+   * agent on the image's behalf at the declared absolute paths; the image never gets `SYS_ADMIN`.
+   * Each connection names a stack resource with private network endpoints and is narrowed to the
+   * private addresses that resource publishes, on the declared TCP port. Connections bypass the egress gateway and its connection log, and isolation between
    * workloads inside the image is the image's own responsibility; setup tells the customer both.
    *
    * AWS Lambda MicroVM sandboxes only. Other platforms refuse it when the stack is planned.

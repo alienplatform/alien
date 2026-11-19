@@ -37,7 +37,8 @@ pub fn private_endpoint_placement(
         .and_then(|descriptor| descriptor.private_network_endpoints)
 }
 
-/// Refuses connections deployment could not resolve to exactly one security group rule each.
+/// Refuses connections deployment could not narrow to the private addresses of the resource they
+/// name.
 pub fn validate_connections(stack: &Stack, sandbox: &Sandbox) -> Result<()> {
     let Some(permissions) = &sandbox.image_permissions else {
         return Ok(());

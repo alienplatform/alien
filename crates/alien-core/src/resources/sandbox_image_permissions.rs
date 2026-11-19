@@ -7,9 +7,9 @@
 //! caller sends at runtime can widen them.
 //!
 //! The agent enforces the declaration: it performs only the declared mounts on the image's behalf
-//! and exempts only the declared connections from the gateway redirect. Deployment resolves each
-//! connection to the private address range of the resource it names and adds exactly one
-//! security group rule for it to the sandbox's connector, which still bounds everything.
+//! and exempts only the declared connections from the gateway redirect. Deployment narrows each
+//! connection to the private addresses the resource it names publishes, and the sandbox's network
+//! boundary still bounds everything.
 
 use crate::error::{ErrorData, Result};
 use crate::resource::ResourceRef;
@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum SandboxImageMountType {
-    /// NFS v4.1 or v4.2 through a proxy the image runs on loopback.
+    /// An NFS v4.1 or v4.2 mount; on AWS through the image's local TLS proxy.
     Nfs,
     /// Memory-backed scratch space. Requires `size`.
     Tmpfs,
@@ -670,8 +670,7 @@ mod tests {
 
     #[test]
     fn lifecycle_argv_must_name_an_absolute_program() {
-        validate_lifecycle_argv("s", "onPause", &["/usr/bin/app".into(), "pause".into()])
-            .unwrap();
+        validate_lifecycle_argv("s", "onPause", &["/usr/bin/app".into(), "pause".into()]).unwrap();
         assert!(validate_lifecycle_argv("s", "onPause", &[]).is_err());
         assert!(validate_lifecycle_argv("s", "onPause", &["app".into()]).is_err());
         assert!(validate_lifecycle_argv("s", "onPause", &["/a".into(), "b\0".into()]).is_err());
@@ -698,7 +697,12 @@ mod tests {
         declared_sandbox()
             .validate_for_platform(Platform::Aws)
             .unwrap();
-        for platform in [Platform::Gcp, Platform::Azure, Platform::Kubernetes] {
+        for platform in [
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
             let error = declared_sandbox()
                 .validate_for_platform(platform)
                 .expect_err("refused off AWS");
@@ -711,6 +715,18 @@ mod tests {
         steps_only.validate_for_platform(Platform::Aws).unwrap();
         let error = steps_only.validate_for_platform(Platform::Gcp).unwrap_err();
         assert!(error.to_string().contains("onResume"), "{error}");
+
+        let mut pause_only = declared_sandbox();
+        pause_only.image_permissions = None;
+        pause_only.lifecycle.on_pause = Some(vec!["/bin/sync".into()]);
+        pause_only.validate_for_platform(Platform::Aws).unwrap();
+        for platform in [Platform::Azure, Platform::Kubernetes, Platform::Local] {
+            let error = pause_only
+                .validate_for_platform(platform)
+                .expect_err("onPause refused off AWS");
+            assert!(error.to_string().contains("onPause"), "{error}");
+            assert!(error.to_string().contains(&platform.to_string()), "{error}");
+        }
     }
 
     #[test]
