@@ -39,31 +39,41 @@ pub fn transport_may_serve(peer: SocketAddr, exec_uid: u32) -> bool {
 /// provider caller. AWS's endpoint proxy and lifecycle hooks may originate in
 /// the guest, but their sockets belong to provider processes outside alien-guest.
 /// Missing or racing attribution always refuses a local caller.
-pub async fn image_transport_may_serve(peer: SocketAddr) -> bool {
+///
+/// A refusal says why, so a provider caller that stops matching fails loud: the reason is logged
+/// and returned in the refused response.
+pub async fn image_transport_may_serve(peer: SocketAddr) -> Result<(), String> {
     if !originates_here(peer) {
-        return true;
+        return Ok(());
     }
     #[cfg(target_os = "linux")]
     {
-        let Ok(groups) = std::fs::read_to_string("/proc/self/cgroup") else {
-            return false;
-        };
+        let groups = std::fs::read_to_string("/proc/self/cgroup")
+            .map_err(|error| format!("cannot read the agent's cgroup: {error}"))?;
         if !in_guest_cgroup(&groups) {
-            return false;
+            return Err(format!(
+                "the agent is not in the guest cgroup ({})",
+                groups.trim()
+            ));
         }
-        provider_socket(peer).await.unwrap_or(false)
+        let decision = provider_socket(peer).await;
+        if let Err(reason) = &decision {
+            tracing::error!(%peer, "local caller refused: {reason}");
+        }
+        decision
     }
     #[cfg(not(target_os = "linux"))]
-    false
+    Err("socket attribution needs Linux".to_string())
 }
 
 #[cfg(target_os = "linux")]
-async fn provider_socket(peer: SocketAddr) -> Option<bool> {
+async fn provider_socket(peer: SocketAddr) -> Result<(), String> {
     // The existing cgroup BPF program marks every guest socket across all UIDs.
     // Kernel socket diagnostics avoids /proc/<pid>/fd, which requires PTRACE
     // over provider processes after we have already reduced our capabilities.
     // MARK is only returned with NET_ADMIN; an absent attribute is never zero.
-    let connection = Connection::<SockDiag>::new().ok()?;
+    let connection = Connection::<SockDiag>::new()
+        .map_err(|error| format!("cannot open socket diagnostics: {error}"))?;
     let filter = SocketFilter::tcp()
         .states(&[TcpState::Established])
         .local_addr(peer.ip())
@@ -72,10 +82,10 @@ async fn provider_socket(peer: SocketAddr) -> Option<bool> {
     let sockets =
         tokio::time::timeout(std::time::Duration::from_secs(1), connection.query(&filter))
             .await
-            .ok()?
-            .ok()?;
+            .map_err(|_| "socket diagnostics did not answer within 1 s".to_string())?
+            .map_err(|error| format!("socket diagnostics failed: {error}"))?;
     if sockets.is_empty() {
-        return Some(false);
+        return Err("the caller's socket is not in the socket table".to_string());
     }
     let mut cgroups = Vec::new();
     for socket in &sockets {
@@ -85,52 +95,72 @@ async fn provider_socket(peer: SocketAddr) -> Option<bool> {
             {
                 cgroups.push((socket.cgroup_id, socket.uid));
             }
-            _ => return Some(false),
+            nlink::sockdiag::SocketInfo::Inet(socket) => {
+                return Err(format!(
+                    "the caller's socket is marked {:?} (a guest socket), uid {}, cgroup {:?}",
+                    socket.mark, socket.uid, socket.cgroup_id
+                ));
+            }
+            _ => return Err("the caller's socket is not an inet socket".to_string()),
         }
     }
     // With image permissions the image's own sockets must never pass for the provider's: the
     // caller's socket must belong to a cgroup outside the guest's, which the image cannot leave
-    // (the guest's cgroup mount is read-only and it holds no SYS_ADMIN). And the image can make
-    // the kernel start a program (`request-key`) outside the guest cgroup: it runs as root with
-    // no capabilities (the broker emptied the helper sets), so it cannot change its uid, while
-    // the provider's callers do not run as root.
+    // (the guest's cgroup mount is read-only and it holds no SYS_ADMIN). Membership is decided by
+    // the guest subtree's IDs, never by resolving the caller's cgroup to a path: the provider's
+    // cgroup can be outside the agent's cgroup namespace. And the image can make the kernel start
+    // a program (`request-key`) outside the guest cgroup: it runs as root with no capabilities
+    // (the broker emptied the helper sets), so it cannot change its uid, while the provider's
+    // callers do not run as root.
     if crate::mount_broker::active() {
-        let guest = guest_cgroup_ids();
-        if guest.is_empty() {
-            tracing::error!(%peer, "provider caller refused: the guest cgroup tree cannot be read");
-            return Some(false);
-        }
+        let guest = guest_cgroup_ids()?;
         for (cgroup, uid) in cgroups {
-            if !cgroup.is_some_and(|id| !guest.contains(&id)) {
-                return Some(false);
+            let Some(cgroup) = cgroup else {
+                return Err(format!(
+                    "the kernel reported no cgroup for the caller's socket (uid {uid})"
+                ));
+            };
+            if guest.contains(&cgroup) {
+                return Err(format!(
+                    "the caller's socket is in the guest cgroup tree (cgroup {cgroup:#x}, uid {uid})"
+                ));
             }
             if uid == 0 {
-                tracing::error!(
-                    %peer,
-                    "provider caller refused: an unmarked root socket outside the guest cgroup \
-                     (a kernel-started program, or a provider process running as root)"
-                );
-                return Some(false);
+                return Err(format!(
+                    "an unmarked root socket outside the guest cgroup (cgroup {cgroup:#x}): a \
+                     kernel-started program, or a provider process running as root"
+                ));
             }
         }
     }
-    Some(true)
+    Ok(())
 }
 
 /// The IDs of the guest cgroup and every cgroup below it (a cgroup v2 ID is its directory's
-/// inode number). Empty when the tree cannot be read.
+/// inode number). A child removed during the walk is skipped: no process is left in it.
 #[cfg(target_os = "linux")]
-fn guest_cgroup_ids() -> std::collections::BTreeSet<u64> {
+fn guest_cgroup_ids() -> Result<std::collections::BTreeSet<u64>, String> {
     use std::os::unix::fs::MetadataExt;
+    let root = std::path::PathBuf::from(GUEST_CGROUP);
     let mut ids = std::collections::BTreeSet::new();
-    let mut pending = vec![std::path::PathBuf::from(GUEST_CGROUP)];
+    let mut pending = vec![root.clone()];
     while let Some(directory) = pending.pop() {
-        let Ok(meta) = std::fs::symlink_metadata(&directory) else {
-            return Default::default();
-        };
-        ids.insert(meta.ino());
-        let Ok(entries) = std::fs::read_dir(&directory) else {
-            return Default::default();
+        let entries = match std::fs::symlink_metadata(&directory)
+            .and_then(|meta| Ok((meta.ino(), std::fs::read_dir(&directory)?)))
+        {
+            Ok((id, entries)) => {
+                ids.insert(id);
+                entries
+            }
+            Err(error) if directory != root && error.kind() == std::io::ErrorKind::NotFound => {
+                continue
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot read the guest cgroup tree at {}: {error}",
+                    directory.display()
+                ))
+            }
         };
         for entry in entries.flatten() {
             if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
@@ -138,7 +168,7 @@ fn guest_cgroup_ids() -> std::collections::BTreeSet<u64> {
             }
         }
     }
-    ids
+    Ok(ids)
 }
 
 #[cfg(target_os = "linux")]
@@ -431,8 +461,8 @@ mod tests {
                 0
             );
             assert_eq!(
-                provider_socket(peer).await,
-                Some(mark == 0),
+                provider_socket(peer).await.is_ok(),
+                mark == 0,
                 "mark {mark:x}"
             );
         }
@@ -448,10 +478,9 @@ mod tests {
         let permitted = provider_socket(peer).await;
         drop(provider.stdin.take());
         assert!(provider.wait().unwrap().success());
-        assert_eq!(permitted, Some(true), "provider UID991 with mark zero");
-        assert_eq!(
-            provider_socket("127.0.0.1:1".parse().unwrap()).await,
-            Some(false)
-        );
+        assert_eq!(permitted, Ok(()), "provider UID991 with mark zero");
+        assert!(provider_socket("127.0.0.1:1".parse().unwrap())
+            .await
+            .is_err());
     }
 }

@@ -214,6 +214,16 @@ fn attach(mount: &OwnedFd, target: &OwnedFd, path: &str) -> Result<u64, Refusal>
     }
     let made = mount_id(mount)?;
     let landed = open_dir(libc::AT_FDCWD, path, false).and_then(|fd| mount_id(&fd));
+    // A rename of the target that passed its mount-point check before the attach may still be
+    // running: the check and the move are not serialized against `move_mount`, so the first check
+    // can pass and the directory move a moment later. The rename holds the parent directory's
+    // lock until it is done; wait for that lock, then check again. A rename that starts after
+    // the attach fails with EBUSY.
+    let landed = landed.and_then(|first| {
+        wait_for_renames_in_parent(target)?;
+        let again = open_dir(libc::AT_FDCWD, path, false).and_then(|fd| mount_id(&fd))?;
+        Ok(if again == first { first } else { 0 })
+    });
     if landed.as_ref().ok() != Some(&made) {
         let detach = c(&format!("/proc/self/fd/{}", mount.as_raw_fd()))?;
         // SAFETY: valid path naming the mount we just attached.
@@ -224,6 +234,52 @@ fn attach(mount: &OwnedFd, target: &OwnedFd, path: &str) -> Result<u64, Refusal>
         ));
     }
     Ok(made)
+}
+
+/// Waits until no rename is running in the directory that holds `target`. Looking up a name the
+/// kernel has not cached takes the directory's lock (shared), which a rename holds exclusively
+/// from before its mount-point check until the entry has moved. The name is random, so the image
+/// cannot have created it; if it exists anyway, another is tried.
+fn wait_for_renames_in_parent(target: &OwnedFd) -> Result<(), Refusal> {
+    let parent = open_dir(target.as_raw_fd(), "..", false)?;
+    for _ in 0..8 {
+        let mut bytes = [0u8; 16];
+        // SAFETY: writes at most `bytes.len()` bytes into `bytes`.
+        let read = unsafe { libc::getrandom(bytes.as_mut_ptr().cast(), bytes.len(), 0) };
+        if read != bytes.len() as isize {
+            return Err(os_error("cannot read random bytes"));
+        }
+        let name: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        let name = c(&format!(".alien-mount-{name}"))?;
+        let how = OpenHow {
+            flags: (libc::O_PATH | libc::O_CLOEXEC) as u64,
+            mode: 0,
+            resolve: RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_BENEATH,
+        };
+        // SAFETY: valid path and a correctly sized open_how.
+        let fd = unsafe {
+            libc::syscall(
+                libc::SYS_openat2,
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                &how as *const OpenHow,
+                size_of::<OpenHow>(),
+            )
+        };
+        if fd >= 0 {
+            // SAFETY: a descriptor the kernel just returned that nothing else owns.
+            drop(unsafe { OwnedFd::from_raw_fd(fd as RawFd) });
+            continue;
+        }
+        return match io::Error::last_os_error().raw_os_error() {
+            Some(libc::ENOENT) => Ok(()),
+            _ => Err(os_error("cannot wait for renames next to the target")),
+        };
+    }
+    Err((
+        Errno::Ebusy,
+        "cannot wait for renames next to the target".to_string(),
+    ))
 }
 
 /// `mount_setattr` flag for a read-only mount.

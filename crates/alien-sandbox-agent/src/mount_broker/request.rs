@@ -49,14 +49,18 @@ pub struct Reply {
     pub errno: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The ID of the mount a request made or removed, as `/proc/<pid>/mountinfo` shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount_id: Option<u64>,
 }
 
 impl Reply {
-    pub fn ok() -> Self {
+    pub fn ok(mount_id: Option<u64>) -> Self {
         Self {
             ok: true,
             errno: None,
             reason: None,
+            mount_id,
         }
     }
 
@@ -65,6 +69,7 @@ impl Reply {
             ok: false,
             errno: Some(errno.name().into()),
             reason: Some(reason.into()),
+            mount_id: None,
         }
     }
 }

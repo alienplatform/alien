@@ -423,12 +423,22 @@ attempt("remove", lambda: os.unlink("/usr/sbin/nologin"))
     .process_group(0)
     .spawn()
     .unwrap();
+    let rounds: usize = std::env::var("ALIEN_BROKER_RACE_ROUNDS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(40);
     let (mut landed, mut refusals) = (0, 0);
-    for _ in 0..40 {
+    for _ in 0..rounds {
         let output = image("/opt/alien/bin/alien-mount tmpfs /scratch -o size=1m");
         if output.status.success() {
             landed += 1;
-            if mount_line("/scratch").is_none() {
+            let reported = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .strip_prefix("mount_id=")
+                .map(str::to_string);
+            let at_scratch =
+                mount_line("/scratch").and_then(|line| line.split(' ').next().map(str::to_string));
+            if reported.is_none() || at_scratch != reported {
                 let table = std::fs::read_to_string("/proc/self/mountinfo").unwrap();
                 let scratch: Vec<&str> = table.lines().filter(|l| l.contains("scratch")).collect();
                 let names: Vec<_> = std::fs::read_dir("/")
@@ -437,7 +447,7 @@ attempt("remove", lambda: os.unlink("/usr/sbin/nologin"))
                     .map(|e| e.file_name())
                     .collect();
                 panic!(
-                    "a mount was reported at /scratch: {} {scratch:?} {names:?}",
+                    "mount {reported:?} was reported at /scratch, which holds {at_scratch:?}: {} {scratch:?} {names:?}",
                     text(&output)
                 );
             }
@@ -454,7 +464,7 @@ attempt("remove", lambda: os.unlink("/usr/sbin/nologin"))
     // SAFETY: signalling the racer's own process group.
     unsafe { libc::kill(-(racer.id() as i32), libc::SIGKILL) };
     racer.wait().unwrap();
-    println!("RACE     40 tmpfs requests during renames: {landed} landed on /scratch, {refusals} refused, 0 elsewhere");
+    println!("RACE     {rounds} tmpfs requests during renames: {landed} landed on /scratch, {refusals} refused, 0 elsewhere");
     let _ = std::fs::rename("/scratch-moved", "/scratch");
 
     // Peers: a root process outside the image cgroup, and a non-root image process.
@@ -896,39 +906,208 @@ fn provider_attribution() {
         ("root with capabilities", "root", 0, true, false),
         ("image", "image", 0, true, false),
     ] {
-        let mut caller = Command::new("python3");
-        caller.args([
-            "-c",
-            "import socket, sys, time; s = socket.create_connection(('127.0.0.1', int(sys.argv[1]))); time.sleep(30)",
-            &port,
-        ]);
-        let in_image = cgroup == "image";
-        // SAFETY: open, write and capability calls before exec; nothing allocates.
-        unsafe {
-            caller.pre_exec(move || {
-                if in_image {
-                    mount_broker::join_image_cgroup()?;
-                } else {
-                    let procs = libc::open(c"/sys/fs/cgroup/cgroup.procs".as_ptr(), libc::O_WRONLY);
-                    if procs < 0 || libc::write(procs, b"0".as_ptr().cast(), 1) != 1 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    libc::close(procs);
-                }
-                if uid != 0 {
-                    privilege::drop_to(ExecIdentity { uid, gid: uid })?;
-                } else if !capabilities {
-                    privilege::restrict_capabilities(0)?;
-                }
-                Ok(())
-            });
-        }
-        let mut caller = caller.spawn().unwrap();
+        let procs = if cgroup == "image" {
+            None
+        } else {
+            Some(c"/sys/fs/cgroup/cgroup.procs")
+        };
+        let mut caller = spawn_caller(&port, procs, uid, capabilities);
         let (_connection, peer) = listener.accept().unwrap();
-        let served = runtime.block_on(crate::peer::image_transport_may_serve(peer));
+        let decision = runtime.block_on(crate::peer::image_transport_may_serve(peer));
+        println!("PROVIDER {who}: {decision:?}");
+        let served = decision.is_ok();
         let _ = caller.kill();
         let _ = caller.wait();
         println!("PROVIDER mark-0 {who} caller served: {served}");
         assert_eq!(served, expected, "{who}");
+    }
+
+    // As on the provider: the agent runs in a cgroup namespace, and the provider's caller is in a
+    // cgroup outside it, which the agent cannot name (its ID resolves to no path the agent sees).
+    // The agent's view: /vm is its namespace's root, so /vm/alien-guest is its alien-guest.
+    for directory in [
+        "/sys/fs/cgroup/hidden-provider",
+        "/sys/fs/cgroup/vm/alien-guest/image",
+    ] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    for (who, procs, uid, capabilities, expected) in [
+        (
+            "provider (uid 991) in a cgroup the agent cannot see",
+            c"/sys/fs/cgroup/hidden-provider/cgroup.procs",
+            991,
+            false,
+            true,
+        ),
+        (
+            "uid 0 without capabilities in a cgroup the agent cannot see",
+            c"/sys/fs/cgroup/hidden-provider/cgroup.procs",
+            0,
+            false,
+            false,
+        ),
+        (
+            "caller in the namespaced guest's image cgroup",
+            c"/sys/fs/cgroup/vm/alien-guest/image/cgroup.procs",
+            0,
+            true,
+            false,
+        ),
+    ] {
+        let mut caller = spawn_caller(&port, Some(procs), uid, capabilities);
+        let (_connection, peer) = listener.accept().unwrap();
+        let decision = decide_in_cgroup_namespace(peer);
+        let _ = caller.kill();
+        let _ = caller.wait();
+        println!("PROVIDER {who}: {decision}");
+        assert_eq!(
+            decision.starts_with("served"),
+            expected,
+            "{who}: {decision}"
+        );
+    }
+    for directory in [
+        "/sys/fs/cgroup/hidden-provider",
+        "/sys/fs/cgroup/vm/alien-guest/image",
+        "/sys/fs/cgroup/vm/alien-guest",
+        "/sys/fs/cgroup/vm",
+    ] {
+        let _ = std::fs::remove_dir(directory);
+    }
+}
+
+/// A caller that connects to `port` and holds the connection, started in the cgroup whose
+/// `cgroup.procs` is `procs` (the image's cgroup, through the broker, when `None`).
+fn spawn_caller(
+    port: &str,
+    procs: Option<&'static std::ffi::CStr>,
+    uid: u32,
+    capabilities: bool,
+) -> Child {
+    let mut caller = Command::new("python3");
+    caller.args([
+        "-c",
+        "import socket, sys, time; s = socket.create_connection(('127.0.0.1', int(sys.argv[1]))); time.sleep(30)",
+        port,
+    ]);
+    // SAFETY: open, write and capability calls before exec; nothing allocates.
+    unsafe {
+        caller.pre_exec(move || {
+            if let Some(procs) = procs {
+                let procs = libc::open(procs.as_ptr(), libc::O_WRONLY);
+                if procs < 0 || libc::write(procs, b"0".as_ptr().cast(), 1) != 1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                libc::close(procs);
+            } else {
+                mount_broker::join_image_cgroup()?;
+            }
+            if uid != 0 {
+                privilege::drop_to(ExecIdentity { uid, gid: uid })?;
+            } else if !capabilities {
+                privilege::restrict_capabilities(0)?;
+            }
+            Ok(())
+        });
+    }
+    caller.spawn().unwrap()
+}
+
+/// Runs the provider check for `peer` in a forked child that sits in /vm/alien-guest, in a cgroup
+/// namespace rooted at /vm with its own cgroup mount, as the agent does on the provider. Returns
+/// "served" or "refused: <reason>", or what went wrong setting up.
+fn decide_in_cgroup_namespace(peer: std::net::SocketAddr) -> String {
+    let (mut read, mut write) = std::io::pipe().unwrap();
+    // SAFETY: the child sets up its namespaces, runs one check on its own runtime and exits.
+    match unsafe { libc::fork() } {
+        0 => {
+            drop(read);
+            let answer = (|| -> Result<String, String> {
+                // SAFETY: plain namespace and mount calls on this single-purpose child.
+                unsafe {
+                    if libc::unshare(libc::CLONE_NEWNS) != 0 {
+                        return Err(format!(
+                            "unshare mount ns: {}",
+                            std::io::Error::last_os_error()
+                        ));
+                    }
+                    libc::mount(
+                        std::ptr::null(),
+                        c"/".as_ptr(),
+                        std::ptr::null(),
+                        libc::MS_REC | libc::MS_PRIVATE,
+                        std::ptr::null(),
+                    );
+                }
+                // Enter a cgroup namespace rooted at /vm: move to /vm, unshare, move back down.
+                std::fs::write(
+                    "/sys/fs/cgroup/vm/cgroup.procs",
+                    std::process::id().to_string(),
+                )
+                .map_err(|e| format!("join /vm: {e}"))?;
+                // SAFETY: as above.
+                unsafe {
+                    if libc::unshare(libc::CLONE_NEWCGROUP) != 0 {
+                        return Err(format!(
+                            "unshare cgroup ns: {}",
+                            std::io::Error::last_os_error()
+                        ));
+                    }
+                }
+                std::fs::write(
+                    "/sys/fs/cgroup/vm/alien-guest/cgroup.procs",
+                    std::process::id().to_string(),
+                )
+                .map_err(|e| format!("rejoin /vm/alien-guest: {e}"))?;
+                // SAFETY: as above.
+                unsafe {
+                    libc::umount2(c"/sys/fs/cgroup".as_ptr(), libc::MNT_DETACH);
+                    if libc::mount(
+                        c"cgroup2".as_ptr(),
+                        c"/sys/fs/cgroup".as_ptr(),
+                        c"cgroup2".as_ptr(),
+                        0,
+                        std::ptr::null(),
+                    ) != 0
+                    {
+                        return Err(format!(
+                            "mount cgroup2: {}",
+                            std::io::Error::last_os_error()
+                        ));
+                    }
+                }
+                let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+                if own.trim() != "0::/alien-guest" {
+                    return Err(format!("unexpected own cgroup {own:?}"));
+                }
+                if Path::new("/sys/fs/cgroup/hidden-provider").exists() {
+                    return Err("the provider's cgroup is visible".to_string());
+                }
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?;
+                Ok(
+                    match runtime.block_on(crate::peer::image_transport_may_serve(peer)) {
+                        Ok(()) => "served".to_string(),
+                        Err(reason) => format!("refused: {reason}"),
+                    },
+                )
+            })()
+            .unwrap_or_else(|setup| format!("setup failed: {setup}"));
+            let _ = write.write_all(answer.as_bytes());
+            drop(write);
+            // SAFETY: leaving the forked child without running the parent's destructors.
+            unsafe { libc::_exit(0) }
+        }
+        child if child > 0 => {
+            drop(write);
+            let mut answer = String::new();
+            let _ = read.read_to_string(&mut answer);
+            // SAFETY: reaping our own child.
+            unsafe { libc::waitpid(child, std::ptr::null_mut(), 0) };
+            answer
+        }
+        _ => panic!("fork: {}", std::io::Error::last_os_error()),
     }
 }

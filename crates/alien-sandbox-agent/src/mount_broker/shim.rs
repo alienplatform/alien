@@ -164,7 +164,16 @@ pub fn main(name: &str, args: &[String]) -> i32 {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| super::SOCKET_PATH.into());
     match call(&socket, &request) {
-        Ok(Reply { ok: true, .. }) => 0,
+        Ok(Reply {
+            ok: true, mount_id, ..
+        }) => {
+            // `alien-mount` names the mount it made or removed; the mount helpers stay quiet,
+            // as mount(8) expects.
+            if let (Some(id), "alien-mount") = (mount_id, name) {
+                println!("mount_id={id}");
+            }
+            0
+        }
         Ok(Reply { errno, reason, .. }) => {
             eprintln!(
                 "{name}: {}: {}",

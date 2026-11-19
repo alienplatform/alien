@@ -15,6 +15,7 @@ DOCKERFILE
 docker build -q -t "$image" "$fixture" >/dev/null
 name=mount_broker::integration_tests::broker_allows_declared_mounts_and_refuses_everything_else
 docker run --rm --privileged --cgroupns=private \
+  -e "ALIEN_BROKER_RACE_ROUNDS=${ALIEN_BROKER_RACE_ROUNDS:-40}" \
   --mount "type=bind,source=$tests,target=/agent-tests,readonly" \
   --mount "type=bind,source=$agent,target=/agent,readonly" \
   "$image" bash -euo pipefail -c '

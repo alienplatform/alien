@@ -1139,13 +1139,14 @@ impl Loop<'_> {
                                 self.made.insert(id, "bind");
                             }
                         }
-                        Reply::ok()
+                        Reply::ok(Some(id))
                     }
-                    Ok(None) => Reply::ok(),
+                    Ok(None) => Reply::ok(None),
                     Err((errno, reason)) => Reply {
                         ok: false,
                         errno: Some(errno),
                         reason: Some(reason),
+                        mount_id: None,
                     },
                 }
             }

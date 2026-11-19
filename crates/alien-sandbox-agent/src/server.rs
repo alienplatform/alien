@@ -1449,13 +1449,22 @@ async fn authorize_control(
     if matches!(&state.authorization, AgentAuthorization::Transport) {
         let permitted = if state.image_process.uses_image_user() {
             crate::peer::image_transport_may_serve(peer).await
+        } else if crate::peer::transport_may_serve(peer, state.exec_identity.uid) {
+            Ok(())
         } else {
-            crate::peer::transport_may_serve(peer, state.exec_identity.uid)
+            Err(String::new())
         };
-        if !permitted {
+        if let Err(reason) = permitted {
+            // The reason names only the caller's own socket, so it is safe to return; it is the
+            // one place a provider caller that stops matching can be seen where logs are not.
+            let message = "the agent does not serve the code it is running".to_string();
             return Err(ApiError {
                 status: StatusCode::FORBIDDEN,
-                message: "the agent does not serve the code it is running".to_string(),
+                message: if reason.is_empty() {
+                    message
+                } else {
+                    format!("{message}: {reason}")
+                },
             });
         }
         return Ok(());
