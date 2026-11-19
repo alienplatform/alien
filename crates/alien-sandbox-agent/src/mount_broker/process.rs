@@ -40,6 +40,35 @@ const ANSWER_SLACK: Duration = Duration::from_secs(10);
 /// (DAC_OVERRIDE) and kill a helper that missed its deadline (KILL).
 const BROKER_CAPABILITIES: u32 = (1 << 21) | (1 << 18) | (1 << 19) | (1 << 2) | (1 << 1) | (1 << 5);
 
+/// Held until the image is about to start, to seal the kernel's helpers (SETPCAP and SYS_MODULE
+/// write `usermodehelper/bset` and `inheritable`).
+const SEAL_CAPABILITIES: u32 = (1 << 8) | (1 << 16);
+
+/// Where the kernel runs its helpers from; read-only in the image's mount namespace.
+const SYSTEM_BINARIES: &[&str] = &["/usr/sbin", "/sbin"];
+
+/// The kernel settings for the programs it runs on its own (`request-key`, `modprobe`). The
+/// image's NFS server can make the kernel call `request-key` (an ID mapping or a DNS referral), and
+/// the image can write the files that choose what that runs. Before the image starts, the broker
+/// empties the capability sets every such program gets and stops module loading by program (the
+/// filesystems the broker mounts are loaded first).
+#[derive(Debug, Clone)]
+pub struct HelperSettings {
+    pub bset: PathBuf,
+    pub inheritable: PathBuf,
+    pub modprobe: PathBuf,
+}
+
+impl Default for HelperSettings {
+    fn default() -> Self {
+        Self {
+            bset: "/proc/sys/kernel/usermodehelper/bset".into(),
+            inheritable: "/proc/sys/kernel/usermodehelper/inheritable".into(),
+            modprobe: "/proc/sys/kernel/modprobe".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The image cgroup directory in the broker's own (writable) view.
@@ -47,6 +76,8 @@ pub struct Config {
     /// The image cgroup as `/proc/<pid>/cgroup` names it.
     pub cgroup_name: String,
     pub deadline: Duration,
+    /// Host-wide kernel settings; tests point them elsewhere.
+    pub helpers: HelperSettings,
 }
 
 impl Default for Config {
@@ -55,6 +86,7 @@ impl Default for Config {
             cgroup_dir: IMAGE_CGROUP.into(),
             cgroup_name: IMAGE_CGROUP_NAME.into(),
             deadline: REQUEST_DEADLINE,
+            helpers: HelperSettings::default(),
         }
     }
 }
@@ -489,7 +521,7 @@ fn broker_main(
         ))?;
     }
     close_other_fds(&[control.as_raw_fd(), join.as_raw_fd()]);
-    crate::privilege::restrict_capabilities(BROKER_CAPABILITIES)?;
+    crate::privilege::restrict_capabilities(BROKER_CAPABILITIES | SEAL_CAPABILITIES)?;
     deny_network()?;
     let one: libc::c_int = 1;
     // SAFETY: a valid descriptor and option.
@@ -510,6 +542,7 @@ fn broker_main(
         made: BTreeMap::new(),
         inflight: None,
         zombies: Vec::new(),
+        sealed: false,
     }
     .run(&control, &join)
 }
@@ -523,6 +556,8 @@ struct Loop<'a> {
     made: BTreeMap<u64, &'static str>,
     inflight: Option<Inflight>,
     zombies: Vec<i32>,
+    /// The kernel's helpers are sealed (once, before the image first starts).
+    sealed: bool,
 }
 
 impl Loop<'_> {
@@ -612,7 +647,13 @@ impl Loop<'_> {
         if message.tag == b'D' {
             self.detach_nfs();
         }
-        let ok = message.tag == b'D' || (message.tag == b'S' && message.fds.len() == 2);
+        let mut ok = message.tag == b'D' || (message.tag == b'S' && message.fds.len() == 2);
+        if message.tag == b'S' && ok {
+            if let Err(error) = self.seal(message.fds[1].as_raw_fd()) {
+                eprintln!("mount broker: cannot seal the kernel's helpers: {error}");
+                ok = false;
+            }
+        }
         if message.tag == b'S' && ok {
             let namespace = message.fds.pop().expect("two descriptors");
             let listener = message.fds.pop().expect("two descriptors");
@@ -630,6 +671,57 @@ impl Loop<'_> {
                 libc::MSG_NOSIGNAL,
             )
         };
+    }
+
+    /// Before the image first starts: loads the filesystems the broker mounts, makes the kernel's
+    /// helper directories read-only in the image's mount namespace, empties the capability sets
+    /// of every program the kernel runs on its own and stops module loading by program, then drops
+    /// the capabilities that took. Any failure keeps the image from starting.
+    fn seal(&mut self, namespace: RawFd) -> io::Result<()> {
+        if self.sealed {
+            return Ok(());
+        }
+        ops::load_filesystems();
+        // SAFETY: the broker is single-threaded, so the child may allocate.
+        let pid = unsafe { libc::fork() };
+        if pid < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if pid == 0 {
+            // SAFETY: a mount namespace descriptor; the child is single-threaded.
+            let code = if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } != 0 {
+                eprintln!(
+                    "mount broker: cannot enter the image's mount namespace: {}",
+                    io::Error::last_os_error()
+                );
+                1
+            } else {
+                match ops::protect_system_binaries(SYSTEM_BINARIES) {
+                    Ok(_) => 0,
+                    Err((_, reason)) => {
+                        eprintln!("mount broker: {reason}");
+                        1
+                    }
+                }
+            };
+            // SAFETY: leaving the forked child.
+            unsafe { libc::_exit(code) };
+        }
+        let mut status = 0;
+        // SAFETY: waiting for our own child (local filesystem calls only).
+        check(unsafe { libc::waitpid(pid, &mut status, 0) })?;
+        if !libc::WIFEXITED(status) || libc::WEXITSTATUS(status) != 0 {
+            return Err(io::Error::other(
+                "cannot make the kernel's helper directories read-only",
+            ));
+        }
+        let helpers = &self.config.helpers;
+        std::fs::write(&helpers.bset, "0\t0\n")?;
+        std::fs::write(&helpers.inheritable, "0\t0\n")?;
+        std::fs::write(&helpers.modprobe, "\n")?;
+        crate::privilege::restrict_capabilities(BROKER_CAPABILITIES)?;
+        self.sealed = true;
+        Ok(())
     }
 
     /// Moves the sender into the image cgroup and answers on the descriptor it sent.

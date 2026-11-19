@@ -157,10 +157,22 @@ fn broker_allows_declared_mounts_and_refuses_everything_else() {
 fn scenario() {
     let declared = image_permissions::parse(DECLARATION).expect("declaration");
     std::fs::create_dir_all(mount_broker::IMAGE_CGROUP).expect("image cgroup");
+    // The kernel's helper settings are host-wide and can only be lowered until reboot: the test
+    // points the broker at stand-ins and checks what it writes.
+    std::fs::create_dir_all("/tmp/helpers").unwrap();
+    for name in ["bset", "inheritable"] {
+        std::fs::write(format!("/tmp/helpers/{name}"), "4294967295\t511\n").unwrap();
+    }
+    std::fs::write("/tmp/helpers/modprobe", "/sbin/modprobe\n").unwrap();
     mount_broker::start(
         &declared,
         mount_broker::Config {
             deadline: Duration::from_secs(5),
+            helpers: mount_broker::HelperSettings {
+                bset: "/tmp/helpers/bset".into(),
+                inheritable: "/tmp/helpers/inheritable".into(),
+                modprobe: "/tmp/helpers/modprobe".into(),
+            },
             ..Default::default()
         },
     )
@@ -168,7 +180,41 @@ fn scenario() {
     privilege::filter_image_mounts();
     std::fs::write("/proc/self/oom_score_adj", "0").ok();
     mount_broker::link_shims(Path::new("/agent")).expect("link the shims");
+    let broker = mount_broker::pid().expect("broker pid");
+    let capabilities = |pid: i32| {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+        let line = status.lines().find(|l| l.starts_with("CapEff:")).unwrap();
+        u64::from_str_radix(line.split_whitespace().nth(1).unwrap(), 16).unwrap()
+    };
+    assert_ne!(
+        capabilities(broker) & (1 << 16),
+        0,
+        "SYS_MODULE until the image starts"
+    );
     mount_broker::serve_socket(Path::new(mount_broker::SOCKET_PATH)).expect("serve the socket");
+
+    // Sealed before the image starts: the kernel's helpers get no capabilities, no module
+    // loading by program, and the broker no longer holds what that took.
+    for name in ["bset", "inheritable"] {
+        assert_eq!(
+            std::fs::read_to_string(format!("/tmp/helpers/{name}")).unwrap(),
+            "0\t0\n"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string("/tmp/helpers/modprobe").unwrap(),
+        "\n"
+    );
+    assert_eq!(
+        capabilities(broker) & ((1 << 8) | (1 << 16)),
+        0,
+        "the broker dropped SETPCAP and SYS_MODULE"
+    );
+    assert!(
+        mount_line("/usr/sbin").is_some_and(|line| line.contains(" ro,") || line.contains(" ro ")),
+        "{:?}",
+        mount_line("/usr/sbin")
+    );
     for directory in [
         "/workspace",
         "/var/lib/vendor/workspace-tmp",
@@ -216,6 +262,39 @@ fn scenario() {
         "the image holds SYS_ADMIN: {status}"
     );
     assert!(status.contains("0::/alien-guest/image"), "{status}");
+
+    // Image root cannot write, replace or move the kernel's helper directory.
+    std::fs::write("/tmp/planted", "#!/bin/sh\n").unwrap();
+    let attempts = allowed(
+        r#"exec python3 -I -c '
+import errno, os
+def attempt(name, action):
+    try:
+        action()
+        print(name, "OK")
+    except OSError as error:
+        print(name, errno.errorcode[error.errno])
+attempt("write", lambda: open("/usr/sbin/request-key", "w"))
+attempt("replace", lambda: os.rename(os.path.realpath("/usr/sbin/nologin"), "/usr/sbin/request-key"))
+attempt("move-in", lambda: os.rename("/tmp/planted", "/usr/sbin/request-key"))
+attempt("rename", lambda: os.rename("/usr/sbin", "/usr/sbin-moved"))
+attempt("remove", lambda: os.unlink("/usr/sbin/nologin"))
+'"#,
+    );
+    let attempts = String::from_utf8_lossy(&attempts.stdout).to_string();
+    println!("{attempts}");
+    for expected in [
+        "write EROFS",
+        "replace EROFS",
+        "move-in EXDEV",
+        "rename EBUSY",
+        "remove EROFS",
+    ] {
+        assert!(
+            attempts.lines().any(|l| l == expected),
+            "{expected}: {attempts}"
+        );
+    }
 
     // Allowed: NFS through the image's proxy with the traced options; tmpfs; bind from it.
     allowed(&format!(

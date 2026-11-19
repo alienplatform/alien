@@ -226,6 +226,76 @@ fn attach(mount: &OwnedFd, target: &OwnedFd, path: &str) -> Result<u64, Refusal>
     Ok(made)
 }
 
+/// `mount_setattr` flag for a read-only mount.
+const MOUNT_ATTR_RDONLY: u64 = 0x1;
+
+/// Directories the kernel runs its helpers from (`/sbin/request-key`, `/sbin/modprobe`), made
+/// read-only in the image's mount namespace before the image starts. The image holds no
+/// `SYS_ADMIN`, so it can neither remount nor unmount them, and renaming one gives `EBUSY`. A
+/// path that is a symbolic link (`/sbin -> usr/sbin`) or absent is left as it is; the link's
+/// target is in the list. Returns the paths it protected.
+pub fn protect_system_binaries(paths: &[&str]) -> Result<Vec<String>, Refusal> {
+    let mut protected = Vec::new();
+    for path in paths {
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Ok(_) => continue,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(_) => return Err(os_error(&format!("cannot inspect {path}"))),
+        }
+        let at = open_dir(libc::AT_FDCWD, path, false)?;
+        let empty = c("")?;
+        // SAFETY: valid descriptor, empty path with AT_EMPTY_PATH.
+        let tree = owned(
+            unsafe {
+                libc::syscall(
+                    libc::SYS_open_tree,
+                    at.as_raw_fd(),
+                    empty.as_ptr(),
+                    OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | libc::AT_EMPTY_PATH as u32,
+                )
+            },
+            &format!("cannot copy {path}"),
+        )?;
+        let attr = MountAttr {
+            attr_set: MOUNT_ATTR_RDONLY,
+            attr_clr: 0,
+            propagation: 0,
+            userns_fd: 0,
+        };
+        // SAFETY: valid descriptor and a correctly sized mount_attr.
+        if unsafe {
+            libc::syscall(
+                libc::SYS_mount_setattr,
+                tree.as_raw_fd(),
+                empty.as_ptr(),
+                libc::AT_EMPTY_PATH,
+                &attr as *const MountAttr,
+                size_of::<MountAttr>(),
+            )
+        } != 0
+        {
+            return Err(os_error(&format!("cannot make {path} read-only")));
+        }
+        attach(&tree, &at, path)?;
+        protected.push(path.to_string());
+    }
+    Ok(protected)
+}
+
+/// Asks the kernel for the filesystem types the broker mounts, so their modules load while the
+/// kernel can still run its module loader.
+pub fn load_filesystems() {
+    for fstype in [c"nfs4", c"tmpfs"] {
+        // SAFETY: a NUL-terminated name; the context descriptor is closed at once.
+        let fd = unsafe { libc::syscall(libc::SYS_fsopen, fstype.as_ptr(), FSOPEN_CLOEXEC) };
+        if fd >= 0 {
+            // SAFETY: the descriptor fsopen just returned.
+            unsafe { libc::close(fd as RawFd) };
+        }
+    }
+}
+
 /// Least time left on the request deadline for a new mount to still be attached. The broker kills
 /// a helper at the deadline; a mount attached just before that kill would land without the broker
 /// ever learning its ID.
