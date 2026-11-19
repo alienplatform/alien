@@ -321,8 +321,11 @@ impl Stack {
                 }
                 // A setup-owned dead-letter queue triggered by a Live Worker needs a
                 // project-level grant that only setup can write. Adding or removing such a
-                // trigger must therefore ask for setup. Absent otherwise, so other stacks keep
-                // their digests.
+                // trigger must therefore ask for setup. The digest does not know the platform,
+                // so the field also appears for such a queue on other platforms, where nothing
+                // asks for setup because of it (only GCP's compatibility check compares it).
+                // It is absent for every stack without a Frozen dead-letter queue that has a
+                // Live Worker trigger, so those stacks keep their digests.
                 if crate::queue_needs_project_push_subscriber(self, id) {
                     value["queueProjectPushSubscriber"] = true.into();
                 }

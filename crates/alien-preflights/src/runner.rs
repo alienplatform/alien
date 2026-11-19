@@ -2380,7 +2380,7 @@ mod setup_update_authorization_tests {
             plain_old.setup_update_digest(),
             plain_target.setup_update_digest()
         );
-        let result = runner
+        runner
             .run_deployment_time_preflights(
                 plain_target,
                 &state,
@@ -2390,10 +2390,90 @@ mod setup_update_authorization_tests {
                 None,
                 None,
             )
-            .await;
-        if let Err(error) = result {
-            assert_ne!(error.code, "DEPLOYMENT_SETUP_REQUIRED", "{error:?}");
-        }
+            .await
+            .expect("a trigger on a queue without a dead letter needs no setup");
+    }
+
+    /// A Frozen dead-letter queue whose Live Worker is gated off by an input answered false
+    /// installs without the Worker, so the installed stack has no trigger. The same release must
+    /// not ask for setup on every update because the unstripped target still lists the Worker;
+    /// answering the input true is the change that needs the grant.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn a_gated_off_worker_trigger_on_a_frozen_dead_letter_queue_needs_no_setup() {
+        let failed = Queue::new("failed".into()).build();
+        let queue = Queue::new("jobs".into())
+            .dead_letter(
+                alien_core::QueueDeadLetter::builder()
+                    .queue(alien_core::ResourceRef::new(Queue::RESOURCE_TYPE, "failed"))
+                    .build(),
+            )
+            .build();
+        let installed = Stack::new("stack".into())
+            .add(failed.clone(), ResourceLifecycle::Frozen)
+            .add(queue.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let mut target = Stack::new("stack".into())
+            .add(failed, ResourceLifecycle::Frozen)
+            .add(queue.clone(), ResourceLifecycle::Frozen)
+            .add(
+                Worker::new("consumer".into())
+                    .code(WorkerCode::Image {
+                        image: "app:v1".into(),
+                    })
+                    .permissions("execution".into())
+                    .trigger(WorkerTrigger::queue(&queue))
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        target
+            .inputs
+            .push(alien_core::StackInputDefinition::deployer_boolean(
+                "consumerEnabled",
+                "Consumer",
+                "Run the consumer",
+                Some(false),
+            ));
+        target.resources.get_mut("consumer").unwrap().enabled_when = Some("consumerEnabled".into());
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let mut config = deployment_config();
+        config
+            .input_values
+            .insert("consumerEnabled".into(), serde_json::json!(false));
+        let state = StackState::new(Platform::Gcp);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".into(),
+        };
+        runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&installed),
+                None,
+                None,
+            )
+            .await
+            .expect("a Worker that is gated off adds no need for setup");
+
+        config
+            .input_values
+            .insert("consumerEnabled".into(), serde_json::json!(true));
+        let error = runner
+            .run_deployment_time_preflights(
+                target,
+                &state,
+                &config,
+                &client,
+                Some(&installed),
+                None,
+                None,
+            )
+            .await
+            .expect_err("answering the input true adds the Worker and needs setup");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
     }
 
     #[cfg(feature = "runtime-checks")]

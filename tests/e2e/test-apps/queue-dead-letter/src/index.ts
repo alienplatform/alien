@@ -25,19 +25,25 @@ const sendRequest = z.object({
 /**
  * One `receive` that gives up after `ms`. On Google Cloud a pull from an empty subscription can
  * wait longer than this Worker's request timeout, so an empty queue would otherwise fail the
- * whole request. A pull that is still waiting when we give up is left to expire.
+ * whole request. A pull that is still waiting when we give up is left to expire. `timedOut` is
+ * true when the receive gave up, which is not the same as the queue being empty: the callers
+ * report it so a check that needs "empty" can ask again.
  */
 async function receiveWithin(
   target: ReturnType<typeof queue>,
   max: number,
   ms = 8000,
-): Promise<Awaited<ReturnType<ReturnType<typeof queue>["receive"]>>> {
+): Promise<{
+  messages: Awaited<ReturnType<ReturnType<typeof queue>["receive"]>>
+  timedOut: boolean
+}> {
   let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<[]>(resolve => {
-    timer = setTimeout(() => resolve([]), ms)
+  const timeout = new Promise<null>(resolve => {
+    timer = setTimeout(() => resolve(null), ms)
   })
   try {
-    return await Promise.race([target.receive(max), timeout])
+    const received = await Promise.race([target.receive(max), timeout])
+    return { messages: received ?? [], timedOut: received === null }
   } finally {
     clearTimeout(timer)
   }
@@ -94,9 +100,14 @@ app.get("/deliveries", async c => {
 app.post("/failed/drain", async c => {
   const failed = queue("tasks-failed")
   const drained: { task: unknown; attempt: number }[] = []
+  let timedOut = false
   for (;;) {
-    const messages = await receiveWithin(failed, 10)
-    if (messages.length === 0) break
+    const received = await receiveWithin(failed, 10)
+    const messages = received.messages
+    if (messages.length === 0) {
+      timedOut = received.timedOut
+      break
+    }
     for (const message of messages) {
       drained.push({
         task: message.payloadType === "json" ? JSON.parse(message.payload) : message.payload,
@@ -105,7 +116,7 @@ app.post("/failed/drain", async c => {
     }
     await failed.ackBatch(messages.map(message => message.receiptHandle))
   }
-  return c.json(drained)
+  return c.json({ messages: drained, timedOut })
 })
 
 /** The pull path: `pulled` has no trigger. */
@@ -166,9 +177,14 @@ app.get("/pull/deliveries", async c => {
 app.post("/pull/failed/drain", async c => {
   const failed = queue("pulled-failed")
   const drained: { task: unknown; attempt: number }[] = []
+  let timedOut = false
   for (;;) {
-    const messages = await receiveWithin(failed, 10)
-    if (messages.length === 0) break
+    const received = await receiveWithin(failed, 10)
+    const messages = received.messages
+    if (messages.length === 0) {
+      timedOut = received.timedOut
+      break
+    }
     for (const message of messages) {
       drained.push({
         task: message.payloadType === "json" ? JSON.parse(message.payload) : message.payload,
@@ -177,7 +193,7 @@ app.post("/pull/failed/drain", async c => {
     }
     await failed.ackBatch(messages.map(message => message.receiptHandle))
   }
-  return c.json(drained)
+  return c.json({ messages: drained, timedOut })
 })
 
 /** Reads `pulled` and gives every message back; shows what is left. */
@@ -193,9 +209,9 @@ app.post("/pull/peek", async c => {
 /** Reads `tasks` with `receive` (the pull path) and gives every message back; shows what is left. */
 app.post("/tasks/peek", async c => {
   const tasks = queue("tasks")
-  const messages = await receiveWithin(tasks, 10)
+  const { messages, timedOut } = await receiveWithin(tasks, 10)
   await Promise.all(messages.map(message => tasks.nack(message.receiptHandle)))
-  return c.json({ visible: messages.length })
+  return c.json({ visible: messages.length, timedOut })
 })
 
 onQueueBatch<unknown>("*", async batch => {

@@ -520,6 +520,41 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
     }
 }
 
+/// `stack` without the Live resources a deployer input answered false gates off, as an update
+/// strips them after these checks. Unchanged when nothing is gated or the answers do not
+/// resolve (the checks then compare as written).
+fn without_declined_live_resources<'a>(
+    stack: &'a Stack,
+    config: Option<&DeploymentConfig>,
+    platform: Platform,
+) -> Cow<'a, Stack> {
+    let Some(config) = config else {
+        return Cow::Borrowed(stack);
+    };
+    if !stack
+        .resources
+        .values()
+        .any(|entry| entry.enabled_when.is_some())
+    {
+        return Cow::Borrowed(stack);
+    }
+    let (answers, still_frozen_gating) = alien_core::surviving_frozen_gate_answers(stack);
+    match alien_core::declined_live_resources(
+        stack,
+        &config.input_values,
+        &answers,
+        &still_frozen_gating,
+        platform,
+    ) {
+        Ok(declined) if !declined.is_empty() => {
+            let mut projected = stack.clone();
+            alien_core::remove_declined_live_resources(&mut projected, &declined);
+            Cow::Owned(projected)
+        }
+        _ => Cow::Borrowed(stack),
+    }
+}
+
 impl FrozenResourcesUnchangedCheck {
     /// `config` carries the deployment's input answers; without it input references compare as
     /// written.
@@ -531,6 +566,11 @@ impl FrozenResourcesUnchangedCheck {
     ) -> Result<CheckResult> {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
+
+        // The installed stack was stored after the Live resources the deployer declined were
+        // dropped, so the target is judged the same way, as the setup digest does.
+        let target_without_declined_workers =
+            without_declined_live_resources(new_stack, config, self.platform);
 
         // Collect frozen resources from old stack
         let old_frozen: HashMap<_, _> = old_stack
@@ -638,8 +678,10 @@ impl FrozenResourcesUnchangedCheck {
                         .config
                         .downcast_ref::<alien_core::Queue>()
                         .is_some()
-                    && alien_core::queue_needs_project_push_subscriber(new_stack, id)
-                        != alien_core::queue_needs_project_push_subscriber(old_stack, id)
+                    && alien_core::queue_needs_project_push_subscriber(
+                        &target_without_declined_workers,
+                        id,
+                    ) != alien_core::queue_needs_project_push_subscriber(old_stack, id)
                 {
                     errors.push(format!(
                         "Frozen queue '{id}' with a dead-letter queue needs a Pub/Sub subscriber grant \

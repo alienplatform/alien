@@ -44,6 +44,7 @@ impl ResourceImporter for GcpWorkerImporter {
             push_dead_letters: Default::default(),
             push_dead_letter_agent: None,
             push_dead_letter_grants: Default::default(),
+            push_dead_letter_patches: Default::default(),
             storage_notification_topics: Vec::new(),
             gcs_notification_ids: Vec::new(),
             scheduler_job_names: data.scheduler_job_names,

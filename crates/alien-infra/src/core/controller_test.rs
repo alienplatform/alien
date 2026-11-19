@@ -866,6 +866,7 @@ pub struct SingleControllerExecutorBuilder {
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
     dependency_lifecycles: HashMap<String, ResourceLifecycle>,
     stack_resources: Vec<(Resource, ResourceLifecycle)>,
+    stack_resource_states: std::collections::HashMap<String, serde_json::Value>,
     stack_inputs: Vec<alien_core::StackInputDefinition>,
     resource_gates: HashMap<String, String>,
     management_permissions: alien_core::permissions::ManagementPermissions,
@@ -911,6 +912,7 @@ impl SingleControllerExecutorBuilder {
             dependencies: Vec::new(),
             dependency_lifecycles: HashMap::new(),
             stack_resources: Vec::new(),
+            stack_resource_states: std::collections::HashMap::new(),
             stack_inputs: Vec::new(),
             resource_gates: HashMap::new(),
             management_permissions: alien_core::permissions::ManagementPermissions::Auto,
@@ -1128,6 +1130,18 @@ impl SingleControllerExecutorBuilder {
     ) -> Self {
         self.stack_resources
             .push((Resource::new(resource), lifecycle));
+        self
+    }
+
+    /// Gives another resource of the test stack a recorded controller state (its serialized
+    /// `internal_state`), as when that resource has already run.
+    pub fn with_stack_resource_state(
+        mut self,
+        id: &str,
+        internal_state: serde_json::Value,
+    ) -> Self {
+        self.stack_resource_states
+            .insert(id.to_string(), internal_state);
         self
     }
 
@@ -1399,15 +1413,18 @@ impl SingleControllerExecutorBuilder {
                     enabled_when: self.resource_gates.get(other.id()).cloned(),
                 },
             );
-            stack_state.resources.insert(
-                other.id().to_string(),
-                StackResourceState::new_pending(
-                    other.resource_type().to_string(),
-                    other.clone(),
-                    Some(*lifecycle),
-                    vec![],
-                ),
+            let mut other_state = StackResourceState::new_pending(
+                other.resource_type().to_string(),
+                other.clone(),
+                Some(*lifecycle),
+                vec![],
             );
+            if let Some(saved) = self.stack_resource_states.get(other.id()) {
+                other_state.internal_state = Some(saved.clone());
+            }
+            stack_state
+                .resources
+                .insert(other.id().to_string(), other_state);
         }
 
         // Add the main resource

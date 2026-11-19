@@ -17,6 +17,48 @@ const GOOD: usize = 20;
 const POISON: usize = 3;
 const MAX_ATTEMPTS: u64 = 5;
 
+/// The fewest deliveries (or reported attempts) a dead-lettered message may show. AWS and Azure
+/// count exactly, so anything below the limit means the setting was applied off by one. Only
+/// Pub/Sub counts push attempts the Worker never saw (a cold start answering 5xx), so a recorded
+/// count can be one short there.
+fn lowest_recorded(platform: &str) -> u64 {
+    if platform == "gcp" {
+        MAX_ATTEMPTS - 1
+    } else {
+        MAX_ATTEMPTS
+    }
+}
+
+/// How often a check that needs an empty queue asks again when the Worker's receive gave up
+/// before the cloud answered (a timeout is not an empty queue).
+const EMPTY_CONFIRMATIONS: usize = 6;
+
+/// One drain of `path`: the messages it returned, and whether the Worker's receive gave up
+/// before the cloud answered (which says nothing about the queue being empty).
+async fn drain_once(client: &Client, url: &str, path: &str) -> (Vec<Value>, bool) {
+    let drained = json_request(client, client.post(format!("{url}{path}"))).await;
+    (
+        drained["messages"].as_array().unwrap().to_vec(),
+        drained["timedOut"] == true,
+    )
+}
+
+/// Everything `path` returns until a drain ends on a real empty answer. A give-up is asked again
+/// (bounded); never counting it as empty keeps "nothing arrived" checks from passing on a slow
+/// cloud.
+async fn drain_confirmed(client: &Client, url: &str, path: &str) -> Vec<Value> {
+    let mut all = Vec::new();
+    for _ in 0..EMPTY_CONFIRMATIONS {
+        let (messages, timed_out) = drain_once(client, url, path).await;
+        all.extend(messages);
+        if !timed_out {
+            return all;
+        }
+        sleep(Duration::from_secs(5)).await;
+    }
+    panic!("{path} never answered before the Worker gave up: emptiness is not confirmed");
+}
+
 /// Waits until the Worker answers, so the first real request does not pay for a cold start.
 async fn warm_up(client: &Client, url: &str) {
     for _ in 0..30 {
@@ -90,10 +132,10 @@ pub async fn check_without_dead_letter(
                 > MAX_ATTEMPTS
         });
         if past {
-            let drained = json_request(&client, client.post(format!("{url}/failed/drain"))).await;
+            let drained = drain_confirmed(&client, url, "/failed/drain").await;
             assert!(
-                drained.as_array().unwrap().is_empty(),
-                "nothing may reach tasks-failed without a dead-letter setting: {drained}"
+                drained.is_empty(),
+                "nothing may reach tasks-failed without a dead-letter setting: {drained:?}"
             );
             info!(
                 ?counts,
@@ -138,10 +180,10 @@ pub async fn check_dead_letter(
             good_seen.len()
         );
         // The pull path: whatever has arrived in `tasks-failed` so far.
-        let drained = json_request(&client, client.post(format!("{url}/failed/drain"))).await;
-        for entry in drained.as_array().unwrap() {
+        let (drained, _) = drain_once(&client, url, "/failed/drain").await;
+        for entry in drained {
             let id = entry["task"]["id"].as_str().unwrap().to_string();
-            failed.insert(id, entry.clone());
+            failed.insert(id, entry);
         }
         let deliveries = json_request(&client, client.get(format!("{url}/deliveries"))).await;
         counts.clear();
@@ -174,12 +216,12 @@ pub async fn check_dead_letter(
             "payload intact"
         );
         // Pub/Sub counts every push attempt, including one that failed before it reached the
-        // Worker (a cold start answering 5xx), which the Worker cannot record. So the recorded
-        // count can be one short of `MAX_ATTEMPTS`; a real run recorded 4 for a message that was
-        // moved after 5 attempts.
+        // Worker (a cold start answering 5xx), which the Worker cannot record. So on GCP only,
+        // the recorded count can be one short of `MAX_ATTEMPTS`; a real run recorded 4 for a
+        // message that was moved after 5 attempts. AWS and Azure count exactly.
         let attempts = counts[&id] as u64;
         assert!(
-            (MAX_ATTEMPTS - 1..=MAX_ATTEMPTS + 2).contains(&attempts),
+            (lowest_recorded(&deployment.platform)..=MAX_ATTEMPTS + 2).contains(&attempts),
             "{id} was delivered {attempts} times; about {MAX_ATTEMPTS} expected"
         );
     }
@@ -191,7 +233,18 @@ pub async fn check_dead_letter(
         // subscription also holds a copy of every message for `receive` consumers, so the
         // trigger path is judged by its deliveries instead.)
         sleep(Duration::from_secs(20)).await;
-        let left = json_request(&client, client.post(format!("{url}/tasks/peek"))).await;
+        let mut left = json!(null);
+        for _ in 0..EMPTY_CONFIRMATIONS {
+            left = json_request(&client, client.post(format!("{url}/tasks/peek"))).await;
+            if left["timedOut"] != true {
+                break;
+            }
+            sleep(Duration::from_secs(5)).await;
+        }
+        assert!(
+            left["timedOut"] != true,
+            "tasks was never confirmed empty: the receive kept giving up: {left}"
+        );
         assert_eq!(left["visible"], 0, "tasks must end empty: {left}");
     }
     counts
@@ -218,7 +271,15 @@ pub async fn check_pull(deployment: &TestDeployment, prefix: &str) -> BTreeMap<S
     // Azure: `abandon_message` answers 411 on the base revision, so nack cannot be used there;
     // the lock expires instead (same redelivery, a few minutes slower).
     let nack = deployment.platform != "azure";
-    await_pull(&client, url, prefix, GOOD, nack).await
+    await_pull(
+        &client,
+        url,
+        prefix,
+        GOOD,
+        nack,
+        lowest_recorded(&deployment.platform),
+    )
+    .await
 }
 
 /// Consumes `pulled` until `good` good messages were seen and every poison message of `prefix`
@@ -229,6 +290,7 @@ async fn await_pull(
     prefix: &str,
     good: usize,
     nack: bool,
+    lowest: u64,
 ) -> BTreeMap<String, u64> {
     let started = Instant::now();
     let mut failed: BTreeMap<String, Value> = BTreeMap::new();
@@ -255,10 +317,10 @@ async fn await_pull(
                 good_seen.insert(id);
             }
         }
-        let drained = json_request(&client, client.post(format!("{url}/pull/failed/drain"))).await;
-        for entry in drained.as_array().unwrap() {
+        let (drained, _) = drain_once(client, url, "/pull/failed/drain").await;
+        for entry in drained {
             let id = entry["task"]["id"].as_str().unwrap().to_string();
-            failed.insert(id, entry.clone());
+            failed.insert(id, entry);
         }
         if seen.as_array().unwrap().is_empty() {
             sleep(Duration::from_secs(5)).await;
@@ -278,7 +340,7 @@ async fn await_pull(
         // Azure's `receive` reports a constant attempt of 1 (unchanged); the move itself and the
         // queue's delivery count in the cloud view prove the five deliveries there.
         assert!(
-            !nack || (MAX_ATTEMPTS - 1..=MAX_ATTEMPTS + 1).contains(&highest),
+            !nack || (lowest..=MAX_ATTEMPTS + 1).contains(&highest),
             "{id}: the last reported attempt was {highest}; about {MAX_ATTEMPTS} expected"
         );
     }
@@ -326,7 +388,15 @@ pub async fn check_upgrade(ctx: &mut alien_test::TestContext) {
     .await
     .expect("adding a dead-letter setting must require and recover through setup");
     // The queues were updated in place: the messages sent before the rerun are still there.
-    await_pull(&client, &url, "up", 2, ctx.deployment.platform != "azure").await;
+    await_pull(
+        &client,
+        &url,
+        "up",
+        2,
+        ctx.deployment.platform != "azure",
+        lowest_recorded(&ctx.deployment.platform),
+    )
+    .await;
     check_dead_letter(&ctx.deployment, "after", false).await;
 
     alien_test::distribution::verify_dead_letter_update(
