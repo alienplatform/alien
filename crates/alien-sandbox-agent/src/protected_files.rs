@@ -271,7 +271,7 @@ mod tests {
 36 37 0:39 / /proc/sys/fs/binfmt_misc rw,nosuid,nodev,noexec,relatime shared:45 - binfmt_misc binfmt_misc rw
 90 25 0:23 /sys /proc/sys rw,nosuid,nodev,noexec,relatime - proc proc rw
 91 25 0:23 /sysrq-trigger /proc/sysrq-trigger rw,nosuid,nodev,noexec,relatime - proc proc rw
-92 25 0:40 / /proc/sys\040x rw,noatime - tmpfs tmpfs rw
+92 25 0:40 / /proc/sys\\040x rw,noatime - tmpfs tmpfs rw
 ";
         let keep = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC | libc::MS_RELATIME;
         assert_eq!(
