@@ -51,6 +51,10 @@ pub struct MountSource {
     /// the zone id from the instance metadata, which a sandbox does not have.
     #[serde(default)]
     pub availability_zone_id: Option<String>,
+    /// IP address of a mount target. When given, the agent makes no DNS lookup and connects to
+    /// it; the server certificate is still checked against the file system's name.
+    #[serde(default)]
+    pub mount_target_ip: Option<String>,
     pub credentials: MountCredentials,
 }
 
@@ -85,6 +89,8 @@ pub enum HelperRequest {
         access_point_id: String,
         region: String,
         availability_zone_id: Option<String>,
+        #[serde(default)]
+        mount_target_ip: Option<String>,
     },
     /// New credentials were written: make a fresh client certificate and have the proxy read it.
     Refresh {
@@ -225,7 +231,7 @@ impl std::fmt::Display for Refusal {
             Self::NoZone(path) => write!(
                 f,
                 "mount '{path}': {}",
-                "availabilityZoneId is missing: pass the zone id of a mount target of this file system that the sandbox's network reaches (for example use2-az1; the S3 Files mount target listing shows it as availabilityZoneId)"
+                "neither availabilityZoneId nor mountTargetIp is given: pass the zone id of a mount target of this file system (for example use2-az1), or the IP address of one the sandbox's network reaches"
             ),
             Self::RefreshFailed(reason) => write!(f, "the new credentials were stored but not applied: {reason}"),
         }
@@ -341,7 +347,9 @@ impl Mounts {
         for path in self.s3files_paths() {
             match given.get(path) {
                 None => return Err(Refusal::Missing(path.to_string())),
-                Some(source) if source.availability_zone_id.is_none() => {
+                Some(source)
+                    if source.availability_zone_id.is_none() && source.mount_target_ip.is_none() =>
+                {
                     return Err(Refusal::NoZone(path.to_string()))
                 }
                 Some(_) => {}
@@ -388,12 +396,27 @@ impl Mounts {
                 continue;
             }
             // Wait for any mount this one sits under.
-            let blocked = self.declared.iter().any(|other| {
+            let parent = self.declared.iter().find(|other| {
                 other.path() != path
                     && Path::new(path).starts_with(other.path())
                     && !self.is_mounted(other.path())
             });
-            if blocked {
+            if let Some(parent) = parent {
+                // Say why this one is not mounted when the mount it sits on failed.
+                let parent_state = self
+                    .inner
+                    .lock()
+                    .expect("mount status")
+                    .status
+                    .get(parent.path())
+                    .cloned()
+                    .unwrap_or_default();
+                if parent_state.starts_with("failed") {
+                    self.set(
+                        path,
+                        format!("failed: the mount it sits on ({}) failed", parent.path()),
+                    );
+                }
                 continue;
             }
             let outcome = match mount {
@@ -417,6 +440,7 @@ impl Mounts {
                                     access_point_id: source.access_point_id.clone(),
                                     region: source.region.clone(),
                                     availability_zone_id: source.availability_zone_id.clone(),
+                                    mount_target_ip: source.mount_target_ip.clone(),
                                 })
                             })
                     }
@@ -856,12 +880,14 @@ fn perform(
             access_point_id,
             region,
             availability_zone_id,
+            mount_target_ip,
         } => helper.mount(
             path,
             file_system_id,
             access_point_id,
             region,
             availability_zone_id.as_deref(),
+            mount_target_ip.as_deref(),
         ),
         HelperRequest::Refresh { path } => helper.refresh(path),
         HelperRequest::Unmount { path } => {
@@ -958,6 +984,7 @@ mod tests {
             access_point_id: "fsap-1".into(),
             region: "us-east-1".into(),
             availability_zone_id: Some("use1-az1".into()),
+            mount_target_ip: None,
             credentials: credentials(tag),
         }
     }
@@ -1023,7 +1050,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tmpfs_under_a_failed_file_system_stays_pending() {
+    fn a_tmpfs_under_a_failed_file_system_reports_the_parent() {
         let dir = tempfile::tempdir().unwrap();
         let fake = Arc::new(Fake {
             fail_s3: true,
@@ -1033,7 +1060,10 @@ mod tests {
         mounts.advance(&BTreeMap::from([("/workspace".to_string(), source("1"))]));
         let status = mounts.status();
         assert_eq!(status[0].state, "failed: no route to the mount target");
-        assert_eq!(status[1].state, "pending");
+        assert_eq!(
+            status[1].state,
+            "failed: the mount it sits on (/workspace) failed"
+        );
         assert!(!mounts.may_start());
         assert!(!mounts.take_deferred_start());
     }
@@ -1056,6 +1086,7 @@ mod tests {
         );
         let mut no_zone = source("1");
         no_zone.availability_zone_id = None;
+        no_zone.mount_target_ip = None;
         let message = mounts
             .check_sources(&BTreeMap::from([("/workspace".to_string(), no_zone)]))
             .unwrap_err()

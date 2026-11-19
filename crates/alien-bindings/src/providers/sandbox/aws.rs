@@ -1480,6 +1480,13 @@ mod tests {
     }
 
     #[test]
+    fn a_pending_mount_is_not_a_success() {
+        let reply = r#"[{"path":"/w","state":"failed: dns: x"},{"path":"/w/tmp","state":"pending"}]"#;
+        let text = AwsSandbox::check_mount_states(reply).unwrap_err().to_string();
+        assert!(text.contains("/w/tmp: pending") && text.contains("/w: failed"), "{text}");
+    }
+
+    #[test]
     fn an_answer_that_does_not_list_the_mounts_is_not_a_success() {
         for reply in ["", "ok", "{}", "<html>"] {
             AwsSandbox::check_mount_states(reply).expect_err(reply);

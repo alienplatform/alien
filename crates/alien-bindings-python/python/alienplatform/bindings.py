@@ -623,6 +623,9 @@ class _MountSourceOptional(TypedDict, total=False):
     # Zone id of the mount target to attach, e.g. "use2-az1"; S3 Files resolves a mount target
     # by "<zone id>.<file system id>.s3files.<region>.on.aws".
     availabilityZoneId: str
+    # IP address of a mount target; no DNS lookup is made when given (the certificate is still
+    # checked against the file system's name).
+    mountTargetIp: str
 
 
 class MountSource(_MountSourceOptional):

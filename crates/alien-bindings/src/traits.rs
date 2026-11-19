@@ -1312,6 +1312,12 @@ pub struct SandboxMountSource {
     /// sandbox's network.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub availability_zone_id: Option<String>,
+    /// IP address of a mount target the sandbox's network reaches. When given, the sandbox makes
+    /// no DNS lookup (a sandbox with no outbound network cannot resolve the mount target's name)
+    /// and connects to this address; the server certificate is still checked against the file
+    /// system's name. Replaces `availability_zone_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount_target_ip: Option<String>,
     /// Credentials for this mount
     pub credentials: SandboxMountCredentials,
 }

@@ -350,6 +350,8 @@ pub fn client_certificate_pem(
 pub struct ProxyFiles<'a> {
     pub listen_port: u16,
     pub dns_name: &'a str,
+    /// What the proxy connects to: the mount target's name, or its IP address when one was given.
+    pub connect_host: &'a str,
     pub fs_id: &'a str,
     pub region: &'a str,
     pub ca_file: &'a str,
@@ -370,7 +372,7 @@ pub fn proxy_config(files: &ProxyFiles<'_>) -> String {
         "[efs]".to_string(),
         "client = yes".to_string(),
         format!("accept = 127.0.0.1:{}", files.listen_port),
-        format!("connect = {}:2049", files.dns_name),
+        format!("connect = {}:2049", files.connect_host),
         "sslVersion = TLSv1.2".to_string(),
         "renegotiation = no".to_string(),
         "TIMEOUTbusy = 20".to_string(),
@@ -411,6 +413,12 @@ pub fn proxy_arguments(config_file: &str) -> Vec<String> {
 /// The name without a zone id does not resolve (checked in a VPC).
 pub fn mount_target_name(fs_id: &str, region: &str, availability_zone_id: &str) -> String {
     format!("{availability_zone_id}.{fs_id}.s3files.{region}.on.aws")
+}
+
+/// The name the server certificate is checked against when the mount target is reached by IP
+/// address and no zone id is given: the file system's own name.
+pub fn certificate_name(fs_id: &str, region: &str) -> String {
+    format!("{fs_id}.s3files.{region}.on.aws")
 }
 
 /// NFS options of an S3 Files mount through the proxy (`get_nfs_mount_options`). The `tls`
@@ -480,10 +488,29 @@ mod tests {
     }
 
     #[test]
+    fn an_ip_address_is_connected_to_and_the_certificate_still_names_the_file_system() {
+        let text = proxy_config(&ProxyFiles {
+            listen_port: 20049,
+            dns_name: &certificate_name("fs-0abc123", "us-east-1"),
+            connect_host: "10.0.1.5",
+            fs_id: "fs-0abc123",
+            region: "us-east-1",
+            ca_file: "/opt/alien/efs-utils.crt",
+            certificate: "c",
+            private_key: "k",
+            pid_file: "p",
+            log_file: "l",
+        });
+        assert!(text.contains("connect = 10.0.1.5:2049\n"));
+        assert!(text.contains("checkHost = fs-0abc123.s3files.us-east-1.on.aws\n"));
+    }
+
+    #[test]
     fn the_proxy_config_matches_the_upstream_layout() {
         let text = proxy_config(&ProxyFiles {
             listen_port: 20049,
             dns_name: "use1-az1.fs-0abc123.s3files.us-east-1.on.aws",
+            connect_host: "use1-az1.fs-0abc123.s3files.us-east-1.on.aws",
             fs_id: "fs-0abc123",
             region: "us-east-1",
             ca_file: "/opt/alien/efs-utils.crt",

@@ -520,6 +520,12 @@ export interface SandboxMountSource {
    * does not resolve. Pick a zone that has a mount target in the sandbox's network.
    */
   availabilityZoneId?: string
+  /**
+   * IP address of a mount target the sandbox's network reaches. When given, the sandbox makes no
+   * DNS lookup and connects to it; the server certificate is still checked against the file
+   * system's name. One of `availabilityZoneId` or `mountTargetIp` is required.
+   */
+  mountTargetIp?: string
   credentials: SandboxMountCredentials
 }
 

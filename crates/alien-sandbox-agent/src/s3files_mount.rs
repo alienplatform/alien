@@ -154,45 +154,60 @@ impl Helper {
         access_point_id: &str,
         region: &str,
         availability_zone_id: Option<&str>,
+        mount_target_ip: Option<&str>,
     ) -> Result<(), String> {
-        let zone = availability_zone_id.ok_or_else(|| {
-            "the mount names no availabilityZoneId: pass the zone id of a mount target of this \
-                 file system that the sandbox's network reaches (for example use2-az1; the S3 \
-                 Files mount target listing shows it)"
-                .to_string()
-        })?;
+        let zone = availability_zone_id;
+        if zone.is_none() && mount_target_ip.is_none() {
+            return Err("the mount names no availabilityZoneId and no mountTargetIp: pass the zone id of a mount target of this file system (for example use2-az1), or the IP address of one the sandbox's network reaches".to_string());
+        }
         if self.attached.contains_key(path) {
             return Err("already mounted".into());
         }
         let started = std::time::Instant::now();
         // Step 1, dns: the mount target's name must resolve (and the network must let this
         // process ask). Step 2, connect: its NFS port must answer.
-        let dns_name = s3files::mount_target_name(fs_id, region, zone);
-        tracing::info!(mount = path, "resolving the mount target");
-        let lookup_name = dns_name.clone();
-        let address = within(DNS_BUDGET, move || {
-            use std::net::ToSocketAddrs;
-            (lookup_name.as_str(), crate::mount_network::NFS_PORT)
-                .to_socket_addrs()
-                .map(|mut a| a.next())
-                .map_err(|e| e.to_string())
-        });
-        let address = match address {
-            None => {
-                return Err(format!(
-                    "dns: resolving {dns_name} took longer than {} s (resolvers: {})",
-                    DNS_BUDGET.as_secs(),
-                    resolvers()
-                ))
-            }
-            Some(Err(e)) => {
-                return Err(format!(
-                    "dns: cannot resolve {dns_name}: {e} (resolvers: {})",
-                    resolvers()
-                ))
-            }
-            Some(Ok(None)) => return Err(format!("dns: {dns_name} has no address")),
-            Some(Ok(Some(address))) => address,
+        let dns_name = match zone {
+            Some(zone) => s3files::mount_target_name(fs_id, region, zone),
+            None => s3files::certificate_name(fs_id, region),
+        };
+        let (connect_host, address) = if let Some(ip) = mount_target_ip {
+            // The address was given, so no lookup is made; the certificate is still checked
+            // against the file system's name.
+            let parsed: std::net::IpAddr = ip
+                .parse()
+                .map_err(|_| "dns: mountTargetIp is not an IP address".to_string())?;
+            (
+                ip.to_string(),
+                std::net::SocketAddr::new(parsed, crate::mount_network::NFS_PORT),
+            )
+        } else {
+            tracing::info!(mount = path, "resolving the mount target");
+            let lookup_name = dns_name.clone();
+            let address = within(DNS_BUDGET, move || {
+                use std::net::ToSocketAddrs;
+                (lookup_name.as_str(), crate::mount_network::NFS_PORT)
+                    .to_socket_addrs()
+                    .map(|mut a| a.next())
+                    .map_err(|e| e.to_string())
+            });
+            let address = match address {
+                None => {
+                    return Err(format!(
+                        "dns: resolving {dns_name} took longer than {} s (resolvers: {})",
+                        DNS_BUDGET.as_secs(),
+                        resolvers()
+                    ))
+                }
+                Some(Err(e)) => {
+                    return Err(format!(
+                        "dns: cannot resolve {dns_name}: {e} (resolvers: {})",
+                        resolvers()
+                    ))
+                }
+                Some(Ok(None)) => return Err(format!("dns: {dns_name} has no address")),
+                Some(Ok(Some(address))) => address,
+            };
+            (dns_name.clone(), address)
         };
         tracing::info!(mount = path, "connecting to the mount target");
         if let Err(e) = std::net::TcpStream::connect_timeout(&address, CONNECT_BUDGET) {
@@ -249,6 +264,7 @@ impl Helper {
         let config = s3files::proxy_config(&ProxyFiles {
             listen_port: port,
             dns_name: &dns_name,
+            connect_host: &connect_host,
             fs_id,
             region,
             ca_file: CA_BUNDLE,
@@ -469,6 +485,7 @@ mod tests {
                 "fsap-0000",
                 "us-east-2",
                 Some("use2-az1"),
+                None,
             )
             .expect_err("nothing resolves here");
         assert!(
@@ -476,5 +493,21 @@ mod tests {
             "{error}"
         );
         assert!(started.elapsed() < Duration::from_secs(12));
+    }
+
+    #[test]
+    fn a_mount_target_ip_skips_the_lookup_and_goes_straight_to_connect() {
+        let dir = std::env::temp_dir().join(format!("ip-{}", std::process::id()));
+        let mut helper = Helper::new(dir);
+        // Nothing listens on this loopback port, so the first step that can fail is connect;
+        // no zone id is needed and no name is looked up.
+        let error = helper
+            .mount("/mnt/x", "fs-0000", "fsap-0000", "us-east-2", None, Some("127.0.0.1"))
+            .expect_err("nothing listens");
+        assert!(error.starts_with("connect:"), "{error}");
+        let error = helper
+            .mount("/mnt/x", "fs-0000", "fsap-0000", "us-east-2", None, None)
+            .expect_err("neither zone nor ip");
+        assert!(error.contains("mountTargetIp"), "{error}");
     }
 }

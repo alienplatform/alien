@@ -110,10 +110,17 @@ pub fn validate_sources(
             {
                 return Err(refuse(format!("mount '{path}': region is not a valid region name")));
             }
-            if source.availability_zone_id.is_none() {
+            if source.availability_zone_id.is_none() && source.mount_target_ip.is_none() {
                 return Err(refuse(format!(
-                    "mount '{path}': availabilityZoneId is missing: pass the zone id of a mount target of this file system that the sandbox's network reaches (for example use2-az1; the S3 Files mount target listing shows it as availabilityZoneId)"
+                    "mount '{path}': neither availabilityZoneId nor mountTargetIp is given: pass the zone id of a mount target of this file system (for example use2-az1; the S3 Files mount target listing shows it as availabilityZoneId), or the IP address of one the sandbox's network reaches"
                 )));
+            }
+            if let Some(ip) = &source.mount_target_ip {
+                if ip.parse::<std::net::IpAddr>().is_err() {
+                    return Err(refuse(format!(
+                        "mount '{path}': mountTargetIp is not an IP address"
+                    )));
+                }
             }
             if let Some(zone) = &source.availability_zone_id {
                 let mut parts = zone.splitn(2, "-az");
@@ -147,6 +154,7 @@ mod tests {
             access_point_id: "fsap-0123456789abcdef0".into(),
             region: "us-east-1".into(),
             availability_zone_id: Some("use1-az1".into()),
+            mount_target_ip: None,
             credentials: SandboxMountCredentials {
                 access_key_id: "AKIDEXAMPLE".into(),
                 secret_access_key: "SECRETVALUE".into(),
@@ -203,6 +211,10 @@ mod tests {
             |s| s.region = "US East".into(),
             |s| s.availability_zone_id = Some("use2".into()),
             |s| s.availability_zone_id = None,
+            |s| {
+                s.availability_zone_id = None;
+                s.mount_target_ip = Some("not-an-ip".into());
+            },
             |s| s.credentials.session_token.clear(),
             |s| s.credentials.expiration = "tomorrow".into(),
             |s| s.credentials.expiration = "2001-01-01T00:00:00Z".into(),
@@ -214,6 +226,15 @@ mod tests {
                 assert!(!error.message.contains(secret), "{}", error.message);
             }
         }
+    }
+
+    #[test]
+    fn a_mount_target_ip_stands_in_for_the_zone_id() {
+        let mut sources = supplied();
+        let one = sources.get_mut("/workspace").unwrap();
+        one.availability_zone_id = None;
+        one.mount_target_ip = Some("10.0.1.25".into());
+        validate_sources(&declared(), &sources).expect("an IP address alone is enough");
     }
 
     #[test]
