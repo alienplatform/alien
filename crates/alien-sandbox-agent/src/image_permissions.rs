@@ -20,9 +20,11 @@ use crate::error::{ErrorData, Result};
 pub const ENV_PERMISSIONS: &str = "ALIEN_SANDBOX_IMAGE_PERMISSIONS";
 pub const ENV_PERMISSIONS_VERSION: &str = "ALIEN_SANDBOX_IMAGE_PERMISSIONS_V";
 pub const ENV_IMAGE_COMMAND: &str = "ALIEN_SANDBOX_IMAGE_COMMAND";
-/// Seconds a lifecycle step may run before its process group is killed (1-60, default 50).
+/// Seconds a lifecycle step may run before its process group is killed (1-55, default 50).
+/// The cap leaves room for the NFS detach after a failed pause inside a 60 s provider hook.
 pub const ENV_LIFECYCLE_DEADLINE: &str = "ALIEN_SANDBOX_LIFECYCLE_DEADLINE_SECONDS";
 pub const DEFAULT_LIFECYCLE_DEADLINE_SECONDS: u64 = 50;
+pub const MAX_LIFECYCLE_DEADLINE_SECONDS: u64 = 55;
 
 /// Paths no declared mount may be at, under or above: the agent's own files, the system
 /// directories and the broker's socket.
@@ -158,8 +160,8 @@ pub fn from_values(
         let seconds: u64 = deadline
             .parse()
             .ok()
-            .filter(|s| (1..=60).contains(s))
-            .ok_or_else(|| invalid(ENV_LIFECYCLE_DEADLINE, "must be 1 to 60 seconds"))?;
+            .filter(|s| (1..=MAX_LIFECYCLE_DEADLINE_SECONDS).contains(s))
+            .ok_or_else(|| invalid(ENV_LIFECYCLE_DEADLINE, "must be 1 to 55 seconds"))?;
         declared.lifecycle_deadline = std::time::Duration::from_secs(seconds);
     }
     Ok(Some(declared))
@@ -342,6 +344,11 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(short.lifecycle_deadline.as_secs(), 5);
+        let longest = from_values(V1, Some("1"), Some(CONTRACT), Some("55"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(longest.lifecycle_deadline.as_secs(), 55);
+        assert!(from_values(V1, Some("1"), Some(CONTRACT), Some("56")).is_err());
         assert!(from_values(V1, Some("1"), Some(CONTRACT), Some("61")).is_err());
     }
 
