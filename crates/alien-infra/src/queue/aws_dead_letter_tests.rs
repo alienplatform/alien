@@ -264,3 +264,62 @@ async fn a_redrive_write_with_a_lost_response_is_cleared_when_the_setting_is_rem
     );
     assert!(!run.needs_update().unwrap());
 }
+
+/// The manager stopped after SQS applied the write: the saved state has the intent recorded
+/// but none of the written values. Removing the setting must still clear both attributes.
+#[tokio::test]
+async fn a_saved_write_intent_with_nothing_recorded_clears_the_policy_and_retention() {
+    let writes: Writes = Default::default();
+    let plain = Queue::new("tasks".into()).build();
+    let mut saved = controller("tasks");
+    saved.dead_letter_write_started = true;
+    let mut run = SingleControllerExecutor::builder()
+        .resource(plain.clone())
+        .controller(saved)
+        .platform(Platform::Aws)
+        .resource_lifecycle(ResourceLifecycle::Live)
+        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+        .with_stack_resource(Queue::new("failed".into()).build(), ResourceLifecycle::Live)
+        .service_provider(provider(&writes))
+        .build()
+        .await
+        .unwrap();
+    assert!(
+        run.needs_update().unwrap(),
+        "a saved intent asks for an update"
+    );
+    run.update(plain).unwrap();
+    run.run_until_terminal().await.unwrap();
+    let writes = writes.lock().unwrap();
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0]["RedrivePolicy"], "");
+    assert_eq!(
+        writes[0]["MessageRetentionPeriod"],
+        AWS_DEFAULT_RETENTION_SECONDS.to_string()
+    );
+    drop(writes);
+    assert!(!run.needs_update().unwrap());
+}
+
+/// The write is not sent in the step that records the intent: the intent is saved first.
+#[tokio::test]
+async fn the_intent_is_saved_before_the_write_is_sent() {
+    let writes: Writes = Default::default();
+    let plain = Queue::new("tasks".into()).build();
+    let mut run = source(
+        plain.clone(),
+        with_dead_letter(7),
+        ResourceLifecycle::Live,
+        InitialSetupAuthority::DirectSetup,
+        &writes,
+    )
+    .await;
+    run.update(with_dead_letter(7)).unwrap();
+    // UpdateStart, UpdatingStorageIngress, then the step that records the intent.
+    for _ in 0..3 {
+        let _ = run.step().await;
+    }
+    assert!(writes.lock().unwrap().is_empty(), "nothing sent yet");
+    run.run_until_terminal().await.unwrap();
+    assert_eq!(writes.lock().unwrap().len(), 1);
+}

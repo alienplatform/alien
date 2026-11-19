@@ -239,8 +239,10 @@ pub async fn check_dead_letter(
             // the highest one seen is `MAX_ATTEMPTS`, or one less when the last attempt never
             // reached the Worker.
             // A Worker image from before the runtime passed the number on reports none (the
-            // attempt then reads as 1 on every delivery): the move into `tasks-failed` with the
-            // payload intact is then the proof, and the Worker-side count is only logged.
+            // attempt then reads as 1 on every delivery). The bound is then on the Worker's own
+            // count: at least one delivery, never more than `MAX_ATTEMPTS` (Pub/Sub moves the
+            // message once that many attempts failed), and the subscription's own policy is
+            // checked against the cloud by `check_gcp_subscription_policy`.
             let seen = highest.get(&id).copied().unwrap_or(1);
             if highest.values().any(|attempt| *attempt > 1) {
                 assert!(
@@ -251,6 +253,11 @@ pub async fn check_dead_letter(
                 );
             } else {
                 info!(%id, worker_deliveries = counts[&id], "Worker image does not report Pub/Sub's attempt number");
+                assert!(
+                    (1..=MAX_ATTEMPTS).contains(&(counts[&id] as u64)),
+                    "{id}: the Worker saw {} deliveries; between 1 and {MAX_ATTEMPTS} expected",
+                    counts[&id]
+                );
             }
         } else {
             let attempts = counts[&id] as u64;
@@ -433,6 +440,7 @@ pub async fn check_upgrade(ctx: &mut alien_test::TestContext) {
     )
     .await;
     check_dead_letter(&ctx.deployment, "after", false).await;
+    check_gcp_subscription_policy(ctx, 5).await;
 
     alien_test::distribution::verify_dead_letter_update(
         ctx,
@@ -451,11 +459,88 @@ pub async fn check_upgrade(ctx: &mut alien_test::TestContext) {
 /// The dead-letter check on the trigger path and on the pull path, or the same run without the
 /// setting when `DLQ_E2E_NO_DEAD_LETTER=1`. `peek_tasks` is false where the trigger's queue also
 /// keeps a pull copy of every message (GCP).
-pub async fn check(deployment: &TestDeployment, prefix: &str, peek_tasks: bool) {
+pub async fn check(ctx: &alien_test::TestContext, prefix: &str, peek_tasks: bool) {
+    let deployment = &ctx.deployment;
     if std::env::var("DLQ_E2E_NO_DEAD_LETTER").as_deref() == Ok("1") {
         check_without_dead_letter(deployment, prefix).await;
     } else {
         check_dead_letter(deployment, prefix, peek_tasks).await;
         check_pull(deployment, prefix).await;
+        check_gcp_subscription_policy(ctx, MAX_ATTEMPTS as i32).await;
     }
+}
+
+/// GCP only: the cloud's own view of the subscriptions of the `tasks` topic. Every one of them
+/// (the queue's pull subscription and the Worker's push subscription) must carry the dead-letter
+/// policy with the declared attempts and the `tasks-failed` topic. This does not depend on the
+/// Worker image reporting an attempt number.
+async fn check_gcp_subscription_policy(ctx: &alien_test::TestContext, max_attempts: i32) {
+    use alien_core::{ClientConfig, StackState};
+    use alien_gcp_clients::pubsub::{PubSubApi, PubSubClient};
+    if ctx.deployment.platform != "gcp" {
+        return;
+    }
+    let deployment = ctx
+        .manager
+        .client()
+        .get_deployment()
+        .id(&ctx.deployment.id)
+        .send()
+        .await
+        .expect("read the deployment");
+    let state: StackState = serde_json::from_value(
+        serde_json::to_value(deployment.stack_state.as_ref().expect("stack state")).unwrap(),
+    )
+    .expect("stack state");
+    let prefix = &state.resource_prefix;
+    let ClientConfig::Gcp(config) = alien_test::setup::build_direct_target_config(
+        &alien_test::TestConfig::from_env(),
+        ctx.platform,
+    )
+    .expect("GCP target config") else {
+        panic!("GCP config expected");
+    };
+    let pubsub = PubSubClient::new(Client::new(), *config);
+    let source_topic = format!("/topics/{prefix}-tasks");
+    let failed_topic = format!("/topics/{prefix}-tasks-failed");
+    let mut page = None;
+    let mut checked = Vec::new();
+    loop {
+        let response = pubsub
+            .list_subscriptions(Some(1000), page)
+            .await
+            .expect("list subscriptions");
+        for subscription in response.subscriptions {
+            if !subscription
+                .topic
+                .as_deref()
+                .is_some_and(|topic| topic.ends_with(&source_topic))
+            {
+                continue;
+            }
+            let name = subscription.name.clone().unwrap_or_default();
+            let policy = subscription
+                .dead_letter_policy
+                .unwrap_or_else(|| panic!("{name} has no dead-letter policy"));
+            assert_eq!(policy.max_delivery_attempts, Some(max_attempts), "{name}");
+            assert!(
+                policy
+                    .dead_letter_topic
+                    .as_deref()
+                    .is_some_and(|topic| topic.ends_with(&failed_topic)),
+                "{name}: dead-letter topic {:?}",
+                policy.dead_letter_topic
+            );
+            checked.push(name);
+        }
+        page = response.next_page_token.filter(|value| !value.is_empty());
+        if page.is_none() {
+            break;
+        }
+    }
+    assert!(
+        checked.len() >= 2,
+        "expected the pull and the push subscription of tasks to carry the policy: {checked:?}"
+    );
+    info!(?checked, "GCP subscriptions carry the dead-letter policy");
 }

@@ -38,11 +38,17 @@ pub struct AwsQueueController {
     /// Whether the queue was last written with the 14 day retention of a dead-letter target.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) dead_letter_target: bool,
-    /// Set before the dead-letter attributes are sent and cleared once SQS answered. If the
-    /// response was lost the attributes may be applied while the recorded values are not
-    /// updated, so a later run rewrites both from the desired stack (including clearing them).
+    /// The intent to write the dead-letter attributes, recorded (and saved with the state) in
+    /// a step of its own before the write is sent in the next step, and cleared once SQS
+    /// answered. If the manager stops after the write was sent, this is still set in the saved
+    /// state although the recorded values were not updated.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) dead_letter_write_started: bool,
+    /// Set when a step finds the intent above already saved: an earlier write may have been
+    /// applied, so the next write sends both attributes from the desired stack (including
+    /// clearing them) instead of comparing with the recorded values.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dead_letter_rewrite: bool,
 }
 
 #[controller]
@@ -230,6 +236,18 @@ impl AwsQueueController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        self.prepare_dead_letter(ctx)?;
+        Ok(HandlerAction::Continue {
+            state: ApplyingDeadLetter,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = ApplyingDeadLetter, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn applying_dead_letter(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
         self.reconcile_dead_letter(ctx).await?;
         Ok(HandlerAction::Continue {
             state: ConfiguringStorageIngress,
@@ -351,6 +369,18 @@ impl AwsQueueController {
 
     #[handler(state = UpdatingDeadLetter, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
     async fn updating_dead_letter(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.prepare_dead_letter(ctx)?;
+        Ok(HandlerAction::Continue {
+            state: ApplyingDeadLetterUpdate,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = ApplyingDeadLetterUpdate, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn applying_dead_letter_update(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
@@ -546,11 +576,23 @@ impl AwsQueueController {
             || is_target != self.dead_letter_target)
     }
 
+    /// Records the intent to write the dead-letter attributes. No cloud call: the state is saved
+    /// when this step returns, and only the next step sends the write. An intent that is
+    /// already saved means an earlier write may have been applied.
+    fn prepare_dead_letter(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        if self.dead_letter_write_started {
+            self.dead_letter_rewrite = true;
+        } else if self.dead_letter_changed(ctx)? {
+            self.dead_letter_write_started = true;
+        }
+        Ok(())
+    }
+
     /// Writes `RedrivePolicy` on a source queue and the 14 day retention on a target queue,
     /// and clears both when the setting is removed. Queues without either are not written.
     async fn reconcile_dead_letter(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let queue = ctx.desired_resource_config::<Queue>()?;
-        if !self.dead_letter_changed(ctx)? {
+        if !self.dead_letter_write_started {
             return Ok(());
         }
         let url = self.queue_url.clone().ok_or_else(|| {
@@ -563,7 +605,7 @@ impl AwsQueueController {
         let is_target = !queues_dead_lettering_to(ctx.desired_stack, &queue.id).is_empty();
         let mut attributes = std::collections::HashMap::new();
         // After a possibly lost write the recorded values cannot be trusted: write both.
-        let rewrite = self.dead_letter_write_started;
+        let rewrite = self.dead_letter_rewrite;
         if rewrite || desired != self.redrive_policy {
             // An empty value removes the policy.
             attributes.insert(
@@ -579,11 +621,17 @@ impl AwsQueueController {
             };
             attributes.insert("MessageRetentionPeriod".to_string(), retention.to_string());
         }
+        if attributes.is_empty() {
+            self.dead_letter_write_started = false;
+            return Ok(());
+        }
         let client = ctx
             .service_provider
             .get_aws_sqs_client(ctx.get_aws_config()?)
             .await?;
-        self.dead_letter_write_started = true;
+        // A retry of this step after a failed send (response lost) must not trust the recorded
+        // values either.
+        self.dead_letter_rewrite = true;
         set_queue_attributes(
             ctx,
             client.as_ref(),
@@ -596,6 +644,7 @@ impl AwsQueueController {
         self.redrive_policy = desired;
         self.dead_letter_target = is_target;
         self.dead_letter_write_started = false;
+        self.dead_letter_rewrite = false;
         Ok(())
     }
 

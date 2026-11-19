@@ -19,7 +19,8 @@ const pulled = (
 ).build()
 const results = new alien.Storage("results").build()
 // DLQ_E2E_TWO_QUEUES=1 adds a second dead-letter queue with its own Worker, to show that two
-// queues share the one project-level grant and the last one removes it.
+// queues share the one project-level grant and the last one removes it. This is a MANUAL
+// fixture: no automated test or CI case sets it, it is run by hand against a real project.
 const twoQueues = process.env.DLQ_E2E_TWO_QUEUES === "1"
 const second = twoQueues ? new alien.Queue("second-failed").build() : undefined
 const secondTasks =

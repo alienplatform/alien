@@ -378,6 +378,7 @@ mod notification_tests {
                 then.status(200).json_body(json!({"receivedMessages": [
                     message("a", "ack-a", Some(3)),
                     message("b", "ack-b", None),
+                    message("c", "ack-c", Some(0)),
                 ]}));
             })
             .await;
@@ -391,8 +392,8 @@ mod notification_tests {
         let messages = queue(&server).await.receive("jobs", 10).await.unwrap();
         assert_eq!(
             messages.iter().map(|m| m.attempt).collect::<Vec<_>>(),
-            [3, 1],
-            "a counted delivery is reported, an uncounted one is the first"
+            [3, 1, 1],
+            "a counted delivery is reported, an uncounted or zero one is the first"
         );
     }
 

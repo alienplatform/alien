@@ -396,6 +396,19 @@ async fn handle_pubsub_cloudevent(
     }
 }
 
+/// `deliveryAttempt` is information, not part of the message: a value that is not a positive
+/// integer (malformed, negative, zero) is ignored and never rejects the push.
+fn lenient_delivery_attempt<'de, D>(deserializer: D) -> std::result::Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <Option<serde_json::Value> as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(value
+        .and_then(|value| value.as_u64())
+        .and_then(|attempt| u32::try_from(attempt).ok())
+        .filter(|attempt| *attempt > 0))
+}
+
 /// Pub/Sub push message format (non-CloudEvent)
 #[derive(serde::Deserialize)]
 struct PubSubPushMessage {
@@ -403,7 +416,11 @@ struct PubSubPushMessage {
     subscription: Option<String>,
     /// How many times Pub/Sub has tried to deliver the message. Pub/Sub sets it only for a
     /// subscription with a dead-letter policy, so it is absent otherwise.
-    #[serde(default, rename = "deliveryAttempt")]
+    #[serde(
+        default,
+        rename = "deliveryAttempt",
+        deserialize_with = "lenient_delivery_attempt"
+    )]
     delivery_attempt: Option<u32>,
 }
 
@@ -517,6 +534,25 @@ mod queue_routing_tests {
     };
     use std::collections::HashMap;
     use tokio_stream::StreamExt;
+
+    #[test]
+    fn a_malformed_or_zero_delivery_attempt_is_ignored_not_rejected() {
+        let parse = |attempt: serde_json::Value| {
+            let body = serde_json::json!({"message": {"data": "e30="}, "deliveryAttempt": attempt});
+            serde_json::from_value::<PubSubPushMessage>(body)
+                .expect("the push must still parse")
+                .delivery_attempt
+        };
+        assert_eq!(parse(serde_json::json!(3)), Some(3));
+        assert_eq!(parse(serde_json::json!(0)), None);
+        assert_eq!(parse(serde_json::json!(-2)), None);
+        assert_eq!(parse(serde_json::json!("three")), None);
+        assert_eq!(parse(serde_json::json!({"n": 1})), None);
+        assert_eq!(parse(serde_json::json!(null)), None);
+        let absent: PubSubPushMessage =
+            serde_json::from_value(serde_json::json!({"message": {"data": "e30="}})).unwrap();
+        assert_eq!(absent.delivery_attempt, None);
+    }
 
     #[tokio::test]
     async fn large_root_upload_reaches_application_but_queue_route_stays_bounded() {
