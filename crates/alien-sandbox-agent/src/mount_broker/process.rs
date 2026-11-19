@@ -1,0 +1,796 @@
+//! The broker process, the agent's handle on it, and the join step the image spawn path uses.
+
+use std::{
+    collections::BTreeSet,
+    io::{self, Read, Write},
+    os::{
+        fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd},
+        unix::net::{UnixListener, UnixStream},
+    },
+    path::{Path, PathBuf},
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
+
+use super::{
+    ops,
+    request::{self, Errno, Plan, Reply},
+};
+use crate::image_permissions::Declared;
+
+/// The image's cgroup, below the guest cgroup.
+pub const IMAGE_CGROUP: &str = "/sys/fs/cgroup/alien-guest/image";
+/// Its name as `/proc/<pid>/cgroup` shows it.
+pub const IMAGE_CGROUP_NAME: &str = "/alien-guest/image";
+/// The socket mark the image cgroup's marker sets. The guest firewall treats it as guest traffic
+/// apart from the declared connections; the agent's peer check refuses any non-zero mark.
+pub const IMAGE_MARK: u32 = 0xa120;
+
+/// How long a mount request may take before its helper is killed.
+pub const REQUEST_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Capabilities the broker keeps: mount (SYS_ADMIN), enter a mount namespace (SYS_CHROOT with
+/// SYS_ADMIN), read image processes' descriptors (SYS_PTRACE, DAC_READ_SEARCH), write the cgroup
+/// (DAC_OVERRIDE) and kill a helper that missed its deadline (KILL).
+const BROKER_CAPABILITIES: u32 = (1 << 21) | (1 << 18) | (1 << 19) | (1 << 2) | (1 << 1) | (1 << 5);
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// The image cgroup directory in the broker's own (writable) view.
+    pub cgroup_dir: PathBuf,
+    /// The image cgroup as `/proc/<pid>/cgroup` names it.
+    pub cgroup_name: String,
+    pub deadline: Duration,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            cgroup_dir: IMAGE_CGROUP.into(),
+            cgroup_name: IMAGE_CGROUP_NAME.into(),
+            deadline: REQUEST_DEADLINE,
+        }
+    }
+}
+
+/// The agent's end of the broker.
+#[derive(Debug)]
+pub struct Broker {
+    control: OwnedFd,
+    join: OwnedFd,
+    pid: i32,
+}
+
+static BROKER: OnceLock<Broker> = OnceLock::new();
+
+/// Whether a broker serves this sandbox.
+pub fn active() -> bool {
+    BROKER.get().is_some()
+}
+
+/// The running broker's process ID.
+pub fn pid() -> Option<i32> {
+    BROKER.get().map(|b| b.pid)
+}
+
+fn check(rc: libc::c_int) -> io::Result<()> {
+    if rc < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn seqpacket_pair() -> io::Result<(OwnedFd, OwnedFd)> {
+    let mut fds = [0; 2];
+    // SAFETY: fds has room for two descriptors.
+    check(unsafe {
+        libc::socketpair(
+            libc::AF_UNIX,
+            libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC,
+            0,
+            fds.as_mut_ptr(),
+        )
+    })?;
+    // SAFETY: two descriptors the kernel just returned.
+    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+}
+
+/// Forks the broker. Must be called while the agent is single-threaded and still holds its full
+/// grant, before it joins the guest cgroup, and at most once.
+pub fn start(declared: &Declared, config: Config) -> io::Result<()> {
+    let threads = std::fs::read_to_string("/proc/self/status")?
+        .lines()
+        .find_map(|l| l.strip_prefix("Threads:").map(|n| n.trim().to_string()));
+    if threads.as_deref() != Some("1") {
+        return Err(io::Error::other(
+            "the mount broker must be forked while the agent is single-threaded",
+        ));
+    }
+    let (control_agent, control_broker) = seqpacket_pair()?;
+    let (join_agent, join_broker) = seqpacket_pair()?;
+    let parent = std::process::id() as i32;
+    // SAFETY: single-threaded (checked above), so the child may allocate.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if pid == 0 {
+        drop((control_agent, join_agent));
+        let code = match broker_main(declared, &config, control_broker, join_broker, parent) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("alien-mount-broker: {error}");
+                1
+            }
+        };
+        // SAFETY: leaving the forked child without running the parent's destructors.
+        unsafe { libc::_exit(code) };
+    }
+    drop((control_broker, join_broker));
+    BROKER
+        .set(Broker {
+            control: control_agent,
+            join: join_agent,
+            pid,
+        })
+        .map_err(|_| io::Error::other("the mount broker is started only once"))
+}
+
+/// Sends `tag` with descriptors over a seqpacket socket.
+fn send_with_fds(socket: RawFd, tag: u8, fds: &[RawFd]) -> io::Result<()> {
+    #[repr(C, align(8))]
+    struct Space([u8; 64]);
+    let mut space = Space([0; 64]);
+    let mut byte = [tag];
+    let mut iov = libc::iovec {
+        iov_base: byte.as_mut_ptr().cast(),
+        iov_len: 1,
+    };
+    // SAFETY: plain C structures, zeroed then filled in; the control buffer is large and aligned
+    // enough for up to four descriptors.
+    unsafe {
+        let mut message: libc::msghdr = std::mem::zeroed();
+        message.msg_iov = &mut iov;
+        message.msg_iovlen = 1;
+        if !fds.is_empty() {
+            let bytes = (fds.len() * size_of::<RawFd>()) as u32;
+            message.msg_control = space.0.as_mut_ptr().cast();
+            message.msg_controllen = libc::CMSG_SPACE(bytes) as _;
+            let header = libc::CMSG_FIRSTHDR(&message);
+            (*header).cmsg_level = libc::SOL_SOCKET;
+            (*header).cmsg_type = libc::SCM_RIGHTS;
+            (*header).cmsg_len = libc::CMSG_LEN(bytes) as _;
+            std::ptr::copy_nonoverlapping(
+                fds.as_ptr(),
+                libc::CMSG_DATA(header).cast::<RawFd>(),
+                fds.len(),
+            );
+        }
+        if libc::sendmsg(socket, &message, libc::MSG_NOSIGNAL) != 1 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// What arrived: the tag, the sender's (pid, uid) when credentials were passed, and descriptors.
+struct Received {
+    tag: u8,
+    credentials: Option<(i32, u32)>,
+    fds: Vec<OwnedFd>,
+}
+
+fn receive(socket: RawFd) -> io::Result<Option<Received>> {
+    #[repr(C, align(8))]
+    struct Space([u8; 128]);
+    let mut space = Space([0; 128]);
+    let mut byte = [0u8];
+    let mut iov = libc::iovec {
+        iov_base: byte.as_mut_ptr().cast(),
+        iov_len: 1,
+    };
+    // SAFETY: as in `send_with_fds`; every header is bounds-checked by the CMSG macros.
+    unsafe {
+        let mut message: libc::msghdr = std::mem::zeroed();
+        message.msg_iov = &mut iov;
+        message.msg_iovlen = 1;
+        message.msg_control = space.0.as_mut_ptr().cast();
+        message.msg_controllen = space.0.len() as _;
+        let n = libc::recvmsg(socket, &mut message, libc::MSG_CMSG_CLOEXEC);
+        if n < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if n == 0 {
+            return Ok(None);
+        }
+        let mut received = Received {
+            tag: byte[0],
+            credentials: None,
+            fds: Vec::new(),
+        };
+        let mut header = libc::CMSG_FIRSTHDR(&message);
+        while !header.is_null() {
+            let data = libc::CMSG_DATA(header);
+            let len = (*header).cmsg_len as usize - (data as usize - header as usize);
+            if (*header).cmsg_level == libc::SOL_SOCKET {
+                if (*header).cmsg_type == libc::SCM_RIGHTS {
+                    for i in 0..len / size_of::<RawFd>() {
+                        let fd = std::ptr::read_unaligned(data.cast::<RawFd>().add(i));
+                        received.fds.push(OwnedFd::from_raw_fd(fd));
+                    }
+                } else if (*header).cmsg_type == libc::SCM_CREDENTIALS
+                    && len >= size_of::<libc::ucred>()
+                {
+                    let credentials = std::ptr::read_unaligned(data.cast::<libc::ucred>());
+                    received.credentials = Some((credentials.pid, credentials.uid));
+                }
+            }
+            header = libc::CMSG_NXTHDR(&message, header);
+        }
+        Ok(Some(received))
+    }
+}
+
+fn wait_ack(socket: RawFd, what: &str) -> io::Result<()> {
+    let mut ack = [0u8];
+    // SAFETY: reading one byte into a buffer we own.
+    let n = unsafe { libc::recv(socket, ack.as_mut_ptr().cast(), 1, 0) };
+    if n == 1 && ack[0] == b'k' {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!("the mount broker refused {what}")))
+    }
+}
+
+/// Creates the broker's socket at `path` in the agent's current mount namespace (the one the
+/// image runs in) and hands it, with that namespace, to the broker. Called before the image
+/// starts.
+pub fn serve_socket(path: &Path) -> io::Result<()> {
+    let broker = BROKER
+        .get()
+        .ok_or_else(|| io::Error::other("no mount broker"))?;
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::other("the broker socket needs a directory"))?;
+    std::fs::create_dir_all(directory)?;
+    let meta = std::fs::symlink_metadata(directory)?;
+    {
+        use std::os::unix::fs::MetadataExt;
+        if !meta.is_dir() || meta.uid() != 0 {
+            return Err(io::Error::other(format!(
+                "{} must be a root-owned directory",
+                directory.display()
+            )));
+        }
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    // Root-only from the moment it exists: a umask, not a chmod after bind.
+    // SAFETY: umask cannot fail.
+    let previous = unsafe { libc::umask(0o177) };
+    let listener = UnixListener::bind(path);
+    // SAFETY: as above.
+    unsafe { libc::umask(previous) };
+    let listener = listener?;
+    let namespace = std::fs::File::open("/proc/self/ns/mnt")?;
+    send_with_fds(
+        broker.control.as_raw_fd(),
+        b'S',
+        &[listener.as_raw_fd(), namespace.as_raw_fd()],
+    )?;
+    wait_ack(broker.control.as_raw_fd(), "its socket")
+}
+
+/// Moves the calling process into the image cgroup, through the broker.
+///
+/// # Safety
+/// Async-signal-safe: meant for `pre_exec`. No allocation.
+pub unsafe fn join_image_cgroup() -> io::Result<()> {
+    let Some(broker) = BROKER.get() else {
+        return Err(io::Error::from_raw_os_error(libc::ENOTCONN));
+    };
+    let mut fds = [0; 2];
+    if libc::socketpair(
+        libc::AF_UNIX,
+        libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC,
+        0,
+        fds.as_mut_ptr(),
+    ) != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let sent = send_with_fds(broker.join.as_raw_fd(), b'J', &[fds[1]]);
+    libc::close(fds[1]);
+    let result = sent.and_then(|()| {
+        let mut ack = [0u8];
+        let n = libc::recv(fds[0], ack.as_mut_ptr().cast(), 1, 0);
+        if n == 1 && ack[0] == b'k' {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(libc::EPERM))
+        }
+    });
+    libc::close(fds[0]);
+    result
+}
+
+/// Installs a filter that lets the broker create only `AF_UNIX` sockets.
+fn deny_network() -> io::Result<()> {
+    #[cfg(target_arch = "x86_64")]
+    const ARCH: u32 = 0xc000003e;
+    #[cfg(target_arch = "aarch64")]
+    const ARCH: u32 = 0xc00000b7;
+    let stmt = |code, k| libc::sock_filter {
+        code,
+        jt: 0,
+        jf: 0,
+        k,
+    };
+    let jump = |k, jt, jf| libc::sock_filter {
+        code: 0x15,
+        jt,
+        jf,
+        k,
+    };
+    let mut filter = [
+        stmt(0x20, 4),
+        jump(ARCH, 1, 0),
+        stmt(0x06, 0x80000000),
+        stmt(0x20, 0),
+        jump(libc::SYS_socket as u32, 0, 3),
+        stmt(0x20, 16),
+        jump(libc::AF_UNIX as u32, 1, 0),
+        stmt(0x06, 0x00050000 | libc::EPERM as u32),
+        stmt(0x06, 0x7fff0000),
+    ];
+    let program = libc::sock_fprog {
+        len: filter.len() as u16,
+        filter: filter.as_mut_ptr(),
+    };
+    // SAFETY: a valid classic BPF program; no_new_privs is already set.
+    check(unsafe { libc::prctl(libc::PR_SET_SECCOMP, 2, &program, 0, 0) })
+}
+
+fn close_other_fds(keep: &[RawFd]) {
+    let fds: Vec<RawFd> = std::fs::read_dir("/proc/self/fd")
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|e| e.file_name().to_str()?.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    for fd in fds {
+        if fd > 2 && !keep.contains(&fd) {
+            // SAFETY: closing a descriptor this process inherited and does not use.
+            unsafe { libc::close(fd) };
+        }
+    }
+}
+
+struct Inflight {
+    connection: UnixStream,
+    helper: i32,
+    pipe: std::fs::File,
+    deadline: Instant,
+    plan: Plan,
+}
+
+fn broker_main(
+    declared: &Declared,
+    config: &Config,
+    control: OwnedFd,
+    join: OwnedFd,
+    parent: i32,
+) -> io::Result<()> {
+    // SAFETY: plain prctl/unshare/mount calls on this process.
+    unsafe {
+        check(libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL))?;
+        if libc::getppid() != parent {
+            return Ok(());
+        }
+        check(libc::prctl(libc::PR_SET_NAME, c"alien-mount-brk".as_ptr()))?;
+        // Image root must not reach the broker's descriptors or root through /proc.
+        check(libc::prctl(libc::PR_SET_DUMPABLE, 0))?;
+        // A mount namespace of its own: the agent later makes the cgroup mount read-only in its
+        // namespace, and the broker keeps a writable copy to move image processes into the
+        // image cgroup.
+        check(libc::unshare(libc::CLONE_NEWNS))?;
+        check(libc::mount(
+            std::ptr::null(),
+            c"/".as_ptr(),
+            std::ptr::null(),
+            libc::MS_REC | libc::MS_PRIVATE,
+            std::ptr::null(),
+        ))?;
+    }
+    close_other_fds(&[control.as_raw_fd(), join.as_raw_fd()]);
+    crate::privilege::restrict_capabilities(BROKER_CAPABILITIES)?;
+    deny_network()?;
+    let one: libc::c_int = 1;
+    // SAFETY: a valid descriptor and option.
+    check(unsafe {
+        libc::setsockopt(
+            join.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PASSCRED,
+            (&one as *const libc::c_int).cast(),
+            size_of::<libc::c_int>() as _,
+        )
+    })?;
+    Loop {
+        declared,
+        config,
+        listener: None,
+        namespace: None,
+        made: BTreeSet::new(),
+        inflight: None,
+        zombies: Vec::new(),
+    }
+    .run(&control, &join)
+}
+
+struct Loop<'a> {
+    declared: &'a Declared,
+    config: &'a Config,
+    listener: Option<UnixListener>,
+    namespace: Option<OwnedFd>,
+    made: BTreeSet<u64>,
+    inflight: Option<Inflight>,
+    zombies: Vec<i32>,
+}
+
+impl Loop<'_> {
+    fn run(&mut self, control: &OwnedFd, join: &OwnedFd) -> io::Result<()> {
+        loop {
+            let mut polls = vec![
+                libc::pollfd {
+                    fd: control.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: join.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            let mut third = None;
+            if let Some(inflight) = &self.inflight {
+                third = Some("pipe");
+                polls.push(libc::pollfd {
+                    fd: inflight.pipe.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                });
+            } else if let Some(listener) = &self.listener {
+                third = Some("listener");
+                polls.push(libc::pollfd {
+                    fd: listener.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                });
+            }
+            let timeout = match &self.inflight {
+                Some(inflight) => inflight
+                    .deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .min(1000) as i32,
+                None => 1000,
+            };
+            // SAFETY: polls is a valid array of pollfd.
+            let n = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as _, timeout) };
+            if n < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            if polls[0].revents & libc::POLLIN != 0 {
+                match receive(control.as_raw_fd())? {
+                    None => return Ok(()),
+                    Some(message) => self.control(control, message),
+                }
+            } else if polls[0].revents & (libc::POLLHUP | libc::POLLERR) != 0 {
+                // The agent is gone.
+                return Ok(());
+            }
+            if polls[1].revents & libc::POLLIN != 0 {
+                if let Some(message) = receive(join.as_raw_fd())? {
+                    self.join(message);
+                }
+            }
+            if let Some(revents) = polls.get(2).map(|p| p.revents) {
+                if revents != 0 && third == Some("listener") {
+                    self.accept();
+                } else if revents != 0 && third == Some("pipe") {
+                    self.finish();
+                }
+            }
+            if self
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| Instant::now() >= inflight.deadline)
+            {
+                self.expire();
+            }
+            self.zombies.retain(|pid| {
+                // SAFETY: reaping our own child without blocking.
+                unsafe { libc::waitpid(*pid, std::ptr::null_mut(), libc::WNOHANG) == 0 }
+            });
+        }
+    }
+
+    fn control(&mut self, control: &OwnedFd, mut message: Received) {
+        let ok = message.tag == b'S' && message.fds.len() == 2;
+        if ok {
+            let namespace = message.fds.pop().expect("two descriptors");
+            let listener = message.fds.pop().expect("two descriptors");
+            // SAFETY: the agent sent a listening unix socket.
+            self.listener = Some(unsafe { UnixListener::from_raw_fd(listener.into_raw_fd()) });
+            self.namespace = Some(namespace);
+        }
+        let ack = [if ok { b'k' } else { b'e' }];
+        // SAFETY: writing one byte from a buffer we own.
+        unsafe {
+            libc::send(
+                control.as_raw_fd(),
+                ack.as_ptr().cast(),
+                1,
+                libc::MSG_NOSIGNAL,
+            )
+        };
+    }
+
+    /// Moves the sender into the image cgroup and answers on the descriptor it sent.
+    fn join(&mut self, message: Received) {
+        let Some(reply) = message.fds.into_iter().next() else {
+            return;
+        };
+        let moved = match message.credentials {
+            Some((pid, 0)) if message.tag == b'J' && pid > 0 => {
+                std::fs::write(self.config.cgroup_dir.join("cgroup.procs"), pid.to_string()).is_ok()
+            }
+            _ => false,
+        };
+        let ack = [if moved { b'k' } else { b'e' }];
+        // SAFETY: writing one byte from a buffer we own.
+        unsafe {
+            libc::send(
+                reply.as_raw_fd(),
+                ack.as_ptr().cast(),
+                1,
+                libc::MSG_NOSIGNAL,
+            )
+        };
+    }
+
+    /// Only a root process in the image cgroup may ask.
+    fn peer_allowed(&self, connection: &UnixStream) -> Result<(), String> {
+        let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: a valid descriptor and a correctly sized buffer.
+        check(unsafe {
+            libc::getsockopt(
+                connection.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut credentials as *mut libc::ucred).cast(),
+                &mut len,
+            )
+        })
+        .map_err(|e| format!("cannot identify the caller: {e}"))?;
+        if credentials.uid != 0 {
+            return Err("only the image's root may ask the broker".into());
+        }
+        let cgroup = std::fs::read_to_string(format!("/proc/{}/cgroup", credentials.pid))
+            .map_err(|e| format!("cannot read the caller's cgroup: {e}"))?;
+        if !cgroup
+            .lines()
+            .any(|line| line.strip_prefix("0::") == Some(self.config.cgroup_name.as_str()))
+        {
+            return Err("only the image's own processes may ask the broker".into());
+        }
+        Ok(())
+    }
+
+    fn accept(&mut self) {
+        let Some(listener) = &self.listener else {
+            return;
+        };
+        let Ok((mut connection, _)) = listener.accept() else {
+            return;
+        };
+        let _ = connection.set_read_timeout(Some(Duration::from_secs(2)));
+        let _ = connection.set_write_timeout(Some(Duration::from_secs(2)));
+        if let Err(reason) = self.peer_allowed(&connection) {
+            respond(&mut connection, Reply::refused(Errno::Eperm, reason));
+            return;
+        }
+        let mut text = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            match connection.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    text.extend_from_slice(&buffer[..n]);
+                    if text.contains(&b'\n') || text.len() > 64 * 1024 {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let line = text.split(|b| *b == b'\n').next().unwrap_or_default();
+        let parsed: request::Request = match serde_json::from_slice(line) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                respond(
+                    &mut connection,
+                    Reply::refused(Errno::Einval, format!("not a broker request: {error}")),
+                );
+                return;
+            }
+        };
+        let plan = match request::plan(self.declared, &parsed) {
+            Ok(plan) => plan,
+            Err((errno, reason)) => {
+                respond(&mut connection, Reply::refused(errno, reason));
+                return;
+            }
+        };
+        let Some(namespace) = &self.namespace else {
+            respond(
+                &mut connection,
+                Reply::refused(Errno::Enoent, "the image is not running"),
+            );
+            return;
+        };
+        match self.fork_helper(&plan, namespace.as_raw_fd()) {
+            Ok((helper, pipe)) => {
+                self.inflight = Some(Inflight {
+                    connection,
+                    helper,
+                    pipe,
+                    deadline: Instant::now() + self.config.deadline,
+                    plan,
+                });
+            }
+            Err(error) => respond(
+                &mut connection,
+                Reply::refused(Errno::Eio, format!("cannot start the helper: {error}")),
+            ),
+        }
+    }
+
+    fn fork_helper(&self, plan: &Plan, namespace: RawFd) -> io::Result<(i32, std::fs::File)> {
+        let mut fds = [0; 2];
+        // SAFETY: fds has room for two descriptors.
+        check(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) })?;
+        // SAFETY: two descriptors the kernel just returned.
+        let (read, write) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+        // SAFETY: the broker is single-threaded, so the child may allocate.
+        let pid = unsafe { libc::fork() };
+        if pid < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if pid == 0 {
+            drop(read);
+            let outcome = helper(plan, namespace, &self.made, &self.config.cgroup_dir);
+            let mut write = std::fs::File::from(write);
+            let _ = write.write_all(&serde_json::to_vec(&outcome).unwrap_or_default());
+            // SAFETY: leaving the forked helper.
+            unsafe { libc::_exit(0) };
+        }
+        drop(write);
+        Ok((pid, std::fs::File::from(read)))
+    }
+
+    fn finish(&mut self) {
+        let Some(mut inflight) = self.inflight.take() else {
+            return;
+        };
+        let mut text = Vec::new();
+        let _ = inflight.pipe.read_to_end(&mut text);
+        // SAFETY: reaping our own helper, which has closed its end and so is exiting.
+        unsafe { libc::waitpid(inflight.helper, std::ptr::null_mut(), 0) };
+        let reply = match serde_json::from_slice::<ops::Outcome>(&text) {
+            Ok(outcome) => {
+                let alive: BTreeSet<u64> = outcome.alive.into_iter().collect();
+                self.made.retain(|id| alive.contains(id));
+                match outcome.result {
+                    Ok(Some(id)) => {
+                        if matches!(inflight.plan, Plan::Umount { .. }) {
+                            self.made.remove(&id);
+                        } else {
+                            self.made.insert(id);
+                        }
+                        Reply::ok()
+                    }
+                    Ok(None) => Reply::ok(),
+                    Err((errno, reason)) => Reply {
+                        ok: false,
+                        errno: Some(errno),
+                        reason: Some(reason),
+                    },
+                }
+            }
+            Err(_) => Reply::refused(Errno::Eio, "the helper failed"),
+        };
+        respond(&mut inflight.connection, reply);
+    }
+
+    fn expire(&mut self) {
+        let Some(mut inflight) = self.inflight.take() else {
+            return;
+        };
+        // SAFETY: signalling our own helper.
+        unsafe { libc::kill(inflight.helper, libc::SIGKILL) };
+        self.zombies.push(inflight.helper);
+        respond(
+            &mut inflight.connection,
+            Reply::refused(
+                Errno::Etimedout,
+                format!(
+                    "the request did not finish within {}s",
+                    self.config.deadline.as_secs()
+                ),
+            ),
+        );
+    }
+}
+
+fn respond(connection: &mut UnixStream, reply: Reply) {
+    let mut text = serde_json::to_vec(&reply).unwrap_or_default();
+    text.push(b'\n');
+    let _ = connection.write_all(&text);
+}
+
+/// Runs in the forked helper: checks that need the broker's view, then joins the image's mount
+/// namespace and carries out the plan.
+fn helper(plan: &Plan, namespace: RawFd, made: &BTreeSet<u64>, cgroup_dir: &Path) -> ops::Outcome {
+    let result = (|| {
+        if let Plan::Nfs { port, .. } = plan {
+            ops::port_held_by(*port, &cgroup_dir.join("cgroup.procs").to_string_lossy())?;
+        }
+        // SAFETY: a mount namespace descriptor; the helper is single-threaded.
+        if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } != 0 {
+            let error = io::Error::last_os_error();
+            return Err((
+                Errno::Eio,
+                format!("cannot enter the image's mount namespace: {error}"),
+            ));
+        }
+        ops::run(plan, made)
+    })();
+    let present = ops::mount_ids();
+    ops::Outcome {
+        result: result.map_err(|(errno, reason)| (errno.name().to_string(), reason)),
+        alive: made
+            .iter()
+            .copied()
+            .filter(|id| present.contains(id))
+            .collect(),
+    }
+}
+
+/// Sends one request to the broker socket at `path` and returns its reply.
+pub fn call(path: &Path, request: &request::Request, timeout: Duration) -> io::Result<Reply> {
+    let mut stream = UnixStream::connect(path)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let mut text = serde_json::to_vec(request).map_err(io::Error::other)?;
+    text.push(b'\n');
+    stream.write_all(&text)?;
+    stream.shutdown(std::net::Shutdown::Write)?;
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer)?;
+    serde_json::from_slice(answer.split(|b| *b == b'\n').next().unwrap_or_default())
+        .map_err(io::Error::other)
+}

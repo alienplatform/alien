@@ -17,6 +17,11 @@
 /// session times out on connect.
 pub const AGENT_PATH: &str = "/usr/local/bin/alien-sandbox-agent";
 
+/// `ALIEN_SANDBOX_IMAGE_COMMAND` value for an image that also declares image permissions
+/// (`ALIEN_SANDBOX_IMAGE_PERMISSIONS`). An agent that predates image permissions accepts only
+/// `true` and so refuses to start such an image instead of ignoring the declaration.
+pub const IMAGE_COMMAND_WITH_IMAGE_PERMISSIONS: &str = "image-permissions-v1";
+
 /// Port the agent serves unless the platform pins another.
 ///
 /// Defined once because two independent copies are a runtime-only failure: the image build places

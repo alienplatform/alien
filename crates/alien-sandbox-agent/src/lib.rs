@@ -3,9 +3,12 @@ pub mod confine;
 pub mod error;
 pub mod exec;
 pub mod files;
+pub mod image_permissions;
 pub mod interactive;
 pub mod jobs;
 pub mod metadata;
+#[cfg(unix)]
+pub mod mount_broker;
 pub mod paths;
 pub mod peer;
 pub mod pid_namespace;
