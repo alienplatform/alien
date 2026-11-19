@@ -926,6 +926,18 @@ impl Loop<'_> {
                     // Created what was missing first: nothing new is needed at the top level now.
                     Ok(protected) => {
                         let mut report = format!("read-only: {}", protected.join(", "));
+                        // Before the immutable attribute, which would keep them from appearing.
+                        let declared: Vec<&str> = self
+                            .declared
+                            .permissions
+                            .mounts
+                            .iter()
+                            .map(|mount| mount.path.as_str())
+                            .collect();
+                        for line in ops::create_declared_paths(&root, &declared) {
+                            report.push_str("; ");
+                            report.push_str(&line);
+                        }
                         for line in ops::make_immutable(&root, IMMUTABLE_DIRECTORIES) {
                             report.push_str("; ");
                             report.push_str(&line);

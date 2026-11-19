@@ -546,6 +546,41 @@ pub fn protect_system_paths(
     Ok(protected)
 }
 
+/// Creates each declared mount path that the image does not have (`0755` directories owned by
+/// root, missing parents too), resolved under `root` as the image would resolve it. Runs before
+/// the immutable attribute is set, which would otherwise keep a path at the top level from ever
+/// being created. A path that exists, as anything, is left alone; one that cannot be created is
+/// reported and only its mounts fail later. Returns one line per created or skipped path.
+pub fn create_declared_paths(root: &str, paths: &[&str]) -> Vec<String> {
+    let root_fd = match CString::new(root).ok().map(|name| {
+        // SAFETY: a valid path.
+        unsafe {
+            libc::open(
+                name.as_ptr(),
+                libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        }
+    }) {
+        // SAFETY: a descriptor the kernel just returned that nothing else owns.
+        Some(fd) if fd >= 0 => unsafe { OwnedFd::from_raw_fd(fd) },
+        _ => return vec![format!("declared paths: skipped, cannot open {root}")],
+    };
+    let mut lines = Vec::new();
+    for path in paths {
+        match open_in_root(&root_fd, path, libc::O_PATH) {
+            Ok(_) => {}
+            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
+                match create_in_root(&root_fd, path, SystemPath::Directory) {
+                    Ok(()) => lines.push(format!("created: {path}")),
+                    Err(reason) => lines.push(format!("not created: {path} ({reason})")),
+                }
+            }
+            Err(error) => lines.push(format!("not created: {path} ({error})")),
+        }
+    }
+    lines
+}
+
 /// Sets the immutable attribute on each directory (resolved under `root` as above), so no entry in
 /// it can be created, removed or renamed by anyone without `CAP_LINUX_IMMUTABLE` (the image never
 /// holds it). Best effort: a filesystem without the attribute, or a process without the
@@ -948,6 +983,43 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn missing_declared_paths_are_created_inside_the_root_and_others_left_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("existing")).unwrap();
+        std::fs::write(root.path().join("existing/keep"), "x").unwrap();
+        // An absolute link resolves inside the root, as the image would see it.
+        std::fs::create_dir(root.path().join("var")).unwrap();
+        std::os::unix::fs::symlink("/var", root.path().join("data")).unwrap();
+        // A link to nothing is not followed into a new directory.
+        std::os::unix::fs::symlink(outside.path().join("gone"), root.path().join("dangling"))
+            .unwrap();
+        let lines = create_declared_paths(
+            root.path().to_str().unwrap(),
+            &[
+                "/existing",
+                "/var/lib/app/scratch",
+                "/data/cache",
+                "/dangling",
+            ],
+        );
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(lines[0], "created: /var/lib/app/scratch");
+        assert_eq!(lines[1], "created: /data/cache");
+        assert!(lines[2].starts_with("not created: /dangling"), "{lines:?}");
+        assert!(root.path().join("existing/keep").exists());
+        for created in ["var/lib", "var/lib/app", "var/lib/app/scratch", "var/cache"] {
+            let mode = std::fs::metadata(root.path().join(created))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o7777, 0o755, "{created}");
+        }
+        assert!(!outside.path().join("gone").exists());
+    }
 
     #[test]
     fn no_attach_in_the_last_moments_of_a_request() {

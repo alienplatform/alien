@@ -32,6 +32,7 @@ pub fn enabled() -> bool {
 pub fn record(reason: String) {
     tracing::error!(%reason, "the image will not start");
     eprintln!("alien-sandbox-agent: the image will not start: {reason}");
+    console(&reason);
     if REASON.set(reason).is_err() {
         return;
     }
@@ -39,6 +40,20 @@ pub fn record(reason: String) {
     if let Err(error) = write(Path::new(PATH), reason) {
         tracing::error!(%error, path = PATH, "cannot write the boot error");
     }
+}
+
+/// The kernel log, which the VM's console shows even where the agent's own output is not kept.
+/// Best effort: one line at error level, cut to what one record holds.
+fn console(reason: &str) {
+    let line: String = format!("<3>alien-sandbox-agent: the image will not start: {reason}")
+        .chars()
+        .filter(|character| *character != '\n')
+        .take(900)
+        .collect();
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/kmsg")
+        .and_then(|mut kmsg| std::io::Write::write_all(&mut kmsg, format!("{line}\n").as_bytes()));
 }
 
 fn write(path: &Path, reason: &str) -> std::io::Result<()> {

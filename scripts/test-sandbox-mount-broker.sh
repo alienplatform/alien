@@ -40,3 +40,5 @@ docker run --rm --privileged --cgroupns=private \
     unshare --mount --propagation private /agent-tests --ignored --exact "'"$name"'" --nocapture --test-threads=1
   '
 done
+# The whole agent, booted as an AWS sandbox: the run hook's answer and the boot error.
+"$(dirname "$0")/test-sandbox-agent-boot.sh" "$agent"

@@ -126,7 +126,11 @@ pub async fn record_nfs_port_drops(moment: &str) {
         }
     };
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let _ = std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o755)
+        .create("/run/alien");
     let written = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

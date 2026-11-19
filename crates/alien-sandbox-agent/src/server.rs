@@ -1456,7 +1456,11 @@ async fn authorize(
     authorize_control(state, peer, headers, required).await?;
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
-        egress.wait_ready().await?;
+        if let Err(error) = egress.wait_ready().await {
+            // A run hook that failed left the network unverified: say why it failed.
+            crate::boot_error::refuse()?;
+            return Err(error.into());
+        }
     }
     state.start_image_once()?;
     Ok(())
@@ -1609,18 +1613,47 @@ async fn run_egress_hook(
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> std::result::Result<StatusCode, ApiError> {
+    let result = run_hook_steps(&state, peer, &headers, body).await;
+    // With image permissions a failed run hook would end the sandbox and the reason with it.
+    // Past the caller's authorization, a failure instead keeps the image from ever starting (the
+    // record is checked before every start and every command) and the agent up to say why.
+    #[cfg(unix)]
+    if crate::boot_error::enabled() {
+        if let Err(error) = &result {
+            if !matches!(
+                error.status,
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ) {
+                crate::boot_error::record(format!(
+                    "the run hook failed ({}): {}",
+                    error.status.as_u16(),
+                    error.message
+                ));
+                return Ok(StatusCode::OK);
+            }
+        }
+    }
+    result
+}
+
+async fn run_hook_steps(
+    state: &AgentState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    body: bytes::Bytes,
+) -> std::result::Result<StatusCode, ApiError> {
     if state.image_process.uses_image_user() {
-        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+        authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
     }
     let Some(egress) = &state.gateway_egress else {
         if state.image_process.waiting_for_activation()? {
-            authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+            authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
             state.image_process.activate()?;
         }
         state.start_image_once()?;
         return Ok(StatusCode::OK);
     };
-    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
     if !egress.requires_token() {
         egress.activate_declared_none().await?;
         state.start_image_once()?;

@@ -50,11 +50,22 @@ pub(super) fn original_destination(stream: &TcpStream) -> io::Result<SocketAddrV
 /// Filter sockets tagged by the guest cgroup across every UID. Provider restore
 /// processes remain outside that cgroup and retain their DNS and metadata paths.
 pub(super) fn install() -> io::Result<()> {
-    crate::netfilter::install(install_rules())
+    crate::netfilter::install(install_rules())?;
+    crate::netfilter::install(install_ip6_rules()).map_err(ip6_failed)
 }
 
 pub(super) async fn install_at_run() -> io::Result<()> {
-    crate::netfilter::apply(install_rules()).await
+    crate::netfilter::apply(install_rules()).await?;
+    crate::netfilter::apply(install_ip6_rules())
+        .await
+        .map_err(ip6_failed)
+}
+
+/// Names the IPv6 step: a guest kernel can lack IPv6 nftables while it has the IPv4 family.
+fn ip6_failed(error: io::Error) -> io::Error {
+    io::Error::other(format!(
+        "the IPv6 NFS-port drop (table ip6 alien_gateway) was refused, so the kernel may lack IPv6 nftables: {error}"
+    ))
 }
 
 /// One line with every counter of the NFS-port drop: per family, the jumps into the chain (per
@@ -179,6 +190,34 @@ fn add_nfs_port_drop(
     Ok(batch)
 }
 
+/// With image permissions, the IPv6 half of the NFS-port drop, in a transaction of its own after
+/// the IPv4 rules so that a kernel refusing the IPv6 family is named. Nothing without them.
+async fn install_ip6_rules() -> nlink::netlink::Result<()> {
+    if crate::image_permissions::declared().is_none() {
+        return Ok(());
+    }
+    let conn = Connection::<Nftables>::new()?;
+    let tables = conn.list_tables().await?;
+    let mut batch = conn.transaction();
+    if tables
+        .iter()
+        .any(|table| table.family == Family::Ip6 && table.name == "alien_gateway")
+    {
+        batch = batch.del_table("alien_gateway", Family::Ip6);
+    }
+    batch = batch.add_table("alien_gateway", Family::Ip6).add_chain(
+        Chain::new("alien_gateway", "filter")?
+            .family(Family::Ip6)
+            .chain_type(ChainType::Filter)
+            .hook(Hook::Output)
+            .priority(Priority::Filter)
+            .policy(Policy::Accept),
+    );
+    add_nfs_port_drop(batch, "alien_gateway", "filter", Family::Ip6)?
+        .commit(&conn)
+        .await
+}
+
 async fn install_rules() -> nlink::netlink::Result<()> {
     let image = crate::image_permissions::declared().is_some();
     let conn = Connection::<Nftables>::new()?;
@@ -192,24 +231,7 @@ async fn install_rules() -> nlink::netlink::Result<()> {
     {
         batch = batch.del_table("alien_gateway", Family::Ip);
     }
-    if tables
-        .iter()
-        .any(|table| table.family == Family::Ip6 && table.name == "alien_gateway")
-    {
-        batch = batch.del_table("alien_gateway", Family::Ip6);
-    }
     batch = batch.add_table("alien_gateway", Family::Ip);
-    if image {
-        batch = batch.add_table("alien_gateway", Family::Ip6).add_chain(
-            Chain::new("alien_gateway", "filter")?
-                .family(Family::Ip6)
-                .chain_type(ChainType::Filter)
-                .hook(Hook::Output)
-                .priority(Priority::Filter)
-                .policy(Policy::Accept),
-        );
-        batch = add_nfs_port_drop(batch, "alien_gateway", "filter", Family::Ip6)?;
-    }
     let nat = || Rule::new("alien_gateway", "guest_tcp").family(Family::Ip);
     let filter = || Rule::new("alien_gateway", "filter").family(Family::Ip);
     let returning = Expr::Verdict(Verdict::Return);
