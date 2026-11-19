@@ -28,7 +28,15 @@ fn main() {
     write_credentials(&dir, path, &credentials()).expect("store credentials");
     let mut helper = Helper::new(dir.clone());
     let started = Instant::now();
-    match helper.mount(path, fs, ap, region, args.get(5).map(String::as_str)) {
+    match helper.mount(
+        path,
+        fs,
+        ap,
+        region,
+        args.get(5).map(String::as_str),
+        None,
+        &[],
+    ) {
         Ok(()) => println!("mounted in {} ms", started.elapsed().as_millis()),
         Err(reason) => {
             println!("failed: {reason}");

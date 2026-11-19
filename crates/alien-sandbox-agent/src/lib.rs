@@ -8,10 +8,10 @@ pub mod jobs;
 pub mod metadata;
 #[cfg(target_os = "linux")]
 pub mod mount_network;
+#[cfg(target_os = "linux")]
+pub mod mount_point;
 #[cfg(unix)]
 pub mod mounts;
-#[cfg(unix)]
-pub mod report;
 pub mod paths;
 pub mod peer;
 pub mod pid_namespace;
@@ -21,6 +21,8 @@ pub mod preview_capability;
 #[cfg(unix)]
 pub mod privilege;
 pub mod proxy_failover;
+#[cfg(unix)]
+pub mod report;
 #[cfg(unix)]
 pub mod s3files;
 #[cfg(target_os = "linux")]

@@ -132,31 +132,44 @@ fn main() -> Result<()> {
     if unsafe { libc::geteuid() } == 0 {
         let raw = std::env::var(alien_sandbox_agent::mounts::ENV_MOUNTS).ok();
         let parsed = alien_sandbox_agent::mounts::parse_declared(raw.as_deref());
-        alien_sandbox_agent::report::init(
-            std::path::Path::new(alien_sandbox_agent::report::DIR),
-            alien_sandbox_agent::report::Status {
-                env_present: raw.is_some(),
-                declared_count: parsed.as_ref().ok().map(Vec::len),
-                declared_paths: parsed
-                    .as_ref()
-                    .map(|d| d.iter().map(|m| m.path().to_string()).collect())
-                    .unwrap_or_default(),
-                env_error: parsed.as_ref().err().cloned(),
-                ..Default::default()
-            },
-        );
-        alien_sandbox_agent::report::log(&format!(
-            "alien-sandbox-agent: mounts: declaration {} ({} declared)",
-            if raw.is_some() { "present" } else { "absent" },
-            parsed.as_ref().map_or(0, Vec::len)
-        ));
-        let declared = parsed
-            .map_err(|reason| invalid(alien_sandbox_agent::mounts::ENV_MOUNTS, &reason))?;
+        // The status file and its log are for sandboxes that declare mounts; others write nothing.
+        if parsed
+            .as_ref()
+            .map_or(true, |declared| !declared.is_empty())
+        {
+            alien_sandbox_agent::report::init(
+                std::path::Path::new(alien_sandbox_agent::report::DIR),
+                alien_sandbox_agent::report::Status {
+                    env_present: raw.is_some(),
+                    declared_count: parsed.as_ref().ok().map(Vec::len),
+                    declared_paths: parsed
+                        .as_ref()
+                        .map(|d| d.iter().map(|m| m.path().to_string()).collect())
+                        .unwrap_or_default(),
+                    env_error: parsed.as_ref().err().cloned(),
+                    ..Default::default()
+                },
+            );
+            alien_sandbox_agent::report::log(&format!(
+                "alien-sandbox-agent: mounts: declaration {} ({} declared)",
+                if raw.is_some() { "present" } else { "absent" },
+                parsed.as_ref().map_or(0, Vec::len)
+            ));
+        }
+        let declared =
+            parsed.map_err(|reason| invalid(alien_sandbox_agent::mounts::ENV_MOUNTS, &reason))?;
         if !declared.is_empty() {
+            // A command that runs as root keeps capabilities that reach the mount credentials and
+            // the helper that holds them. Refused here as well as at plan time.
+            if image_command_enabled()? && alien_sandbox_agent::image_command::image_runs_as_root()?
+            {
+                return Err(invalid(
+                    alien_sandbox_agent::mounts::ENV_MOUNTS,
+                    "mounts are not supported with an image that runs as root; use a non-root image USER",
+                ));
+            }
             let helper = alien_sandbox_agent::mounts::fork_helper(
-                declared
-                    .iter()
-                    .any(|mount| matches!(mount, alien_core::SandboxMount::S3files { .. })),
+                declared.iter().map(|m| m.path().to_string()).collect(),
             )
             .into_alien_error()
             .context(failed(

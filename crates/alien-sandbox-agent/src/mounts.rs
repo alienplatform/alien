@@ -124,7 +124,20 @@ pub fn parse_declared(value: Option<&str>) -> Result<Vec<SandboxMount>, String> 
     match value {
         None => Ok(Vec::new()),
         Some(text) => {
-            serde_json::from_str(text).map_err(|_| format!("{ENV_MOUNTS} is not a list of mounts"))
+            let declared: Vec<SandboxMount> = serde_json::from_str(text)
+                .map_err(|_| format!("{ENV_MOUNTS} is not a list of mounts"))?;
+            // The same rule the plan applies: a path that covers the agent's own files is refused
+            // here too, so a declaration that did not come through the plan cannot hide them.
+            if let Some(mount) = declared
+                .iter()
+                .find(|m| alien_core::mount_path_is_reserved(m.path()))
+            {
+                return Err(format!(
+                    "the mount path '{}' is a system path (or lies under or above one) and cannot hold a mount",
+                    mount.path()
+                ));
+            }
+            Ok(declared)
         }
     }
 }
@@ -220,6 +233,8 @@ pub enum Refusal {
     NoMounts,
     RefreshFailed(String),
     NoZone(String),
+    /// The credentials could not be written to their file.
+    StoreFailed(String),
 }
 
 impl std::fmt::Display for Refusal {
@@ -233,6 +248,9 @@ impl std::fmt::Display for Refusal {
                 "mount '{path}': {}",
                 "neither availabilityZoneId nor mountTargetIp is given: pass the zone id of a mount target of this file system (for example use2-az1), or the IP address of one the sandbox's network reaches"
             ),
+            Self::StoreFailed(path) => {
+                write!(f, "the credentials for the mount '{path}' could not be stored")
+            }
             Self::RefreshFailed(reason) => write!(f, "the new credentials were stored but not applied: {reason}"),
         }
     }
@@ -255,6 +273,9 @@ pub struct Mounts {
     credentials_dir: PathBuf,
     backend: Box<dyn MountBackend>,
     inner: Mutex<Inner>,
+    /// Held by every operation that changes what is mounted, so a renewal, a suspend, a resume
+    /// and a delivery never interleave their helper requests.
+    serial: Mutex<()>,
 }
 
 impl Mounts {
@@ -281,7 +302,12 @@ impl Mounts {
                 sources: BTreeMap::new(),
                 suspended: false,
             }),
+            serial: Mutex::new(()),
         }
+    }
+
+    fn serialized(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.serial.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -348,7 +374,8 @@ impl Mounts {
             match given.get(path) {
                 None => return Err(Refusal::Missing(path.to_string())),
                 Some(source)
-                    if source.availability_zone_id.is_none() && source.mount_target_ip.is_none() =>
+                    if source.availability_zone_id.is_none()
+                        && source.mount_target_ip.is_none() =>
                 {
                     return Err(Refusal::NoZone(path.to_string()))
                 }
@@ -383,6 +410,11 @@ impl Mounts {
     /// Mounts every declared mount that can be mounted now, in declaration order. A tmpfs under
     /// an s3files mount waits for it. Failures are recorded as the mount's status.
     pub fn advance(&self, sources: &BTreeMap<String, MountSource>) {
+        let _turn = self.serialized();
+        self.advance_locked(sources);
+    }
+
+    fn advance_locked(&self, sources: &BTreeMap<String, MountSource>) {
         if !sources.is_empty() {
             self.inner
                 .lock()
@@ -449,7 +481,9 @@ impl Mounts {
             match outcome {
                 Ok(()) => self.set(path, "mounted".into()),
                 Err(reason) => {
-                    crate::report::log(&format!("alien-sandbox-agent: mounts: {path} failed: {reason}"));
+                    crate::report::log(&format!(
+                        "alien-sandbox-agent: mounts: {path} failed: {reason}"
+                    ));
                     self.set(path, format!("failed: {reason}"))
                 }
             }
@@ -458,11 +492,12 @@ impl Mounts {
 
     /// Replaces a mount's credentials without remounting.
     pub fn renew(&self, path: &str, credentials: &MountCredentials) -> Result<(), Refusal> {
+        let _turn = self.serialized();
         if !self.s3files_paths().any(|p| p == path) {
             return Err(Refusal::Unknown(path.to_string()));
         }
         write_credentials(&self.credentials_dir, path, credentials)
-            .map_err(|_| Refusal::Unknown(path.to_string()))?;
+            .map_err(|_| Refusal::StoreFailed(path.to_string()))?;
         // A resume mounts from the remembered source; it must carry the newest credentials.
         if let Some(source) = self
             .inner
@@ -498,7 +533,7 @@ impl Mounts {
             )
         };
         if let (true, Some(source)) = (retry, source) {
-            self.advance(&BTreeMap::from([(path.to_string(), source)]));
+            self.advance_locked(&BTreeMap::from([(path.to_string(), source)]));
         }
         Ok(())
     }
@@ -519,6 +554,7 @@ impl Mounts {
     /// first, and stops their proxies. Status goes back to `pending`. A tmpfs outside them stays
     /// as it is. Credentials files stay, so renewals arriving while suspended still apply.
     pub fn suspend(&self) {
+        let _turn = self.serialized();
         self.inner.lock().expect("mount status").suspended = true;
         for mount in self.declared.iter().rev() {
             let path = mount.path();
@@ -535,8 +571,11 @@ impl Mounts {
     }
 
     /// After a resume: mounts again whatever [`Mounts::suspend`] took away (or that failed), from
-    /// the sources delivered before. Nothing is asked of the binding.
-    pub fn resume(&self) {
+    /// the sources delivered before. Nothing is asked of the binding. An error names every mount
+    /// that could not be mounted again: a workload must not run on the root disk where a file
+    /// system was.
+    pub fn resume(&self) -> Result<(), String> {
+        let _turn = self.serialized();
         self.inner.lock().expect("mount status").suspended = false;
         let sources = self.inner.lock().expect("mount status").sources.clone();
         // A mount that failed on the way down is still there; forget it so it is tried afresh.
@@ -545,11 +584,26 @@ impl Mounts {
                 self.set(mount.path(), "pending".into());
             }
         }
-        self.advance(&sources);
+        self.advance_locked(&sources);
+        let failed: Vec<String> = self
+            .status()
+            .into_iter()
+            .filter(|m| m.state.starts_with("failed"))
+            .map(|m| format!("{}: {}", m.path, m.state))
+            .collect();
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "mounts not in place after the resume: {}",
+                failed.join("; ")
+            ))
+        }
     }
 
     /// Unmounts every mount in reverse declaration order. Status goes back to `pending`.
     pub fn unmount_all(&self) {
+        let _turn = self.serialized();
         for mount in self.declared.iter().rev() {
             let path = mount.path();
             if !self.is_mounted(path) {
@@ -620,7 +674,10 @@ impl MountBackend for HelperClient {
             serde_json::from_str(&reply).map_err(|_| "the mount helper is gone")?;
         let (step, result) = (
             request.describe(),
-            reply.error.clone().map_or("ok".to_string(), |r| format!("failed: {r}")),
+            reply
+                .error
+                .clone()
+                .map_or("ok".to_string(), |r| format!("failed: {r}")),
         );
         crate::report::log(&format!("alien-sandbox-agent: mounts: {step}: {result}"));
         crate::report::update(|s| s.steps.push(crate::report::Step { step, result }));
@@ -734,7 +791,7 @@ fn receive_descriptor(
 /// Forks the helper. Call before the agent drops capabilities and before it starts threads.
 /// In the parent returns the client; the child never returns.
 #[cfg(target_os = "linux")]
-pub fn fork_helper(prepare_key: bool) -> std::io::Result<HelperClient> {
+pub fn fork_helper(declared_paths: Vec<String>) -> std::io::Result<HelperClient> {
     use std::os::unix::net::UnixStream;
     let (parent, child) = UnixStream::pair()?;
     let (namespace_parent, namespace_child) = UnixStream::pair()?;
@@ -750,7 +807,7 @@ pub fn fork_helper(prepare_key: bool) -> std::io::Result<HelperClient> {
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
                 libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
             }
-            helper_loop(child, namespace_child, prepare_key);
+            helper_loop(child, namespace_child, declared_paths);
             std::process::exit(0);
         }
         pid => {
@@ -789,16 +846,15 @@ pub fn fork_helper(prepare_key: bool) -> std::io::Result<HelperClient> {
 fn helper_loop(
     stream: std::os::unix::net::UnixStream,
     namespace: std::os::unix::net::UnixStream,
-    prepare_key: bool,
+    declared_paths: Vec<String>,
 ) {
     let mut writer = stream.try_clone().expect("socket clone");
     let reader = BufReader::new(stream);
     let mut helper = crate::s3files_mount::Helper::new(CREDENTIALS_DIR.into());
-    // The client key is made once, while the agent is still starting, and reused by every mount
-    // and renewal (upstream shares one key between mounts too). It stays in this process.
-    if prepare_key {
-        helper.prepare_key();
-    }
+    // The client key is made at the first s3files mount, which comes after the image has booted
+    // and been snapshotted, so no two MicroVMs restored from one image share it. It is reused by
+    // every later mount and renewal (upstream shares one key between mounts too) and stays in
+    // this process.
     // Joined once, on the first request; a failure is the answer to every request after it.
     let mut joined: Option<Result<(), String>> = None;
     eprintln!(
@@ -815,7 +871,7 @@ fn helper_loop(
                     .get_or_insert_with(|| join_agent_mount_namespace(&namespace))
                     .clone();
                 let what = request.describe();
-                let outcome = ready.and_then(|()| perform(&mut helper, &request));
+                let outcome = ready.and_then(|()| perform(&mut helper, &request, &declared_paths));
                 match &outcome {
                     Ok(()) => eprintln!("alien-sandbox-agent: mounts: {what}: ok"),
                     Err(reason) => {
@@ -870,6 +926,7 @@ fn capabilities_line() -> String {
 fn perform(
     helper: &mut crate::s3files_mount::Helper,
     request: &HelperRequest,
+    declared_paths: &[String],
 ) -> Result<(), String> {
     match request {
         HelperRequest::Tmpfs {
@@ -877,7 +934,7 @@ fn perform(
             size_bytes,
             uid,
             gid,
-        } => mount_tmpfs(path, *size_bytes, *uid, *gid),
+        } => mount_tmpfs(path, *size_bytes, *uid, *gid, declared_paths),
         HelperRequest::S3Files {
             path,
             file_system_id,
@@ -892,11 +949,12 @@ fn perform(
             region,
             availability_zone_id.as_deref(),
             mount_target_ip.as_deref(),
+            declared_paths,
         ),
         HelperRequest::Refresh { path } => helper.refresh(path),
         HelperRequest::Unmount { path } => {
             helper.stop_proxy(path);
-            unmount(path)
+            unmount(path, declared_paths)
         }
     }
 }
@@ -907,9 +965,15 @@ pub(crate) fn c_string(text: &str) -> Result<std::ffi::CString, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn mount_tmpfs(path: &str, size_bytes: u64, uid: u32, gid: u32) -> Result<(), String> {
-    std::fs::create_dir_all(path).map_err(|e| format!("cannot create {path}: {e}"))?;
-    let target = c_string(path)?;
+fn mount_tmpfs(
+    path: &str,
+    size_bytes: u64,
+    uid: u32,
+    gid: u32,
+    declared_paths: &[String],
+) -> Result<(), String> {
+    let point = crate::mount_point::open(path, true, 0, declared_paths)?;
+    let target = c_string(&point.target())?;
     let source = c_string("tmpfs")?;
     let fstype = c_string("tmpfs")?;
     let options = c_string(&tmpfs_options(size_bytes, uid, gid))?;
@@ -930,16 +994,20 @@ fn mount_tmpfs(path: &str, size_bytes: u64, uid: u32, gid: u32) -> Result<(), St
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn unmount(path: &str) -> Result<(), String> {
+pub(crate) fn unmount(path: &str, declared_paths: &[String]) -> Result<(), String> {
+    // The path is walked without following links first, so a name the workload has since turned
+    // into a link is refused; the last component is refused by UMOUNT_NOFOLLOW itself.
+    crate::mount_point::open(path, false, 0, declared_paths)?;
     let target = c_string(path)?;
     // SAFETY: valid NUL-terminated path.
-    if unsafe { libc::umount2(target.as_ptr(), 0) } != 0 {
+    if unsafe { libc::umount2(target.as_ptr(), libc::UMOUNT_NOFOLLOW) } != 0 {
         let error = std::io::Error::last_os_error();
         // A process still holding a file open must not keep the VM from suspending: detach, and
         // the mount goes once the last file closes.
         // SAFETY: as above.
         if error.raw_os_error() == Some(libc::EBUSY)
-            && unsafe { libc::umount2(target.as_ptr(), libc::MNT_DETACH) } == 0
+            && unsafe { libc::umount2(target.as_ptr(), libc::MNT_DETACH | libc::UMOUNT_NOFOLLOW) }
+                == 0
         {
             return Ok(());
         }
@@ -1211,7 +1279,7 @@ mod tests {
         mounts.advance(&BTreeMap::from([("/workspace".to_string(), source("1"))]));
         mounts.suspend();
         fake.calls.lock().unwrap().clear();
-        mounts.resume();
+        mounts.resume().expect("resumes");
         let calls = fake.calls.lock().unwrap();
         assert_eq!(calls.len(), 2, "{calls:?}");
         assert!(matches!(&calls[0], HelperRequest::S3Files { path, .. } if path == "/workspace"));
@@ -1230,7 +1298,7 @@ mod tests {
         mounts.renew("/workspace", &credentials("2")).unwrap();
         // Suspended: only the file changes; there is no certificate to remake.
         assert!(fake.calls.lock().unwrap().is_empty());
-        mounts.resume();
+        mounts.resume().expect("resumes");
         let written = std::fs::read_to_string(credentials_file(dir.path(), "/workspace")).unwrap();
         assert!(
             written.contains("SK2") && !written.contains("SK1"),
@@ -1298,7 +1366,13 @@ mod tests {
         });
         let mounts_bad = mounts(&bad, dir.path());
         mounts_bad.advance(&BTreeMap::from([("/workspace".to_string(), source("1"))]));
-        mounts_bad.resume();
+        let error = mounts_bad
+            .resume()
+            .expect_err("a failed remount fails the resume");
+        assert!(
+            error.contains("/workspace") && error.contains("no route"),
+            "{error}"
+        );
         assert_eq!(
             mounts_bad.status()[0].state,
             "failed: no route to the mount target"
@@ -1312,7 +1386,7 @@ mod tests {
         let fake = Arc::new(Fake::default());
         let mounts = mounts(&fake, dir.path());
         mounts.suspend();
-        mounts.resume();
+        mounts.resume().expect("resumes");
         assert!(
             fake.calls.lock().unwrap().is_empty(),
             "no source was ever delivered"
@@ -1380,7 +1454,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn capped_tmpfs_scenario(target: &Path) {
         use std::os::unix::fs::MetadataExt;
-        let helper = fork_helper(false).expect("forks the helper");
+        // The namespace maps only root, so the real owners of `/` and `/tmp` do not match.
+        let helper =
+            fork_helper(vec!["/".to_string(), "/tmp".to_string()]).expect("forks the helper");
         // Only after the fork, as the agent does: a private mount namespace of its own.
         assert_eq!(unsafe { libc::unshare(libc::CLONE_NEWNS) }, 0);
         assert_eq!(
@@ -1486,9 +1562,202 @@ mod tests {
     }
 
     #[test]
+    fn a_declaration_that_covers_system_paths_or_their_parents_is_refused() {
+        for path in [
+            "/opt",
+            "/opt/alien",
+            "/run",
+            "/run/alien-sandbox",
+            "/etc",
+            "/usr/local",
+            "/dev",
+        ] {
+            let text = format!(r#"[{{"type":"s3files","path":"{path}"}}]"#);
+            parse_declared(Some(&text)).expect_err(path);
+        }
+        parse_declared(Some(r#"[{"type":"s3files","path":"/workspace"}]"#))
+            .expect("an ordinary path");
+    }
+
+    /// Records whether two requests were ever in flight at once.
+    #[derive(Default)]
+    struct Overlap {
+        busy: std::sync::atomic::AtomicBool,
+        overlapped: std::sync::atomic::AtomicBool,
+    }
+
+    impl MountBackend for Arc<Overlap> {
+        fn request(&self, _request: &HelperRequest) -> Result<(), String> {
+            use std::sync::atomic::Ordering::SeqCst;
+            if self.busy.swap(true, SeqCst) {
+                self.overlapped.store(true, SeqCst);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(15));
+            self.busy.store(false, SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn suspend_resume_renew_and_delivery_never_interleave() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(Overlap::default());
+        let mounts = Arc::new(Mounts::new(
+            workspace_and_scratch(),
+            60000,
+            60000,
+            dir.path().to_path_buf(),
+            Box::new(backend.clone()),
+        ));
+        mounts.advance(&BTreeMap::from([("/workspace".to_string(), source("1"))]));
+        let threads: Vec<_> = (0..4)
+            .map(|n| {
+                let mounts = mounts.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..3 {
+                        match n {
+                            0 => mounts.suspend(),
+                            1 => {
+                                let _ = mounts.resume();
+                            }
+                            2 => {
+                                let _ = mounts.renew("/workspace", &credentials("2"));
+                            }
+                            _ => mounts.advance(&BTreeMap::from([(
+                                "/workspace".to_string(),
+                                source("3"),
+                            )])),
+                        }
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert!(
+            !backend.overlapped.load(std::sync::atomic::Ordering::SeqCst),
+            "two helper requests were in flight at once"
+        );
+    }
+
+    #[test]
+    fn credentials_that_cannot_be_stored_are_not_reported_as_an_unknown_mount() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(Fake::default());
+        // A credentials directory that is a file cannot hold the credentials file.
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, "x").unwrap();
+        let mounts = mounts(&fake, &blocked);
+        let error = mounts
+            .renew("/workspace", &credentials("1"))
+            .expect_err("cannot store");
+        assert!(matches!(error, Refusal::StoreFailed(_)), "{error}");
+        assert!(error.to_string().contains("could not be stored"), "{error}");
+    }
+
+    #[test]
     fn the_declaration_variable_must_be_a_list_of_mounts() {
         assert!(parse_declared(None).unwrap().is_empty());
         parse_declared(Some("{}")).expect_err("not a list");
         parse_declared(Some(r#"[{"type":"nfs","path":"/x"}]"#)).expect_err("unknown type");
+    }
+
+    /// A workload that turns a mount path (or a directory above it) into a link must not steer a
+    /// root mount onto the link's target. Runs the real helper in a private mount namespace.
+    /// Run with `unshare --user --map-root-user --mount -- <test binary> --ignored`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs mount privileges, e.g. unshare --user --map-root-user --mount"]
+    fn the_helper_refuses_a_symbolic_link_in_a_mount_path_and_mounts_nothing_over_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::create_dir(&victim).unwrap();
+        std::fs::write(victim.join("keep"), "x").unwrap();
+        symlink_scenario(&dir.path().to_path_buf(), &victim);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn symlink_scenario(base: &Path, victim: &Path) {
+        use std::os::unix::fs::symlink;
+        // SAFETY: the child only runs the scenario below and exits without returning.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0);
+        if child == 0 {
+            let outcome = std::panic::catch_unwind(|| {
+                // The base and everything above it count as the workload's own content: the
+                // namespace maps only root, so the real owners of /tmp and / do not match.
+                let trusted = vec!["/".to_string(), "/tmp".to_string()];
+                let helper = fork_helper(trusted).expect("forks the helper");
+                assert_eq!(unsafe { libc::unshare(libc::CLONE_NEWNS) }, 0);
+                assert_eq!(
+                    unsafe {
+                        libc::mount(
+                            std::ptr::null(),
+                            c"/".as_ptr(),
+                            std::ptr::null(),
+                            libc::MS_REC | libc::MS_PRIVATE,
+                            std::ptr::null(),
+                        )
+                    },
+                    0
+                );
+                let tmpfs = |path: &Path| HelperRequest::Tmpfs {
+                    path: path.to_str().unwrap().into(),
+                    size_bytes: 1 << 20,
+                    uid: 0,
+                    gid: 0,
+                };
+                // The mount path itself was swapped for a link to the victim directory.
+                let swapped = base.join("workspace");
+                symlink(victim, &swapped).unwrap();
+                let error = helper
+                    .request(&tmpfs(&swapped))
+                    .expect_err("a link as the path");
+                assert!(error.contains("symbolic link"), "{error}");
+                // A directory above the mount path was swapped for a link.
+                let above = base.join("above");
+                symlink(victim, &above).unwrap();
+                let error = helper
+                    .request(&tmpfs(&above.join("scratch")))
+                    .expect_err("a link above the path");
+                assert!(error.contains("symbolic link"), "{error}");
+                assert!(
+                    !victim.join("scratch").exists(),
+                    "nothing was created behind the link"
+                );
+                // Nothing is mounted on the victim, and an unmount through the link is refused.
+                let table = std::fs::read_to_string("/proc/self/mountinfo").unwrap();
+                assert!(!table.contains(victim.to_str().unwrap()), "{table}");
+                helper
+                    .request(&HelperRequest::Unmount {
+                        path: swapped.to_str().unwrap().into(),
+                    })
+                    .expect_err("an unmount through a link");
+                assert!(victim.join("keep").exists());
+                // The same path as a real directory mounts normally.
+                std::fs::remove_file(&swapped).unwrap();
+                helper
+                    .request(&tmpfs(&swapped))
+                    .expect("a real directory mounts");
+            });
+            if let Err(panic) = &outcome {
+                let text = panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("panic");
+                eprintln!("SCENARIO FAILED: {text}");
+            }
+            // SAFETY: leave the forked copy of the test harness without running its destructors.
+            unsafe { libc::_exit(if outcome.is_ok() { 0 } else { 1 }) };
+        }
+        let mut status = 0;
+        // SAFETY: waiting for the child just forked.
+        assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+            "scenario failed"
+        );
     }
 }

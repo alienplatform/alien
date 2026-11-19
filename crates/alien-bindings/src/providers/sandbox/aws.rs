@@ -140,11 +140,11 @@ impl AwsSandbox {
             .put_agent("sandbox.mounts", sandbox_id, "/v1/mounts", &body)
             .await?;
         // The agent answers with each mount's state; a failed mount says which step failed.
-        Self::check_mount_states(&reply)
+        Self::check_mount_states(sandbox_id, &reply)
     }
 
     /// Turns the agent's per-mount states into an error naming every mount that is not mounted.
-    fn check_mount_states(reply: &str) -> Result<()> {
+    fn check_mount_states(sandbox_id: &str, reply: &str) -> Result<()> {
         #[derive(serde::Deserialize)]
         struct State {
             path: String,
@@ -165,8 +165,11 @@ impl AwsSandbox {
         if bad.is_empty() {
             return Ok(());
         }
-        Err(AlienError::new(ErrorData::SandboxUnreachable {
-            operation: "sandbox.mounts".to_string(),
+        // The sandbox answered and says what failed: a different answer is not expected from
+        // asking again, so this is not the retryable "could not reach the agent".
+        Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
+            sandbox_id: sandbox_id.to_string(),
+            restriction: "mounts".to_string(),
             reason: format!("mounts not in place: {}", bad.join("; ")),
         }))
     }
@@ -1471,25 +1474,37 @@ mod tests {
     #[test]
     fn a_failed_mount_state_becomes_the_error_with_its_step() {
         let reply = r#"[{"path":"/data","state":"mounted"},{"path":"/w","state":"failed: dns: cannot resolve the mount target"}]"#;
-        let error = AwsSandbox::check_mount_states(reply).expect_err("a failed mount refuses");
+        let error =
+            AwsSandbox::check_mount_states("sbx", reply).expect_err("a failed mount refuses");
         let text = error.to_string();
         assert!(text.contains("/w: failed: dns:"), "{text}");
         assert!(!text.contains("/data"), "{text}");
+        assert!(
+            !error.retryable,
+            "a mount that failed is not the agent being unreachable"
+        );
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED");
         let all = r#"[{"path":"/data","state":"mounted"}]"#;
-        AwsSandbox::check_mount_states(all).expect("all mounted is fine");
+        AwsSandbox::check_mount_states("sbx", all).expect("all mounted is fine");
     }
 
     #[test]
     fn a_pending_mount_is_not_a_success() {
-        let reply = r#"[{"path":"/w","state":"failed: dns: x"},{"path":"/w/tmp","state":"pending"}]"#;
-        let text = AwsSandbox::check_mount_states(reply).unwrap_err().to_string();
-        assert!(text.contains("/w/tmp: pending") && text.contains("/w: failed"), "{text}");
+        let reply =
+            r#"[{"path":"/w","state":"failed: dns: x"},{"path":"/w/tmp","state":"pending"}]"#;
+        let text = AwsSandbox::check_mount_states("sbx", reply)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            text.contains("/w/tmp: pending") && text.contains("/w: failed"),
+            "{text}"
+        );
     }
 
     #[test]
     fn an_answer_that_does_not_list_the_mounts_is_not_a_success() {
         for reply in ["", "ok", "{}", "<html>"] {
-            AwsSandbox::check_mount_states(reply).expect_err(reply);
+            AwsSandbox::check_mount_states("sbx", reply).expect_err(reply);
         }
     }
 

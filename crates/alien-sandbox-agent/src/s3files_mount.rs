@@ -94,11 +94,6 @@ impl Helper {
             .map_err(|_| "cannot install the mount network rules".to_string())
     }
 
-    /// Makes the client key ahead of the first mount. A failure is left for the mount to report.
-    pub fn prepare_key(&mut self) {
-        let _ = self.key();
-    }
-
     fn key(&mut self) -> Result<&ClientKey, String> {
         if self.key.is_none() {
             self.key = Some(ClientKey::generate()?);
@@ -155,6 +150,7 @@ impl Helper {
         region: &str,
         availability_zone_id: Option<&str>,
         mount_target_ip: Option<&str>,
+        declared_paths: &[String],
     ) -> Result<(), String> {
         let zone = availability_zone_id;
         if zone.is_none() && mount_target_ip.is_none() {
@@ -216,6 +212,10 @@ impl Helper {
                 crate::mount_network::NFS_PORT
             ));
         }
+        // Before anything is started: a path that cannot hold a mount fails the mount here.
+        // Found without following links and held by descriptor, so the directory that was checked
+        // is the one that gets the mount.
+        let point = crate::mount_point::open(path, true, 0, declared_paths)?;
         tracing::info!(mount = path, "reading the stored credentials");
         let credentials = self.read_credentials(path)?;
         let dir = self.credentials_dir.join(format!(
@@ -326,15 +326,13 @@ impl Helper {
             ));
         }
 
-        std::fs::create_dir_all(path).map_err(|e| format!("cannot create {path}: {e}"))?;
         tracing::info!(mount = path, port, "mounting over the proxy");
         // Step 3, tls and nfs: the kernel's mount call waits on the proxy's TLS session to the
         // mount target, and does not return on its own when that never comes up.
-        let target = path.to_string();
         let left = MOUNT_DEADLINE
             .saturating_sub(started.elapsed())
             .max(std::time::Duration::from_secs(5));
-        let outcome = within(left, move || mount_nfs(&target, port));
+        let outcome = within(left, move || mount_nfs(&point, port));
         let outcome = match outcome {
             Some(result) => result.map_err(|e| format!("nfs: {e}; {}", proxy_log_tail(&dir))),
             None => Err(format!(
@@ -398,9 +396,9 @@ impl Helper {
     }
 }
 
-fn mount_nfs(path: &str, port: u16) -> Result<(), String> {
+fn mount_nfs(point: &crate::mount_point::MountPoint, port: u16) -> Result<(), String> {
     let source = c_string("127.0.0.1:/")?;
-    let target = c_string(path)?;
+    let target = c_string(&point.target())?;
     let fstype = c_string("nfs4")?;
     // `addr` and `clientaddr` are what mount.nfs4 would have worked out for a loopback server.
     let options = c_string(&format!(
@@ -486,6 +484,7 @@ mod tests {
                 "us-east-2",
                 Some("use2-az1"),
                 None,
+                &[],
             )
             .expect_err("nothing resolves here");
         assert!(
@@ -502,11 +501,27 @@ mod tests {
         // Nothing listens on this loopback port, so the first step that can fail is connect;
         // no zone id is needed and no name is looked up.
         let error = helper
-            .mount("/mnt/x", "fs-0000", "fsap-0000", "us-east-2", None, Some("127.0.0.1"))
+            .mount(
+                "/mnt/x",
+                "fs-0000",
+                "fsap-0000",
+                "us-east-2",
+                None,
+                Some("127.0.0.1"),
+                &[],
+            )
             .expect_err("nothing listens");
         assert!(error.starts_with("connect:"), "{error}");
         let error = helper
-            .mount("/mnt/x", "fs-0000", "fsap-0000", "us-east-2", None, None)
+            .mount(
+                "/mnt/x",
+                "fs-0000",
+                "fsap-0000",
+                "us-east-2",
+                None,
+                None,
+                &[],
+            )
             .expect_err("neither zone nor ip");
         assert!(error.contains("mountTargetIp"), "{error}");
     }

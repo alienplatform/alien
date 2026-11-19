@@ -716,8 +716,38 @@ impl SandboxMount {
     }
 }
 
-/// Paths a mount may never cover: the agent's own files and the kernel's virtual filesystems.
-const RESERVED_MOUNT_PREFIXES: &[&str] = &["/opt/alien", "/proc", "/sys", "/dev", "/run/alien"];
+/// Paths a mount may never cover, lie under, or be a parent of: the agent's own files, the
+/// system directories and the kernel's virtual filesystems. A mount on a parent (such as `/opt`)
+/// would hide the agent's files just as one on the path itself.
+pub const RESERVED_MOUNT_PATHS: &[&str] = &[
+    "/",
+    "/opt",
+    "/opt/alien",
+    "/run",
+    "/run/alien",
+    "/run/alien-sandbox",
+    "/etc",
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+    "/proc",
+    "/sys",
+    "/dev",
+    "/sandbox",
+];
+
+/// True when a mount at `path` would cover, lie under, or be a parent of a reserved path. The
+/// sandbox agent applies the same rule when it boots.
+pub fn mount_path_is_reserved(path: &str) -> bool {
+    RESERVED_MOUNT_PATHS.iter().any(|reserved| {
+        let under = |outer: &str, inner: &str| {
+            inner == outer || (outer != "/" && inner.starts_with(&format!("{outer}/")))
+        };
+        under(reserved, path) || under(path, reserved)
+    })
+}
 
 /// Most mounts one sandbox may declare.
 pub const MAX_SANDBOX_MOUNTS: usize = 8;
@@ -1101,6 +1131,15 @@ impl Sandbox {
                 format!("a sandbox may declare at most {MAX_SANDBOX_MOUNTS} mounts"),
             ));
         }
+        // A command running as root keeps file-access and signal capabilities that reach the mount
+        // credentials and the helper that holds them, so mounts need a non-root image user.
+        if self.image_user == Some(0) {
+            return Err(invalid(
+                "mounts".into(),
+                "root image USER",
+                "mounts are not supported with an image that runs as root; use a non-root image USER".into(),
+            ));
+        }
         let mut seen: Vec<&str> = Vec::new();
         for (index, mount) in self.mounts.iter().enumerate() {
             let field = format!("mounts[{index}].path");
@@ -1123,14 +1162,11 @@ impl Sandbox {
                     "must be an absolute path of letters, digits, '-', '_' and '.' without a trailing slash, '.' or '..' parts".into(),
                 ));
             }
-            if RESERVED_MOUNT_PREFIXES
-                .iter()
-                .any(|reserved| path == *reserved || path.starts_with(&format!("{reserved}/")))
-            {
+            if mount_path_is_reserved(path) {
                 return Err(invalid(
                     field,
                     path,
-                    "overlaps a path the sandbox agent or the kernel owns".into(),
+                    "overlaps, lies under or is a parent of a system path the sandbox agent or the kernel owns (for example /opt, /run, /etc, /usr, /proc, /dev)".into(),
                 ));
             }
             if seen.contains(&path) {
@@ -3475,6 +3511,50 @@ mod label_format_tests {
     }
 
     #[test]
+    fn ordinary_mount_paths_are_not_reserved() {
+        for path in [
+            "/workspace",
+            "/workspace/tmp",
+            "/data",
+            "/mnt/files",
+            "/runtime",
+            "/optional",
+        ] {
+            assert!(!mount_path_is_reserved(path), "{path}");
+        }
+        for path in [
+            "/",
+            "/opt",
+            "/opt/alien/x",
+            "/run",
+            "/run/alien-sandbox",
+            "/etc/x",
+            "/sandbox",
+        ] {
+            assert!(mount_path_is_reserved(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn mounts_are_refused_for_an_image_that_runs_as_root() {
+        let mut sandbox =
+            mounts_sandbox(serde_json::json!([{"type": "s3files", "path": "/workspace"}]));
+        sandbox
+            .validate_for_platform(Platform::Aws)
+            .expect("non-root image");
+        sandbox.image_user = Some(0);
+        let error = sandbox
+            .validate_for_platform(Platform::Aws)
+            .expect_err("root image with mounts");
+        assert_eq!(error.code, "SANDBOX_LIMIT_INVALID");
+        assert!(
+            error.message.contains("non-root image USER"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
     fn malformed_mounts_are_refused() {
         let cases = [
             serde_json::json!([{"type": "s3files", "path": "workspace"}]),
@@ -3484,6 +3564,14 @@ mod label_format_tests {
             serde_json::json!([{"type": "s3files", "path": "/opt/alien"}]),
             serde_json::json!([{"type": "s3files", "path": "/opt/alien/x"}]),
             serde_json::json!([{"type": "s3files", "path": "/proc"}]),
+            // Parents of reserved paths hide them as well, and so do the added system paths.
+            serde_json::json!([{"type": "s3files", "path": "/opt"}]),
+            serde_json::json!([{"type": "s3files", "path": "/run"}]),
+            serde_json::json!([{"type": "s3files", "path": "/run/alien-sandbox"}]),
+            serde_json::json!([{"type": "tmpfs", "path": "/etc", "size": "1Gi"}]),
+            serde_json::json!([{"type": "s3files", "path": "/usr/local"}]),
+            serde_json::json!([{"type": "s3files", "path": "/lib64"}]),
+            serde_json::json!([{"type": "s3files", "path": "/sandbox"}]),
             serde_json::json!([{"type": "tmpfs", "path": "/t", "size": "lots"}]),
             serde_json::json!([{"type": "tmpfs", "path": "/t", "size": "0"}]),
             serde_json::json!([

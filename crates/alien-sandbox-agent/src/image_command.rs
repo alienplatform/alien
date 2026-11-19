@@ -283,6 +283,38 @@ pub fn defer_to_run_hook() -> Result<bool> {
     }
 }
 
+/// True when the image's own `USER` is root, so its command would run as uid 0. An image that
+/// records no user runs under the exec identity and is not root.
+pub fn image_runs_as_root() -> Result<bool> {
+    image_runs_as_root_from(Path::new(IMAGE_COMMAND_PATH))
+}
+
+fn image_runs_as_root_from(path: &Path) -> Result<bool> {
+    let failed = |reason: &str| {
+        AlienError::new(ErrorData::OperationFailed {
+            operation: "read the image user".to_string(),
+            reason: reason.to_string(),
+        })
+    };
+    let bytes = fs::read(path).map_err(|_| failed("the image command metadata is unreadable"))?;
+    let image: SandboxImageCommand = serde_json::from_slice(&bytes)
+        .map_err(|_| failed("the image command metadata is malformed"))?;
+    let Some(user) = image.user.as_deref() else {
+        return Ok(false);
+    };
+    let passwd =
+        fs::read_to_string("/etc/passwd").map_err(|_| failed("/etc/passwd is unreadable"))?;
+    let group = fs::read_to_string("/etc/group").map_err(|_| failed("/etc/group is unreadable"))?;
+    let resolved = ImageUser {
+        user,
+        passwd: &passwd,
+        group: &group,
+    }
+    .image_identity()
+    .map_err(|_| failed("the image user does not resolve"))?;
+    Ok(resolved.uid == 0)
+}
+
 fn monitor_failed() -> AlienError<ErrorData> {
     AlienError::new(ErrorData::OperationFailed {
         operation: "image process lifecycle".into(),
@@ -431,6 +463,27 @@ fn start_from_with_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_image_user_of_root_is_found_and_other_users_are_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let metadata = |user: Option<&str>| {
+            let path = dir.path().join("image-command.json");
+            let image = SandboxImageCommand {
+                user: user.map(str::to_string),
+                working_directory: "/".into(),
+                ..Default::default()
+            };
+            fs::write(&path, serde_json::to_vec(&image).unwrap()).unwrap();
+            path
+        };
+        assert!(image_runs_as_root_from(&metadata(Some("0:0"))).unwrap());
+        assert!(image_runs_as_root_from(&metadata(Some("root"))).unwrap());
+        assert!(!image_runs_as_root_from(&metadata(Some("60000:60000"))).unwrap());
+        assert!(!image_runs_as_root_from(&metadata(None)).unwrap());
+        image_runs_as_root_from(&dir.path().join("missing"))
+            .expect_err("unreadable metadata is not an answer");
+    }
     use std::os::unix::fs::PermissionsExt;
 
     fn process_fixture(

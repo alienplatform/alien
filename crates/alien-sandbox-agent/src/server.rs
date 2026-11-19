@@ -555,7 +555,11 @@ async fn resume_egress_hook(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> std::result::Result<StatusCode, ApiError> {
-    if state.image_process.uses_image_user() {
+    #[cfg(target_os = "linux")]
+    let has_mounts = crate::mounts::global().is_some_and(|m| !m.is_empty());
+    #[cfg(not(target_os = "linux"))]
+    let has_mounts = false;
+    if state.image_process.uses_image_user() || has_mounts {
         authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
     }
     #[cfg(target_os = "linux")]
@@ -565,25 +569,42 @@ async fn resume_egress_hook(
     }
     #[cfg(not(target_os = "linux"))]
     let _ = (&state, peer, &headers);
-    // The network is back, so the file systems can be reached again. A mount that fails shows in
-    // the health `mounts` status; it does not fail the resume.
+    // The network is back, so the file systems can be reached again. When one cannot be mounted
+    // the resume fails: a workload must not continue on the root disk where a file system was.
     #[cfg(target_os = "linux")]
-    if crate::mounts::global().is_some_and(|m| !m.is_empty()) {
-        let _ = tokio::task::spawn_blocking(|| {
-            if let Some(mounts) = crate::mounts::global() {
-                mounts.resume();
-            }
+    if has_mounts {
+        let outcome = tokio::task::spawn_blocking(|| match crate::mounts::global() {
+            Some(mounts) => mounts.resume(),
+            None => Ok(()),
         })
-        .await;
+        .await
+        .map_err(|_| {
+            ApiError::from(AlienError::new(ErrorData::OperationFailed {
+                operation: "resume mounts".into(),
+                reason: "the mount task failed".into(),
+            }))
+        })?;
+        outcome.map_err(|reason| {
+            ApiError::from(AlienError::new(ErrorData::OperationFailed {
+                operation: "resume mounts".into(),
+                reason,
+            }))
+        })?;
     }
     Ok(StatusCode::OK)
 }
 
 /// Before the sandbox is suspended, mounted file systems are unmounted: their connections do not
-/// survive the restore.
-async fn suspend_mounts_hook() -> StatusCode {
+/// survive the restore. Only the platform's own call may ask for it: a workload that could reach
+/// this port would otherwise take its own mounts down.
+async fn suspend_mounts_hook(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> std::result::Result<StatusCode, ApiError> {
     #[cfg(target_os = "linux")]
     if crate::mounts::global().is_some_and(|m| !m.is_empty()) {
+        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
         let _ = tokio::task::spawn_blocking(|| {
             if let Some(mounts) = crate::mounts::global() {
                 mounts.suspend();
@@ -591,7 +612,9 @@ async fn suspend_mounts_hook() -> StatusCode {
         })
         .await;
     }
-    StatusCode::OK
+    #[cfg(not(target_os = "linux"))]
+    let _ = (&state, peer, &headers);
+    Ok(StatusCode::OK)
 }
 
 async fn run_command(
@@ -1514,7 +1537,9 @@ async fn put_mounts(
     ));
     crate::report::update(|s| s.puts.push(received));
     mounts.check_sources(&request.mounts).map_err(|refusal| {
-        crate::report::log(&format!("alien-sandbox-agent: mounts: PUT refused: {refusal}"));
+        crate::report::log(&format!(
+            "alien-sandbox-agent: mounts: PUT refused: {refusal}"
+        ));
         ApiError::from(AlienError::new(ErrorData::RequestInvalid {
             reason: refusal.to_string(),
         }))
