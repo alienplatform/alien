@@ -14,8 +14,8 @@ use crate::{exec::ExecIdentity, image_permissions, mount_broker, privilege};
 const DECLARATION: &str = r#"{
   "mounts": [
     {"type": "nfs", "path": "/workspace"},
-    {"type": "tmpfs", "path": "/var/lib/vendor/workspace-tmp", "sizeBytes": 16777216},
-    {"type": "bind", "from": "/var/lib/vendor/workspace-tmp", "path": "/workspace/tmp"},
+    {"type": "tmpfs", "path": "/var/lib/app/scratch", "sizeBytes": 16777216},
+    {"type": "bind", "from": "/var/lib/app/scratch", "path": "/workspace/tmp"},
     {"type": "nfs", "path": "/link"},
     {"type": "nfs", "path": "/linkparent/inner"},
     {"type": "tmpfs", "path": "/scratch", "sizeBytes": 1048576}
@@ -236,7 +236,7 @@ fn scenario() {
     );
     for directory in [
         "/workspace",
-        "/var/lib/vendor/workspace-tmp",
+        "/var/lib/app/scratch",
         "/scratch",
         "/elsewhere",
     ] {
@@ -324,13 +324,13 @@ attempt("remove", lambda: os.unlink("/usr/sbin/nologin"))
         line.contains("nosuid") && line.contains("nodev") && line.contains(" nfs4 "),
         "{line}"
     );
-    allowed("/opt/alien/bin/alien-mount tmpfs /var/lib/vendor/workspace-tmp -o size=8m,mode=770,uid=1001,gid=1001");
-    let line = mount_line("/var/lib/vendor/workspace-tmp").expect("the tmpfs");
+    allowed("/opt/alien/bin/alien-mount tmpfs /var/lib/app/scratch -o size=8m,mode=770,uid=1001,gid=1001");
+    let line = mount_line("/var/lib/app/scratch").expect("the tmpfs");
     assert!(
         line.contains("size=8192k") && line.contains("nosuid"),
         "{line}"
     );
-    allowed("/opt/alien/bin/alien-mount bind /var/lib/vendor/workspace-tmp /workspace/tmp && echo x > /workspace/tmp/f && test -f /var/lib/vendor/workspace-tmp/f");
+    allowed("/opt/alien/bin/alien-mount bind /var/lib/app/scratch /workspace/tmp && echo x > /workspace/tmp/f && test -f /var/lib/app/scratch/f");
     assert!(mount_line("/workspace/tmp").is_some_and(|l| l.contains("nosuid")));
 
     // Wrong type, wrong path, too big.
@@ -504,11 +504,11 @@ attempt("remove", lambda: os.unlink("/usr/sbin/nologin"))
         "REFUSED  root outside the image cgroup  ->  {}",
         answer.trim()
     );
-    let mut lane = Command::new("/opt/alien/bin/alien-mount");
-    lane.args(["umount", "/workspace"]);
+    let mut unprivileged = Command::new("/opt/alien/bin/alien-mount");
+    unprivileged.args(["umount", "/workspace"]);
     // SAFETY: async-signal-safe calls only.
     unsafe {
-        lane.pre_exec(|| {
+        unprivileged.pre_exec(|| {
             mount_broker::join_image_cgroup()?;
             privilege::drop_image_to(ExecIdentity {
                 uid: 1000,
@@ -516,7 +516,7 @@ attempt("remove", lambda: os.unlink("/usr/sbin/nologin"))
             })
         });
     }
-    let output = lane.output().unwrap();
+    let output = unprivileged.output().unwrap();
     assert_eq!(output.status.code(), Some(32), "{}", text(&output));
     assert!(
         text(&output).contains("Permission denied"),
@@ -648,30 +648,35 @@ print(results)
         10,
     )
     .expect("a step in the image");
-    let started = Instant::now();
-    // One child stays in the step's process group, one leaves it (setsid).
-    let error = step(
-        &["/bin/sh", "-c", "sleep 300 & setsid sleep 302 & sleep 301"],
-        2,
-    )
-    .unwrap_err();
-    assert!(error.contains("its processes were killed"), "{error}");
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "the step was killed after {:?}: {error}",
-        started.elapsed()
-    );
-    std::thread::sleep(Duration::from_millis(300));
-    let left = Command::new("pgrep")
-        .args(["-f", "sleep 30[012]"])
-        .output()
-        .unwrap();
-    assert!(
-        left.stdout.is_empty(),
-        "left behind: {}",
-        String::from_utf8_lossy(&left.stdout)
-    );
-    println!("STEP     a step past its 2s deadline: {error}; nothing left behind");
+    // A host that freezes the whole container for a while (a snapshot's `docker pause`) can
+    // stretch one attempt past the bound; a slow kill fails both.
+    for attempt in 1..=2 {
+        let started = Instant::now();
+        // One child stays in the step's process group, one leaves it (setsid).
+        let error = step(
+            &["/bin/sh", "-c", "sleep 300 & setsid sleep 302 & sleep 301"],
+            2,
+        )
+        .unwrap_err();
+        let took = started.elapsed();
+        assert!(error.contains("its processes were killed"), "{error}");
+        std::thread::sleep(Duration::from_millis(300));
+        let left = Command::new("pgrep")
+            .args(["-f", "sleep 30[012]"])
+            .output()
+            .unwrap();
+        assert!(
+            left.stdout.is_empty(),
+            "left behind: {}",
+            String::from_utf8_lossy(&left.stdout)
+        );
+        if took < Duration::from_secs(5) {
+            println!("STEP     a step past its 2s deadline: {error}; nothing left behind");
+            break;
+        }
+        assert!(attempt < 2, "the step was killed after {took:?}: {error}");
+        println!("STEP     attempt {attempt} was killed after {took:?}; once more");
+    }
 
     // A step that remounts: it starts its own proxy and mounts through it. The proxy then joins
     // the image's own processes, and a later step's deadline does not kill it.

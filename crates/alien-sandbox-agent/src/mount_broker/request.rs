@@ -534,7 +534,7 @@ mod tests {
 
     fn declared() -> Declared {
         crate::image_permissions::parse(
-            r#"{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/workspace/tmp","sizeBytes":8589934592},{"type":"nfs","path":"/other"},{"type":"tmpfs","path":"/var/lib/vendor/workspace-tmp","sizeBytes":8589934592},{"type":"bind","from":"/var/lib/vendor/workspace-tmp","path":"/workspace/bound"}]}"#,
+            r#"{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/workspace/tmp","sizeBytes":8589934592},{"type":"nfs","path":"/other"},{"type":"tmpfs","path":"/var/lib/app/scratch","sizeBytes":8589934592},{"type":"bind","from":"/var/lib/app/scratch","path":"/workspace/bound"}]}"#,
         )
         .unwrap()
     }
@@ -575,8 +575,8 @@ mod tests {
         for text in [
             r#"{"op":"mount","type":"nfs","source":"127.0.0.1:/","target":"/workspace","options":"vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123"}"#,
             r#"{"op":"mount","type":"tmpfs","target":"/workspace/tmp","options":"size=8g,mode=1777"}"#,
-            r#"{"op":"bind","from":"/var/lib/vendor/workspace-tmp","target":"/workspace/bound"}"#,
-            r#"{"op":"bind","from":"/var/lib/vendor/workspace-tmp/sub","target":"/workspace/bound"}"#,
+            r#"{"op":"bind","from":"/var/lib/app/scratch","target":"/workspace/bound"}"#,
+            r#"{"op":"bind","from":"/var/lib/app/scratch/sub","target":"/workspace/bound"}"#,
             r#"{"op":"mount","type":"nfs4","source":"127.0.0.1:/","target":"/workspace","options":"actimeo=30,nfsvers=4.2,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,port=20514,addr=127.0.0.1,clientaddr=127.0.0.1"}"#,
             r#"{"op":"umount","target":"/workspace","flags":["force","detach"]}"#,
         ] {
@@ -704,9 +704,9 @@ mod tests {
         assert!(plan(&declared(), &bind).is_err(), "bind from undeclared");
         for (from, target) in [
             ("/workspace", "/workspace/bound"),
-            ("/var/lib/vendor/workspace-tmpX", "/workspace/bound"),
-            ("/var/lib/vendor/workspace-tmp/../x", "/workspace/bound"),
-            ("/var/lib/vendor/workspace-tmp", "/other"),
+            ("/var/lib/app/scratchX", "/workspace/bound"),
+            ("/var/lib/app/scratch/../x", "/workspace/bound"),
+            ("/var/lib/app/scratch", "/other"),
         ] {
             let bind = Request::Bind {
                 from: from.into(),

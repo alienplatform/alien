@@ -359,7 +359,7 @@ mod tests {
     use super::*;
 
     const V1: Option<&str> = Some(alien_core::sandbox_image::IMAGE_COMMAND_WITH_IMAGE_PERMISSIONS);
-    const CONTRACT: &str = r#"{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/var/lib/vendor/workspace-tmp","sizeBytes":8589934592},{"type":"bind","from":"/var/lib/vendor/workspace-tmp","path":"/workspace/tmp"}],"connections":[{"cidr":"10.0.1.5/32","port":2049}],"onPause":["/bin/agentd","pause"],"onResume":["/bin/agentd","resume"]}"#;
+    const CONTRACT: &str = r#"{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/var/lib/app/scratch","sizeBytes":8589934592},{"type":"bind","from":"/var/lib/app/scratch","path":"/workspace/tmp"}],"connections":[{"cidr":"10.0.1.5/32","port":2049}],"onPause":["/usr/local/bin/app","pause"],"onResume":["/usr/local/bin/app","resume"]}"#;
 
     #[test]
     fn the_contract_example_is_accepted() {
@@ -373,10 +373,7 @@ mod tests {
         );
         assert_eq!(declared.lifecycle_deadline.as_secs(), 40);
         assert_eq!(
-            declared
-                .mount("/var/lib/vendor/workspace-tmp")
-                .unwrap()
-                .size_bytes,
+            declared.mount("/var/lib/app/scratch").unwrap().size_bytes,
             Some(8 << 30)
         );
         let short = from_values(V1, Some("1"), Some(CONTRACT), Some("5"))
