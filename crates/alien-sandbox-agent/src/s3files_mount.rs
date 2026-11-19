@@ -108,7 +108,7 @@ impl Helper {
         let credentials = self.read_credentials(path)?;
         let dir = self.credentials_dir.join(format!(
             "proxy-{}",
-            &credentials_file(&self.credentials_dir, path)
+            credentials_file(&self.credentials_dir, path)
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("x")
