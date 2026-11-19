@@ -3,7 +3,7 @@
 //! /opt/alien/efs-utils.crt). Credentials come from AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and
 //! optionally AWS_SESSION_TOKEN. Prints one line per step and no credential.
 //!
-//! usage: s3files_probe <mount-path> <file-system-id> <access-point-id> <region> [renew-seconds]
+//! usage: s3files_probe <mount-path> <file-system-id> <access-point-id> <region> <zone-id> [renew-seconds]
 
 #[cfg(target_os = "linux")]
 fn main() {
@@ -11,8 +11,9 @@ fn main() {
     use alien_sandbox_agent::s3files_mount::Helper;
     use std::time::Instant;
 
+    tracing_subscriber::fmt::init();
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 5 {
+    if args.len() < 6 {
         eprintln!("usage: s3files_probe <mount-path> <file-system-id> <access-point-id> <region>");
         std::process::exit(2);
     }
@@ -27,7 +28,7 @@ fn main() {
     write_credentials(&dir, path, &credentials()).expect("store credentials");
     let mut helper = Helper::new(dir.clone());
     let started = Instant::now();
-    match helper.mount(path, fs, ap, region) {
+    match helper.mount(path, fs, ap, region, args.get(5).map(String::as_str)) {
         Ok(()) => println!("mounted in {} ms", started.elapsed().as_millis()),
         Err(reason) => {
             println!("failed: {reason}");
@@ -45,7 +46,7 @@ fn main() {
         Ok(text) => println!("read after refresh ok ({} bytes)", text.len()),
         Err(e) => println!("read after refresh failed: {e}"),
     }
-    if let Some(seconds) = args.get(5).and_then(|s| s.parse::<u64>().ok()) {
+    if let Some(seconds) = args.get(6).and_then(|s| s.parse::<u64>().ok()) {
         std::thread::sleep(std::time::Duration::from_secs(seconds));
     }
     helper.stop_proxy(path);

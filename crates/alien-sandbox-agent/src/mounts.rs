@@ -46,6 +46,11 @@ pub struct MountSource {
     pub file_system_id: String,
     pub access_point_id: String,
     pub region: String,
+    /// Availability zone id (for example `use2-az1`) of the mount target to use. S3 Files names a
+    /// mount target `<zone id>.<file system id>.s3files.<region>.on.aws`; the upstream helper reads
+    /// the zone id from the instance metadata, which a sandbox does not have.
+    #[serde(default)]
+    pub availability_zone_id: Option<String>,
     pub credentials: MountCredentials,
 }
 
@@ -79,6 +84,7 @@ pub enum HelperRequest {
         file_system_id: String,
         access_point_id: String,
         region: String,
+        availability_zone_id: Option<String>,
     },
     /// New credentials were written: make a fresh client certificate and have the proxy read it.
     Refresh {
@@ -366,6 +372,7 @@ impl Mounts {
                             file_system_id: source.file_system_id.clone(),
                             access_point_id: source.access_point_id.clone(),
                             region: source.region.clone(),
+                            availability_zone_id: source.availability_zone_id.clone(),
                         })
                     }),
                 },
@@ -514,7 +521,14 @@ fn perform(
             file_system_id,
             access_point_id,
             region,
-        } => helper.mount(path, file_system_id, access_point_id, region),
+            availability_zone_id,
+        } => helper.mount(
+            path,
+            file_system_id,
+            access_point_id,
+            region,
+            availability_zone_id.as_deref(),
+        ),
         HelperRequest::Refresh { path } => helper.refresh(path),
         HelperRequest::Unmount { path } => {
             helper.stop_proxy(path);
@@ -600,6 +614,7 @@ mod tests {
             file_system_id: "fs-1".into(),
             access_point_id: "fsap-1".into(),
             region: "us-east-1".into(),
+            availability_zone_id: Some("use1-az1".into()),
             credentials: credentials(tag),
         }
     }

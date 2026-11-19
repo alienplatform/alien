@@ -97,10 +97,14 @@ impl Helper {
         fs_id: &str,
         access_point_id: &str,
         region: &str,
+        availability_zone_id: Option<&str>,
     ) -> Result<(), String> {
+        let zone = availability_zone_id
+            .ok_or_else(|| "the mount names no availability zone id".to_string())?;
         if self.attached.contains_key(path) {
             return Err("already mounted".into());
         }
+        tracing::info!(mount = path, "reading the stored credentials");
         let credentials = self.read_credentials(path)?;
         let dir = self.credentials_dir.join(format!(
             "proxy-{}",
@@ -115,6 +119,7 @@ impl Helper {
             .create(&dir)
             .map_err(|_| "cannot create the proxy directory".to_string())?;
 
+        tracing::info!(mount = path, "preparing the client key");
         // The private key: written once per mount from the in-memory key, readable by root only.
         let key_pem = self.key()?.pkcs8_pem();
         let key_path = dir.join("key.pem");
@@ -127,6 +132,7 @@ impl Helper {
             .map_err(|_| "cannot write the client key".to_string())?;
         std::io::Write::write_all(&mut key_file, key_pem.as_bytes())
             .map_err(|_| "cannot write the client key".to_string())?;
+        tracing::info!(mount = path, "writing the client certificate");
         self.write_certificate(&dir, &credentials, fs_id, access_point_id, region)?;
 
         // The port is chosen here and handed to the proxy as an open socket, as upstream does, so
@@ -137,7 +143,7 @@ impl Helper {
             .local_addr()
             .map_err(|_| "cannot read the loopback port".to_string())?
             .port();
-        let dns_name = s3files::mount_target_name(fs_id, region);
+        let dns_name = s3files::mount_target_name(fs_id, region, zone);
         let config = s3files::proxy_config(&ProxyFiles {
             listen_port: port,
             dns_name: &dns_name,
@@ -147,6 +153,7 @@ impl Helper {
             certificate: dir.join("certificate.pem").to_str().unwrap_or_default(),
             private_key: key_path.to_str().unwrap_or_default(),
             pid_file: dir.join("proxy.pid").to_str().unwrap_or_default(),
+            log_file: dir.join("proxy.log").to_str().unwrap_or_default(),
         });
         let config_path = dir.join("proxy.conf");
         std::fs::write(&config_path, config).map_err(|_| "cannot write the proxy config".to_string())?;
@@ -179,6 +186,7 @@ impl Helper {
                 Ok(())
             });
         }
+        tracing::info!(mount = path, port, "starting the proxy");
         let mut proxy = command
             .spawn()
             .map_err(|e| format!("cannot start the proxy: {e}"))?;
@@ -190,6 +198,7 @@ impl Helper {
         }
 
         std::fs::create_dir_all(path).map_err(|e| format!("cannot create {path}: {e}"))?;
+        tracing::info!(mount = path, port, "mounting over the proxy");
         let outcome = mount_nfs(path, port);
         if let Err(reason) = outcome {
             let _ = proxy.kill();

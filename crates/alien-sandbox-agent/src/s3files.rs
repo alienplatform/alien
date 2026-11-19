@@ -346,6 +346,7 @@ pub struct ProxyFiles<'a> {
     pub certificate: &'a str,
     pub private_key: &'a str,
     pub pid_file: &'a str,
+    pub log_file: &'a str,
 }
 
 pub fn proxy_config(files: &ProxyFiles<'_>) -> String {
@@ -354,6 +355,7 @@ pub fn proxy_config(files: &ProxyFiles<'_>) -> String {
         "foreground = yes".to_string(),
         "socket = l:SO_REUSEADDR=yes".to_string(),
         "socket = a:SO_BINDTODEVICE=lo".to_string(),
+        format!("output = {}", files.log_file),
         format!("pid = {}", files.pid_file),
         "[efs]".to_string(),
         "client = yes".to_string(),
@@ -389,9 +391,11 @@ pub fn proxy_arguments(config_file: &str) -> Vec<String> {
     ]
 }
 
-/// Name the proxy connects to and checks the server certificate against.
-pub fn mount_target_name(fs_id: &str, region: &str) -> String {
-    format!("{fs_id}.s3files.{region}.on.aws")
+/// Name the proxy connects to and checks the server certificate against: the `dns_name_format`
+/// of upstream's `s3files-utils.conf`, `{az_id}.{fs_id}.s3files.{region}.{dns_name_suffix}`.
+/// The name without a zone id does not resolve (checked in a VPC).
+pub fn mount_target_name(fs_id: &str, region: &str, availability_zone_id: &str) -> String {
+    format!("{availability_zone_id}.{fs_id}.s3files.{region}.on.aws")
 }
 
 /// NFS options of an S3 Files mount through the proxy (`get_nfs_mount_options`). The `tls`
@@ -471,6 +475,7 @@ mod tests {
             certificate: "/run/alien/mounts/x/certificate.pem",
             private_key: "/run/alien/mounts/x/key.pem",
             pid_file: "/run/alien/mounts/x/proxy.pid",
+            log_file: "/run/alien/mounts/x/proxy.log",
         });
         assert!(text.contains("[efs]\nclient = yes\naccept = 127.0.0.1:20049\nconnect = fs-0abc123.s3files.us-east-1.on.aws:2049\n"));
         assert!(text.contains("verify = 2\nCAfile = /opt/alien/efs-utils.crt\ncert = "));
