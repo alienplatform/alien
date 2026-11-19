@@ -60,6 +60,11 @@ impl Helper {
             .map_err(|_| "cannot install the mount network rules".to_string())
     }
 
+    /// Makes the client key ahead of the first mount. A failure is left for the mount to report.
+    pub fn prepare_key(&mut self) {
+        let _ = self.key();
+    }
+
     fn key(&mut self) -> Result<&ClientKey, String> {
         if self.key.is_none() {
             self.key = Some(ClientKey::generate()?);

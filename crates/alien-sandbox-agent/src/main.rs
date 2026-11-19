@@ -132,7 +132,9 @@ fn main() -> Result<()> {
         )
         .map_err(|reason| invalid(alien_sandbox_agent::mounts::ENV_MOUNTS, &reason))?;
         if !declared.is_empty() {
-            let helper = alien_sandbox_agent::mounts::fork_helper()
+            let helper = alien_sandbox_agent::mounts::fork_helper(
+                declared.iter().any(|mount| matches!(mount, alien_core::SandboxMount::S3files { .. })),
+            )
                 .into_alien_error()
                 .context(failed(
                     "start the mount helper",

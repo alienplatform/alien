@@ -473,7 +473,7 @@ impl MountBackend for HelperClient {
 /// Forks the helper. Call before the agent drops capabilities and before it starts threads.
 /// In the parent returns the client; the child never returns.
 #[cfg(target_os = "linux")]
-pub fn fork_helper() -> std::io::Result<HelperClient> {
+pub fn fork_helper(prepare_key: bool) -> std::io::Result<HelperClient> {
     use std::os::unix::net::UnixStream;
     let (parent, child) = UnixStream::pair()?;
     // SAFETY: the agent has no other threads yet; the child only uses its own memory and exits.
@@ -487,7 +487,7 @@ pub fn fork_helper() -> std::io::Result<HelperClient> {
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
                 libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
             }
-            helper_loop(child);
+            helper_loop(child, prepare_key);
             std::process::exit(0);
         }
         _ => {
@@ -501,10 +501,15 @@ pub fn fork_helper() -> std::io::Result<HelperClient> {
 }
 
 #[cfg(target_os = "linux")]
-fn helper_loop(stream: std::os::unix::net::UnixStream) {
+fn helper_loop(stream: std::os::unix::net::UnixStream, prepare_key: bool) {
     let mut writer = stream.try_clone().expect("socket clone");
     let reader = BufReader::new(stream);
     let mut helper = crate::s3files_mount::Helper::new(CREDENTIALS_DIR.into());
+    // The client key is made once, while the agent is still starting, and reused by every mount
+    // and renewal (upstream shares one key between mounts too). It stays in this process.
+    if prepare_key {
+        helper.prepare_key();
+    }
     let mut in_agent_namespace = false;
     for line in reader.lines() {
         let Ok(line) = line else { return };
@@ -869,7 +874,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn capped_tmpfs_scenario(target: &Path) {
         use std::os::unix::fs::MetadataExt;
-        let helper = fork_helper().expect("forks the helper");
+        let helper = fork_helper(false).expect("forks the helper");
         // Only after the fork, as the agent does: a private mount namespace of its own.
         assert_eq!(unsafe { libc::unshare(libc::CLONE_NEWNS) }, 0);
         assert_eq!(
