@@ -74,7 +74,8 @@ impl Helper {
 
     fn read_credentials(&self, mount_path: &str) -> Result<MountCredentials, String> {
         let file = credentials_file(&self.credentials_dir, mount_path);
-        let text = std::fs::read_to_string(file).map_err(|_| "no credentials stored".to_string())?;
+        let text =
+            std::fs::read_to_string(file).map_err(|_| "no credentials stored".to_string())?;
         serde_json::from_str(&text).map_err(|_| "stored credentials are unreadable".to_string())
     }
 
@@ -120,13 +121,12 @@ impl Helper {
         region: &str,
         availability_zone_id: Option<&str>,
     ) -> Result<(), String> {
-        let zone = availability_zone_id
-            .ok_or_else(|| {
-                "the mount names no availabilityZoneId: pass the zone id of a mount target of this \
+        let zone = availability_zone_id.ok_or_else(|| {
+            "the mount names no availabilityZoneId: pass the zone id of a mount target of this \
                  file system that the sandbox's network reaches (for example use2-az1; the S3 \
                  Files mount target listing shows it)"
-                    .to_string()
-            })?;
+                .to_string()
+        })?;
         if self.attached.contains_key(path) {
             return Err("already mounted".into());
         }
@@ -188,12 +188,15 @@ impl Helper {
             log_file: dir.join("proxy.log").to_str().unwrap_or_default(),
         });
         let config_path = dir.join("proxy.conf");
-        std::fs::write(&config_path, config).map_err(|_| "cannot write the proxy config".to_string())?;
+        std::fs::write(&config_path, config)
+            .map_err(|_| "cannot write the proxy config".to_string())?;
 
         let fd = listener.as_raw_fd();
         let mut command = Command::new(PROXY_BINARY);
         command
-            .args(s3files::proxy_arguments(config_path.to_str().unwrap_or_default()))
+            .args(s3files::proxy_arguments(
+                config_path.to_str().unwrap_or_default(),
+            ))
             .args(["--listen-fd", &fd.to_string()])
             .env_clear()
             .stdin(Stdio::null())

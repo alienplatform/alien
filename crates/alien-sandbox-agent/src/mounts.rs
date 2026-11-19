@@ -104,8 +104,9 @@ struct HelperReply {
 pub fn parse_declared(value: Option<&str>) -> Result<Vec<SandboxMount>, String> {
     match value {
         None => Ok(Vec::new()),
-        Some(text) => serde_json::from_str(text)
-            .map_err(|_| format!("{ENV_MOUNTS} is not a list of mounts")),
+        Some(text) => {
+            serde_json::from_str(text).map_err(|_| format!("{ENV_MOUNTS} is not a list of mounts"))
+        }
     }
 }
 
@@ -370,21 +371,19 @@ impl Mounts {
                 }),
                 SandboxMount::S3files { .. } => match sources.get(path) {
                     None => continue,
-                    Some(source) => write_credentials(
-                        &self.credentials_dir,
-                        path,
-                        &source.credentials,
-                    )
-                    .map_err(|_| "cannot store the credentials".to_string())
-                    .and_then(|()| {
-                        self.backend.request(&HelperRequest::S3Files {
-                            path: path.to_string(),
-                            file_system_id: source.file_system_id.clone(),
-                            access_point_id: source.access_point_id.clone(),
-                            region: source.region.clone(),
-                            availability_zone_id: source.availability_zone_id.clone(),
-                        })
-                    }),
+                    Some(source) => {
+                        write_credentials(&self.credentials_dir, path, &source.credentials)
+                            .map_err(|_| "cannot store the credentials".to_string())
+                            .and_then(|()| {
+                                self.backend.request(&HelperRequest::S3Files {
+                                    path: path.to_string(),
+                                    file_system_id: source.file_system_id.clone(),
+                                    access_point_id: source.access_point_id.clone(),
+                                    region: source.region.clone(),
+                                    availability_zone_id: source.availability_zone_id.clone(),
+                                })
+                            })
+                    }
                 },
             };
             match outcome {
@@ -444,7 +443,10 @@ pub fn global() -> Option<&'static Mounts> {
 
 /// Talks to the forked helper.
 pub struct HelperClient {
-    stream: Mutex<(std::os::unix::net::UnixStream, BufReader<std::os::unix::net::UnixStream>)>,
+    stream: Mutex<(
+        std::os::unix::net::UnixStream,
+        BufReader<std::os::unix::net::UnixStream>,
+    )>,
 }
 
 impl MountBackend for HelperClient {
@@ -625,7 +627,10 @@ pub(crate) fn unmount(path: &str) -> Result<(), String> {
     let target = c_string(path)?;
     // SAFETY: valid NUL-terminated path.
     if unsafe { libc::umount2(target.as_ptr(), 0) } != 0 {
-        return Err(format!("unmount failed: {}", std::io::Error::last_os_error()));
+        return Err(format!(
+            "unmount failed: {}",
+            std::io::Error::last_os_error()
+        ));
     }
     Ok(())
 }
@@ -725,7 +730,9 @@ mod tests {
         // The tmpfs under /workspace is mounted after the file system it sits on.
         let calls = fake.calls.lock().unwrap();
         assert!(matches!(calls[0], HelperRequest::S3Files { .. }));
-        assert!(matches!(calls[1], HelperRequest::Tmpfs { size_bytes, .. } if size_bytes == 8 << 30));
+        assert!(
+            matches!(calls[1], HelperRequest::Tmpfs { size_bytes, .. } if size_bytes == 8 << 30)
+        );
     }
 
     #[test]
@@ -766,7 +773,10 @@ mod tests {
             .check_sources(&BTreeMap::from([("/workspace".to_string(), no_zone)]))
             .unwrap_err()
             .to_string();
-        assert!(message.contains("availabilityZoneId") && message.contains("use2-az1"), "{message}");
+        assert!(
+            message.contains("availabilityZoneId") && message.contains("use2-az1"),
+            "{message}"
+        );
         // A tmpfs path takes no source.
         let tmpfs = BTreeMap::from([("/workspace/tmp".to_string(), source("1"))]);
         assert!(matches!(
@@ -789,7 +799,9 @@ mod tests {
         // The only thing asked of the helper is a fresh certificate; nothing is mounted again.
         assert_eq!(
             fake.calls.lock().unwrap()[calls_before..],
-            [HelperRequest::Refresh { path: "/workspace".into() }]
+            [HelperRequest::Refresh {
+                path: "/workspace".into()
+            }]
         );
 
         let file = credentials_file(dir.path(), "/workspace");
@@ -807,7 +819,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fake = Arc::new(Fake::default());
         let mounts = mounts(&fake, dir.path());
-        mounts.advance(&BTreeMap::from([("/workspace".to_string(), source("secret"))]));
+        mounts.advance(&BTreeMap::from([(
+            "/workspace".to_string(),
+            source("secret"),
+        )]));
         let shown = format!(
             "{:?} {}",
             source("secret"),
@@ -868,7 +883,10 @@ mod tests {
         let mut status = 0;
         // SAFETY: waiting for the child just forked.
         assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
-        assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0, "scenario failed");
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+            "scenario failed"
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -916,7 +934,10 @@ mod tests {
                 path: target.to_str().unwrap().into(),
             })
             .expect("unmounts");
-        assert!(!target.join("fill").exists(), "the unmount removed the mount");
+        assert!(
+            !target.join("fill").exists(),
+            "the unmount removed the mount"
+        );
     }
 
     #[test]
