@@ -78,6 +78,12 @@ async fn main() -> ExitCode {
         "--agent-image" => AgentSource::Image(agent.clone()),
         _ => return usage(),
     };
+    // A sandbox that declares an s3files mount also carries the mount proxy (beside a local
+    // agent binary, or from the agent image).
+    let agent = match declaration.as_ref() {
+        Some(sandbox) => agent.for_mounts(&sandbox.mounts),
+        None => agent,
+    };
 
     let (image, build) = match dockdash::Image::builder()
         .from(base_image)
