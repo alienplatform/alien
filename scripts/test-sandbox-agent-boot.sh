@@ -27,6 +27,17 @@ export ALIEN_SANDBOX_ROOT=/session ALIEN_SANDBOX_PORT=8080 ALIEN_SANDBOX_AUTHORI
   ALIEN_SANDBOX_EGRESS='"none"' ALIEN_SANDBOX_IMAGE_PERMISSIONS_V=1 \
   ALIEN_SANDBOX_IMAGE_PERMISSIONS='{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/var/lib/app/scratch","sizeBytes":1048576}],"connections":[{"cidr":"10.0.1.5/32","port":2049}],"onPause":["/bin/true"],"onResume":["/bin/true"]}'
 ip link set lo up
+# The seal writes kernel-wide helper settings that can only be lowered until reboot. Files bound
+# over them in this container's mount namespace (inherited by the agent and its broker) take the
+# writes instead, so the host keeps its own values.
+mkdir -p /tmp/kernel-settings
+for setting in usermodehelper/bset usermodehelper/inheritable modprobe; do
+  [ -e "/proc/sys/kernel/$setting" ] || continue
+  standin=/tmp/kernel-settings/${setting//\//-}
+  # Unsealed values, so the check below sees the seal's write even on a host sealed before.
+  case "$setting" in modprobe) echo /sbin/modprobe ;; *) printf '4294967295\t31\n' ;; esac > "$standin"
+  mount --bind "$standin" "/proc/sys/kernel/$setting"
+done
 start=(/agent)
 case "$variant" in
   started) ;;
@@ -70,6 +81,12 @@ if [ "$variant" = started ]; then
     grep -q "$fact" /run/alien/boot-report || fail "boot report lacks $fact: $(cat /run/alien/boot-report)"
   done
   grep -q 'boot report' /tmp/agent.log || fail "the boot report is not in the log"
+  [ "$(cat /tmp/kernel-settings/usermodehelper-bset)" = "$(printf '0\t0')" ] \
+    || fail "the seal did not write the bset stand-in"
+  [ "$(cat /tmp/kernel-settings/usermodehelper-inheritable)" = "$(printf '0\t0')" ] \
+    || fail "the seal did not write the inheritable stand-in"
+  [ ! -e /proc/sys/kernel/modprobe ] || [ -z "$(cat /tmp/kernel-settings/modprobe)" ] \
+    || fail "the seal did not write the modprobe stand-in"
   echo "boot report:"; sed 's/^/  /' /run/alien/boot-report
   echo "OK started: run hook 200, image running, exec ran, declared path created before the seal"
 else
@@ -89,9 +106,13 @@ else
 fi
 BOOT
 docker build -q -t "$image" "$fixture" >/dev/null
+host_settings() { cat /proc/sys/kernel/usermodehelper/bset /proc/sys/kernel/usermodehelper/inheritable /proc/sys/kernel/modprobe 2>/dev/null || true; }
+before=$(host_settings)
 for variant in started seal-fails run-hook-step-fails; do
   docker run --rm --privileged --cgroupns=private --network none \
     --mount "type=bind,source=$agent,target=/agent,readonly" \
     --mount "type=bind,source=$fixture/boot.sh,target=/boot.sh,readonly" \
     "$image" bash /boot.sh "$variant"
 done
+[ "$(host_settings)" = "$before" ] || { echo "FAIL: the test changed the host's helper settings" >&2; exit 1; }
+echo "OK the host's helper settings are unchanged"
