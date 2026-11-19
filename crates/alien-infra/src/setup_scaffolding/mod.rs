@@ -426,8 +426,10 @@ pub async fn recover_unrecorded(
             }
             #[cfg(not(feature = "aws"))]
             Scaffolded::AwsSandbox(_) => return Err(aws_not_built()),
-            // Recorded before the create call, so there is nothing a record can lack.
-            Scaffolded::GcpSandbox(_) => None,
+            #[cfg(feature = "gcp")]
+            Scaffolded::GcpSandbox(sandbox) => gcp_sandbox::recover(ctx, &sandbox.id).await?,
+            #[cfg(not(feature = "gcp"))]
+            Scaffolded::GcpSandbox(_) => return Err(gcp_not_built()),
         };
         let Some(recovered) = recovered else {
             continue;

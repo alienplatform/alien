@@ -252,6 +252,48 @@ pub(super) async fn reconcile(
     Ok(ScaffoldingProgress::Done)
 }
 
+/// The repository a crashed step created without saving its record, found by name and setup's
+/// owner label. One without the label is never claimed: teardown deletes a recorded repository.
+pub(super) async fn recover(
+    ctx: &SetupScaffoldingContext<'_>,
+    sandbox_id: &str,
+) -> Result<Option<SetupScaffolding>> {
+    let gcp = gcp_config(ctx.client_config)?;
+    let (repository, role_id) = names(ctx, sandbox_id)?;
+    let registry = ctx.service_provider.get_gcp_artifact_registry_client(gcp)?;
+    let existing = match registry
+        .get_repository(
+            gcp.project_id.clone(),
+            gcp.region.clone(),
+            repository.clone(),
+        )
+        .await
+    {
+        Ok(existing) => existing,
+        Err(error) if is_not_found(&error) => return Ok(None),
+        Err(error) => {
+            return Err(error).context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read the sandbox image repository '{repository}'"),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        }
+    };
+    let ours = existing
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get(OWNER_LABEL))
+        .is_some_and(|owner| owner == ctx.resource_prefix);
+    if !ours {
+        return Ok(None);
+    }
+    info!(sandbox_id, %repository, "Recovered setup scaffolding the record did not hold");
+    Ok(Some(SetupScaffolding::GcpSandbox {
+        image_repository: repository,
+        write_role: role_id,
+        writer_granted: false,
+    }))
+}
+
 fn record(
     records: &mut BTreeMap<String, SetupScaffolding>,
     sandbox_id: &str,
@@ -431,6 +473,31 @@ mod tests {
             )
             .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
             .build()
+    }
+
+    /// A crash after Google made the repository but before the step result was saved leaves no
+    /// record; teardown finds the repository by its name and setup's label instead.
+    #[tokio::test]
+    async fn an_unrecorded_repository_with_setups_label_is_recovered_and_one_without_is_not() {
+        for (label, recovered) in [(Some(PREFIX), true), (Some("other"), false), (None, false)] {
+            let mut registry = MockArtifactRegistryApi::new();
+            registry
+                .expect_get_repository()
+                .returning(move |_, _, _| Ok(labelled(label)));
+            let provider = provider(registry, MockIamApi::new());
+            let client_config = client_config();
+            let ctx = SetupScaffoldingContext {
+                client_config: &client_config,
+                service_provider: &provider,
+                resource_prefix: PREFIX,
+            };
+            let stack = stack_with_image("registry.example/agents:1");
+            let mut records = BTreeMap::new();
+            crate::setup_scaffolding::recover_unrecorded(&ctx, &stack, Platform::Gcp, &mut records)
+                .await
+                .unwrap();
+            assert_eq!(records.contains_key("agents"), recovered, "label {label:?}");
+        }
     }
 
     /// Nothing is created until the management account exists: a grant naming it would be refused.
