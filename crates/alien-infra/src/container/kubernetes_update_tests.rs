@@ -1031,6 +1031,11 @@ async fn an_unchanged_release_over_pods_waiting_for_a_node_goes_back_to_the_refr
         state.resources["platform"].status,
         ResourceStatus::RefreshFailed
     );
+    // The failure carries the reason the update wait ran out of time.
+    assert_eq!(
+        state.resources["platform"].error.as_ref().unwrap().code,
+        "WORKLOAD_NOT_READY"
+    );
     assert!(steps < 40, "the short bound applies: {steps} steps");
 
     // The pods get a node and run: the refresh check recovers the resource.

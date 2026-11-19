@@ -80,6 +80,10 @@ pub struct KubernetesWorkerController {
     /// waits for readiness only briefly.
     #[serde(default)]
     pub(crate) update_template_unchanged: bool,
+    /// Why an unchanged update that ran out of time went to the refresh check, kept so the
+    /// executor reports it as the resource error instead of an empty failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) update_timeout_reason: Option<String>,
     /// When the current rollout was first seen unfinished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) rollout_watch: Option<RolloutWatch>,
@@ -1025,9 +1029,17 @@ impl KubernetesWorkerController {
             self.ready_hold.reset();
             let selector = worker_labels(deployment_name);
             let pod_reason = workload_pod_reason(ctx, namespace, &selector, None).await;
+            let timeout_message = rollout_timeout_message(
+                "Deployment",
+                deployment_name,
+                &counts,
+                pod_reason.as_deref(),
+            );
             if unchanged_update_rechecks(self.update_template_unchanged, pod_reason.as_deref()) {
                 // Nothing rolled and the pods are not failing for good: the refresh check looks
-                // again later. An update failure is never checked again.
+                // again later. An update failure is never checked again. The reason is kept as
+                // the resource error, so a retry applies the spec again.
+                self.update_timeout_reason = Some(timeout_message);
                 return Ok(HandlerAction::Continue {
                     state: RefreshFailed,
                     suggested_delay: Some(Duration::from_secs(10)),
@@ -1036,12 +1048,7 @@ impl KubernetesWorkerController {
             return Err(rollout_budget_exhausted(AlienError::new(
                 ErrorData::WorkloadNotReady {
                     resource_id: config.id.clone(),
-                    message: rollout_timeout_message(
-                        "Deployment",
-                        deployment_name,
-                        &counts,
-                        pod_reason.as_deref(),
-                    ),
+                    message: timeout_message,
                 },
             )));
         }
@@ -1417,6 +1424,7 @@ impl KubernetesWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        self.update_timeout_reason = None;
         self.recovering = true;
         let checked = self.ready(ctx).await;
         self.recovering = false;
@@ -1470,6 +1478,10 @@ impl KubernetesWorkerController {
 
     fn reapplies_after_failed_refresh(&self) -> bool {
         true
+    }
+
+    fn refresh_failure_reason(&self) -> Option<String> {
+        self.update_timeout_reason.clone()
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
@@ -1580,6 +1592,7 @@ impl KubernetesWorkerController {
             not_ready: Default::default(),
             ready_hold: Default::default(),
             update_template_unchanged: false,
+            update_timeout_reason: None,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,
@@ -2148,6 +2161,7 @@ mod tests {
                 namespace: Some("test-ns".into()),
                 state: KubernetesWorkerState::WaitingForUpdate,
                 update_template_unchanged: true,
+                update_timeout_reason: None,
                 _internal_stay_count: Some(
                     crate::kubernetes_workload_heartbeat::UNCHANGED_REAPPLY_MAX_POLLS - 1,
                 ),
@@ -2328,6 +2342,7 @@ mod tests {
             not_ready: Default::default(),
             ready_hold: Default::default(),
             update_template_unchanged: false,
+            update_timeout_reason: None,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,
@@ -2376,6 +2391,7 @@ mod tests {
             not_ready: Default::default(),
             ready_hold: Default::default(),
             update_template_unchanged: false,
+            update_timeout_reason: None,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,

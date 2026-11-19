@@ -232,6 +232,10 @@ pub struct KubernetesContainerController {
     /// waits for readiness only briefly.
     #[serde(default)]
     pub(crate) update_template_unchanged: bool,
+    /// Why an unchanged update that ran out of time went to the refresh check, kept so the
+    /// executor reports it as the resource error instead of an empty failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) update_timeout_reason: Option<String>,
     /// When the current rollout was first seen unfinished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) rollout_watch: Option<RolloutWatch>,
@@ -1915,9 +1919,27 @@ impl KubernetesContainerController {
             let pod_reason =
                 workload_pod_reason(ctx, namespace, &selector, self.workload_failure.as_deref())
                     .await;
+            let timeout_message = rollout_timeout_message(
+                if self.is_stateful {
+                    "StatefulSet"
+                } else {
+                    "Deployment"
+                },
+                workload_name,
+                &format!(
+                    "desired {}, ready {}, total {}",
+                    desired_replicas,
+                    ready_replicas.unwrap_or(0),
+                    replicas.unwrap_or(0)
+                ),
+                pod_reason.as_deref(),
+            );
             if unchanged_update_rechecks(self.update_template_unchanged, pod_reason.as_deref()) {
                 // Nothing rolled and the pods are not failing for good: the refresh check looks
-                // again later. An update failure is never checked again.
+                // again later. An update failure is never checked again. The reason is kept as
+                // the resource error, so the failure reads as a failed readiness check that a
+                // retry answers by applying the spec again.
+                self.update_timeout_reason = Some(timeout_message);
                 return Ok(HandlerAction::Continue {
                     state: RefreshFailed,
                     suggested_delay: Some(Duration::from_secs(10)),
@@ -1926,21 +1948,7 @@ impl KubernetesContainerController {
             return Err(rollout_budget_exhausted(AlienError::new(
                 ErrorData::WorkloadNotReady {
                     resource_id: config.id.clone(),
-                    message: rollout_timeout_message(
-                        if self.is_stateful {
-                            "StatefulSet"
-                        } else {
-                            "Deployment"
-                        },
-                        workload_name,
-                        &format!(
-                            "desired {}, ready {}, total {}",
-                            desired_replicas,
-                            ready_replicas.unwrap_or(0),
-                            replicas.unwrap_or(0)
-                        ),
-                        pod_reason.as_deref(),
-                    ),
+                    message: timeout_message,
                 },
             )));
         }
@@ -2445,6 +2453,7 @@ impl KubernetesContainerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        self.update_timeout_reason = None;
         self.recovering = true;
         let checked = self.ready(ctx).await;
         self.recovering = false;
@@ -2536,6 +2545,10 @@ impl KubernetesContainerController {
 
     fn reapplies_after_failed_refresh(&self) -> bool {
         true
+    }
+
+    fn refresh_failure_reason(&self) -> Option<String> {
+        self.update_timeout_reason.clone()
     }
 
     /// Secret-typed env vars never enter the resource config on Kubernetes
@@ -2653,6 +2666,7 @@ mod output_tests {
             not_ready: Default::default(),
             ready_hold: Default::default(),
             update_template_unchanged: false,
+            update_timeout_reason: None,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,
@@ -2732,6 +2746,7 @@ mod output_tests {
             not_ready: Default::default(),
             ready_hold: Default::default(),
             update_template_unchanged: false,
+            update_timeout_reason: None,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,
@@ -2823,6 +2838,7 @@ impl KubernetesContainerController {
             not_ready: Default::default(),
             ready_hold: Default::default(),
             update_template_unchanged: false,
+            update_timeout_reason: None,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,
@@ -4772,6 +4788,7 @@ mod tests {
             not_ready: Default::default(),
             ready_hold: Default::default(),
             update_template_unchanged: false,
+            update_timeout_reason: None,
             recovering: false,
             last_recovery_check_unix: None,
             _internal_stay_count: None,

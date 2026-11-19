@@ -3498,8 +3498,21 @@ impl StackExecutor {
                 force_deleted,
             ) = match step_outcome_result {
                 Ok(step_result) => {
-                    // Step succeeded, clear retry count and error
-                    (0, None, step_result.suggested_delay, false, false)
+                    // Step succeeded, clear retry count and error. A step that ends in
+                    // RefreshFailed after an update wait ran out of time still carries its
+                    // reason, so the failure is not reported without one.
+                    let refresh_failure = (updated_controller.get_status()
+                        == ResourceStatus::RefreshFailed)
+                        .then(|| updated_controller.refresh_failure_reason())
+                        .flatten()
+                        .map(|message| {
+                            AlienError::new(ErrorData::WorkloadNotReady {
+                                resource_id: resource_id.clone(),
+                                message,
+                            })
+                            .into_generic()
+                        });
+                    (0, refresh_failure, step_result.suggested_delay, false, false)
                 }
                 Err(err) => {
                     warn!("Step failed for '{}': {}", resource_id, err);

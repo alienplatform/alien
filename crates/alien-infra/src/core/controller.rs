@@ -843,6 +843,14 @@ pub trait ResourceController: Send + Sync + Debug {
         false
     }
 
+    /// Why the step that just ended in RefreshFailed did so, when that step returned `Ok` (an
+    /// update wait that ran out of time and left the verdict to the refresh check). The executor
+    /// records it as the resource error, so the failure has a reason and a retry applies the
+    /// spec again. None by default.
+    fn refresh_failure_reason(&self) -> Option<String> {
+        None
+    }
+
     /// Whether the current state only waits on something outside Alien (a poll with nothing
     /// to undo), so a newer target can take over the resource now instead of after the wait
     /// ends. Set with `interruptible = true` on a handler. Off by default: every other state
