@@ -339,7 +339,29 @@ pub fn serve_socket(path: &Path) -> io::Result<()> {
     let directory = path
         .parent()
         .ok_or_else(|| io::Error::other("the broker socket needs a directory"))?;
-    std::fs::create_dir_all(directory)?;
+    // Not through a symbolic link the image's files may hold (`/run -> ...`): every directory on
+    // the way is a real one.
+    for ancestor in directory
+        .ancestors()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .skip(1)
+    {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(io::Error::other(format!(
+                    "{} is not a directory (a symbolic link?)",
+                    ancestor.display()
+                )))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                std::fs::create_dir(ancestor)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
     let meta = std::fs::symlink_metadata(directory)?;
     {
         use std::os::unix::fs::MetadataExt;
@@ -376,54 +398,6 @@ pub fn serve_socket(path: &Path) -> io::Result<()> {
 }
 
 static CONTROL: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// The effective capability sets of the live processes that hold the socket with `inode` open.
-/// The broker reads them: the agent no longer holds what reading other processes' descriptors
-/// takes. Empty when no live process holds it.
-pub fn socket_holders(inode: u64) -> io::Result<Vec<u64>> {
-    let broker = BROKER
-        .get()
-        .ok_or_else(|| io::Error::other("no mount broker"))?;
-    let (ours, theirs) = seqpacket_pair()?;
-    // The question waits in the pair the answer comes back on.
-    let question = inode.to_ne_bytes();
-    // SAFETY: sending from a buffer we own on a descriptor we own.
-    if unsafe {
-        libc::send(
-            ours.as_raw_fd(),
-            question.as_ptr().cast(),
-            question.len(),
-            libc::MSG_NOSIGNAL,
-        )
-    } != question.len() as isize
-    {
-        return Err(io::Error::last_os_error());
-    }
-    receive_timeout(ours.as_raw_fd(), &broker.answer_within)?;
-    {
-        let _serial = CONTROL
-            .lock()
-            .map_err(|_| io::Error::other("broker control poisoned"))?;
-        drain_late_acks(broker.control.as_raw_fd());
-        send_with_fds(broker.control.as_raw_fd(), b'P', &[theirs.as_raw_fd()])?;
-        drop(theirs);
-        wait_ack(broker.control.as_raw_fd(), "a socket lookup")?;
-    }
-    let mut answer = vec![0u8; 64 * 1024];
-    // SAFETY: receiving into a buffer we own.
-    let n = unsafe {
-        libc::recv(
-            ours.as_raw_fd(),
-            answer.as_mut_ptr().cast(),
-            answer.len(),
-            0,
-        )
-    };
-    if n < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    serde_json::from_slice(&answer[..n as usize]).map_err(io::Error::other)
-}
 
 /// Asks the broker to detach every NFS mount in the image's mount namespace (blocking; bounded by
 /// [`DETACH_DEADLINE`] and the request the broker may be reading).
@@ -521,38 +495,6 @@ unsafe fn join_cgroup(tag: u8) -> io::Result<()> {
     });
     libc::close(fds[0]);
     result
-}
-
-/// Reads the inode the agent asks about from `socket` and answers there with its holders.
-fn answer_socket_holders(socket: RawFd) -> io::Result<()> {
-    let mut inode = [0u8; 8];
-    // SAFETY: receiving into a buffer we own, without blocking.
-    let n = unsafe {
-        libc::recv(
-            socket,
-            inode.as_mut_ptr().cast(),
-            inode.len(),
-            libc::MSG_DONTWAIT,
-        )
-    };
-    if n != inode.len() as isize {
-        return Err(io::Error::other("no inode"));
-    }
-    let answer = serde_json::to_vec(&ops::socket_holders(u64::from_ne_bytes(inode)))
-        .map_err(io::Error::other)?;
-    // SAFETY: sending from a buffer we own, without blocking.
-    if unsafe {
-        libc::send(
-            socket,
-            answer.as_ptr().cast(),
-            answer.len(),
-            libc::MSG_NOSIGNAL | libc::MSG_DONTWAIT,
-        )
-    } != answer.len() as isize
-    {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
 }
 
 /// Installs a filter that lets the broker create only `AF_UNIX` sockets.
@@ -795,11 +737,7 @@ impl Loop<'_> {
             _ => {}
         }
         let mut ok = matches!(message.tag, b'D' | b'Q' | b'R' | b'K')
-            || (message.tag == b'S' && message.fds.len() == 2)
-            || (message.tag == b'P' && message.fds.len() == 1);
-        if message.tag == b'P' && ok {
-            ok = answer_socket_holders(message.fds[0].as_raw_fd()).is_ok();
-        }
+            || (message.tag == b'S' && message.fds.len() == 2);
         if message.tag == b'S' && ok {
             if let Err(error) = self.seal(message.fds[1].as_raw_fd()) {
                 eprintln!("mount broker: cannot seal the kernel's helpers: {error}");
@@ -1231,7 +1169,17 @@ fn helper(
     let result = (|| {
         if let Plan::Nfs { port, .. } = plan {
             // The image's view of the (read-only) cgroup mount shows the same members.
-            ops::port_held_by(*port, &cgroup_dir.join("cgroup.procs").to_string_lossy())?;
+            // Wait for a late proxy, leaving the mount its time before the deadline.
+            let until = (Instant::now() + ops::LISTENER_WAIT).min(
+                deadline
+                    .checked_sub(ops::ATTACH_MARGIN * 2)
+                    .unwrap_or(deadline),
+            );
+            ops::wait_for_port(
+                *port,
+                &cgroup_dir.join("cgroup.procs").to_string_lossy(),
+                until,
+            )?;
         }
         ops::run(plan, made, Some(deadline))
     })();
@@ -1268,7 +1216,29 @@ pub fn call(path: &Path, request: &request::Request, timeout: Duration) -> io::R
 pub fn link_shims(agent: &Path) -> io::Result<()> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let directory = Path::new(super::shim::DIRECTORY);
-    std::fs::create_dir_all(directory)?;
+    // Not through a symbolic link the image's files may hold (`/run -> ...`): every directory on
+    // the way is a real one.
+    for ancestor in directory
+        .ancestors()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .skip(1)
+    {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(io::Error::other(format!(
+                    "{} is not a directory (a symbolic link?)",
+                    ancestor.display()
+                )))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                std::fs::create_dir(ancestor)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
     let meta = std::fs::symlink_metadata(directory)?;
     if !meta.is_dir() || meta.uid() != 0 {
         return Err(io::Error::other(format!(

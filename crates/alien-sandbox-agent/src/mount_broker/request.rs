@@ -456,6 +456,7 @@ fn tmpfs_options(
     let mut params = Vec::new();
     let mut attributes = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV;
     let mut size = None;
+    let mut inodes = None;
     for (key, value) in split(options) {
         if user_space_only(key) {
             continue;
@@ -490,9 +491,17 @@ fn tmpfs_options(
                 params.push((key.to_string(), Some(number(key, value, u32::MAX as u64)?)))
             }
             "nr_inodes" => {
+                // 0 would mean no limit at all.
                 let n = value
                     .and_then(parse_size)
-                    .ok_or_else(|| (Errno::Einval, "nr_inodes needs a number".to_string()))?;
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| {
+                        (
+                            Errno::Einval,
+                            "nr_inodes needs a number above 0".to_string(),
+                        )
+                    })?;
+                inodes = Some(n);
                 params.push((key.to_string(), Some(n.to_string())));
             }
             "suid" | "dev" => {
@@ -501,8 +510,15 @@ fn tmpfs_options(
             other => return refuse(format!("option '{other}' is not allowed for tmpfs")),
         }
     }
-    if size.is_none() {
+    let Some(size) = size else {
         return refuse("a tmpfs needs size=");
+    };
+    // An inode costs kernel memory the size does not count: at most one per KiB of size.
+    let most_inodes = (size / 1024).max(1024);
+    if inodes.is_some_and(|n| n > most_inodes) {
+        return refuse(format!(
+            "nr_inodes is above {most_inodes} (one per KiB of size)"
+        ));
     }
     Ok((params, attributes))
 }
@@ -528,6 +544,26 @@ mod tests {
     }
 
     const GOOD: &str = "vers=4.2,addr=127.0.0.1,clientaddr=127.0.0.1,proto=tcp,port=20123,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev";
+
+    #[test]
+    fn tmpfs_inodes_are_bounded() {
+        let tmpfs = |options: &str| {
+            plan(
+                &declared(),
+                &Request::Mount {
+                    kind: "tmpfs".into(),
+                    source: None,
+                    target: "/workspace/tmp".into(),
+                    options: options.into(),
+                },
+            )
+        };
+        assert!(tmpfs("size=1g,nr_inodes=1m").is_ok());
+        assert!(tmpfs("size=1g").is_ok());
+        assert!(tmpfs("size=1g,nr_inodes=0").is_err());
+        assert!(tmpfs("size=1g,nr_inodes=2m").is_err());
+        assert!(tmpfs("nr_inodes=1024,size=1m").is_ok());
+    }
 
     #[test]
     fn the_contract_requests_parse_and_pass() {

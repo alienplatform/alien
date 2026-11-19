@@ -290,6 +290,8 @@ fn image_nfs_leaves_only_through_its_mark_and_declared_connections() {
         ("127.0.0.1:20049", "loopback-data-server"),
         ("[fd00::5]:20049", "data-server-v6"),
         ("[::1]:20049", "loopback-data-server-v6"),
+        ("[fd00::5]:2049", "declared-v6"),
+        ("[::1]:2049", "loopback-v6"),
         // The VM's own non-loopback address, where provider processes reach the agent.
         ("192.168.77.1:20049", "local-address"),
     ] {
@@ -375,12 +377,12 @@ except OSError as error:
         ("image", "127.0.0.1", 2049, format!("{image_mark} loopback")),
         // The rest of the guest goes through the gateway as before.
         ("guest", "10.0.1.5", 2049, "0xa11f gateway".to_string()),
-        // Unmarked sockets (the kernel's NFS client) reach NFS only on loopback.
+        // Unmarked sockets (the kernel's NFS client) reach the NFS port only on loopback.
         ("0", "10.0.1.5", 2049, "0x0 dropped".to_string()),
         ("0", "10.0.2.5", 2049, "0x0 dropped".to_string()),
         ("0", "127.0.0.1", 2049, "0x0 loopback".to_string()),
-        // Nor anywhere else off loopback (the kernel's helpers, outside the guest cgroup).
-        ("0", "10.0.1.5", 20049, "0x0 dropped".to_string()),
+        // Other ports are untouched: the provider's own services share the VM's network.
+        ("0", "10.0.1.5", 20049, "0x0 data-server".to_string()),
         (
             "0",
             "127.0.0.1",
@@ -407,11 +409,10 @@ except OSError as error:
             ));
         }
     }
-    // UDP without a mark (a kernel helper's DNS, say) reaches only loopback; the agent's own
-    // marked UDP is not affected.
+    // UDP is untouched, marked or not (the provider's DNS forwarder and NTP).
     for (mark, address, expected) in [
-        (0, "10.0.1.5:20053", "dropped"),
-        (0, "[fd00::5]:20053", "dropped"),
+        (0, "10.0.1.5:20053", "delivered"),
+        (0, "[fd00::5]:20053", "delivered"),
         (0, "127.0.0.1:20053", "delivered"),
         (0, "[::1]:20053", "delivered"),
         (0, "192.168.77.1:20053", "delivered"),
@@ -452,14 +453,17 @@ except OSError as error:
             ));
         }
     }
-    // The kernel's NFS client itself (a socket the kernel made, which carries no mark) opens a connection only to
-    // loopback, on any port and in IPv4 and IPv6. `mount -i` makes the mount(2) call directly.
+    // The kernel's NFS client itself (a socket the kernel made, which carries no mark) reaches the
+    // NFS port only on the VM, in IPv4 and IPv6; other ports are not covered (a pNFS data server
+    // the image's server names is accepted). `mount -i` makes the mount(2) call directly.
     let target = tempfile::tempdir().unwrap();
     for (address, source, expected) in [
-        ("10.0.1.5:20049", "10.0.1.5:/", "dropped"),
-        ("127.0.0.1:20049", "127.0.0.1:/", "connected"),
-        ("[fd00::5]:20049", "[fd00::5]:/", "dropped"),
-        ("[::1]:20049", "[::1]:/", "connected"),
+        ("10.0.1.5:2049", "10.0.1.5:/", "dropped"),
+        ("10.0.2.5:2049", "10.0.2.5:/", "dropped"),
+        ("127.0.0.1:2049", "127.0.0.1:/", "connected"),
+        ("[fd00::5]:2049", "[fd00::5]:/", "dropped"),
+        ("[::1]:2049", "[::1]:/", "connected"),
+        ("10.0.1.5:20049", "10.0.1.5:/", "connected"),
         ("192.168.77.1:20049", "192.168.77.1:/", "connected"),
     ] {
         let count = Arc::clone(&connections.lock().unwrap()[address]);
@@ -468,8 +472,9 @@ except OSError as error:
         let mut mount = Command::new("mount")
             .args(["-i", "-t", "nfs4", "-o"])
             .arg(format!(
-                "vers=4.2,proto={},addr={host},port=20049,soft,timeo=10,retrans=1",
-                if host.contains(':') { "tcp6" } else { "tcp" }
+                "vers=4.2,proto={},addr={host},port={},soft,timeo=10,retrans=1",
+                if host.contains(':') { "tcp6" } else { "tcp" },
+                address.rsplit(':').next().unwrap()
             ))
             .arg(source)
             .arg(target.path())

@@ -347,7 +347,9 @@ unsafe fn deny_network_bypass(block_ipv6: bool) -> io::Result<()> {
 /// * the new mount API, `pivot_root` and `clone3` return ENOSYS (`clone3` hides its flags in
 ///   memory a filter cannot read; C libraries fall back to `clone`, whose flags it can);
 /// * no keyrings (`request_key`, `keyctl`, `add_key`), which reach kernel upcalls and the
-///   NFS client's identity mapping.
+///   NFS client's identity mapping;
+/// * no `perf_event_open`: what it exposes depends on `perf_event_paranoid`, which the guest does
+///   not guarantee.
 ///
 /// # Safety
 /// Must be called only between `fork` and `exec`, after `no_new_privs`.
@@ -389,9 +391,10 @@ pub unsafe fn deny_mount_bypass() -> io::Result<()> {
         libc::SYS_request_key,
         libc::SYS_keyctl,
         libc::SYS_add_key,
+        libc::SYS_perf_event_open,
     ];
     // No allocation between fork and exec: a fixed array, filled by index.
-    const CHECKS: usize = 9 + 4 + 2;
+    const CHECKS: usize = 9 + 5 + 2;
     const LEN: usize = 6 + CHECKS + 7;
     let mut filter = [stmt(0x06, ALLOW); LEN];
     filter[0] = stmt(0x20, 4);

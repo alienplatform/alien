@@ -296,68 +296,10 @@ pub fn load_filesystems() {
     }
 }
 
-/// The effective capability sets of the live processes that hold the socket with `inode` open.
-/// Each process is pinned with a pidfd before its descriptors are read, and kept only if it is
-/// still alive afterwards, so a reused process ID cannot answer for another process.
-pub fn socket_holders(inode: u64) -> Vec<u64> {
-    let link = format!("socket:[{inode}]");
-    let mut holders = Vec::new();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return holders;
-    };
-    for entry in entries.flatten() {
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<libc::pid_t>().ok())
-        else {
-            continue;
-        };
-        // SAFETY: pidfd_open takes a PID and flags.
-        let Ok(pidfd) = owned(
-            unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) },
-            "pidfd",
-        ) else {
-            continue;
-        };
-        let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
-            continue;
-        };
-        if !fds.flatten().any(|fd| {
-            std::fs::read_link(fd.path()).is_ok_and(|target| target.as_os_str() == link.as_str())
-        }) {
-            continue;
-        }
-        let Some(effective) = std::fs::read_to_string(format!("/proc/{pid}/status"))
-            .ok()
-            .and_then(|status| {
-                status
-                    .lines()
-                    .find_map(|line| line.strip_prefix("CapEff:"))
-                    .and_then(|value| u64::from_str_radix(value.trim(), 16).ok())
-            })
-        else {
-            continue;
-        };
-        // A pidfd turns readable once its process has exited.
-        let mut poll = libc::pollfd {
-            fd: pidfd.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: one valid pollfd, no waiting.
-        if unsafe { libc::poll(&mut poll, 1, 0) } != 0 {
-            continue;
-        }
-        holders.push(effective);
-    }
-    holders
-}
-
 /// Least time left on the request deadline for a new mount to still be attached. The broker kills
 /// a helper at the deadline; a mount attached just before that kill would land without the broker
 /// ever learning its ID.
-const ATTACH_MARGIN: std::time::Duration = std::time::Duration::from_secs(2);
+pub const ATTACH_MARGIN: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Refuses to attach a mount whose request is about to reach its deadline. The detached mount is
 /// released when its descriptor closes.
@@ -371,6 +313,24 @@ fn in_time(attach_by: Option<Instant>) -> Result<(), Refusal> {
     }
 }
 
+/// How many mounts the broker stacks on one path at most.
+pub const MOST_STACKED: usize = 4;
+
+/// Refuses another mount on `target` once the broker's mounts there reach [`MOST_STACKED`].
+fn room_on(target: &str, made: &BTreeSet<u64>) -> Result<(), Refusal> {
+    let stacked = mounts()
+        .iter()
+        .filter(|(id, point, _)| point == target && made.contains(id))
+        .count();
+    if stacked >= MOST_STACKED {
+        return Err((
+            Errno::Ebusy,
+            format!("{target} already has {stacked} mounts; unmount one first"),
+        ));
+    }
+    Ok(())
+}
+
 /// Carries out a checked plan. `made` is every mount ID the broker made; `attach_by` is the
 /// request deadline.
 pub fn run(
@@ -378,6 +338,12 @@ pub fn run(
     made: &BTreeSet<u64>,
     attach_by: Option<Instant>,
 ) -> Result<Option<u64>, Refusal> {
+    match plan {
+        Plan::Nfs { target, .. } | Plan::Tmpfs { target, .. } | Plan::Bind { target, .. } => {
+            room_on(target, made)?
+        }
+        _ => {}
+    }
     match plan {
         Plan::Nfs {
             target,
@@ -469,6 +435,21 @@ pub fn run(
                 return Err(os_error(&format!("cannot unmount {target}")));
             }
             Ok(Some(id))
+        }
+    }
+}
+
+/// How long a request waits for the image's proxy to listen on its port. A mount helper may
+/// start the proxy and ask for the mount at once, before the proxy listens.
+pub const LISTENER_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// [`port_held_by`], polled until it holds or `until`, then its last answer.
+pub fn wait_for_port(port: u16, procs: &str, until: Instant) -> Result<(), Refusal> {
+    loop {
+        match port_held_by(port, procs) {
+            Ok(()) => return Ok(()),
+            Err(refusal) if Instant::now() >= until => return Err(refusal),
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
         }
     }
 }

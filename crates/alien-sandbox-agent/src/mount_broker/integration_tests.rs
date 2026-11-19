@@ -191,6 +191,13 @@ fn scenario() {
         0,
         "SYS_MODULE until the image starts"
     );
+    // The socket's directory is reached without symbolic links.
+    std::fs::create_dir_all("/tmp/link-target").unwrap();
+    symlink("/tmp/link-target", "/tmp/linked-run").unwrap();
+    let error = mount_broker::serve_socket(Path::new("/tmp/linked-run/alien/mount.sock"))
+        .expect_err("a socket directory through a symbolic link");
+    assert!(error.to_string().contains("symbolic link"), "{error}");
+    assert!(!Path::new("/tmp/link-target/alien").exists());
     mount_broker::serve_socket(Path::new(mount_broker::SOCKET_PATH)).expect("serve the socket");
 
     // Sealed before the image starts: the kernel's helpers get no capabilities, no module
@@ -514,8 +521,9 @@ print(results)
             libc::SYS_pivot_root, libc::SYS_clone3
         ),
         eperm = format!(
-            "{{'setns': {}, 'request_key': {}, 'keyctl': {}, 'add_key': {}}}",
-            libc::SYS_setns, libc::SYS_request_key, libc::SYS_keyctl, libc::SYS_add_key
+            "{{'setns': {}, 'request_key': {}, 'keyctl': {}, 'add_key': {}, 'perf_event_open': {}}}",
+            libc::SYS_setns, libc::SYS_request_key, libc::SYS_keyctl, libc::SYS_add_key,
+            libc::SYS_perf_event_open
         ),
         unshare = libc::SYS_unshare,
     );
@@ -544,6 +552,7 @@ print(results)
         "request_key",
         "keyctl",
         "add_key",
+        "perf_event_open",
         "unshare(NEWUSER|NEWNS)",
         "unshare(NEWNS)",
         "mount",
@@ -669,6 +678,38 @@ print(results)
     allowed("/opt/alien/bin/alien-mount tmpfs /scratch -o size=1m && /opt/alien/bin/alien-mount umount /scratch");
     println!("PAUSE    mounts were refused from the pause until the resume");
 
+    // A proxy that starts listening just after the mount is asked for (a mount helper starts
+    // it and mounts at once): the broker waits for it.
+    let mut late = spawn_image("sleep 0.3; exec python3 /tmp/forward.py 20127 2049");
+    allowed("/opt/alien/bin/mount.nfs4 127.0.0.1:/ /workspace -o nfsvers=4.2,port=20127,soft,timeo=20,retrans=1 && cat /workspace/hello.txt && /opt/alien/bin/alien-mount umount /workspace");
+    let _ = late.kill();
+    let _ = late.wait();
+    println!("LATE     a proxy listening 0.3s after the request was waited for");
+
+    // At most four of the broker's mounts stacked on one path.
+    allowed(
+        &"/opt/alien/bin/alien-mount tmpfs /scratch -o size=1m && "
+            .repeat(4)
+            .trim_end_matches(" && ")
+            .to_string(),
+    );
+    refused(
+        "/opt/alien/bin/alien-mount tmpfs /scratch -o size=1m",
+        "already has 4 mounts",
+    );
+    refused(
+        "/opt/alien/bin/alien-mount tmpfs /scratch -o size=1m,nr_inodes=0",
+        "nr_inodes",
+    );
+    allowed(
+        &"/opt/alien/bin/alien-mount umount /scratch && "
+            .repeat(4)
+            .trim_end_matches(" && ")
+            .to_string(),
+    );
+    assert!(mount_line("/scratch").is_none());
+    println!("STACK    a fifth mount on one path was refused");
+
     // A caller trickling its request one byte at a time cannot hold the broker: every caller
     // gets the whole request read within one bound, so the next caller is answered promptly.
     let mut trickle = spawn_image(
@@ -748,10 +789,11 @@ print(results)
     provider_attribution();
 }
 
-/// A local caller whose socket carries no mark counts as the provider only if every process
-/// holding that socket has the provider's grant. A program the kernel starts for the image has
-/// none (the broker emptied the helper capability sets) and is refused, the way every hook and
-/// control route refuses it (`authorize_control` answers 403 when this gate says no).
+/// With image permissions a local caller whose socket carries no mark counts as the provider
+/// only if its socket's cgroup is outside the guest's. The provider's processes are outside it
+/// (on the provider, even outside the VM's view); the image's processes cannot leave it. Every
+/// hook and control route goes through this gate (`authorize_control` answers 403 when it says
+/// no).
 fn provider_attribution() {
     // The agent itself runs in the guest cgroup; the callers run outside it, in the root cgroup,
     // as provider processes and the kernel's helpers do. No socket marker is attached here, so
@@ -767,21 +809,31 @@ fn provider_attribution() {
         .enable_all()
         .build()
         .unwrap();
-    for (who, capabilities, expected) in [("helper", false, false), ("provider", true, true)] {
+    // `root`: outside the guest cgroup, capabilities or none. `image`: in the image cgroup.
+    for (who, cgroup, capabilities, expected) in [
+        ("provider", "root", true, true),
+        ("capless root-cgroup", "root", false, true),
+        ("image", "image", true, false),
+    ] {
         let mut caller = Command::new("python3");
         caller.args([
             "-c",
             "import socket, sys, time; s = socket.create_connection(('127.0.0.1', int(sys.argv[1]))); time.sleep(30)",
             &port,
         ]);
+        let in_image = cgroup == "image";
         // SAFETY: open, write and capability calls before exec; nothing allocates.
         unsafe {
             caller.pre_exec(move || {
-                let procs = libc::open(c"/sys/fs/cgroup/cgroup.procs".as_ptr(), libc::O_WRONLY);
-                if procs < 0 || libc::write(procs, b"0".as_ptr().cast(), 1) != 1 {
-                    return Err(std::io::Error::last_os_error());
+                if in_image {
+                    mount_broker::join_image_cgroup()?;
+                } else {
+                    let procs = libc::open(c"/sys/fs/cgroup/cgroup.procs".as_ptr(), libc::O_WRONLY);
+                    if procs < 0 || libc::write(procs, b"0".as_ptr().cast(), 1) != 1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    libc::close(procs);
                 }
-                libc::close(procs);
                 if !capabilities {
                     privilege::restrict_capabilities(0)?;
                 }
@@ -793,7 +845,7 @@ fn provider_attribution() {
         let served = runtime.block_on(crate::peer::image_transport_may_serve(peer));
         let _ = caller.kill();
         let _ = caller.wait();
-        println!("PROVIDER mark-0 {who} caller (capabilities: {capabilities}) served: {served}");
+        println!("PROVIDER mark-0 {who} caller served: {served}");
         assert_eq!(served, expected, "{who}");
     }
 }

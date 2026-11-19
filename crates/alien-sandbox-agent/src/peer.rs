@@ -77,49 +77,60 @@ async fn provider_socket(peer: SocketAddr) -> Option<bool> {
     if sockets.is_empty() {
         return Some(false);
     }
-    let mut inodes = Vec::new();
+    let mut cgroups = Vec::new();
     for socket in &sockets {
         match socket {
             nlink::sockdiag::SocketInfo::Inet(socket)
                 if socket.local == peer && socket.is_connected() && socket.mark == Some(0) =>
             {
-                inodes.push(u64::from(socket.inode));
+                cgroups.push(socket.cgroup_id);
             }
             _ => return Some(false),
         }
     }
-    // With image permissions the image can make the kernel start a program of its choosing
-    // (`request-key`) outside the guest cgroup, so its sockets carry no mark either. The broker
-    // has emptied the capability sets of such programs; a provider process holds its grant.
+    // With image permissions the image can make the kernel start a program that skips the
+    // guest's socket marker, and the image's own sockets must never pass for the provider's: the
+    // caller's socket must also belong to a cgroup outside the guest's. The image cannot leave
+    // its cgroup (the guest's cgroup mount is read-only and it holds no SYS_ADMIN).
     if crate::mount_broker::active() {
-        for inode in inodes {
-            let holders =
-                tokio::task::spawn_blocking(move || crate::mount_broker::socket_holders(inode))
-                    .await
-                    .ok()?
-                    .ok()?;
-            if !provider_holders(&holders) {
-                return Some(false);
-            }
+        let guest = guest_cgroup_ids();
+        if guest.is_empty()
+            || !cgroups
+                .iter()
+                .all(|cgroup| cgroup.is_some_and(|id| !guest.contains(&id)))
+        {
+            return Some(false);
         }
     }
     Some(true)
 }
 
-/// What a provider process holds that a program the kernel starts for the image does not.
-/// Provider processes run with the VM's full grant.
+/// The IDs of the guest cgroup and every cgroup below it (a cgroup v2 ID is its directory's
+/// inode number). Empty when the tree cannot be read.
 #[cfg(target_os = "linux")]
-const PROVIDER_CAPABILITIES: u64 = 1 << 21; // CAP_SYS_ADMIN
-
-/// Every live process holding the caller's socket holds the provider's capabilities, and there is
-/// at least one.
-#[cfg(target_os = "linux")]
-fn provider_holders(holders: &[u64]) -> bool {
-    !holders.is_empty()
-        && holders
-            .iter()
-            .all(|effective| effective & PROVIDER_CAPABILITIES == PROVIDER_CAPABILITIES)
+fn guest_cgroup_ids() -> std::collections::BTreeSet<u64> {
+    use std::os::unix::fs::MetadataExt;
+    let mut ids = std::collections::BTreeSet::new();
+    let mut pending = vec![std::path::PathBuf::from(GUEST_CGROUP)];
+    while let Some(directory) = pending.pop() {
+        let Ok(meta) = std::fs::symlink_metadata(&directory) else {
+            return Default::default();
+        };
+        ids.insert(meta.ino());
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            return Default::default();
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                pending.push(entry.path());
+            }
+        }
+    }
+    ids
 }
+
+#[cfg(target_os = "linux")]
+const GUEST_CGROUP: &str = "/sys/fs/cgroup/alien-guest";
 
 #[cfg(target_os = "linux")]
 fn in_guest_cgroup(groups: &str) -> bool {
@@ -273,21 +284,6 @@ fn address_matches(column: &str, peer: SocketAddr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn only_processes_with_the_provider_grant_count_as_the_provider() {
-        use super::provider_holders;
-        let full = 0x1ff_ffff_ffff;
-        assert!(provider_holders(&[full]));
-        assert!(!provider_holders(&[]), "nobody holds it any more");
-        assert!(!provider_holders(&[0]), "a helper with emptied sets");
-        assert!(!provider_holders(&[full, 0]), "shared with a helper");
-        assert!(
-            !provider_holders(&[full & !(1 << 21)]),
-            "root without SYS_ADMIN"
-        );
-    }
-
     use super::*;
     #[cfg(target_os = "linux")]
     use std::os::fd::AsRawFd;

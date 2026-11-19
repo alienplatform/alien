@@ -91,43 +91,51 @@ fn image_exemptions(rule: impl Fn() -> Rule, verdict: Expr) -> Vec<Rule> {
         .collect()
 }
 
-const UNMARKED: &str = "unmarked";
+const NFS_PORTS: &str = "nfs_ports";
 
-/// With image permissions, new TCP and UDP traffic that leaves the VM (anything not routed
-/// through `lo`) from a socket that carries no mark is dropped, in both IPv4 and IPv6. Traffic to
-/// the VM's own addresses stays allowed: provider processes in the VM reach the agent that way. Sockets made in the guest cgroup carry the
-/// guest or image mark from the socket-create hook, and the agent marks its own. What carries none
-/// was made outside the guest cgroup: the kernel's own sockets (the NFS client, including the pNFS
-/// data servers a layout names, which skip the hook) and the kernel's helper processes, which run
-/// in the root cgroup. The image's server must not steer either to another address. `ct state
-/// new` keeps SYN-ACKs, resets and replies, which the kernel sends from its own sockets, out of it.
-fn add_unmarked_drop(
+/// With image permissions, a new TCP connection that leaves the VM (anything not routed through
+/// `lo`) to the NFS port or a declared connection's port is dropped unless its socket carries the
+/// image mark, in both IPv4 and IPv6. This covers the kernel's NFS client, whose sockets carry no
+/// mark, so a mount cannot bypass the image's loopback proxy through a referral or a second
+/// address. Other traffic from outside the guest cgroup (the provider's DNS forwarder, NTP, the
+/// endpoint proxy) is untouched.
+fn add_nfs_port_drop(
     batch: nlink::netlink::nftables::Transaction,
     table: &str,
     chain: &str,
     family: Family,
 ) -> nlink::netlink::Result<nlink::netlink::nftables::Transaction> {
-    let rule = || Rule::new(table, UNMARKED).family(family);
-    Ok(batch
-        .add_chain(Chain::new(table, UNMARKED)?.family(family))
+    let mut ports: Vec<u16> = crate::image_permissions::declared()
+        .map(|declared| {
+            declared
+                .destinations
+                .iter()
+                .map(|(_, _, port)| *port)
+                .collect()
+        })
+        .unwrap_or_default();
+    ports.push(2049);
+    ports.sort_unstable();
+    ports.dedup();
+    let rule = || Rule::new(table, NFS_PORTS).family(family);
+    let mut batch = batch
+        .add_chain(Chain::new(table, NFS_PORTS)?.family(family))
         .add_rule(rule().match_oif("lo").expr(Expr::Verdict(Verdict::Return)))
-        .add_rule(rule().match_l4proto(libc::IPPROTO_TCP as u8).drop())
-        .add_rule(rule().match_l4proto(libc::IPPROTO_UDP as u8).drop())
-        .add_rule(
+        .add_rule(rule().drop());
+    for port in ports {
+        let [meta, cmp] = image_mark(CmpOp::Neq);
+        batch = batch.add_rule(
             Rule::new(table, chain)
                 .family(family)
                 .match_ct_state(CtState::NEW)
-                .expr(Expr::Meta {
-                    dreg: Register::R0,
-                    key: MetaKey::Mark,
-                })
-                .expr(Expr::Cmp {
-                    sreg: Register::R0,
-                    op: CmpOp::Eq,
-                    data: 0u32.to_ne_bytes().to_vec(),
-                })
-                .jump(ChainName::new(UNMARKED)?),
-        ))
+                .expr(meta)
+                .expr(cmp)
+                .match_l4proto(libc::IPPROTO_TCP as u8)
+                .match_tcp_dport(port)
+                .jump(ChainName::new(NFS_PORTS)?),
+        );
+    }
+    Ok(batch)
 }
 
 async fn install_rules() -> nlink::netlink::Result<()> {
@@ -159,7 +167,7 @@ async fn install_rules() -> nlink::netlink::Result<()> {
                 .priority(Priority::Filter)
                 .policy(Policy::Accept),
         );
-        batch = add_unmarked_drop(batch, "alien_gateway", "filter", Family::Ip6)?;
+        batch = add_nfs_port_drop(batch, "alien_gateway", "filter", Family::Ip6)?;
     }
     let nat = || Rule::new("alien_gateway", "guest_tcp").family(Family::Ip);
     let filter = || Rule::new("alien_gateway", "filter").family(Family::Ip);
@@ -235,10 +243,7 @@ async fn install_rules() -> nlink::netlink::Result<()> {
                 .policy(Policy::Drop),
         );
     if image {
-        // NFS leaves the guest only through the image's own proxy: the kernel's NFS client
-        // carries no mark, so a mount cannot bypass the loopback proxy through a referral, a
-        // second address or a pNFS data server.
-        batch = add_unmarked_drop(batch, "alien_gateway", "filter", Family::Ip)?;
+        batch = add_nfs_port_drop(batch, "alien_gateway", "filter", Family::Ip)?;
     }
     batch = batch.add_rule(system(filter()).accept());
     for rule in image_exemptions(filter, Expr::Verdict(Verdict::Accept)) {
