@@ -37,6 +37,75 @@ use crate::error::{ErrorData, Result};
 
 /// Transport implementation that persists state to the operator's local DB
 /// and re-reads config each step to pick up sync loop changes.
+/// How an apply checkpoint ended.
+#[derive(Debug, PartialEq, Eq)]
+enum ApplyCheckpoint {
+    /// The step's state is stored.
+    Stored,
+    /// A newer target was stored on top of the step's state: end the pass.
+    Adopted,
+    /// The stored state kept changing: nothing was written, end the pass.
+    Contended,
+}
+
+/// Store an apply step's state by compare and set. When the sync loop changed the
+/// stored state since this pass last wrote it, a different target is newer work:
+/// it is stored on top of the step's result, so the next pass runs every gate
+/// (approval, signature, retry budget) for it. Each retry reads the stored state
+/// afresh and writes against exactly that read, so a change landing in between is
+/// never overwritten. `after_read` runs between a read and the write that follows
+/// it (a seam for tests).
+async fn checkpoint_apply(
+    db: &OperatorDb,
+    written: &DeploymentState,
+    state: &DeploymentState,
+    mut after_read: impl AsyncFnMut(&DeploymentState),
+) -> std::result::Result<ApplyCheckpoint, AlienError> {
+    let mut expected = written.clone();
+    let mut to_write = state.clone();
+    let mut adopted = false;
+    for _ in 0..APPLY_CHECKPOINT_ATTEMPTS {
+        if db
+            .compare_and_set_deployment_state(&expected, &to_write)
+            .await
+            .map_err(|e| e.into_generic())?
+        {
+            return Ok(if adopted {
+                ApplyCheckpoint::Adopted
+            } else {
+                ApplyCheckpoint::Stored
+            });
+        }
+        let Some(stored) = db
+            .get_deployment_state()
+            .await
+            .map_err(|e| e.into_generic())?
+        else {
+            break;
+        };
+        after_read(&stored).await;
+        to_write = state.clone();
+        adopted = false;
+        if let Some(newer) = stored
+            .target_release
+            .clone()
+            .filter(|stored| written.target_release.as_ref() != Some(stored))
+        {
+            info!(
+                release_id = ?newer.release_id,
+                "A newer target arrived while the deployment was applying; ending this pass"
+            );
+            super::sync::accept_target_release(&mut to_write, newer);
+            adopted = true;
+        }
+        expected = stored;
+    }
+    Ok(ApplyCheckpoint::Contended)
+}
+
+/// Tries an apply checkpoint makes against a stored state that keeps changing.
+const APPLY_CHECKPOINT_ATTEMPTS: usize = 5;
+
 struct OperatorTransport {
     db: Arc<OperatorDb>,
     operator_config: OperatorConfig,
@@ -111,54 +180,17 @@ impl DeploymentLoopTransport for OperatorTransport {
             None => match &self.applying_from {
                 Some(applying_from) => {
                     let mut written = applying_from.lock().await;
-                    if self
-                        .db
-                        .compare_and_set_deployment_state(&written, state)
-                        .await
-                        .map_err(|e| e.into_generic())?
+                    // Compare and set against what is stored; a newer target the
+                    // sync loop stored meanwhile ends the pass (see `checkpoint_apply`).
+                    if checkpoint_apply(&self.db, &written, state, async |_| {}).await?
+                        != ApplyCheckpoint::Stored
                     {
-                        *written = state.clone();
-                    } else {
-                        // The sync loop changed the stored state since this pass
-                        // last wrote it. A different target is newer work: store it
-                        // on top of this step's result and end the pass, so the
-                        // next pass runs every gate (approval, signature, retry
-                        // budget) for it. Anything else is not ours to keep.
-                        // Read now: the copy from the top of this call can predate the
-                        // change that made the compare fail.
-                        let stored = self
-                            .db
-                            .get_deployment_state()
-                            .await
-                            .map_err(|e| e.into_generic())?;
-                        let newer = stored
-                            .and_then(|stored| stored.target_release)
-                            .filter(|stored| written.target_release.as_ref() != Some(stored));
-                        match newer {
-                            Some(newer) => {
-                                info!(
-                                    release_id = ?newer.release_id,
-                                    "A newer target arrived while the deployment was applying; ending this pass"
-                                );
-                                let mut merged = state.clone();
-                                super::sync::accept_target_release(&mut merged, newer);
-                                self.db
-                                    .set_deployment_state(&merged)
-                                    .await
-                                    .map_err(|e| e.into_generic())?;
-                                self.superseded.store(true, Ordering::Relaxed);
-                                return Err(AlienError::new(ErrorData::MaintenanceSuperseded)
-                                    .into_generic());
-                            }
-                            None => {
-                                self.db
-                                    .set_deployment_state(state)
-                                    .await
-                                    .map_err(|e| e.into_generic())?;
-                                *written = state.clone();
-                            }
-                        }
+                        self.superseded.store(true, Ordering::Relaxed);
+                        return Err(
+                            AlienError::new(ErrorData::MaintenanceSuperseded).into_generic()
+                        );
                     }
+                    *written = state.clone();
                 }
                 None => self
                     .db
@@ -1769,6 +1801,69 @@ mod tests {
         let _ = run_deployment_continuously(&state).await;
         let moved = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_ne!(moved.status, DeploymentStatus::UpdatePending);
+    }
+
+    /// The sync loop can store a newer target between the checkpoint's read of the
+    /// stored state and its write. The write compares against that read, so the
+    /// change is seen on the next try, never overwritten.
+    #[tokio::test]
+    async fn an_apply_checkpoint_never_overwrites_a_change_landing_after_its_read() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(
+            data_dir.path().to_str().unwrap(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .unwrap();
+        let release = |id: &str| alien_core::ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("apply".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
+        };
+        let state = |status, target: &str| DeploymentState {
+            platform: Platform::Test,
+            status,
+            current_release: Some(release("rel_installed")),
+            target_release: Some(release(target)),
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let written = state(DeploymentStatus::Updating, "rel_a");
+        db.set_deployment_state(&written).await.unwrap();
+        // Sync accepts B; the checkpoint's compare fails and it reads B.
+        db.set_deployment_state(&state(DeploymentStatus::Updating, "rel_b"))
+            .await
+            .unwrap();
+        // Right after that read, sync accepts C.
+        let mut landed = false;
+        let outcome = checkpoint_apply(
+            &db,
+            &written,
+            &state(DeploymentStatus::UpdateFailed, "rel_a"),
+            async |_| {
+                if !std::mem::replace(&mut landed, true) {
+                    db.set_deployment_state(&state(DeploymentStatus::Updating, "rel_c"))
+                        .await
+                        .unwrap();
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, ApplyCheckpoint::Adopted);
+        let stored = db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(
+            stored.target_release.unwrap().release_id.as_deref(),
+            Some("rel_c")
+        );
+        assert_eq!(stored.status, DeploymentStatus::UpdatePending);
     }
 
     /// The last step of an apply clears the target. A target the sync loop accepted
