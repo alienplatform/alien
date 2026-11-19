@@ -14,8 +14,14 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 DOCKERFILE
 docker build -q -t "$image" "$fixture" >/dev/null
 name=mount_broker::integration_tests::broker_allows_declared_mounts_and_refuses_everything_else
+# Twice: as on a kernel with module loading, then as on one without (no kernel.modprobe).
+for variant in modules no-modules; do
+rounds=${ALIEN_BROKER_RACE_ROUNDS:-40}
+extra=()
+if [ "$variant" = no-modules ]; then rounds=5; extra=(-e ALIEN_BROKER_NO_MODPROBE=1); fi
+echo "mount broker integration: $variant"
 docker run --rm --privileged --cgroupns=private \
-  -e "ALIEN_BROKER_RACE_ROUNDS=${ALIEN_BROKER_RACE_ROUNDS:-40}" \
+  -e "ALIEN_BROKER_RACE_ROUNDS=$rounds" "${extra[@]}" \
   --mount "type=bind,source=$tests,target=/agent-tests,readonly" \
   --mount "type=bind,source=$agent,target=/agent,readonly" \
   "$image" bash -euo pipefail -c '
@@ -29,3 +35,4 @@ docker run --rm --privileged --cgroupns=private \
     /agent-tests --list --ignored --exact "'"$name"'" | grep -Fx "'"$name"': test"
     unshare --mount --propagation private /agent-tests --ignored --exact "'"$name"'" --nocapture --test-threads=1
   '
+done

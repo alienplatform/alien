@@ -342,7 +342,12 @@ pub fn protect_system_binaries(paths: &[&str]) -> Result<Vec<String>, Refusal> {
 /// Asks the kernel for the filesystem types the broker mounts, so their modules load while the
 /// kernel can still run its module loader.
 pub fn load_filesystems() {
+    let known = std::fs::read_to_string("/proc/filesystems").unwrap_or_default();
     for fstype in [c"nfs4", c"tmpfs"] {
+        // Built in or already loaded: nothing to ask for.
+        if filesystem_known(&known, fstype.to_str().unwrap_or_default()) {
+            continue;
+        }
         // SAFETY: a NUL-terminated name; the context descriptor is closed at once.
         let fd = unsafe { libc::syscall(libc::SYS_fsopen, fstype.as_ptr(), FSOPEN_CLOEXEC) };
         if fd >= 0 {
@@ -350,6 +355,13 @@ pub fn load_filesystems() {
             unsafe { libc::close(fd as RawFd) };
         }
     }
+}
+
+/// Whether `/proc/filesystems` (`[nodev]\t<name>` per line) lists `name`.
+fn filesystem_known(filesystems: &str, name: &str) -> bool {
+    filesystems
+        .lines()
+        .any(|line| line.rsplit('\t').next() == Some(name))
 }
 
 /// Least time left on the request deadline for a new mount to still be attached. The broker kills
@@ -675,6 +687,15 @@ pub fn detach_nfs() -> usize {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn filesystems_already_known_are_not_loaded_again() {
+        let listed = "nodev\tsysfs\nnodev\ttmpfs\n\text4\nnodev\tnfs\nnodev\tnfs4\n";
+        assert!(super::filesystem_known(listed, "nfs4"));
+        assert!(super::filesystem_known(listed, "tmpfs"));
+        assert!(!super::filesystem_known("nodev\tnfs\n", "nfs4"));
+        assert!(!super::filesystem_known("", "tmpfs"));
+    }
+
     use super::*;
 
     #[test]

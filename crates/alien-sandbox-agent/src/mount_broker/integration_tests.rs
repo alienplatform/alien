@@ -164,6 +164,14 @@ fn scenario() {
         std::fs::write(format!("/tmp/helpers/{name}"), "4294967295\t511\n").unwrap();
     }
     std::fs::write("/tmp/helpers/modprobe", "/sbin/modprobe\n").unwrap();
+    // A kernel without module support (CONFIG_MODULES off) has no kernel.modprobe: a procfs path
+    // that does not exist and cannot be created, as there.
+    let no_modprobe = std::env::var_os("ALIEN_BROKER_NO_MODPROBE").is_some();
+    let modprobe = if no_modprobe {
+        "/proc/sys/kernel/alien-no-modprobe"
+    } else {
+        "/tmp/helpers/modprobe"
+    };
     mount_broker::start(
         &declared,
         mount_broker::Config {
@@ -171,7 +179,7 @@ fn scenario() {
             helpers: mount_broker::HelperSettings {
                 bset: "/tmp/helpers/bset".into(),
                 inheritable: "/tmp/helpers/inheritable".into(),
-                modprobe: "/tmp/helpers/modprobe".into(),
+                modprobe: modprobe.into(),
             },
             ..Default::default()
         },
@@ -208,10 +216,14 @@ fn scenario() {
             "0\t0\n"
         );
     }
-    assert_eq!(
-        std::fs::read_to_string("/tmp/helpers/modprobe").unwrap(),
-        "\n"
-    );
+    if no_modprobe {
+        assert!(
+            !Path::new(modprobe).exists(),
+            "nothing to seal, nothing made"
+        );
+    } else {
+        assert_eq!(std::fs::read_to_string(modprobe).unwrap(), "\n");
+    }
     assert_eq!(
         capabilities(broker) & ((1 << 8) | (1 << 16)),
         0,

@@ -312,9 +312,9 @@ fn drain_late_acks(socket: RawFd) {
 }
 
 fn wait_ack(socket: RawFd, what: &str) -> io::Result<()> {
-    let mut ack = [0u8];
-    // SAFETY: reading one byte into a buffer we own.
-    let n = unsafe { libc::recv(socket, ack.as_mut_ptr().cast(), 1, 0) };
+    let mut ack = [0u8; 512];
+    // SAFETY: reading into a buffer we own, at most its length.
+    let n = unsafe { libc::recv(socket, ack.as_mut_ptr().cast(), ack.len(), 0) };
     if n < 0 {
         let error = io::Error::last_os_error();
         return Err(io::Error::new(
@@ -322,10 +322,18 @@ fn wait_ack(socket: RawFd, what: &str) -> io::Result<()> {
             format!("the mount broker did not answer {what}: {error}"),
         ));
     }
-    if n == 1 && ack[0] == b'k' {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!("the mount broker refused {what}")))
+    ack_result(&ack[..n as usize], what)
+}
+
+/// `k`, or `e` followed by the broker's reason.
+fn ack_result(ack: &[u8], what: &str) -> io::Result<()> {
+    match ack.split_first() {
+        Some((b'k', _)) => Ok(()),
+        Some((b'e', reason)) if !reason.is_empty() => Err(io::Error::other(format!(
+            "the mount broker refused {what}: {}",
+            String::from_utf8_lossy(reason)
+        ))),
+        _ => Err(io::Error::other(format!("the mount broker refused {what}"))),
     }
 }
 
@@ -395,6 +403,33 @@ pub fn serve_socket(path: &Path) -> io::Result<()> {
         &[listener.as_raw_fd(), namespace.as_raw_fd()],
     )?;
     wait_ack(broker.control.as_raw_fd(), "its socket")
+}
+
+/// Empties the capability sets of the programs the kernel runs on its own and stops module
+/// loading by program. A kernel without module support has no `modprobe` setting: nothing to
+/// stop there. Every other failure names its step and keeps the image from starting.
+fn seal_helper_settings(helpers: &HelperSettings) -> Result<(), String> {
+    let write = |step: &str, path: &Path, value: &str| {
+        // Never creates the file: a kernel setting either exists or the step fails.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .and_then(|mut file| file.write_all(value.as_bytes()))
+            .map_err(|error| format!("step {step} ({}): {error}", path.display()))
+    };
+    write("usermodehelper bset", &helpers.bset, "0\t0\n")?;
+    write("usermodehelper inheritable", &helpers.inheritable, "0\t0\n")?;
+    match std::fs::symlink_metadata(&helpers.modprobe) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            eprintln!(
+                "mount broker: {} does not exist (no module loading in this kernel); nothing to seal there",
+                helpers.modprobe.display()
+            );
+            Ok(())
+        }
+        _ => write("modprobe", &helpers.modprobe, "\n"),
+    }
 }
 
 static CONTROL: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -744,9 +779,11 @@ impl Loop<'_> {
         }
         let mut ok = matches!(message.tag, b'D' | b'Q' | b'R' | b'K' | b'E')
             || (message.tag == b'S' && message.fds.len() == 2);
+        let mut reason = String::new();
         if message.tag == b'S' && ok {
             if let Err(error) = self.seal(message.fds[1].as_raw_fd()) {
-                eprintln!("mount broker: cannot seal the kernel's helpers: {error}");
+                reason = format!("cannot seal the kernel's helpers: {error}");
+                eprintln!("mount broker: {reason}");
                 ok = false;
             }
         }
@@ -757,13 +794,14 @@ impl Loop<'_> {
             self.listener = Some(unsafe { UnixListener::from_raw_fd(listener.into_raw_fd()) });
             self.namespace = Some(namespace);
         }
-        let ack = [if ok { b'k' } else { b'e' }];
-        // SAFETY: writing one byte from a buffer we own.
+        let mut ack = vec![if ok { b'k' } else { b'e' }];
+        ack.extend(reason.bytes().take(500));
+        // SAFETY: writing from a buffer we own, at most its length.
         unsafe {
             libc::send(
                 control.as_raw_fd(),
                 ack.as_ptr().cast(),
-                1,
+                ack.len(),
                 libc::MSG_NOSIGNAL,
             )
         };
@@ -773,49 +811,85 @@ impl Loop<'_> {
     /// helper directories read-only in the image's mount namespace, empties the capability sets
     /// of every program the kernel runs on its own and stops module loading by program, then drops
     /// the capabilities that took. Any failure keeps the image from starting.
-    fn seal(&mut self, namespace: RawFd) -> io::Result<()> {
+    fn seal(&mut self, namespace: RawFd) -> Result<(), String> {
         if self.sealed {
             return Ok(());
         }
         ops::load_filesystems();
+        let mut pipe = [0; 2];
+        // SAFETY: a two-element buffer for pipe2.
+        if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+            return Err(format!(
+                "step read-only system binaries: pipe: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: pipe2 returned two descriptors we now own.
+        let (read_end, write_end) =
+            unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) };
         // SAFETY: the broker is single-threaded, so the child may allocate.
         let pid = unsafe { libc::fork() };
         if pid < 0 {
-            return Err(io::Error::last_os_error());
+            return Err(format!(
+                "step read-only system binaries: fork: {}",
+                io::Error::last_os_error()
+            ));
         }
         if pid == 0 {
+            drop(read_end);
             // SAFETY: a mount namespace descriptor; the child is single-threaded.
-            let code = if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } != 0 {
-                eprintln!(
-                    "mount broker: cannot enter the image's mount namespace: {}",
+            let failure = if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } != 0 {
+                Some(format!(
+                    "cannot enter the image's mount namespace: {}",
                     io::Error::last_os_error()
-                );
-                1
+                ))
             } else {
-                match ops::protect_system_binaries(SYSTEM_BINARIES) {
-                    Ok(_) => 0,
-                    Err((_, reason)) => {
-                        eprintln!("mount broker: {reason}");
-                        1
-                    }
+                ops::protect_system_binaries(SYSTEM_BINARIES)
+                    .err()
+                    .map(|(_, reason)| reason)
+            };
+            let code = match failure {
+                None => 0,
+                Some(reason) => {
+                    // SAFETY: writing from a buffer we own to our pipe.
+                    unsafe {
+                        libc::write(
+                            write_end.as_raw_fd(),
+                            reason.as_ptr().cast(),
+                            reason.len().min(400),
+                        )
+                    };
+                    1
                 }
             };
             // SAFETY: leaving the forked child.
             unsafe { libc::_exit(code) };
         }
+        drop(write_end);
         let mut status = 0;
         // SAFETY: waiting for our own child (local filesystem calls only).
-        check(unsafe { libc::waitpid(pid, &mut status, 0) })?;
-        if !libc::WIFEXITED(status) || libc::WEXITSTATUS(status) != 0 {
-            return Err(io::Error::other(
-                "cannot make the kernel's helper directories read-only",
+        if unsafe { libc::waitpid(pid, &mut status, 0) } < 0 {
+            return Err(format!(
+                "step read-only system binaries: wait: {}",
+                io::Error::last_os_error()
             ));
         }
-        let helpers = &self.config.helpers;
-        std::fs::write(&helpers.bset, "0\t0\n")?;
-        std::fs::write(&helpers.inheritable, "0\t0\n")?;
-        std::fs::write(&helpers.modprobe, "\n")?;
-        crate::privilege::restrict_capabilities(BROKER_CAPABILITIES)?;
+        if !libc::WIFEXITED(status) || libc::WEXITSTATUS(status) != 0 {
+            let mut reason = String::new();
+            let _ = std::fs::File::from(read_end).read_to_string(&mut reason);
+            return Err(format!(
+                "step read-only system binaries ({}): {}",
+                SYSTEM_BINARIES.join(", "),
+                if reason.is_empty() {
+                    "the helper failed"
+                } else {
+                    &reason
+                }
+            ));
+        }
+        seal_helper_settings(&self.config.helpers)?;
+        crate::privilege::restrict_capabilities(BROKER_CAPABILITIES)
+            .map_err(|error| format!("step drop SETPCAP and SYS_MODULE: {error}"))?;
         self.sealed = true;
         Ok(())
     }
@@ -1314,5 +1388,75 @@ pub fn image_leader() -> Option<u32> {
     match IMAGE_LEADER.load(std::sync::atomic::Ordering::Relaxed) {
         0 => None,
         pid => Some(pid),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(dir: &Path) -> HelperSettings {
+        HelperSettings {
+            bset: dir.join("bset"),
+            inheritable: dir.join("inheritable"),
+            modprobe: dir.join("modprobe"),
+        }
+    }
+
+    #[test]
+    fn a_kernel_without_modprobe_seals_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let helpers = settings(dir.path());
+        std::fs::write(&helpers.bset, "4294967295\t511\n").unwrap();
+        std::fs::write(&helpers.inheritable, "4294967295\t511\n").unwrap();
+        seal_helper_settings(&helpers).expect("no modprobe setting: nothing to seal there");
+        assert_eq!(std::fs::read_to_string(&helpers.bset).unwrap(), "0\t0\n");
+        assert_eq!(
+            std::fs::read_to_string(&helpers.inheritable).unwrap(),
+            "0\t0\n"
+        );
+        assert!(!helpers.modprobe.exists());
+    }
+
+    #[test]
+    fn modprobe_is_emptied_when_it_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let helpers = settings(dir.path());
+        for path in [&helpers.bset, &helpers.inheritable] {
+            std::fs::write(path, "x\n").unwrap();
+        }
+        std::fs::write(&helpers.modprobe, "/sbin/modprobe\n").unwrap();
+        seal_helper_settings(&helpers).unwrap();
+        assert_eq!(std::fs::read_to_string(&helpers.modprobe).unwrap(), "\n");
+    }
+
+    #[test]
+    fn a_failing_step_is_named_and_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let helpers = settings(dir.path());
+        std::fs::write(&helpers.bset, "x\n").unwrap();
+        std::fs::write(&helpers.modprobe, "/sbin/modprobe\n").unwrap();
+        // inheritable is missing: a real failure of a step that exists.
+        let error = seal_helper_settings(&helpers).unwrap_err();
+        assert!(error.contains("step usermodehelper inheritable"), "{error}");
+        // modprobe is a directory: writing it fails, and the step says so.
+        std::fs::write(&helpers.inheritable, "x\n").unwrap();
+        std::fs::remove_file(&helpers.modprobe).unwrap();
+        std::fs::create_dir(&helpers.modprobe).unwrap();
+        let error = seal_helper_settings(&helpers).unwrap_err();
+        assert!(error.contains("step modprobe"), "{error}");
+    }
+
+    #[test]
+    fn a_refusal_carries_the_broker_reason() {
+        assert!(ack_result(b"k", "its socket").is_ok());
+        let error = ack_result(b"ecannot seal: step modprobe: EROFS", "its socket").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "the mount broker refused its socket: cannot seal: step modprobe: EROFS"
+        );
+        let error = ack_result(b"e", "its socket").unwrap_err();
+        assert_eq!(error.to_string(), "the mount broker refused its socket");
+        assert!(ack_result(b"", "its socket").is_err());
     }
 }
