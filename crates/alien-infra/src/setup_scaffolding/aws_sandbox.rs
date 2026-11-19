@@ -648,8 +648,7 @@ fn record(
             *build_role_name = role_name;
             *image_arn = image;
         }
-        // Another cloud's record under an AWS sandbox's id cannot happen: a stack has one platform.
-        Some(SetupScaffolding::GcpSandbox { .. }) | None => {
+        None => {
             records.insert(
                 sandbox_id.to_string(),
                 SetupScaffolding::AwsSandbox {
@@ -1013,7 +1012,7 @@ mod tests {
             service_provider: &provider,
             resource_prefix: PREFIX,
         };
-        super::super::teardown(&ctx, records).await
+        super::super::teardown(&ctx, records, &mut BTreeMap::new()).await
     }
 
     fn recorded() -> BTreeMap<String, SetupScaffolding> {
@@ -1353,6 +1352,7 @@ mod tests {
             &client_config(),
             installed,
             &records,
+            &BTreeMap::new(),
             &StackState::new(platform),
             target,
             platform,
@@ -1502,6 +1502,7 @@ mod tests {
             super::super::changes_requiring_setup(
                 &client_config(),
                 &allow,
+                &BTreeMap::new(),
                 &BTreeMap::new(),
                 &StackState::new(Platform::Aws),
                 &allow,

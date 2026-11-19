@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap};
 use alien_core::gar_repository::{
     sandbox_image_repository, sandbox_image_write_role_id, SANDBOX_IMAGE_WRITE_PERMISSIONS,
 };
-use alien_core::{ClientConfig, Platform, ResourceStatus, SetupScaffolding, StackState};
+use alien_core::{ClientConfig, GcpSandboxScaffolding, Platform, ResourceStatus, StackState};
 use alien_error::{AlienError, Context};
 use alien_gcp_clients::artifactregistry::{
     CleanupPolicy, CleanupPolicyAction, CleanupPolicyCondition, CleanupPolicyConditionTagState,
@@ -85,6 +85,17 @@ fn is_not_found(error: &AlienError<alien_client_core::ErrorData>) -> bool {
     )
 }
 
+/// Google keeps a deleted custom role for a week and answers a second delete with a 400
+/// (FAILED_PRECONDITION): "You can't delete role_id (...) as it is already deleted." A teardown
+/// retried after a crash meets it, and the role is gone as far as setup is concerned.
+fn is_already_deleted(error: &AlienError<alien_client_core::ErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(alien_client_core::ErrorData::RemoteResourceConflict { message, .. })
+            if message.ends_with("as it is already deleted.")
+    )
+}
+
 fn names(ctx: &SetupScaffoldingContext<'_>, sandbox_id: &str) -> Result<(String, String)> {
     let invalid = |what: &str| {
         AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -151,7 +162,7 @@ pub(super) async fn reconcile(
     ctx: &SetupScaffoldingContext<'_>,
     stack_state: &StackState,
     sandbox_id: &str,
-    records: &mut BTreeMap<String, SetupScaffolding>,
+    records: &mut BTreeMap<String, GcpSandboxScaffolding>,
 ) -> Result<ScaffoldingProgress> {
     let gcp = gcp_config(ctx.client_config)?;
     let (repository, role_id) = names(ctx, sandbox_id)?;
@@ -271,7 +282,7 @@ pub(super) async fn reconcile(
         info!(sandbox_id, %repository, "Granted the manager write access to the sandbox image repository");
         return Ok(ScaffoldingProgress::InProgress);
     }
-    if let Some(SetupScaffolding::GcpSandbox { writer_granted, .. }) = records.get_mut(sandbox_id) {
+    if let Some(GcpSandboxScaffolding { writer_granted, .. }) = records.get_mut(sandbox_id) {
         if !std::mem::replace(writer_granted, true) {
             info!(
             sandbox_id,
@@ -290,7 +301,7 @@ pub(super) async fn reconcile(
 pub(super) async fn recover(
     ctx: &SetupScaffoldingContext<'_>,
     sandbox_id: &str,
-) -> Result<Option<SetupScaffolding>> {
+) -> Result<Option<GcpSandboxScaffolding>> {
     let gcp = gcp_config(ctx.client_config)?;
     let (repository, role_id) = names(ctx, sandbox_id)?;
     let registry = ctx.service_provider.get_gcp_artifact_registry_client(gcp)?;
@@ -320,7 +331,7 @@ pub(super) async fn recover(
         return Ok(None);
     }
     info!(sandbox_id, %repository, "Recovered setup scaffolding the record did not hold");
-    Ok(Some(SetupScaffolding::GcpSandbox {
+    Ok(Some(GcpSandboxScaffolding {
         image_repository: repository,
         write_role: role_id,
         writer_granted: false,
@@ -328,14 +339,14 @@ pub(super) async fn recover(
 }
 
 fn record(
-    records: &mut BTreeMap<String, SetupScaffolding>,
+    records: &mut BTreeMap<String, GcpSandboxScaffolding>,
     sandbox_id: &str,
     repository: &str,
     role_id: &str,
 ) {
     records
         .entry(sandbox_id.to_string())
-        .or_insert_with(|| SetupScaffolding::GcpSandbox {
+        .or_insert_with(|| GcpSandboxScaffolding {
             image_repository: repository.to_string(),
             write_role: role_id.to_string(),
             writer_granted: false,
@@ -396,7 +407,7 @@ pub(super) async fn teardown(
     let iam = ctx.service_provider.get_gcp_iam_client(gcp)?;
     match iam.delete_role(write_role.to_string()).await {
         Ok(_) => {}
-        Err(error) if is_not_found(&error) => {}
+        Err(error) if is_not_found(&error) || is_already_deleted(&error) => {}
         Err(error) => {
             return Err(error).context(cloud_error(format!(
                 "Failed to delete the custom role '{write_role}'"
@@ -477,7 +488,7 @@ mod tests {
     async fn step(
         provider: &MockPlatformServiceProvider,
         state: &StackState,
-        records: &mut BTreeMap<String, SetupScaffolding>,
+        records: &mut BTreeMap<String, GcpSandboxScaffolding>,
     ) -> Result<ScaffoldingProgress> {
         let client_config = client_config();
         let ctx = SetupScaffoldingContext {
@@ -526,9 +537,15 @@ mod tests {
             };
             let stack = stack_with_image("registry.example/agents:1");
             let mut records = BTreeMap::new();
-            crate::setup_scaffolding::recover_unrecorded(&ctx, &stack, Platform::Gcp, &mut records)
-                .await
-                .unwrap();
+            crate::setup_scaffolding::recover_unrecorded(
+                &ctx,
+                &stack,
+                Platform::Gcp,
+                &mut BTreeMap::new(),
+                &mut records,
+            )
+            .await
+            .unwrap();
             assert_eq!(records.contains_key("agents"), recovered, "label {label:?}");
         }
     }
@@ -650,7 +667,7 @@ mod tests {
         assert_eq!(progress, ScaffoldingProgress::InProgress);
         assert_eq!(
             records["agents"],
-            SetupScaffolding::GcpSandbox {
+            GcpSandboxScaffolding {
                 image_repository: "acme-agents-img".to_string(),
                 write_role: "acme_agents_image_write".to_string(),
                 writer_granted: false,
@@ -722,7 +739,7 @@ mod tests {
         assert_eq!(progress, ScaffoldingProgress::Done);
         assert!(matches!(
             records["agents"],
-            SetupScaffolding::GcpSandbox {
+            GcpSandboxScaffolding {
                 writer_granted: true,
                 ..
             }
@@ -780,17 +797,61 @@ mod tests {
         };
         let mut records = BTreeMap::from([(
             "agents".to_string(),
-            SetupScaffolding::GcpSandbox {
+            GcpSandboxScaffolding {
                 image_repository: "acme-agents-img".to_string(),
                 write_role: "acme_agents_image_write".to_string(),
                 writer_granted: true,
             },
         )]);
-        let first = super::super::teardown(&ctx, &mut records).await.unwrap();
+        let first = super::super::teardown(&ctx, &mut BTreeMap::new(), &mut records)
+            .await
+            .unwrap();
         assert_eq!(first, ScaffoldingProgress::InProgress);
         assert!(records.contains_key("agents"));
-        let second = super::super::teardown(&ctx, &mut records).await.unwrap();
+        let second = super::super::teardown(&ctx, &mut BTreeMap::new(), &mut records)
+            .await
+            .unwrap();
         assert_eq!(second, ScaffoldingProgress::Done);
+        assert!(records.is_empty());
+    }
+
+    /// A retry after a crash deletes a role Google already soft-deleted; Google answers 400
+    /// "... as it is already deleted.", which is done, not a failure.
+    #[tokio::test]
+    async fn teardown_treats_an_already_deleted_role_as_done() {
+        let mut registry = MockArtifactRegistryApi::new();
+        registry
+            .expect_get_repository()
+            .returning(|_, _, _| Err(not_found()));
+        let mut iam = MockIamApi::new();
+        iam.expect_delete_role().times(1).returning(|_| {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceConflict {
+                    message: "You can't delete role_id (projects/test-project-123/roles/acme_agents_image_write) as it is already deleted.".to_string(),
+                    resource_type: "role".to_string(),
+                    resource_name: "acme_agents_image_write".to_string(),
+                },
+            ))
+        });
+        let provider = provider(registry, iam);
+        let client_config = client_config();
+        let ctx = SetupScaffoldingContext {
+            client_config: &client_config,
+            service_provider: &provider,
+            resource_prefix: PREFIX,
+        };
+        let mut records = BTreeMap::from([(
+            "agents".to_string(),
+            GcpSandboxScaffolding {
+                image_repository: "acme-agents-img".to_string(),
+                write_role: "acme_agents_image_write".to_string(),
+                writer_granted: true,
+            },
+        )]);
+        let done = super::super::teardown(&ctx, &mut BTreeMap::new(), &mut records)
+            .await
+            .unwrap();
+        assert_eq!(done, ScaffoldingProgress::Done);
         assert!(records.is_empty());
     }
 
@@ -816,13 +877,15 @@ mod tests {
         };
         let mut records = BTreeMap::from([(
             "agents".to_string(),
-            SetupScaffolding::GcpSandbox {
+            GcpSandboxScaffolding {
                 image_repository: "acme-agents-img".to_string(),
                 write_role: "acme_agents_image_write".to_string(),
                 writer_granted: true,
             },
         )]);
-        let done = super::super::teardown(&ctx, &mut records).await.unwrap();
+        let done = super::super::teardown(&ctx, &mut BTreeMap::new(), &mut records)
+            .await
+            .unwrap();
         assert_eq!(done, ScaffoldingProgress::Done);
     }
 
@@ -873,10 +936,10 @@ mod tests {
         }
     }
 
-    fn record(writer: bool) -> BTreeMap<String, SetupScaffolding> {
+    fn record(writer: bool) -> BTreeMap<String, GcpSandboxScaffolding> {
         BTreeMap::from([(
             "agents".to_string(),
-            SetupScaffolding::GcpSandbox {
+            GcpSandboxScaffolding {
                 image_repository: "acme-agents-img".to_string(),
                 write_role: "acme_agents_image_write".to_string(),
                 writer_granted: writer,
@@ -911,10 +974,14 @@ mod tests {
         state
     }
 
-    fn image_changes(records: &BTreeMap<String, SetupScaffolding>, granted: bool) -> Vec<String> {
+    fn image_changes(
+        records: &BTreeMap<String, GcpSandboxScaffolding>,
+        granted: bool,
+    ) -> Vec<String> {
         super::super::changes_requiring_setup(
             &client_config(),
             &stack_with_image("registry.example/a@sha256:1"),
+            &BTreeMap::new(),
             records,
             &state_with_grant(granted),
             &stack_with_image("registry.example/a@sha256:2"),
@@ -941,6 +1008,7 @@ mod tests {
         let same = super::super::changes_requiring_setup(
             &client_config(),
             &stack_with_image("registry.example/a@sha256:1"),
+            &BTreeMap::new(),
             &BTreeMap::new(),
             &state_with_grant(false),
             &stack_with_image("registry.example/a@sha256:1"),

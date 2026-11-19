@@ -265,6 +265,11 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub setup_scaffolding: BTreeMap<String, SetupScaffolding>,
 
+    /// What a direct setup created for each GCP sandbox, keyed by resource id. Teardown removes
+    /// exactly what is recorded here.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub gcp_sandbox_scaffolding: BTreeMap<String, GcpSandboxScaffolding>,
+
     /// Whether each vault-native deployer secret is in the customer's secret
     /// store, with where it goes. Checked from metadata only; no value is ever
     /// read or recorded here.
@@ -334,19 +339,26 @@ pub enum SetupScaffolding {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         image_arn: Option<String>,
     },
-    /// A Frozen GCP sandbox's image repository and the manager's write access to it. Setup makes
-    /// them because the runtime identity may write images into the repository but cannot create
-    /// it or change who may; an image-only release then rolls without setup.
-    #[serde(rename_all = "camelCase")]
-    GcpSandbox {
-        /// Artifact Registry repository the sandbox's image is copied into.
-        image_repository: String,
-        /// Custom role (no delete) the manager is granted on that repository.
-        write_role: String,
-        /// Whether the manager holds `write_role` on the repository.
-        #[serde(default)]
-        writer_granted: bool,
-    },
+}
+
+/// A Frozen GCP sandbox's image repository and the manager's write access to it. Setup makes
+/// them because the runtime identity may write images into the repository but cannot create
+/// it or change who may; an image-only release then rolls without setup.
+///
+/// Kept in its own `RuntimeMetadata` field, not as a [`SetupScaffolding`] variant: a manager or
+/// CLI from before this record cannot read an unknown variant of that tagged enum, and would then
+/// fail to load the whole deployment state. An unknown field is ignored instead.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct GcpSandboxScaffolding {
+    /// Artifact Registry repository the sandbox's image is copied into.
+    pub image_repository: String,
+    /// Custom role (no delete) the manager is granted on that repository.
+    pub write_role: String,
+    /// Whether the manager holds `write_role` on the repository.
+    #[serde(default)]
+    pub writer_granted: bool,
 }
 
 /// The objects that keep an AWS deny sandbox's sessions inside the VPC. Each id is recorded as
@@ -400,9 +412,6 @@ impl SetupScaffolding {
                     (Some(_), None) => {}
                 }
             }
-            // A repository is found by its fixed name, so a record never lacks anything a found
-            // one would add.
-            (SetupScaffolding::GcpSandbox { .. }, _) | (_, SetupScaffolding::GcpSandbox { .. }) => {}
         }
     }
 }
@@ -730,6 +739,61 @@ mod tests {
         assert!(
             serde_json::to_value(RuntimeMetadata::default()).unwrap()["setupScaffolding"].is_null(),
             "state with no scaffolding serializes as it did before the field existed"
+        );
+    }
+
+    /// The previous release's reader of the persisted record, copied as it was: a tagged enum
+    /// with no fallback for a variant it does not know.
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", tag = "type")]
+    #[allow(dead_code)]
+    enum PreviousSetupScaffolding {
+        #[serde(rename_all = "camelCase")]
+        AwsSandbox { build_role_name: String },
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PreviousRuntimeMetadata {
+        #[serde(default)]
+        setup_scaffolding: BTreeMap<String, PreviousSetupScaffolding>,
+    }
+
+    /// A state written with a GCP sandbox's record must still load in a manager or CLI of the
+    /// previous release, which would otherwise fail on the whole deployment state.
+    #[test]
+    fn a_gcp_sandbox_record_loads_in_the_previous_release() {
+        let mut metadata = RuntimeMetadata::default();
+        metadata.gcp_sandbox_scaffolding.insert(
+            "agents".to_string(),
+            GcpSandboxScaffolding {
+                image_repository: "acme-agents-img".to_string(),
+                write_role: "acme_agents_image_write".to_string(),
+                writer_granted: true,
+            },
+        );
+        metadata.setup_scaffolding.insert(
+            "other".to_string(),
+            SetupScaffolding::AwsSandbox {
+                build_role_name: "acme-other-build".to_string(),
+                egress: None,
+                image_arn: None,
+            },
+        );
+        let written = serde_json::to_value(&metadata).unwrap();
+        let previous: PreviousRuntimeMetadata =
+            serde_json::from_value(written.clone()).expect("previous release reads the state");
+        assert_eq!(previous.setup_scaffolding.len(), 1);
+        let current: RuntimeMetadata = serde_json::from_value(written).unwrap();
+        assert_eq!(current, metadata);
+
+        // The shape an unknown variant of the tagged record would have had.
+        let as_a_variant = serde_json::json!({
+            "setupScaffolding": { "agents": { "type": "gcpSandbox", "imageRepository": "r" } }
+        });
+        assert!(
+            serde_json::from_value::<PreviousRuntimeMetadata>(as_a_variant).is_err(),
+            "the fixture reader refuses an unknown variant, which is why the record has its own field"
         );
     }
 

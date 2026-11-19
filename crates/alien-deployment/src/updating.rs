@@ -457,6 +457,7 @@ pub async fn handle_update_pending(
         // sandbox counts as new.
         let nothing_installed = Stack::new(mutated_stack.id.clone()).build();
         let nothing_recorded = BTreeMap::new();
+        let nothing_recorded_gcp = BTreeMap::new();
         refuse_changes_requiring_setup(
             &client_config,
             old_stack_for_comparison
@@ -466,6 +467,12 @@ pub async fn handle_update_pending(
                 .runtime_metadata
                 .as_ref()
                 .map_or(&nothing_recorded, |metadata| &metadata.setup_scaffolding),
+            current
+                .runtime_metadata
+                .as_ref()
+                .map_or(&nothing_recorded_gcp, |metadata| {
+                    &metadata.gcp_sandbox_scaffolding
+                }),
             &stack_state,
             &mutated_stack,
             current.platform,
@@ -501,6 +508,7 @@ fn refuse_changes_requiring_setup(
     client_config: &alien_core::ClientConfig,
     installed_stack: &Stack,
     records: &BTreeMap<String, SetupScaffolding>,
+    gcp_records: &BTreeMap<String, alien_core::GcpSandboxScaffolding>,
     stack_state: &StackState,
     target_stack: &Stack,
     platform: Platform,
@@ -509,6 +517,7 @@ fn refuse_changes_requiring_setup(
         client_config,
         installed_stack,
         records,
+        gcp_records,
         stack_state,
         target_stack,
         platform,

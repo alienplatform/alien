@@ -2072,7 +2072,7 @@ mod tests {
             resource_prefix: PREFIX,
         };
         let before = cloud.lock().unwrap().mutations.len();
-        let progress = reconcile_all(&ctx, stack, state, records).await?;
+        let progress = reconcile_all(&ctx, stack, state, records, &mut BTreeMap::new()).await?;
         let made = cloud.lock().unwrap().mutations[before..].to_vec();
         Ok((progress, made))
     }
@@ -2111,7 +2111,7 @@ mod tests {
             resource_prefix: PREFIX,
         };
         let before = cloud.lock().unwrap().mutations.len();
-        let progress = teardown_all(&ctx, records).await?;
+        let progress = teardown_all(&ctx, records, &mut BTreeMap::new()).await?;
         let made = cloud.lock().unwrap().mutations[before..].to_vec();
         Ok((progress, made))
     }
@@ -2132,10 +2132,20 @@ mod tests {
         let mut calls = 0;
         loop {
             bounded(&mut calls);
-            crate::setup_scaffolding::recover_unrecorded(&ctx, stack, Platform::Aws, records)
+            crate::setup_scaffolding::recover_unrecorded(
+                &ctx,
+                stack,
+                Platform::Aws,
+                records,
+                &mut BTreeMap::new(),
+            )
+            .await
+            .unwrap();
+            if teardown_all(&ctx, records, &mut BTreeMap::new())
                 .await
-                .unwrap();
-            if teardown_all(&ctx, records).await.unwrap() == ScaffoldingProgress::Done {
+                .unwrap()
+                == ScaffoldingProgress::Done
+            {
                 return;
             }
         }
@@ -2414,7 +2424,7 @@ mod tests {
         let mut records = BTreeMap::new();
 
         for _ in 0..2 {
-            reconcile_all(&ctx, &stack, &state, &mut records)
+            reconcile_all(&ctx, &stack, &state, &mut records, &mut BTreeMap::new())
                 .await
                 .unwrap();
         }
@@ -2470,6 +2480,7 @@ mod tests {
             &stack,
             &stack_state(Some(ResourceStatus::Running)),
             &mut records,
+            &mut BTreeMap::new(),
         )
         .await
         .expect_err("the direct path must refuse what the templates refuse");
