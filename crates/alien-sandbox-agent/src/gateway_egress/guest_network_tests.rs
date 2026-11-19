@@ -269,7 +269,7 @@ fn image_nfs_leaves_only_through_its_mark_and_declared_connections() {
     std::env::set_var(crate::image_permissions::ENV_PERMISSIONS_VERSION, "1");
     std::env::set_var(
         crate::image_permissions::ENV_PERMISSIONS,
-        r#"{"mounts":[{"type":"nfs","path":"/workspace"}],"connections":[{"cidr":"10.0.1.0/24","port":2049}]}"#,
+        r#"{"mounts":[{"type":"nfs","path":"/workspace"}],"connections":[{"cidr":"10.0.1.5/32","port":2049}]}"#,
     );
     crate::image_permissions::load_from_env()
         .expect("declaration")

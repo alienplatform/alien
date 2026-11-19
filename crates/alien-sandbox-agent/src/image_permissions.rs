@@ -20,11 +20,11 @@ use crate::error::{ErrorData, Result};
 pub const ENV_PERMISSIONS: &str = "ALIEN_SANDBOX_IMAGE_PERMISSIONS";
 pub const ENV_PERMISSIONS_VERSION: &str = "ALIEN_SANDBOX_IMAGE_PERMISSIONS_V";
 pub const ENV_IMAGE_COMMAND: &str = "ALIEN_SANDBOX_IMAGE_COMMAND";
-/// Seconds a lifecycle step may run before its process group is killed (1-55, default 50).
-/// The cap leaves room for the NFS detach after a failed pause inside a 60 s provider hook.
+/// Seconds a lifecycle step may run before it is killed (1-40, default 40). The step, then the
+/// NFS detach (at most [`crate::mount_broker::DETACH_DEADLINE`]), fit a 60 s provider hook.
 pub const ENV_LIFECYCLE_DEADLINE: &str = "ALIEN_SANDBOX_LIFECYCLE_DEADLINE_SECONDS";
-pub const DEFAULT_LIFECYCLE_DEADLINE_SECONDS: u64 = 50;
-pub const MAX_LIFECYCLE_DEADLINE_SECONDS: u64 = 55;
+pub const DEFAULT_LIFECYCLE_DEADLINE_SECONDS: u64 = 40;
+pub const MAX_LIFECYCLE_DEADLINE_SECONDS: u64 = 40;
 
 /// Paths no declared mount may be at, under or above: the agent's own files, the system
 /// directories and the broker's socket.
@@ -69,7 +69,7 @@ pub struct DeclaredMount {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeclaredConnection {
-    /// A private IPv4 network (`10.0.1.0/24`) or host.
+    /// One private IPv4 host (`10.0.1.5` or `10.0.1.5/32`).
     pub cidr: String,
     /// TCP port.
     pub port: u16,
@@ -113,13 +113,51 @@ pub fn load_from_env() -> Result<Option<&'static Declared>> {
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(_) => Err(invalid(name, "is not valid UTF-8")),
     };
+    // The platform sets these for every sandbox (empty when the image has no permissions). A
+    // value that is only the image's own (its OCI config `Env`, which the platform's would
+    // override) grants nothing.
+    let image_env = image_config_env()?;
+    let platform =
+        |name: &str| -> Result<Option<String>> { Ok(from_platform(name, get(name)?, &image_env)) };
     let parsed = from_values(
         get(ENV_IMAGE_COMMAND)?.as_deref(),
-        get(ENV_PERMISSIONS_VERSION)?.as_deref(),
-        get(ENV_PERMISSIONS)?.as_deref(),
-        get(ENV_LIFECYCLE_DEADLINE)?.as_deref(),
+        platform(ENV_PERMISSIONS_VERSION)?.as_deref(),
+        platform(ENV_PERMISSIONS)?.as_deref(),
+        platform(ENV_LIFECYCLE_DEADLINE)?.as_deref(),
     )?;
     Ok(DECLARED.get_or_init(|| parsed).as_ref())
+}
+
+/// `value` unless it is empty or the image's own (`image_env`, from its OCI config).
+fn from_platform(
+    name: &str,
+    value: Option<String>,
+    image_env: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    value.filter(|value| {
+        !value.is_empty() && image_env.get(name).map(String::as_str) != Some(value.as_str())
+    })
+}
+
+/// The image's own environment from its saved OCI config; empty without one.
+fn image_config_env() -> Result<std::collections::BTreeMap<String, String>> {
+    match std::fs::read(alien_core::sandbox_image::IMAGE_COMMAND_PATH) {
+        Ok(bytes) => {
+            serde_json::from_slice::<alien_core::sandbox_image::SandboxImageCommand>(&bytes)
+                .map(|command| command.env)
+                .map_err(|error| {
+                    invalid(
+                        alien_core::sandbox_image::IMAGE_COMMAND_PATH,
+                        &error.to_string(),
+                    )
+                })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(error) => Err(invalid(
+            alien_core::sandbox_image::IMAGE_COMMAND_PATH,
+            &error.to_string(),
+        )),
+    }
 }
 
 /// The declaration, once loaded.
@@ -161,7 +199,7 @@ pub fn from_values(
             .parse()
             .ok()
             .filter(|s| (1..=MAX_LIFECYCLE_DEADLINE_SECONDS).contains(s))
-            .ok_or_else(|| invalid(ENV_LIFECYCLE_DEADLINE, "must be 1 to 55 seconds"))?;
+            .ok_or_else(|| invalid(ENV_LIFECYCLE_DEADLINE, "must be 1 to 40 seconds"))?;
         declared.lifecycle_deadline = std::time::Duration::from_secs(seconds);
     }
     Ok(Some(declared))
@@ -275,7 +313,8 @@ fn check_not_reserved(path: &str) -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// An RFC 1918 network, /16 or narrower, without host bits.
+/// One private (RFC 1918) IPv4 host: `10.0.1.5` or `10.0.1.5/32`. A connection names the
+/// resolved address of the resource it reaches, never a network.
 pub fn parse_private_cidr(cidr: &str) -> std::result::Result<(Ipv4Addr, u8), String> {
     let (address, prefix) = match cidr.split_once('/') {
         Some((address, prefix)) => (
@@ -291,8 +330,8 @@ pub fn parse_private_cidr(cidr: &str) -> std::result::Result<(Ipv4Addr, u8), Str
     let address: Ipv4Addr = address
         .parse()
         .map_err(|_| format!("'{cidr}' is not an IPv4 address or network"))?;
-    if prefix < 16 {
-        return Err(format!("'{cidr}' is wider than a /16"));
+    if prefix != 32 {
+        return Err(format!("'{cidr}' is a network; name one host (/32)"));
     }
     let mask = if prefix == 0 {
         0
@@ -320,7 +359,7 @@ mod tests {
     use super::*;
 
     const V1: Option<&str> = Some(alien_core::sandbox_image::IMAGE_COMMAND_WITH_IMAGE_PERMISSIONS);
-    const CONTRACT: &str = r#"{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/var/lib/vendor/workspace-tmp","sizeBytes":8589934592},{"type":"bind","from":"/var/lib/vendor/workspace-tmp","path":"/workspace/tmp"}],"connections":[{"cidr":"10.0.1.0/24","port":2049}],"onPause":["/bin/agentd","pause"],"onResume":["/bin/agentd","resume"]}"#;
+    const CONTRACT: &str = r#"{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/var/lib/vendor/workspace-tmp","sizeBytes":8589934592},{"type":"bind","from":"/var/lib/vendor/workspace-tmp","path":"/workspace/tmp"}],"connections":[{"cidr":"10.0.1.5/32","port":2049}],"onPause":["/bin/agentd","pause"],"onResume":["/bin/agentd","resume"]}"#;
 
     #[test]
     fn the_contract_example_is_accepted() {
@@ -330,9 +369,9 @@ mod tests {
         assert_eq!(declared.permissions.mounts.len(), 3);
         assert_eq!(
             declared.destinations,
-            vec![("10.0.1.0".parse().unwrap(), 24, 2049)]
+            vec![("10.0.1.5".parse().unwrap(), 32, 2049)]
         );
-        assert_eq!(declared.lifecycle_deadline.as_secs(), 50);
+        assert_eq!(declared.lifecycle_deadline.as_secs(), 40);
         assert_eq!(
             declared
                 .mount("/var/lib/vendor/workspace-tmp")
@@ -344,12 +383,36 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(short.lifecycle_deadline.as_secs(), 5);
-        let longest = from_values(V1, Some("1"), Some(CONTRACT), Some("55"))
+        let longest = from_values(V1, Some("1"), Some(CONTRACT), Some("40"))
             .unwrap()
             .unwrap();
-        assert_eq!(longest.lifecycle_deadline.as_secs(), 55);
-        assert!(from_values(V1, Some("1"), Some(CONTRACT), Some("56")).is_err());
+        assert_eq!(longest.lifecycle_deadline.as_secs(), 40);
+        assert!(from_values(V1, Some("1"), Some(CONTRACT), Some("41")).is_err());
         assert!(from_values(V1, Some("1"), Some(CONTRACT), Some("61")).is_err());
+    }
+
+    #[test]
+    fn only_the_platform_grants_permissions() {
+        let image_env: std::collections::BTreeMap<String, String> =
+            [(ENV_PERMISSIONS.to_string(), CONTRACT.to_string())].into();
+        let set = |value: &str| Some(value.to_string());
+        // The image's own config value grants nothing, and neither does the platform's empty one.
+        assert_eq!(
+            from_platform(ENV_PERMISSIONS, set(CONTRACT), &image_env),
+            None
+        );
+        assert_eq!(from_platform(ENV_PERMISSIONS, set(""), &image_env), None);
+        assert_eq!(from_platform(ENV_PERMISSIONS, None, &image_env), None);
+        // A value the platform set (different from the image's) stands.
+        let platform = r#"{"mounts":[{"type":"nfs","path":"/workspace"}]}"#;
+        assert_eq!(
+            from_platform(ENV_PERMISSIONS, set(platform), &image_env).as_deref(),
+            Some(platform)
+        );
+        assert_eq!(
+            from_platform(ENV_PERMISSIONS, set(CONTRACT), &Default::default()).as_deref(),
+            Some(CONTRACT)
+        );
     }
 
     #[test]
@@ -381,7 +444,9 @@ mod tests {
             r#"{"connections":[{"cidr":"8.8.8.0/24","port":2049}]}"#,
             r#"{"connections":[{"cidr":"10.0.0.0/8","port":2049}]}"#,
             r#"{"connections":[{"cidr":"10.0.1.1/24","port":2049}]}"#,
-            r#"{"connections":[{"cidr":"10.0.1.0/24","port":53}]}"#,
+            r#"{"connections":[{"cidr":"10.0.1.5/32","port":53}]}"#,
+            r#"{"connections":[{"cidr":"10.0.1.0/24","port":2049}]}"#,
+            r#"{"connections":[{"cidr":"10.0.1.4/31","port":2049}]}"#,
             r#"{"connections":[{"cidr":"127.0.0.1","port":2049}]}"#,
             r#"{"onPause":[]}"#,
             r#"{"mounts":[{"type":"bind","path":"/b"}]}"#,

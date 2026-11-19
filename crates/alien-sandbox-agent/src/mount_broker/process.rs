@@ -29,6 +29,10 @@ pub const IMAGE_MARK: u32 = 0xa120;
 /// How long a mount request may take before its helper is killed.
 pub const REQUEST_DEADLINE: Duration = Duration::from_secs(30);
 
+/// How long the pause detach may take. With the lifecycle step's own deadline and the broker
+/// finishing the request it is reading, it fits the provider's 60 s hook.
+pub const DETACH_DEADLINE: Duration = Duration::from_secs(12);
+
 /// How long a caller has to send its whole request line.
 const REQUEST_READ: Duration = Duration::from_secs(2);
 
@@ -1013,7 +1017,7 @@ impl Loop<'_> {
         if pid < 0 {
             return;
         }
-        let deadline = Instant::now() + self.config.deadline;
+        let deadline = Instant::now() + DETACH_DEADLINE.min(self.config.deadline);
         loop {
             // SAFETY: reaping our own helper without blocking.
             if unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) } != 0 {
