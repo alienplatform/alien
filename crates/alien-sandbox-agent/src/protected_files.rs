@@ -47,10 +47,15 @@ pub fn protect(binary: &Path, metadata: &Path) -> io::Result<()> {
     }
     bind(binary, true)?;
     bind(metadata, true)?;
+    // A missing entry below may be skipped only when procfs itself is there: without it nothing
+    // under `/proc` would be made read-only, and that must not pass for "the kernel has none".
+    require_procfs(Path::new("/proc"))?;
     for path in READ_ONLY_KERNEL_PATHS {
         match read_only_tree(Path::new(path)) {
-            // Not every kernel has every entry (no IRQ or bus directories, no /sys).
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            // Not every kernel has every entry (no IRQ or bus directories, no /sys). The kernel
+            // settings always exist where procfs is mounted.
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound && !path.starts_with("/proc/sys") => {}
             result => {
                 result.map_err(|error| io::Error::new(error.kind(), format!("{path}: {error}")))?
             }
@@ -59,6 +64,35 @@ pub fn protect(binary: &Path, metadata: &Path) -> io::Result<()> {
     for path in MASKED_KERNEL_PATHS {
         mask(Path::new(path))
             .map_err(|error| io::Error::new(error.kind(), format!("mask {path}: {error}")))?;
+    }
+    Ok(())
+}
+
+const PROC_SUPER_MAGIC: i64 = 0x9fa0;
+
+/// `proc` is procfs, mounted, and shows this process (`self/stat` reads): what is missing below it
+/// is missing from the kernel, not hidden by an absent or foreign mount.
+pub fn require_procfs(proc: &Path) -> io::Result<()> {
+    let refused = |reason: String| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} is not this process's procfs: {reason}", proc.display()),
+        )
+    };
+    let name = CString::new(proc.as_os_str().as_bytes())?;
+    // SAFETY: a zeroed statfs for statfs to fill, and a valid path.
+    let mut fs: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(name.as_ptr(), &mut fs) } != 0 {
+        return Err(refused(io::Error::last_os_error().to_string()));
+    }
+    if fs.f_type as i64 != PROC_SUPER_MAGIC {
+        return Err(refused(format!("filesystem type {:#x}", fs.f_type)));
+    }
+    let stat = fs::read_to_string(proc.join("self/stat"))
+        .map_err(|error| refused(format!("self/stat: {error}")))?;
+    let pid = stat.split(' ').next().unwrap_or_default();
+    if pid != std::process::id().to_string() {
+        return Err(refused(format!("self/stat names process {pid}")));
     }
     Ok(())
 }
@@ -334,6 +368,27 @@ fn private_mount_namespace() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn procfs_is_required_where_it_should_be() {
+        super::require_procfs(std::path::Path::new("/proc")).expect("/proc is procfs");
+        let empty = tempfile::tempdir().unwrap();
+        let error = super::require_procfs(empty.path()).unwrap_err();
+        assert!(error.to_string().contains("filesystem type"), "{error}");
+        let error = super::require_procfs(&empty.path().join("absent")).unwrap_err();
+        assert!(
+            error.to_string().contains("is not this process's procfs"),
+            "{error}"
+        );
+        // A copy of procfs files on another filesystem is not procfs.
+        std::fs::create_dir(empty.path().join("self")).unwrap();
+        std::fs::write(
+            empty.path().join("self/stat"),
+            format!("{} (x) R", std::process::id()),
+        )
+        .unwrap();
+        assert!(super::require_procfs(empty.path()).is_err());
+    }
+
     use super::*;
 
     #[test]
@@ -365,6 +420,80 @@ mod tests {
         os::unix::process::CommandExt,
         process::Command,
     };
+
+    /// A `/proc` that is not procfs (here an empty tmpfs holding only a copy of `self/status`)
+    /// must not read as "the kernel has no `/proc/sys`": nothing would be made read-only.
+    #[test]
+    #[ignore = "requires root and SYS_ADMIN"]
+    fn protect_refuses_without_procfs() {
+        const CHILD: &str = "ALIEN_PROTECTION_NO_PROCFS_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let status = fs::read_to_string("/proc/self/status").unwrap();
+            // SAFETY: valid NUL-terminated strings; this process's private mount namespace.
+            let mounted = unsafe {
+                libc::mount(
+                    c"tmpfs".as_ptr(),
+                    c"/proc".as_ptr(),
+                    c"tmpfs".as_ptr(),
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            assert_eq!(mounted, 0, "{}", io::Error::last_os_error());
+            fs::create_dir("/proc/self").unwrap();
+            fs::write("/proc/self/status", status).unwrap();
+            let root = tempfile::tempdir().unwrap();
+            let binary = root.path().join("usr/local/bin/agent");
+            let metadata = root.path().join("opt/alien");
+            fs::create_dir_all(binary.parent().unwrap()).unwrap();
+            fs::create_dir_all(&metadata).unwrap();
+            fs::write(&binary, b"binary").unwrap();
+            let error = protect(&binary, &metadata).expect_err("protect without procfs");
+            println!("protect without procfs: {error}");
+            assert!(
+                error
+                    .to_string()
+                    .contains("/proc is not this process's procfs: filesystem type"),
+                "{error}"
+            );
+            return;
+        }
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "protected_files::tests::protect_refuses_without_procfs",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(CHILD, "1");
+        // SAFETY: only unshare and mount between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::unshare(libc::CLONE_NEWNS) != 0
+                    || libc::mount(
+                        std::ptr::null(),
+                        c"/".as_ptr(),
+                        std::ptr::null(),
+                        libc::MS_REC | libc::MS_PRIVATE,
+                        std::ptr::null(),
+                    ) != 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let output = command.output().unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        println!("{text}");
+        assert!(
+            output.status.success(),
+            "{text}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(text.contains("protect without procfs: "), "{text}");
+    }
 
     #[test]
     #[ignore = "requires root, SYS_ADMIN and Python 3"]

@@ -86,6 +86,9 @@ pub struct Config {
     /// namespace, so the image's `/` may be the root the kernel runs its helpers from. Tests use a
     /// stand-in.
     pub kernel_thread_parent: PathBuf,
+    /// Where procfs must be mounted for an absent [`Config::kernel_thread_parent`] to mean "no
+    /// PID 2 in this namespace". Tests use a stand-in.
+    pub proc: PathBuf,
 }
 
 impl Default for Config {
@@ -96,6 +99,7 @@ impl Default for Config {
             deadline: REQUEST_DEADLINE,
             helpers: HelperSettings::default(),
             kernel_thread_parent: "/proc/2/comm".into(),
+            proc: "/proc".into(),
         }
     }
 }
@@ -970,6 +974,9 @@ impl Loop<'_> {
         }
         // The kernel runs its helpers from its own root. With the agent in the kernel's initial
         // PID namespace the image's `/` may be that root, and the image could choose what runs.
+        // An absent PID 2 counts only where procfs is mounted and ours: no /proc says nothing.
+        crate::protected_files::require_procfs(&self.config.proc)
+            .map_err(|error| format!("step own namespaces: {error}"))?;
         let parent = match std::fs::read_to_string(&self.config.kernel_thread_parent) {
             Ok(name) => name,
             Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),

@@ -147,11 +147,21 @@ fn broker_allows_declared_mounts_and_refuses_everything_else() {
     seal_or_start_refused(
         None,
         Some("/tmp/kthreadd-comm-standin"),
+        None,
         "seal",
         &[
             "step own namespaces: /tmp/kthreadd-comm-standin is kthreadd",
             "image permissions need the image in its own PID and mount namespaces",
         ],
+    );
+    // No PID 2 says nothing where procfs is not mounted: the seal refuses that too.
+    std::fs::create_dir_all("/tmp/not-proc/2").unwrap();
+    seal_or_start_refused(
+        None,
+        None,
+        Some("/tmp/not-proc"),
+        "seal",
+        &["step own namespaces: /tmp/not-proc is not this process's procfs: filesystem type"],
     );
     // The broker must be forked by a single-threaded process, as the agent does at boot; libtest
     // runs this test on a thread of its own, so the scenario runs in a forked child.
@@ -176,13 +186,14 @@ fn broker_allows_declared_mounts_and_refuses_everything_else() {
 /// In a forked child (single-threaded, as the agent at boot) that drops `capability` first: the
 /// broker's start or its seal fails with `expect` in the error, before anything is mounted.
 fn missing_capability_is_named(capability: u32, at: &str, expect: &str) {
-    seal_or_start_refused(Some(capability), None, at, &[expect])
+    seal_or_start_refused(Some(capability), None, None, at, &[expect])
 }
 
 /// As [`missing_capability_is_named`], optionally with a stand-in for `/proc/2/comm`.
 fn seal_or_start_refused(
     capability: Option<u32>,
     kernel_thread_parent: Option<&str>,
+    proc: Option<&str>,
     at: &str,
     expect: &[&str],
 ) {
@@ -214,6 +225,7 @@ fn seal_or_start_refused(
                     kernel_thread_parent: kernel_thread_parent
                         .unwrap_or("/tmp/no-kernel-thread-parent/comm")
                         .into(),
+                    proc: proc.unwrap_or("/proc").into(),
                     ..Default::default()
                 },
             );

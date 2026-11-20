@@ -41,6 +41,7 @@ docker create --name "$container" --privileged --cgroupns=private \
       image_command::tests::legacy_egress_refuses_root_image_before_spawn \
       peer::tests::socket_mark_separates_provider_from_every_guest_uid \
       protected_files::tests::root_image_cannot_replace_bootstrap_files \
+      protected_files::tests::protect_refuses_without_procfs \
       gateway_egress::guest_network_tests::root_and_child_uids_keep_redirects_and_cannot_escape
     do
       /agent-tests --list --ignored --exact "$name" | grep -Fx "$name: test"
