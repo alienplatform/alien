@@ -370,6 +370,7 @@ async fn an_azure_sandbox_only_stack_depends_only_on_resources_it_defines() {
         .lifecycle(alien_core::SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: Some(1800),
+            ..Default::default()
         })
         .build();
     let sandbox_only = Stack::new("test-stack".to_string())
@@ -722,6 +723,7 @@ async fn sandbox_consumers_get_signing_access_only_with_management_permissions()
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let worker = Container::new("executor".into())
@@ -841,6 +843,7 @@ async fn internet_sandbox_key_dependencies_respect_setup_ownership() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build();
             stack = stack.add(sandbox, lifecycle);
@@ -912,6 +915,7 @@ async fn azure_internet_sandbox_declares_the_gateway_without_a_compute_cluster()
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let stack = Stack::new("azint".to_string())

@@ -12,7 +12,7 @@ const DNS_QUESTION: &[u8] =
     b"\x00\x2a\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x06egress\x07invalid\x00\x00\x01\x00\x01";
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
-pub(super) async fn supervisor_udp(privileged: bool) -> Result<()> {
+pub(super) async fn supervisor_udp(privileged: bool, window: Duration) -> Result<()> {
     let socket = tokio::net::UdpSocket::bind("0.0.0.0:0")
         .await
         .into_alien_error()
@@ -23,7 +23,7 @@ pub(super) async fn supervisor_udp(privileged: bool) -> Result<()> {
             .context(failed("mark UDP path check"))?;
     }
     let mut reply = [0; 512];
-    let reply = tokio::time::timeout(PROBE_TIMEOUT, async {
+    let reply = tokio::time::timeout(window, async {
         socket.connect("8.8.8.8:53").await?;
         socket.send(DNS_QUESTION).await?;
         socket.recv(&mut reply).await

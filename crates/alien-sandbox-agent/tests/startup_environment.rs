@@ -22,6 +22,7 @@ fn released_supervisor_policies_keep_their_startup_meaning() {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         sandbox.privileged_supervisor = Some(SandboxPrivilegedSupervisor { command_uid: 60001 });
@@ -47,6 +48,7 @@ fn runtime_defaults_do_not_become_the_startup_network_floor() {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     sandbox.privileged_supervisor = Some(SandboxPrivilegedSupervisor { command_uid: 60001 });

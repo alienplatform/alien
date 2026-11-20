@@ -2166,10 +2166,12 @@ mod tests {
             .expect_get_role_assignment_by_id()
             .times(2)
             .returning(|_| {
-                Err(AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "RoleAssignment".to_string(),
-                    resource_name: "existing-assignment".to_string(),
-                }))
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: "RoleAssignment".to_string(),
+                        resource_name: "existing-assignment".to_string(),
+                    },
+                ))
             });
         authorization.expect_delete_role_assignment_by_id().times(0);
         let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
@@ -2199,8 +2201,11 @@ mod tests {
             resource_name: "x".to_string(),
             message: "The role assignment already exists. The ID of the existing role assignment is 62afc2c04b505f948cbbb16c9711c901.".to_string(),
         });
-        let id = AzurePermissionsHelper::existing_assignment_id(&error, "/subscriptions/s/resourceGroups/rg")
-            .expect("the id is read");
+        let id = AzurePermissionsHelper::existing_assignment_id(
+            &error,
+            "/subscriptions/s/resourceGroups/rg",
+        )
+        .expect("the id is read");
         assert_eq!(
             id,
             "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Authorization/roleAssignments/62afc2c0-4b50-5f94-8cbb-b16c9711c901"
@@ -2270,11 +2275,13 @@ mod tests {
             .expect_create_or_update_role_assignment_by_id()
             .times(1)
             .returning(|_, _| {
-                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
-                    resource_type: "role assignment".to_string(),
-                    resource_name: "assignment-123".to_string(),
-                    message: "The role assignment already exists.".to_string(),
-                }))
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "role assignment".to_string(),
+                        resource_name: "assignment-123".to_string(),
+                        message: "The role assignment already exists.".to_string(),
+                    },
+                ))
             });
         authorization.expect_delete_role_assignment_by_id().times(0);
         let error = write_with(authorization).await.expect_err("never a reuse");
@@ -2294,7 +2301,11 @@ mod tests {
             .returning(|_, _| Err(conflict_naming("62afc2c04b505f948cbbb16c9711c901")));
         authorization
             .expect_get_role_assignment_by_id()
-            .returning(|_| Ok(assignment_with_description(Some(RUNTIME_ROLE_ASSIGNMENT_DESCRIPTION))));
+            .returning(|_| {
+                Ok(assignment_with_description(Some(
+                    RUNTIME_ROLE_ASSIGNMENT_DESCRIPTION,
+                )))
+            });
         authorization
             .expect_delete_role_assignment_by_id()
             .times(2)
@@ -2395,11 +2406,14 @@ mod tests {
             .expect_create_or_update_role_assignment_by_id()
             .times(1)
             .returning(|_, _| {
-                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
-                    resource_type: "role assignment".to_string(),
-                    resource_name: "assignment-123".to_string(),
-                    message: "the value cannot be updated while the policy is locked".to_string(),
-                }))
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "role assignment".to_string(),
+                        resource_name: "assignment-123".to_string(),
+                        message: "the value cannot be updated while the policy is locked"
+                            .to_string(),
+                    },
+                ))
             });
         authorization.expect_get_role_assignment_by_id().times(0);
         authorization.expect_delete_role_assignment_by_id().times(0);
@@ -2424,11 +2438,15 @@ mod tests {
             .expect_create_or_update_role_assignment_by_id()
             .times(1)
             .returning(|_, _| {
-                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
-                    resource_type: "role assignment".to_string(),
-                    resource_name: "assignment-123".to_string(),
-                    message: "RoleAssignmentUpdateNotPermitted: scope are not allowed to be updated.".to_string(),
-                }))
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "role assignment".to_string(),
+                        resource_name: "assignment-123".to_string(),
+                        message:
+                            "RoleAssignmentUpdateNotPermitted: scope are not allowed to be updated."
+                                .to_string(),
+                    },
+                ))
             });
         authorization
             .expect_get_role_assignment_by_id()

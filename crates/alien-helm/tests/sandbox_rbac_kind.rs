@@ -134,6 +134,7 @@ fn write_chart(directory: &Path, sandbox_id: &str) {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: Some(3600),
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,

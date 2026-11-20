@@ -389,7 +389,11 @@ fn machine_override_without_a_machine_list_still_converts_to_a_verified_intent()
         Platform::Aws,
         ComputeClusterEmitter,
     );
-    registry.register(Container::RESOURCE_TYPE, Platform::Aws, ComputeClusterEmitter);
+    registry.register(
+        Container::RESOURCE_TYPE,
+        Platform::Aws,
+        ComputeClusterEmitter,
+    );
     let mut template = generate_cloudformation_template(
         &stack,
         CloudFormationOptions {

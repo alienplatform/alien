@@ -1814,6 +1814,7 @@ mod setup_update_authorization_tests {
                         .lifecycle(SandboxLifecyclePolicy {
                             max_lifetime_seconds: None,
                             idle_pause_seconds: None,
+                            ..Default::default()
                         })
                         .build(),
                     ResourceLifecycle::Frozen,
@@ -3493,6 +3494,7 @@ mod setup_update_authorization_tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         Stack::new("stack".to_string())
@@ -3676,6 +3678,7 @@ mod setup_update_authorization_tests {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: max_lifetime,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build();
             Stack::new("stack".to_string())

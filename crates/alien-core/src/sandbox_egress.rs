@@ -214,7 +214,25 @@ pub fn aws_sandbox_agent_environment(
         // is installed. The authenticated run hook installs it before user code.
         environment.insert("ALIEN_SANDBOX_EGRESS_RUN_HOOK".into(), "true".into());
     }
+    // Only for an inspected image, which already runs the image command: the marker replaces
+    // `true` there, so a released agent refuses to start rather than ignore the declaration.
+    // The contract itself needs the network's address range and is added by the caller.
+    if sandbox.image_user.is_some() && sandbox.declares_image_permissions() {
+        environment.extend(crate::sandbox_image_permissions::image_permissions_markers());
+    }
     environment
+}
+
+/// Whether any AWS sandbox in the stack declares a direct connection, which setup can resolve
+/// only against a network it creates.
+pub fn stack_declares_image_connections(stack: &Stack) -> bool {
+    stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<Sandbox>()
+            .and_then(|sandbox| sandbox.image_permissions.as_ref())
+            .is_some_and(|permissions| !permissions.connections.is_empty())
+    })
 }
 
 /// The name of the operator role's inline policy.
@@ -416,6 +434,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let mut stack = Stack::new("acme".to_string()).add(sandbox, ResourceLifecycle::Frozen);

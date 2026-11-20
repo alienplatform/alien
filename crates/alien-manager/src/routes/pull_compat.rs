@@ -35,7 +35,7 @@ const OLDEST_OPERATOR: &str = "3.3.31";
 /// (`.github/scripts/bump-next-release.sh`); CI fails when it is not newer than
 /// the latest tag. Feature gates always carry a literal version: for a feature
 /// not yet released, write this value, never the constant itself.
-pub(crate) const NEXT_RELEASE: &str = "3.3.70";
+pub(crate) const NEXT_RELEASE: &str = "3.3.71";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Action {
@@ -174,6 +174,12 @@ pub(crate) const SANDBOX_IMAGE_USER: Feature = feature(
     Action::Refuse,
     "the sandbox would run as another user",
 );
+pub(crate) const SANDBOX_IMAGE_PERMISSIONS: Feature = feature(
+    "sandbox image permissions and lifecycle steps",
+    "3.3.70",
+    Action::Refuse,
+    "mounts, direct connections and pause or resume steps the developer declared; older Operators cannot parse them",
+);
 pub(crate) const REDIS: Feature = feature(
     "Redis resources",
     "3.3.59",
@@ -230,6 +236,7 @@ pub(crate) const FEATURES: &[&Feature] = &[
     &STORAGE_UPLOAD_ORIGINS,
     &SANDBOX_POLICY,
     &SANDBOX_IMAGE_USER,
+    &SANDBOX_IMAGE_PERMISSIONS,
     &REDIS,
     &SIGNING_VERIFIER,
     &AZURE_SANDBOX_INTERNET,
@@ -411,6 +418,9 @@ pub(crate) fn apply(
             }
             if sandbox.image_user.is_some() {
                 refuse(&SANDBOX_IMAGE_USER);
+            }
+            if sandbox.declares_image_permissions() {
+                refuse(&SANDBOX_IMAGE_PERMISSIONS);
             }
         } else if config.resource_type() == alien_core::Redis::RESOURCE_TYPE {
             refuse(&REDIS);
@@ -602,6 +612,55 @@ mod tests {
         }
         assert!(refused_for(&stack, Some(NEXT_RELEASE)).is_empty());
         assert!(refused_for(&stack, Some("dev")).is_empty());
+    }
+
+    #[test]
+    fn sandbox_image_permissions_are_refused_for_operators_that_cannot_parse_them() {
+        let declared =
+            |lifecycle: alien_core::SandboxLifecyclePolicy,
+             permissions: Option<alien_core::SandboxImagePermissions>| {
+                let mut sandbox = Sandbox::new("agents".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "s3://bundles/agents.zip".to_string(),
+                        bundled_from: None,
+                    })
+                    .egress(alien_core::SandboxEgress::None)
+                    .lifecycle(lifecycle)
+                    .build();
+                sandbox.image_permissions = permissions;
+                Stack::new("app".to_string())
+                    .add(sandbox, alien_core::ResourceLifecycle::Live)
+                    .build()
+            };
+        let mounts = declared(
+            Default::default(),
+            Some(alien_core::SandboxImagePermissions {
+                mounts: vec![alien_core::SandboxImageMount {
+                    mount_type: alien_core::SandboxImageMountType::Tmpfs,
+                    path: "/scratch".into(),
+                    size: Some("1Gi".into()),
+                    from: None,
+                }],
+                connections: vec![],
+            }),
+        );
+        let steps = declared(
+            alien_core::SandboxLifecyclePolicy {
+                on_resume: Some(vec!["/bin/true".into()]),
+                ..Default::default()
+            },
+            None,
+        );
+        for stack in [&mounts, &steps] {
+            for version in [None, Some("3.3.62"), Some("3.3.69")] {
+                assert_eq!(
+                    refused_for(stack, version),
+                    ["sandbox image permissions and lifecycle steps"]
+                );
+            }
+            assert!(refused_for(stack, Some(NEXT_RELEASE)).is_empty());
+        }
+        assert!(refused_for(&declared(Default::default(), None), None).is_empty());
     }
 
     #[test]
@@ -856,6 +915,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         Stack::new("app".to_string())

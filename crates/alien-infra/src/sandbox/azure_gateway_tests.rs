@@ -80,6 +80,7 @@ async fn executor_with(
         .lifecycle(alien_core::SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .default_policy(alien_core::EgressPolicy::Allow {
             allow: vec!["api.example.com".into()],
@@ -350,6 +351,7 @@ async fn the_owner_never_reads_a_value_from_key_vault() {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .default_policy(alien_core::EgressPolicy::Allow {
                 allow: vec!["other.example.com".into()],

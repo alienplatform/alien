@@ -92,6 +92,7 @@ const MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS: &str = "RegionalCustomRes
 const MAPPING_SERVICE_TOKEN_KEY: &str = "ServiceToken";
 const RULE_SUPPORTED_AWS_REGION: &str = "SupportedAwsRegion";
 const RULE_CUSTOM_DOMAIN_CERTIFICATE: &str = "CustomDomainCertificate";
+const RULE_SANDBOX_IMAGE_CONNECTIONS_NETWORK: &str = "SandboxImageConnectionsNeedCreatedNetwork";
 
 /// Registration behavior for the generated CloudFormation template.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -458,6 +459,33 @@ pub fn generate_cloudformation_template_with_profile(
                     metadata
                 })
                 .collect::<Vec<_>>()),
+        );
+    }
+
+    // What a sandbox's own image may do beyond the default grant, in the words the person
+    // approving setup reads: the template metadata carries every line, and the description,
+    // which every console shows, says where to find them.
+    let image_permissions: Vec<serde_json::Value> = stack
+        .resources()
+        .filter(|_| !options.target.is_kubernetes())
+        .filter_map(|(id, entry)| {
+            let sandbox = entry.config.downcast_ref::<Sandbox>()?;
+            let statements = alien_core::sandbox_image_permissions::approval_statements(sandbox);
+            (!statements.is_empty()).then(|| json!({ "sandbox": id, "statements": statements }))
+        })
+        .collect();
+    if !image_permissions.is_empty() {
+        if let Some(description) = &mut template.description {
+            description.truncate(description.trim_end_matches('.').len());
+            description.push_str(
+                ". A sandbox image in this application may mount file systems or connect \
+                 directly to private services outside the egress gateway and its connection \
+                 log; Metadata.SandboxImagePermissions lists each one.",
+            );
+        }
+        template.metadata.insert(
+            "SandboxImagePermissions".to_string(),
+            json!(image_permissions),
         );
     }
 
@@ -1943,6 +1971,24 @@ fn add_standard_parameters(
     );
 
     add_network_parameters(template, stack, settings.network.as_ref(), target);
+    if !target.is_kubernetes()
+        && alien_core::sandbox_egress::stack_declares_image_connections(stack)
+    {
+        // A sandbox image's direct connections resolve to the address range of the VPC setup
+        // creates; an existing or default VPC has no range this template can read.
+        template.rules.insert(
+            RULE_SANDBOX_IMAGE_CONNECTIONS_NETWORK.to_string(),
+            CfRule {
+                assertions: vec![CfRuleAssertion {
+                    assertion: equals_ref(PARAM_NETWORK_MODE, "create-new"),
+                    assert_description: "This application's sandbox image connects directly to \
+                                         private services inside the VPC setup creates. Choose \
+                                         NetworkMode create-new."
+                        .to_string(),
+                }],
+            },
+        );
+    }
     add_container_resource_parameters(template, stack, settings.compute.as_ref())?;
     if !target.is_kubernetes() {
         add_compute_parameters(template, stack, runtime_scale, settings.compute.as_ref())?;

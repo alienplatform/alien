@@ -11838,6 +11838,7 @@ mod tests {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: Some(1800),
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build()
         }

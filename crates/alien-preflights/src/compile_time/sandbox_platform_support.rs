@@ -122,6 +122,9 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                 }
                 sandbox
                     .validate_for_platform(platform)
+                    .and_then(|()| {
+                        alien_core::sandbox_image_permissions::validate_connections(stack, sandbox)
+                    })
                     .err()
                     // A capability refusal names the platform and the capability, which is the
                     // right shape for the runtime caller but leaves a deployer with several
@@ -222,6 +225,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             });
         match limits {
             Some(limits) => builder.limits(limits).build(),
@@ -253,6 +257,7 @@ mod tests {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .preview_ports(vec![8080])
                 .build()
@@ -295,6 +300,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .preview_ports(vec![8080])
             .build();

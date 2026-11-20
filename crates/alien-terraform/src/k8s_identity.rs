@@ -439,28 +439,82 @@ fn apply_eks(fragment: &mut TfFragment, label: &str, service_account_name: &str)
     )
 }
 
+/// Takes the federated principal setup's customer federation granted
+/// `roles/iam.workloadIdentityUser` on this service account out of the fragment, when it has
+/// one: `(member expression, depends_on expression)`.
+///
+/// `google_service_account_iam_binding` is authoritative for the role, so a separate
+/// `google_service_account_iam_member` for the same role is overwritten by it on every apply
+/// and the manager loses access. The Workload Identity binding lists both principals instead.
+/// The member resource's address is forgotten without destroying it: a destroy would remove
+/// the principal the binding has just set.
+fn take_federated_workload_identity_member(
+    fragment: &mut TfFragment,
+    label: &str,
+) -> Option<(Expression, Option<Expression>)> {
+    let member_label = format!("{label}_manager");
+    let index = fragment.resource_blocks.iter().position(|block| {
+        let labels: Vec<&str> = block.labels.iter().map(|l| l.as_str()).collect();
+        labels == ["google_service_account_iam_member", member_label.as_str()]
+    })?;
+    let block = &fragment.resource_blocks[index];
+    let find = |name: &str| {
+        block
+            .body
+            .attributes()
+            .find(|attribute| attribute.key.as_str() == name)
+            .map(|attribute| attribute.expr.clone())
+    };
+    let member = find("member")?;
+    let depends_on = find("depends_on");
+    fragment.resource_blocks.remove(index);
+    fragment.moved_blocks.push(crate::block::block(
+        "removed",
+        [
+            attr(
+                "from",
+                expr::traversal(["google_service_account_iam_member", &member_label]),
+            ),
+            nested(crate::block::block(
+                "lifecycle",
+                [attr("destroy", Expression::Bool(false))],
+            )),
+        ],
+    ));
+    Some((member, depends_on))
+}
+
 fn apply_gke(fragment: &mut TfFragment, label: &str, service_account_name: &str) -> Expression {
+    let federated = take_federated_workload_identity_member(fragment, label);
+    let mut members = vec![expr::template(format!(
+        "serviceAccount:${{data.google_container_cluster.target.workload_identity_config[0].workload_pool}}[${{var.kubernetes_namespace}}/{service_account_name}]"
+    ))];
+    let mut depends_on = None;
+    if let Some((member, federated_depends_on)) = federated {
+        members.push(member);
+        depends_on = federated_depends_on;
+    }
+    let mut binding = vec![
+        attr(
+            "service_account_id",
+            expr::traversal(["google_service_account", label, "name"]),
+        ),
+        attr(
+            "role",
+            Expression::String("roles/iam.workloadIdentityUser".to_string()),
+        ),
+        attr("members", Expression::Array(members)),
+    ];
+    if let Some(depends_on) = depends_on {
+        binding.push(attr("depends_on", depends_on));
+    }
     // Workload Identity binding: the IAM service account allows the
-    // Kubernetes service account to impersonate it.
+    // Kubernetes service account (and the manager's federated principal, when setup
+    // federates it) to impersonate it.
     fragment.resource_blocks.push(resource_block(
         "google_service_account_iam_binding",
         &format!("{label}_workload_identity"),
-        [
-            attr(
-                "service_account_id",
-                expr::traversal(["google_service_account", label, "name"]),
-            ),
-            attr(
-                "role",
-                Expression::String("roles/iam.workloadIdentityUser".to_string()),
-            ),
-            attr(
-                "members",
-                Expression::Array(vec![expr::template(format!(
-                    "serviceAccount:${{data.google_container_cluster.target.workload_identity_config[0].workload_pool}}[${{var.kubernetes_namespace}}/{service_account_name}]"
-                ))]),
-            ),
-        ],
+        binding,
     ));
 
     service_account_values(
@@ -650,5 +704,47 @@ mod naming_tests {
                 alien_core::kubernetes_service_account_name(&prefix, &profile)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod federated_member_tests {
+    use super::*;
+
+    #[test]
+    fn a_member_block_without_a_member_attribute_is_left_in_place() {
+        let mut fragment = TfFragment::default();
+        fragment.resource_blocks.push(resource_block(
+            "google_service_account_iam_member",
+            "management_manager",
+            [attr(
+                "role",
+                Expression::String("roles/iam.workloadIdentityUser".into()),
+            )],
+        ));
+
+        assert!(take_federated_workload_identity_member(&mut fragment, "management").is_none());
+        assert_eq!(fragment.resource_blocks.len(), 1, "the block is untouched");
+        assert!(
+            fragment.moved_blocks.is_empty(),
+            "no removed block is added"
+        );
+    }
+
+    #[test]
+    fn a_member_block_with_a_member_is_taken_and_its_address_forgotten() {
+        let mut fragment = TfFragment::default();
+        fragment.resource_blocks.push(resource_block(
+            "google_service_account_iam_member",
+            "management_manager",
+            [attr("member", Expression::String("principal://x".into()))],
+        ));
+
+        let (member, depends_on) =
+            take_federated_workload_identity_member(&mut fragment, "management").expect("taken");
+        assert_eq!(member, Expression::String("principal://x".into()));
+        assert!(depends_on.is_none());
+        assert!(fragment.resource_blocks.is_empty());
+        assert_eq!(fragment.moved_blocks.len(), 1);
     }
 }

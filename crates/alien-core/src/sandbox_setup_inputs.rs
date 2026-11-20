@@ -189,7 +189,7 @@ pub fn aws_sandbox_setup_inputs(
     // this the grant would outlive the declaration.
     let grant =
         aws_sandbox_remote_grant(stack, sandbox).map(|definition| definition.permission_set);
-    Ok(vec![
+    let mut inputs = vec![
         ("egress", sandbox.setup_digest_value()),
         ("egress network", serde_json::json!(network)),
         (
@@ -197,7 +197,17 @@ pub fn aws_sandbox_setup_inputs(
             serde_json::to_value(policy).expect("a build role policy serializes to JSON"),
         ),
         ("remote grant", serde_json::json!(grant)),
-    ])
+    ];
+    // Setup installs the connections as connector rules and shows the customer every mount and
+    // connection, so a change to either is approved through setup. Absent when undeclared, so the
+    // inputs of every sandbox that predates them are unchanged.
+    if let Some(permissions) = &sandbox.image_permissions {
+        inputs.push((
+            "image permissions",
+            serde_json::to_value(permissions).expect("image permissions serialize to JSON"),
+        ));
+    }
+    Ok(inputs)
 }
 
 /// [`aws_sandbox_setup_inputs`] for comparing stacks, which cannot fail: a sandbox whose inputs do

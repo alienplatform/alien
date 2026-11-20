@@ -591,6 +591,7 @@ async fn a_sandbox_base_is_built_for_its_backend_architecture() {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let mut stack = alien_core::Stack::new("sandbox-arch".to_string());

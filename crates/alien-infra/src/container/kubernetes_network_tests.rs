@@ -42,6 +42,7 @@ fn source_stack(target: &Container) -> Stack {
         .lifecycle(alien_core::SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(300),
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .code(alien_core::SandboxCode::Image {
             image: "python:3.13-slim".into(),

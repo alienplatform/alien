@@ -2686,10 +2686,9 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
 /// One output per deployer secret, naming where the deployer writes its value.
 ///
 /// The name comes from the `deployer-secrets` vault's binding: a Parameter Store or
-/// Secret Manager prefix, or a Key Vault. On a Kubernetes target the value is
-/// a Secret in the deployment's namespace whose name the operator derives, so
-/// the output carries the vault key and the deployment status shows the full
-/// name.
+/// Secret Manager prefix, or a Key Vault. On a Kubernetes target the value is a Secret in the
+/// release namespace, whatever the cluster's cloud: the output names it, as
+/// `alien_core::deployer_secret_location` does for a Kubernetes Secret binding.
 /// Resource types the chart binds through its `infrastructure` values.
 const CHART_BOUND_TYPES: &[&str] = &["storage", "queue", "kv", "artifact-registry", "vault"];
 
@@ -2823,11 +2822,32 @@ fn deployer_secret_outputs(
     for input in inputs {
         let vault_key = alien_core::deployer_secret_vault_key(&input.id);
         let (value, description) = if target.is_kubernetes() {
+            // The Secret the pods read: the vault prefix the Kubernetes vault controller
+            // derives (`<resource prefix>-deployer-secrets`), joined to the key the same way
+            // `vault_naming::kubernetes_secret_name` does, including the length limit on the
+            // whole name (the prefix is only known when Terraform runs, so `substr` cuts it).
+            let tail = alien_core::vault_naming::kubernetes_secret_name_tail(&vault_key);
             (
-                expr::object([("vault_key", Expression::String(vault_key))]),
+                expr::object([
+                    (
+                        "name",
+                        expr::raw(format!(
+                            "substr(\"${{lower(local.resource_prefix)}}-{}{tail}\", 0, {})",
+                            alien_core::DEPLOYER_SECRETS_VAULT_ID,
+                            alien_core::vault_naming::KUBERNETES_SECRET_NAME_MAX_CHARS
+                        )),
+                    ),
+                    ("namespace", expr::raw("var.kubernetes_namespace")),
+                    (
+                        "key",
+                        Expression::String(
+                            alien_core::vault_naming::KUBERNETES_SECRET_VALUE_KEY.to_string(),
+                        ),
+                    ),
+                ]),
                 format!(
-                    "Secrets vault key for '{}'; the deployment status shows the Kubernetes \
-                     Secret to create.",
+                    "Kubernetes Secret (name, namespace and data key) to write the '{}' value \
+                     into.",
                     input.label
                 ),
             )
@@ -5451,7 +5471,84 @@ fn expression_is_empty_object(expression: &Expression) -> bool {
     matches!(expression, Expression::Object(object) if object.is_empty())
 }
 
-const REMOTE_OPERATOR_VALUES: &str = "yamlencode({ remoteOperator = { enabled = var.remote_operator_enabled, existingSecret = { name = \"${var.helm_release_name}-remote\", encryptionKeySha256 = var.remote_operator_encryption_key != null ? sha256(var.remote_operator_encryption_key) : \"\" }, bootstrapIdentity = var.remote_operator_bootstrap_identity, syncTokenRevision = var.remote_operator_sync_token_revision, collectorTokenRevision = var.remote_operator_collector_token != null ? sha256(var.remote_operator_collector_token) : \"\", serviceAccountAnnotations = {}, podLabels = var.remote_operator_enabled ? { \"alien.dev/credentials-secret-uid\" = kubernetes_secret_v1.remote_operator_credentials[0].metadata[0].uid } : {} } })";
+/// The Remote Operator values Terraform layers over the provider's `helm_values`.
+/// `pod_labels_when` guards the Secret UID label: the Helm release only exists when
+/// `helm_install_enabled`, but the `helm_values` output also renders without it.
+fn remote_operator_values_override(pod_labels_when: &str) -> String {
+    format!(
+        "yamlencode({{ remoteOperator = {{ enabled = var.remote_operator_enabled, existingSecret = {{ name = \"${{var.helm_release_name}}-remote\", encryptionKeySha256 = var.remote_operator_encryption_key != null ? sha256(var.remote_operator_encryption_key) : \"\" }}, bootstrapIdentity = var.remote_operator_bootstrap_identity, syncTokenRevision = var.remote_operator_sync_token_revision, collectorTokenRevision = var.remote_operator_collector_token != null ? sha256(var.remote_operator_collector_token) : \"\", serviceAccountAnnotations = {{}}, podLabels = {pod_labels_when} ? {{ \"alien.dev/credentials-secret-uid\" = kubernetes_secret_v1.remote_operator_credentials[0].metadata[0].uid }} : {{}} }} }})"
+    )
+}
+
+/// The `helm_values` output (and the locals it reads): one YAML document equal to what the
+/// `helm_release` receives as its values list, merged the way Helm merges values files (maps
+/// merge by key, later wins). For a customer who installs the chart themselves
+/// (`helm_install_enabled = false`).
+fn helm_values_blocks(
+    provider_resource: &str,
+    product_remote_operator: bool,
+    chart_infrastructure: Option<&Expression>,
+) -> Vec<Structure> {
+    let mut blocks = Vec::new();
+    // The provider's values are named once, here; the release and the output read the local.
+    let mut locals = vec![attr(
+        "chart_values_provider_yaml",
+        expr::raw(format!("{provider_resource}.this.helm_values")),
+    )];
+    let has_infrastructure = chart_infrastructure.is_some();
+    if product_remote_operator || has_infrastructure {
+        locals.push(attr(
+            "chart_values_provider",
+            expr::raw("yamldecode(local.chart_values_provider_yaml)"),
+        ));
+    }
+    // Same order as the release's values list: provider, infrastructure, remoteOperator.
+    // `infrastructure` replaces the provider's null.
+    let mut layers = vec!["local.chart_values_provider".to_string()];
+    if let Some(infrastructure) = chart_infrastructure {
+        locals.push(attr(
+            "chart_values_infrastructure",
+            expr::object([("infrastructure", infrastructure.clone())]),
+        ));
+        layers.push("local.chart_values_infrastructure".to_string());
+    }
+    if product_remote_operator {
+        locals.push(attr(
+            "chart_values_remote_operator",
+            expr::raw(format!(
+                "yamldecode({})",
+                remote_operator_values_override(
+                    "var.helm_install_enabled && var.remote_operator_enabled"
+                )
+            )),
+        ));
+        // Terraform's `merge` is shallow; the override replaces `remoteOperator` keys and
+        // merges the maps inside it, so merge those levels explicitly.
+        layers.push("{ remoteOperator = merge(try(local.chart_values_provider.remoteOperator, {}), local.chart_values_remote_operator.remoteOperator, { for key in [\"existingSecret\", \"podLabels\", \"serviceAccountAnnotations\"] : key => merge(try(local.chart_values_provider.remoteOperator[key], {}), local.chart_values_remote_operator.remoteOperator[key]) }) }".to_string());
+    }
+    let value = if layers.len() > 1 {
+        format!("yamlencode(merge({}))", layers.join(", "))
+    } else {
+        "local.chart_values_provider_yaml".to_string()
+    };
+    blocks.push(Structure::Block(block("locals", locals)));
+    blocks.push(Structure::Block(Block {
+        identifier: Identifier::sanitized("output"),
+        labels: vec![BlockLabel::String("helm_values".to_string())],
+        body: Body::from(vec![
+            attr("value", expr::raw(value)),
+            attr(
+                "description",
+                Expression::String(
+                    "The Helm chart values Terraform installs with, as one YAML document. With `helm_install_enabled = false`, save it (`terraform output -raw helm_values > values.yaml`) and install the chart with `-f values.yaml`."
+                        .to_string(),
+                ),
+            ),
+            attr("sensitive", Expression::Bool(true)),
+        ]),
+    }));
+    blocks
+}
 
 fn helm_install_body(
     registration: &TerraformRegistration,
@@ -5775,7 +5872,7 @@ fn helm_install_body(
     // The provider's `helm_values` render `infrastructure: null`; the entry after it sets the
     // bindings of the resources this module created, so the release the module installs gets
     // the same value as the `chart_infrastructure_json` output.
-    let mut values = vec![expr::raw(format!("{provider_resource}.this.helm_values"))];
+    let mut values = vec![expr::raw("local.chart_values_provider_yaml")];
     if let Some(infrastructure) = chart_infrastructure {
         values.push(expr::yamlencode(expr::object([(
             "infrastructure",
@@ -5788,7 +5885,9 @@ fn helm_install_body(
         // keeps Helm planning deferred until the Secret exists. That is
         // required because the chart's server-side `lookup` checks cannot
         // validate a Secret that Terraform has only planned to create.
-        values.push(expr::raw(REMOTE_OPERATOR_VALUES));
+        values.push(expr::raw(remote_operator_values_override(
+            "var.remote_operator_enabled",
+        )));
     }
     let values = Expression::Array(values);
     let mut helm_body = vec![
@@ -5837,6 +5936,11 @@ fn helm_install_body(
         "runtime",
         helm_body,
     )));
+    resources.extend(helm_values_blocks(
+        &provider_resource,
+        product_remote_operator,
+        chart_infrastructure,
+    ));
     // Terraform destroys a resource before the ones it depends on, so this guard
     // goes first, while the Operator still runs. Its Delete detaches the
     // deployment, or stops the destroy with the order to follow when retained
@@ -6547,10 +6651,10 @@ fn readme_kubernetes_inputs(
                 "Supply `remote_operator_collector_token` only when the product chart includes log collection."
             };
             format!(
-                "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately. A separately managed Helm release can keep its Remote Operator identity without blocking later infrastructure-only applies. Once Terraform has enabled the embedded Remote Operator, keep this and `remote_operator_enabled` set to `true` until explicit retirement with `terraform destroy`; disabling it in place is unsupported.\n- `helm_release_name`, `helm_chart`: exact product release and chart reference. Terraform pins the namespace and release name in its state when it first manages Remote Operator, preventing an in-place move from abandoning the retained identity. Terraform retains only the newest Helm revision so a pre-guard historical rollback target cannot survive first enable.\n- `remote_operator_enabled`: set to `true` only with `remote_operator_sync_token` and `remote_operator_encryption_key` from a separate Remote Operator setup registration. {collector_token_requirement} Never reuse the product deployment token; the two controllers must have distinct deployment identities. Terraform stores these credentials in a separate Kubernetes Secret before enabling the Remote workload. Retained prepared/completed identity records keep that Secret present during a rejected disable attempt. Keep the credentials required by the chart populated until `terraform destroy`; generated variable files already persist them. First apply the module once with Remote Operator disabled. On first enable, arm the state latch with `terraform apply -replace=terraform_data.remote_operator_ownership` while both enable flags and the final namespace/release are set. Never replace that state resource after it is armed.\n- `remote_operator_encryption_key`: establishes the durable Operator identity on first enable. Terraform ignores later in-place changes to this Secret field; changing the input cannot silently replace the installed identity. Retire the installation instead of replacing this key.\n- `remote_operator_bootstrap_identity`: every release must first apply the chart with `remote_operator_enabled = false`; this records a guard-capable Kubernetes history revision and prunes older rollback targets. Then set this to `true`, arm the state latch as described above, and enable the Operator for one apply before setting it back to `false`. The Helm resource is atomic, and an Operator that never opens its durable identity cannot mark initialization complete. If an enabled upgrade fails after identity initialization, atomic rollback preserves the disabled release so `terraform destroy` can run its exact cleanup hook.\n- `remote_operator_sync_token_revision`: starts at `0`; increment it with every sync-token rotation and apply the new token and revision together. This is a rollout marker, not an anti-rollback store: stale Terraform input can restore an older token and revision, so protect the authoritative variable state with the same controls as the credential. Terraform separately derives the collector rollout marker from `remote_operator_collector_token`, so changing only that token restarts collector pods without coupling it to the sync-token revision.\n- `kubernetes_namespace_create`: defaults to `false`, which is safe for `default`, another existing namespace, and upgrades of older modules. Set it to `true` only for a non-default namespace that does not exist and that Terraform should own. `terraform destroy` permanently retires the setup: Helm first deletes this release's exact identity records and identity PVC, then Terraform removes the release, credentials Secret, state latch, setup registration, and any Terraform-owned namespace. The shared access-request CRD remains available to other releases."
+                "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately. Write the values Terraform would have used with `terraform output -raw helm_values > values.yaml` (the output is sensitive) and install the chart with `-f values.yaml`. A separately managed Helm release can keep its Remote Operator identity without blocking later infrastructure-only applies. Once Terraform has enabled the embedded Remote Operator, keep this and `remote_operator_enabled` set to `true` until explicit retirement with `terraform destroy`; disabling it in place is unsupported.\n- `helm_release_name`, `helm_chart`: exact product release and chart reference. Terraform pins the namespace and release name in its state when it first manages Remote Operator, preventing an in-place move from abandoning the retained identity. Terraform retains only the newest Helm revision so a pre-guard historical rollback target cannot survive first enable.\n- `remote_operator_enabled`: set to `true` only with `remote_operator_sync_token` and `remote_operator_encryption_key` from a separate Remote Operator setup registration. {collector_token_requirement} Never reuse the product deployment token; the two controllers must have distinct deployment identities. Terraform stores these credentials in a separate Kubernetes Secret before enabling the Remote workload. Retained prepared/completed identity records keep that Secret present during a rejected disable attempt. Keep the credentials required by the chart populated until `terraform destroy`; generated variable files already persist them. First apply the module once with Remote Operator disabled. On first enable, arm the state latch with `terraform apply -replace=terraform_data.remote_operator_ownership` while both enable flags and the final namespace/release are set. Never replace that state resource after it is armed.\n- `remote_operator_encryption_key`: establishes the durable Operator identity on first enable. Terraform ignores later in-place changes to this Secret field; changing the input cannot silently replace the installed identity. Retire the installation instead of replacing this key.\n- `remote_operator_bootstrap_identity`: every release must first apply the chart with `remote_operator_enabled = false`; this records a guard-capable Kubernetes history revision and prunes older rollback targets. Then set this to `true`, arm the state latch as described above, and enable the Operator for one apply before setting it back to `false`. The Helm resource is atomic, and an Operator that never opens its durable identity cannot mark initialization complete. If an enabled upgrade fails after identity initialization, atomic rollback preserves the disabled release so `terraform destroy` can run its exact cleanup hook.\n- `remote_operator_sync_token_revision`: starts at `0`; increment it with every sync-token rotation and apply the new token and revision together. This is a rollout marker, not an anti-rollback store: stale Terraform input can restore an older token and revision, so protect the authoritative variable state with the same controls as the credential. Terraform separately derives the collector rollout marker from `remote_operator_collector_token`, so changing only that token restarts collector pods without coupling it to the sync-token revision.\n- `kubernetes_namespace_create`: defaults to `false`, which is safe for `default`, another existing namespace, and upgrades of older modules. Set it to `true` only for a non-default namespace that does not exist and that Terraform should own. `terraform destroy` permanently retires the setup: Helm first deletes this release's exact identity records and identity PVC, then Terraform removes the release, credentials Secret, state latch, setup registration, and any Terraform-owned namespace. The shared access-request CRD remains available to other releases."
             )
         } else {
-            "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately.\n- `helm_release_name`, `helm_chart`: Helm release and chart reference used when Terraform installs the Operator chart. On `terraform destroy`, Terraform uninstalls this Helm release before removing the setup registration.".to_string()
+            "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately. Write the values Terraform would have used with `terraform output -raw helm_values > values.yaml` (the output is sensitive) and install the chart with `-f values.yaml`.\n- `helm_release_name`, `helm_chart`: Helm release and chart reference used when Terraform installs the Operator chart. On `terraform destroy`, Terraform uninstalls this Helm release before removing the setup registration.".to_string()
         }
     } else {
         String::new()

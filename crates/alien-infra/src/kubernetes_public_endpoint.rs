@@ -4085,6 +4085,23 @@ mod tests {
     }
 
     #[test]
+    fn generated_domain_tls_secret_names_differ_between_deployments_in_one_namespace() {
+        // The default template of the Terraform Kubernetes modules. The workload name carries
+        // the deployment's resource prefix, the resource id does not.
+        let template = "{{ workloadName }}-tls";
+        let first = render_secret_name_template(template, "api", "dep-aaaa-api");
+        let second = render_secret_name_template(template, "api", "dep-bbbb-api");
+        assert_eq!(first, "dep-aaaa-api-tls");
+        assert_ne!(first, second);
+        // The old default collided: same resource id, same name.
+        let old = "deployment-{{ resourceId }}-tls";
+        assert_eq!(
+            render_secret_name_template(old, "api", "dep-aaaa-api"),
+            render_secret_name_template(old, "api", "dep-bbbb-api")
+        );
+    }
+
+    #[test]
     fn aws_alb_detection_requires_ingress_provider() {
         let route = KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
             ingress_class_name: "alb".to_string(),

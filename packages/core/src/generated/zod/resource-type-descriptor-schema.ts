@@ -7,6 +7,7 @@ import * as z from "zod";
 import { LinkDescriptorSchema } from "./link-descriptor-schema.js";
 import { PermissionSetSchema } from "./permission-set-schema.js";
 import { PlatformSchema } from "./platform-schema.js";
+import { PrivateEndpointPlacementSchema } from "./private-endpoint-placement-schema.js";
 import { ResourceLifecycleSchema } from "./resource-lifecycle-schema.js";
 import { ResourceTypeSchemasSchema } from "./resource-type-schemas-schema.js";
 import { SetupSupportSchema } from "./setup-support-schema.js";
@@ -27,6 +28,9 @@ get "link"(){
               },
 get "permissionSets"(){
                 return z.array(PermissionSetSchema.describe("A permission set that can be applied across different cloud platforms")).describe("The permission sets the extension defines for this type. Their ids are\n`<extension>/<type>/<name>`.")
+              },
+get "privateNetworkEndpoints"(){
+                return z.union([PrivateEndpointPlacementSchema, z.null()]).optional()
               },
 "requiresNetwork": z.optional(z.boolean().describe("Whether the type needs the stack's network. Alien then creates the network on AWS, GCP\nand Azure.")),
 get "schemas"(){

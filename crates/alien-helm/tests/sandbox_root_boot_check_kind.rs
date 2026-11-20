@@ -43,6 +43,7 @@ fn write_chart(directory: &Path) {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(3600),
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     sandbox.image_user = Some(0);

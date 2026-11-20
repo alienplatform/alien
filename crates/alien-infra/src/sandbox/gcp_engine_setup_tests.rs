@@ -79,6 +79,7 @@ fn sandbox(ports: Vec<u16>, egress: alien_core::SandboxEgress) -> Sandbox {
         .lifecycle(alien_core::SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .preview_ports(ports)
         .build()

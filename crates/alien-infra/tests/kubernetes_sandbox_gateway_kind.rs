@@ -87,6 +87,7 @@ async fn prepared_stack(session_image: &str, app_image: &str) -> Stack {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(3600),
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     // The workload that administers session policies, as an application would.

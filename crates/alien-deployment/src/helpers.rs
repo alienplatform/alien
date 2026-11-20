@@ -1116,6 +1116,32 @@ pub async fn check_deployer_secrets(
             .context(ErrorData::InternalError {
                 message: "Failed to parse the 'deployer-secrets' vault binding".to_string(),
             })?;
+    // Pods on a Kubernetes target read deployer secrets from Kubernetes Secrets, so that is
+    // where the check looks, whatever the stored binding says: a deployment set up before
+    // this rule has the vault bound to its cloud's store, which no pod reads.
+    let (binding, stack_state) =
+        match kubernetes_deployer_secrets_binding(platform, &binding, stack_state, client_config) {
+            Some(kubernetes_binding) => {
+                let mut state = stack_state.clone();
+                if let Some(vault) = state
+                    .resources
+                    .get_mut(alien_core::DEPLOYER_SECRETS_VAULT_ID)
+                {
+                    vault.remote_binding_params = Some(
+                        serde_json::to_value(&kubernetes_binding)
+                            .into_alien_error()
+                            .context(ErrorData::InternalError {
+                                message:
+                                    "Failed to serialize the Kubernetes deployer-secrets binding"
+                                        .to_string(),
+                            })?,
+                    );
+                }
+                (kubernetes_binding, std::borrow::Cow::Owned(state))
+            }
+            None => (binding, std::borrow::Cow::Borrowed(stack_state)),
+        };
+    let stack_state: &StackState = &stack_state;
     let mut context = deployer_secret_location_context(stack_state, client_config, config);
 
     let provider = BindingsProvider::from_stack_state(stack_state, client_config.clone()).context(
@@ -1168,6 +1194,35 @@ pub async fn check_deployer_secrets(
         });
     }
     Ok(reports)
+}
+
+/// The Kubernetes Secret binding the `deployer-secrets` vault has on a Kubernetes target, when
+/// the stored binding is something else: the release namespace and the `<prefix>-deployer-secrets`
+/// prefix the Kubernetes vault controller registers for a new setup.
+fn kubernetes_deployer_secrets_binding(
+    platform: Platform,
+    stored: &VaultBinding,
+    stack_state: &StackState,
+    client_config: &ClientConfig,
+) -> Option<VaultBinding> {
+    if platform != Platform::Kubernetes || matches!(stored, VaultBinding::KubernetesSecret(_)) {
+        return None;
+    }
+    let namespace = match client_config.kubernetes_config()? {
+        alien_core::KubernetesClientConfig::InCluster { namespace, .. }
+        | alien_core::KubernetesClientConfig::Kubeconfig { namespace, .. }
+        | alien_core::KubernetesClientConfig::Manual { namespace, .. } => namespace.clone()?,
+    };
+    let prefix = format!(
+        "{}-{}",
+        stack_state.resource_prefix,
+        alien_core::DEPLOYER_SECRETS_VAULT_ID
+    )
+    .chars()
+    .filter(|c| c.is_alphanumeric() || *c == '-')
+    .collect::<String>()
+    .to_lowercase();
+    Some(VaultBinding::kubernetes_secret(namespace, prefix))
 }
 
 /// How often the customer's secret store is asked again while the deployment waits for
@@ -2165,6 +2220,51 @@ fn is_resource_error_headline(error: &AlienError) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stored_cloud_deployer_secrets_binding_is_read_as_the_kubernetes_secret_pods_read() {
+        let mut state = StackState::new(Platform::Kubernetes);
+        state.resource_prefix = "acme-prod".to_string();
+        let kubernetes =
+            ClientConfig::Kubernetes(Box::new(alien_core::KubernetesClientConfig::InCluster {
+                namespace: Some("apps".to_string()),
+                additional_headers: None,
+            }));
+        // A deployment registered before this rule: the vault is bound to Secret Manager.
+        let stored = VaultBinding::secret_manager("acme-prod-deployer-secrets");
+        let binding =
+            kubernetes_deployer_secrets_binding(Platform::Kubernetes, &stored, &state, &kubernetes)
+                .expect("a cloud binding on a Kubernetes target is replaced");
+        assert_eq!(
+            binding,
+            VaultBinding::kubernetes_secret("apps", "acme-prod-deployer-secrets")
+        );
+        // The name reports (and so each pod's secretKeyRef) carry is the Secret's name, in
+        // the release namespace.
+        let location = deployer_secret_location(
+            &binding,
+            "db-password",
+            &DeployerSecretLocationContext::default(),
+        )
+        .expect("location");
+        assert_eq!(
+            location.store,
+            alien_core::DeployerSecretStore::KubernetesSecret
+        );
+
+        // A Kubernetes binding, or any other platform, is left as stored.
+        assert!(kubernetes_deployer_secrets_binding(
+            Platform::Kubernetes,
+            &binding,
+            &state,
+            &kubernetes
+        )
+        .is_none());
+        assert!(
+            kubernetes_deployer_secrets_binding(Platform::Gcp, &stored, &state, &kubernetes)
+                .is_none()
+        );
+    }
+
     use super::*;
 
     const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
@@ -2891,6 +2991,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let gateway = alien_core::Container::new(
