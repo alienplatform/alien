@@ -1700,7 +1700,7 @@ mod tests {
         *run.desired_resource_config_mut("tasks").unwrap() =
             alien_core::Resource::new(source.clone());
         run.update(source).unwrap();
-        let _ = run.run_until_terminal().await;
+        run.run_until_terminal().await.unwrap();
         assert!(
             !run.needs_update().unwrap(),
             "the project grant alone does not ask for an update outside a setup run"
@@ -1708,6 +1708,111 @@ mod tests {
         assert_eq!(project.writes(), 0);
         assert!(project.read_versions.lock().unwrap().is_empty());
         assert!(project.members().is_empty());
+    }
+
+    /// The manager stops (state not saved) right after the pull subscription's dead-letter
+    /// policy was applied by Google; the next release drops the setting. The policy the stop
+    /// left in Google is cleared.
+    #[tokio::test]
+    async fn a_stop_right_after_the_pull_policy_patch_is_cleared_when_the_setting_is_removed() {
+        use alien_gcp_clients::pubsub::{DeadLetterPolicy, SubscriptionPatch};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let source = queue_dead_lettering("tasks");
+        let plain = Queue::new("tasks".into()).build();
+        let cloud: Arc<std::sync::Mutex<Option<DeadLetterPolicy>>> = Default::default();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let mut pubsub = MockPubSubApi::new();
+        pubsub
+            .expect_get_subscription_iam_policy()
+            .returning(|_| Ok(IamPolicy::default()));
+        pubsub
+            .expect_set_subscription_iam_policy()
+            .returning(|_, value| Ok(value));
+        pubsub
+            .expect_get_topic_iam_policy()
+            .returning(|_| Ok(IamPolicy::default()));
+        pubsub
+            .expect_set_topic_iam_policy()
+            .returning(|_, value| Ok(value));
+        let (stored, flag) = (cloud.clone(), stopped.clone());
+        pubsub
+            .expect_patch_subscription()
+            .returning(move |_, patch: SubscriptionPatch, _| {
+                if patch.dead_letter_policy.is_some() {
+                    flag.store(true, Ordering::SeqCst);
+                }
+                *stored.lock().unwrap() = patch.dead_letter_policy;
+                Ok(Subscription::default())
+            });
+        let pubsub = Arc::new(pubsub);
+        let mut manager = alien_gcp_clients::resource_manager::MockResourceManagerApi::new();
+        manager.expect_get_project_metadata().returning(|_| {
+            Ok(alien_gcp_clients::resource_manager::Project::builder()
+                .project_number("4242".to_string())
+                .build())
+        });
+        let manager = Arc::new(manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        let provider: Arc<dyn crate::PlatformServiceProvider> = Arc::new(provider);
+        let build = |controller: GcpQueueController| {
+            let provider = provider.clone();
+            let plain = plain.clone();
+            async move {
+                SingleControllerExecutor::builder()
+                    .resource(plain)
+                    .controller(controller)
+                    .platform(Platform::Gcp)
+                    .service_provider(provider)
+                    .with_stack_resource(
+                        Queue::new("failed".into()).build(),
+                        ResourceLifecycle::Live,
+                    )
+                    .build()
+                    .await
+                    .unwrap()
+            }
+        };
+        let ready = GcpQueueController {
+            state: GcpQueueState::Ready,
+            topic_name: Some("test-tasks".into()),
+            subscription_name: Some("test-tasks-sub".into()),
+            ..Default::default()
+        };
+
+        let mut run = build(ready).await;
+        *run.desired_resource_config_mut("tasks").unwrap() =
+            alien_core::Resource::new(source.clone());
+        run.update(source).unwrap();
+        let mut saved = None;
+        for _ in 0..50 {
+            let before =
+                serde_json::to_value(run.internal_state::<GcpQueueController>().unwrap()).unwrap();
+            let _ = run.step().await;
+            if stopped.load(Ordering::SeqCst) {
+                saved = Some(before);
+                break;
+            }
+        }
+        let saved = saved.expect("Google applied the policy");
+        assert!(cloud.lock().unwrap().is_some());
+
+        // The next release drops the setting.
+        let mut run = build(serde_json::from_value(saved).unwrap()).await;
+        run.run_until_terminal().await.unwrap();
+        if run.needs_update().unwrap() {
+            run.update(plain.clone()).unwrap();
+            run.run_until_terminal().await.unwrap();
+        }
+        assert!(
+            cloud.lock().unwrap().is_none(),
+            "no policy may outlive the setting"
+        );
     }
 
     /// The patch of the pull subscription's dead-letter policy reaches Google but its response
@@ -2613,6 +2718,13 @@ impl GcpQueueController {
             || self.dead_letter_publisher_pending.is_some()
         {
             self.dead_letter_publisher_pending = Some(want_publisher);
+        }
+        // The policy patch is recorded here, in the step before the one that sends it, so the
+        // intent is saved first: a patch whose response is lost may have been applied, and
+        // removing the setting afterwards still clears it.
+        let desired_policy = dead_letter_policy(ctx, &queue)?;
+        if desired_policy.is_some() && policy_key(&desired_policy) != self.dead_letter_policy {
+            self.dead_letter_patch_started = true;
         }
         let want_project = queue_needs_project_push_subscriber(ctx.desired_stack, &queue.id)
             && ctx.is_direct_setup_run();

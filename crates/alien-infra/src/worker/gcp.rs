@@ -1924,9 +1924,39 @@ impl GcpWorkerController {
             }
         }
 
+        // The dead-letter intent recorded above is saved when this handler returns; the writes
+        // happen in the next step. Workers with nothing dead-letter related skip it.
+        if self.push_dead_letter_pending(ctx, &cfg)? {
+            return Ok(HandlerAction::Continue {
+                state: ApplyingPushDeadLetters,
+                suggested_delay: None,
+            });
+        }
+
         // Go to scheduler jobs next
         Ok(HandlerAction::Continue {
             state: CreatingSchedulerJobs,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = ApplyingPushDeadLetters,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn applying_push_dead_letters(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let cfg = ctx.desired_resource_config::<Worker>()?;
+        let applied = self.apply_push_dead_letters(ctx, &cfg).await?;
+        Ok(HandlerAction::Continue {
+            state: if applied {
+                CreatingSchedulerJobs
+            } else {
+                ApplyingPushDeadLetters
+            },
             suggested_delay: None,
         })
     }
@@ -3550,14 +3580,16 @@ impl GcpWorkerController {
             })
         })?;
 
-        // A queue's dead-letter setting that changed is reconciled in this same update.
+        // A queue's dead-letter setting that changed is reconciled in this same update: the
+        // intent is recorded here and saved when this handler returns, the writes happen in
+        // `UpdateApplyingPushDeadLetters`.
         for trigger in &current_config.triggers {
             if let alien_core::WorkerTrigger::Queue { queue, .. } = trigger {
                 if self
                     .push_subscriptions
                     .contains(&Self::push_subscription_name(ctx, &current_config, queue))
                 {
-                    self.reconcile_push_dead_letter(ctx, &current_config, queue)
+                    self.record_push_dead_letter_intent(ctx, &current_config, queue)
                         .await?;
                 }
             }
@@ -3593,7 +3625,7 @@ impl GcpWorkerController {
                 }
             }
             return Ok(HandlerAction::Continue {
-                state: UpdateSettingIamPolicy,
+                state: self.after_update_push_subscriptions(ctx, &current_config)?,
                 suggested_delay: None,
             });
         }
@@ -3706,7 +3738,28 @@ impl GcpWorkerController {
         }
 
         Ok(HandlerAction::Continue {
-            state: UpdateSettingIamPolicy,
+            state: self.after_update_push_subscriptions(ctx, &current_config)?,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = UpdateApplyingPushDeadLetters,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_applying_push_dead_letters(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let cfg = ctx.desired_resource_config::<Worker>()?;
+        let applied = self.apply_push_dead_letters(ctx, &cfg).await?;
+        Ok(HandlerAction::Continue {
+            state: if applied {
+                UpdateSettingIamPolicy
+            } else {
+                UpdateApplyingPushDeadLetters
+            },
             suggested_delay: None,
         })
     }
@@ -5711,6 +5764,125 @@ impl GcpWorkerController {
         Ok(false)
     }
 
+    /// Records, without writing anything to Pub/Sub, what `reconcile_push_dead_letter` is about
+    /// to write: the resolved service agent and the grant and policy markers. The handler that
+    /// calls this returns afterwards, so the intent is saved before any write is sent; a stop
+    /// after a write whose response was lost is then still cleared when the setting is removed.
+    async fn record_push_dead_letter_intent(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        worker_config: &alien_core::Worker,
+        queue_ref: &alien_core::ResourceRef,
+    ) -> Result<()> {
+        use crate::queue::gcp_dead_letter::pubsub_service_agent;
+        if !crate::queue::may_change_queue_settings(ctx, &worker_config.id) {
+            return Ok(());
+        }
+        let name = Self::push_subscription_name(ctx, worker_config, queue_ref);
+        let desired = Self::desired_push_dead_letter(ctx, queue_ref)?;
+        Self::refuse_protected_dead_letter(ctx, worker_config, queue_ref)?;
+        if desired.is_none() {
+            return Ok(());
+        }
+        if !alien_core::queue_needs_project_push_subscriber(ctx.desired_stack, &queue_ref.id) {
+            if self.push_dead_letter_agent.is_none() {
+                self.push_dead_letter_agent =
+                    Some(pubsub_service_agent(ctx, &worker_config.id).await?);
+            }
+            self.push_dead_letter_grants.insert(name.clone());
+        }
+        self.push_dead_letter_patches.insert(name);
+        Ok(())
+    }
+
+    /// Whether any queue trigger's push subscription still has a dead-letter write to make
+    /// (a changed setting, or a recorded intent to clear).
+    fn push_dead_letter_pending(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker_config: &alien_core::Worker,
+    ) -> Result<bool> {
+        if !crate::queue::may_change_queue_settings(ctx, &worker_config.id) {
+            return Ok(false);
+        }
+        self.push_dead_letter_changed(ctx)
+    }
+
+    /// The step after `UpdatePushSubscriptions`: the dead-letter writes when there are any.
+    fn after_update_push_subscriptions(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker_config: &alien_core::Worker,
+    ) -> Result<GcpWorkerState> {
+        Ok(if self.push_dead_letter_pending(ctx, worker_config)? {
+            GcpWorkerState::UpdateApplyingPushDeadLetters
+        } else {
+            GcpWorkerState::UpdateSettingIamPolicy
+        })
+    }
+
+    /// Whether `reconcile_push_dead_letter` would write a setting that no saved marker covers.
+    /// `desired_stack` is always the latest stack, so a step that resumes after the setting
+    /// first appeared sees it without the record step having run for it.
+    fn push_dead_letter_unrecorded(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker_config: &alien_core::Worker,
+        queue_ref: &alien_core::ResourceRef,
+    ) -> Result<bool> {
+        if !crate::queue::may_change_queue_settings(ctx, &worker_config.id) {
+            return Ok(false);
+        }
+        let name = Self::push_subscription_name(ctx, worker_config, queue_ref);
+        let desired = Self::desired_push_dead_letter(ctx, queue_ref)?;
+        let key = crate::queue::gcp_dead_letter::policy_key(&desired);
+        if desired.is_none() || key.as_ref() == self.push_dead_letters.get(&name) {
+            return Ok(false);
+        }
+        let grant_needed =
+            !alien_core::queue_needs_project_push_subscriber(ctx.desired_stack, &queue_ref.id);
+        Ok(!self.push_dead_letter_patches.contains(&name)
+            || (grant_needed && !self.push_dead_letter_grants.contains(&name)))
+    }
+
+    /// Writes the dead-letter policy and grant of every queue trigger's push subscription.
+    /// Returns false, having written nothing, when a setting appeared that was not recorded
+    /// yet: the intent is recorded instead and the caller returns, so it is saved before the
+    /// next step writes.
+    async fn apply_push_dead_letters(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        worker_config: &alien_core::Worker,
+    ) -> Result<bool> {
+        let mut queues = Vec::new();
+        for trigger in &worker_config.triggers {
+            if let alien_core::WorkerTrigger::Queue { queue, .. } = trigger {
+                if self
+                    .push_subscriptions
+                    .contains(&Self::push_subscription_name(ctx, worker_config, queue))
+                {
+                    queues.push(queue);
+                }
+            }
+        }
+        let mut unrecorded = false;
+        for queue in &queues {
+            unrecorded |= self.push_dead_letter_unrecorded(ctx, worker_config, queue)?;
+        }
+        if unrecorded {
+            for queue in queues {
+                self.record_push_dead_letter_intent(ctx, worker_config, queue)
+                    .await?;
+            }
+            return Ok(false);
+        }
+        for queue in queues {
+            self.reconcile_push_dead_letter(ctx, worker_config, queue)
+                .await?;
+        }
+        Ok(true)
+    }
+
     /// Makes one push subscription's dead-letter policy and the Pub/Sub service agent's
     /// subscriber grant match its queue's setting. The grant is added before the policy and
     /// removed after it.
@@ -5956,7 +6128,7 @@ impl GcpWorkerController {
         if !self.push_subscriptions.contains(&subscription_name) {
             self.push_subscriptions.push(subscription_name.clone());
         }
-        self.reconcile_push_dead_letter(ctx, worker_config, queue_ref)
+        self.record_push_dead_letter_intent(ctx, worker_config, queue_ref)
             .await?;
 
         info!(
@@ -9201,6 +9373,299 @@ mod tests {
         assert!(
             subscription_policy.lock().unwrap().bindings.is_empty(),
             "no service-agent grant may outlive the setting"
+        );
+    }
+
+    /// The manager stops (state not saved) right after a dead-letter write was applied by
+    /// Google; the next release drops the queue's dead-letter setting. Whatever the stop left
+    /// in Google is cleared, whether the stop came after the subscriber grant or after the
+    /// policy patch, on the create path and on the update path.
+    #[rstest::rstest]
+    #[case::create_after_grant(false, "grant")]
+    #[case::create_after_patch(false, "patch")]
+    #[case::update_after_grant(true, "grant")]
+    #[case::update_after_patch(true, "patch")]
+    #[tokio::test]
+    async fn a_stop_right_after_a_dead_letter_write_is_cleared_when_the_setting_is_removed(
+        #[case] update_path: bool,
+        #[case] stop_after: &'static str,
+    ) {
+        use alien_gcp_clients::iam::IamPolicy;
+        use alien_gcp_clients::pubsub::{DeadLetterPolicy, SubscriptionPatch};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let worker = function_with_queue_trigger();
+        let function_name = format!("test-{}", worker.id);
+        let mock_cloudrun = setup_mock_client_for_creation_and_update(&function_name, false);
+        let mut with_dead_letter = test_queue();
+        with_dead_letter.dead_letter = Some(
+            alien_core::QueueDeadLetter::builder()
+                .queue(alien_core::ResourceRef::new(
+                    alien_core::Queue::RESOURCE_TYPE,
+                    "failed",
+                ))
+                .max_attempts(8)
+                .build(),
+        );
+
+        // What Google holds, shared by every executor of this test.
+        let subscription_policy = Arc::new(std::sync::Mutex::new(IamPolicy::default()));
+        let cloud_policy: Arc<std::sync::Mutex<Option<DeadLetterPolicy>>> = Default::default();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let mut mock_pubsub = MockPubSubApi::new();
+        mock_pubsub
+            .expect_create_subscription()
+            .returning(|_, subscription| Ok(subscription));
+        let reads = subscription_policy.clone();
+        mock_pubsub
+            .expect_get_subscription_iam_policy()
+            .returning(move |_| Ok(reads.lock().unwrap().clone()));
+        let (writes, flag) = (subscription_policy.clone(), stopped.clone());
+        mock_pubsub
+            .expect_set_subscription_iam_policy()
+            .returning(move |_, policy| {
+                *writes.lock().unwrap() = policy.clone();
+                if stop_after == "grant" && !policy.bindings.is_empty() {
+                    flag.store(true, Ordering::SeqCst);
+                }
+                Ok(policy)
+            });
+        let (stored, flag) = (cloud_policy.clone(), stopped.clone());
+        mock_pubsub.expect_patch_subscription().returning(
+            move |_, patch: SubscriptionPatch, mask| {
+                if mask.as_deref() == Some("deadLetterPolicy") {
+                    if stop_after == "grant" && patch.dead_letter_policy.is_some() {
+                        // The manager stops after the grant: Google never sees a policy.
+                        return Err(alien_error::AlienError::new(
+                            alien_client_core::ErrorData::GenericError {
+                                message: "stopped before the policy patch".to_string(),
+                            },
+                        ));
+                    }
+                    *stored.lock().unwrap() = patch.dead_letter_policy.clone();
+                    if stop_after == "patch" && patch.dead_letter_policy.is_some() {
+                        flag.store(true, Ordering::SeqCst);
+                    }
+                }
+                Ok(Subscription::default())
+            },
+        );
+        let mut manager = alien_gcp_clients::resource_manager::MockResourceManagerApi::new();
+        manager.expect_get_project_metadata().returning(|_| {
+            Ok(alien_gcp_clients::resource_manager::Project::builder()
+                .project_number("4242".to_string())
+                .build())
+        });
+        let manager = Arc::new(manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        let cloudrun = mock_cloudrun.clone();
+        provider
+            .expect_get_gcp_cloudrun_client()
+            .returning(move |_| Ok(cloudrun.clone()));
+        let iam = create_gcp_iam_mock_for_resource_permissions();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let pubsub = Arc::new(mock_pubsub);
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        let provider: Arc<dyn crate::PlatformServiceProvider> = Arc::new(provider);
+
+        let queue_controller = || GcpQueueController {
+            state: GcpQueueState::Ready,
+            topic_name: Some("test-test-queue".to_string()),
+            subscription_name: Some("test-test-queue-sub".to_string()),
+            ..Default::default()
+        };
+        let start = if update_path {
+            GcpWorkerController {
+                state: GcpWorkerState::UpdatePushSubscriptions,
+                push_subscriptions: vec!["test-queue-func-test-queue".into()],
+                ..GcpWorkerController::mock_ready("test-queue-func")
+            }
+        } else {
+            GcpWorkerController::default()
+        };
+        let build = |controller: GcpWorkerController, queue: alien_core::Queue| {
+            let (worker, provider) = (worker.clone(), provider.clone());
+            async move {
+                SingleControllerExecutor::builder()
+                    .resource(worker.clone())
+                    .previous_resource(worker)
+                    .controller(controller)
+                    .platform(Platform::Gcp)
+                    .service_provider(provider)
+                    .with_test_dependencies()
+                    .with_dependency(queue, queue_controller())
+                    .build()
+                    .await
+                    .unwrap()
+            }
+        };
+
+        // Run with the setting until Google applied the write, then lose everything that
+        // handler changed: the controller comes back as it was saved before that step.
+        let mut executor = build(start, with_dead_letter.clone()).await;
+        let mut saved = None;
+        for _ in 0..200 {
+            let before =
+                serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap())
+                    .unwrap();
+            let _ = executor.step().await;
+            if stopped.load(Ordering::SeqCst) {
+                saved = Some(before);
+                break;
+            }
+        }
+        let saved = saved.expect("Google applied a dead-letter write");
+        assert!(
+            cloud_policy.lock().unwrap().is_some()
+                || !subscription_policy.lock().unwrap().bindings.is_empty(),
+            "the write that was lost is in Google"
+        );
+        if stop_after == "grant" {
+            assert!(
+                cloud_policy.lock().unwrap().is_none(),
+                "a stop after the grant leaves Google with the grant and no policy"
+            );
+            assert!(!subscription_policy.lock().unwrap().bindings.is_empty());
+        }
+
+        // The next release drops the setting.
+        let restored: GcpWorkerController = serde_json::from_value(saved).unwrap();
+        let mut executor = build(restored, test_queue()).await;
+        executor.run_until_terminal().await.unwrap();
+        if executor.needs_update().unwrap() {
+            executor.update(worker.clone()).unwrap();
+            executor.run_until_terminal().await.unwrap();
+        }
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(!executor.needs_update().unwrap());
+        assert!(
+            cloud_policy.lock().unwrap().is_none(),
+            "no policy may outlive the setting"
+        );
+        assert!(
+            subscription_policy.lock().unwrap().bindings.is_empty(),
+            "no service-agent grant may outlive the setting"
+        );
+    }
+
+    /// A worker saved in its dead-letter write step before the queue's setting existed: a
+    /// release adds the setting, and the step resumes against the latest stack. It must not
+    /// write what no saved marker covers: it records the intent first, and writes in the next
+    /// step.
+    #[tokio::test]
+    async fn a_setting_that_appears_after_the_record_step_is_recorded_before_it_is_written() {
+        use alien_gcp_clients::iam::IamPolicy;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let worker = function_with_queue_trigger();
+        let function_name = format!("test-{}", worker.id);
+        let mock_cloudrun = setup_mock_client_for_creation_and_update(&function_name, false);
+        let mut queue = test_queue();
+        queue.dead_letter = Some(
+            alien_core::QueueDeadLetter::builder()
+                .queue(alien_core::ResourceRef::new(
+                    alien_core::Queue::RESOURCE_TYPE,
+                    "failed",
+                ))
+                .max_attempts(8)
+                .build(),
+        );
+        let writes = Arc::new(AtomicUsize::new(0));
+        let mut mock_pubsub = MockPubSubApi::new();
+        let counter = writes.clone();
+        mock_pubsub
+            .expect_get_subscription_iam_policy()
+            .returning(|_| Ok(IamPolicy::default()));
+        mock_pubsub
+            .expect_set_subscription_iam_policy()
+            .returning(move |_, policy| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(policy)
+            });
+        let counter = writes.clone();
+        mock_pubsub
+            .expect_patch_subscription()
+            .returning(move |_, _, _| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(Subscription::default())
+            });
+        let mut manager = alien_gcp_clients::resource_manager::MockResourceManagerApi::new();
+        manager.expect_get_project_metadata().returning(|_| {
+            Ok(alien_gcp_clients::resource_manager::Project::builder()
+                .project_number("4242".to_string())
+                .build())
+        });
+        let manager = Arc::new(manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        let cloudrun = mock_cloudrun.clone();
+        provider
+            .expect_get_gcp_cloudrun_client()
+            .returning(move |_| Ok(cloudrun.clone()));
+        let iam = create_gcp_iam_mock_for_resource_permissions();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let pubsub = Arc::new(mock_pubsub);
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        let provider: Arc<dyn crate::PlatformServiceProvider> = Arc::new(provider);
+
+        let controller = GcpWorkerController {
+            state: GcpWorkerState::UpdateApplyingPushDeadLetters,
+            push_subscriptions: vec!["test-queue-func-test-queue".into()],
+            ..GcpWorkerController::mock_ready("test-queue-func")
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .previous_resource(worker)
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .with_dependency(
+                queue,
+                GcpQueueController {
+                    state: GcpQueueState::Ready,
+                    topic_name: Some("test-test-queue".to_string()),
+                    subscription_name: Some("test-test-queue-sub".to_string()),
+                    ..Default::default()
+                },
+            )
+            .build()
+            .await
+            .unwrap();
+
+        executor.step().await.unwrap();
+        assert_eq!(
+            writes.load(Ordering::SeqCst),
+            0,
+            "the first step only records the intent"
+        );
+        let saved = executor.internal_state::<GcpWorkerController>().unwrap();
+        assert_eq!(saved.state, GcpWorkerState::UpdateApplyingPushDeadLetters);
+        assert!(saved
+            .push_dead_letter_patches
+            .contains("test-queue-func-test-queue"));
+        assert!(saved
+            .push_dead_letter_grants
+            .contains("test-queue-func-test-queue"));
+
+        executor.step().await.unwrap();
+        assert_eq!(
+            writes.load(Ordering::SeqCst),
+            2,
+            "the next step writes the grant and the policy"
         );
     }
 
