@@ -351,11 +351,15 @@ pub fn tmpfs_size_bytes(size: &str) -> std::result::Result<u64, String> {
     Ok(bytes)
 }
 
-/// Refuses an argv for a lifecycle step that the agent could not run unambiguously.
+/// Refuses an argv for a lifecycle step that the agent could not run unambiguously, or whose
+/// program lies on one of the declared `mounts`: a step runs from the image's own files, never
+/// from what a mount's writer put there (and a hard NFS mount could block its launch past the
+/// hook's deadline).
 pub(crate) fn validate_lifecycle_argv(
     resource_id: &str,
     field: &str,
     argv: &[String],
+    mounts: &[SandboxImageMount],
 ) -> Result<()> {
     let invalid = |value: &str, reason: &str| {
         AlienError::new(ErrorData::SandboxLimitInvalid {
@@ -372,6 +376,29 @@ pub(crate) fn validate_lifecycle_argv(
         return Err(invalid(
             program,
             "the program must be an absolute path inside the image; there is no PATH lookup",
+        ));
+    }
+    if program[1..]
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return Err(invalid(
+            program,
+            "the program path must be normalized: no trailing '/', no '//', and no '.' or '..' \
+             segments",
+        ));
+    }
+    if let Some(mount) = mounts
+        .iter()
+        .find(|mount| is_same_or_under(program, &mount.path))
+    {
+        return Err(invalid(
+            program,
+            &format!(
+                "the program is on the declared mount {}; a lifecycle step must run from the \
+                 image's own files",
+                mount.path
+            ),
         ));
     }
     if argv
@@ -668,10 +695,18 @@ mod tests {
 
     #[test]
     fn lifecycle_argv_must_name_an_absolute_program() {
-        validate_lifecycle_argv("s", "onPause", &["/usr/bin/app".into(), "pause".into()]).unwrap();
-        assert!(validate_lifecycle_argv("s", "onPause", &[]).is_err());
-        assert!(validate_lifecycle_argv("s", "onPause", &["app".into()]).is_err());
-        assert!(validate_lifecycle_argv("s", "onPause", &["/a".into(), "b\0".into()]).is_err());
+        validate_lifecycle_argv(
+            "s",
+            "onPause",
+            &["/usr/bin/app".into(), "pause".into()],
+            &[],
+        )
+        .unwrap();
+        assert!(validate_lifecycle_argv("s", "onPause", &[], &[]).is_err());
+        assert!(validate_lifecycle_argv("s", "onPause", &["app".into()], &[]).is_err());
+        assert!(
+            validate_lifecycle_argv("s", "onPause", &["/a".into(), "b\0".into()], &[]).is_err()
+        );
     }
 
     fn declared_sandbox() -> crate::Sandbox {
@@ -724,6 +759,65 @@ mod tests {
                 .expect_err("onPause refused off AWS");
             assert!(error.to_string().contains("onPause"), "{error}");
             assert!(error.to_string().contains(&platform.to_string()), "{error}");
+        }
+    }
+
+    /// A lifecycle step runs from the image's own files, never from a declared mount: a program
+    /// on a mount is whatever the mount's writer put there, and a hard NFS mount can block its
+    /// launch past the hook's deadline. An unnormalized program path could hide that, so it is
+    /// refused too.
+    #[test]
+    fn lifecycle_programs_under_a_declared_mount_are_refused() {
+        let with_mounts = || {
+            let mut sandbox = declared_sandbox();
+            sandbox.image_permissions = Some(permissions(
+                vec![
+                    mount(SandboxImageMountType::Nfs, "/workspace", None),
+                    mount(SandboxImageMountType::Tmpfs, "/scratch", Some("64Mi")),
+                    SandboxImageMount {
+                        mount_type: SandboxImageMountType::Bind,
+                        path: "/workspace/cache".into(),
+                        size: None,
+                        from: Some("/scratch".into()),
+                    },
+                ],
+                vec![connection("workspace-files", 2049)],
+            ));
+            sandbox
+        };
+        for field in ["onPause", "onResume"] {
+            let set = |sandbox: &mut crate::Sandbox, program: &str| {
+                let argv = Some(vec![program.to_string(), "pause".to_string()]);
+                if field == "onPause" {
+                    sandbox.lifecycle.on_pause = argv;
+                } else {
+                    sandbox.lifecycle.on_resume = argv;
+                }
+            };
+            for program in ["/usr/local/bin/app", "/workspaces/app", "/scratchpad"] {
+                let mut sandbox = with_mounts();
+                set(&mut sandbox, program);
+                sandbox
+                    .validate_for_platform(Platform::Aws)
+                    .unwrap_or_else(|error| panic!("{field} {program}: {error}"));
+            }
+            for program in [
+                "/workspace",
+                "/workspace/bin/pause",
+                "/scratch/pause",
+                "/workspace/cache/pause",
+                "//workspace/bin/pause",
+                "/usr/../workspace/pause",
+                "/./scratch/pause",
+                "/usr/bin/",
+            ] {
+                let mut sandbox = with_mounts();
+                set(&mut sandbox, program);
+                let error = sandbox
+                    .validate_for_platform(Platform::Aws)
+                    .expect_err(program);
+                assert!(error.to_string().contains(field), "{program}: {error}");
+            }
         }
     }
 

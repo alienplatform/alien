@@ -124,7 +124,8 @@ export class Sandbox extends ResourceBuilder {
    *
    * `onPause` and `onResume` are programs (argv, absolute path first) Alien's agent runs inside
    * the image, with the image's own grant, around a pause that keeps memory. They are best effort
-   * and killed at a deadline: the image must also survive a stop with no warning. AWS only.
+   * and killed at a deadline: the image must also survive a stop with no warning. The program
+   * must be one of the image's own files, not on a mount `imagePermissions` declares. AWS only.
    */
   public lifecycle(lifecycle: SandboxLifecyclePolicy): this {
     this._config.lifecycle = lifecycle

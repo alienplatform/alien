@@ -320,11 +320,12 @@ pub struct SandboxLifecyclePolicy {
     pub idle_pause_seconds: Option<u32>,
     /// A program the agent runs inside the image, with the image's own grant, before the
     /// platform pauses the sandbox with its memory kept. Killed by process group at a deadline.
-    /// Best effort: the image must also survive a stop with no warning. AWS only.
+    /// Best effort: the image must also survive a stop with no warning. The program must be one
+    /// of the image's own files, not on a declared image-permissions mount. AWS only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_pause: Option<Vec<String>>,
     /// A program the agent runs inside the image after such a pause resumes. Best effort, with a
-    /// deadline. AWS only.
+    /// deadline. The same rule for the program applies. AWS only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_resume: Option<Vec<String>>,
 }
@@ -1061,7 +1062,15 @@ impl Sandbox {
         ] {
             if let Some(argv) = argv {
                 sandbox_image_permissions::require_image_permissions_platform(field, platform)?;
-                sandbox_image_permissions::validate_lifecycle_argv(&self.id, field, argv)?;
+                sandbox_image_permissions::validate_lifecycle_argv(
+                    &self.id,
+                    field,
+                    argv,
+                    self.image_permissions
+                        .as_ref()
+                        .map(|permissions| &permissions.mounts[..])
+                        .unwrap_or_default(),
+                )?;
             }
         }
         if self.declares_image_permissions() && self.privileged_supervisor.is_some() {
