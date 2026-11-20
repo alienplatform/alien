@@ -397,6 +397,17 @@ fn scenario() {
     std::fs::create_dir_all("/tmp/sysroot/usr/sbin").unwrap();
     std::fs::create_dir_all("/tmp/sysroot/etc").unwrap();
     std::fs::write("/tmp/sysroot/usr/sbin/nologin", "").unwrap();
+    // The kernel's key-request program; it leaves a mark if it ever runs.
+    std::fs::write(
+        "/tmp/sysroot/usr/sbin/request-key",
+        "#!/bin/sh\ntouch /tmp/request-key-ran\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        "/tmp/sysroot/usr/sbin/request-key",
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
     symlink("usr/sbin", "/tmp/sysroot/sbin").unwrap();
     std::fs::create_dir_all(mount_broker::IMAGE_CGROUP).expect("image cgroup");
     // The kernel's helper settings are host-wide and can only be lowered until reboot: the test
@@ -424,6 +435,11 @@ fn scenario() {
                 modprobe: modprobe.into(),
             },
             system_root: "/tmp/sysroot".into(),
+            // This process's namespace stands in for the kernel's helper namespace.
+            helper_namespace: mount_broker::HelperNamespace {
+                namespace: format!("/proc/{}/ns/mnt", std::process::id()).into(),
+                comm: None,
+            },
             ..Default::default()
         },
     )
@@ -472,13 +488,25 @@ fn scenario() {
         0,
         "the broker dropped SETPCAP, LINUX_IMMUTABLE and SYS_MODULE"
     );
-    for path in [
-        "/tmp/sysroot/usr/sbin",
-        "/tmp/sysroot/etc/request-key.conf",
-        "/tmp/sysroot/etc/request-key.d",
-    ] {
-        assert!(read_only(path), "{path}: {:?}", mount_line(path));
-    }
+    assert!(
+        read_only("/tmp/sysroot/usr/sbin"),
+        "{:?}",
+        mount_line("/tmp/sysroot/usr/sbin")
+    );
+    // In the helper namespace the program is /dev/null: the kernel's exec fails before any loader
+    // or library is read, whatever the image wrote.
+    let blocked = std::fs::metadata("/tmp/sysroot/sbin/request-key").unwrap();
+    assert!(
+        std::os::unix::fs::FileTypeExt::is_char_device(&blocked.file_type()),
+        "request-key is not /dev/null: {blocked:?}"
+    );
+    let ran = Command::new("/tmp/sysroot/sbin/request-key").status();
+    assert_eq!(
+        ran.as_ref().map_err(|error| error.raw_os_error()).err(),
+        Some(Some(libc::EACCES)),
+        "{ran:?}"
+    );
+    assert!(!Path::new("/tmp/request-key-ran").exists());
     assert_eq!(
         (immutable("/tmp/sysroot"), immutable("/tmp/sysroot/usr")),
         (!ramfs, !ramfs),
@@ -557,11 +585,6 @@ attempt("replace", lambda: os.rename(r + "/usr/sbin/nologin", r + "/usr/sbin/req
 attempt("move-in", lambda: os.rename("/tmp/planted", r + "/usr/sbin/request-key"))
 attempt("rename", lambda: os.rename(r + "/usr/sbin", r + "/usr/sbin-moved"))
 attempt("remove", lambda: os.unlink(r + "/usr/sbin/nologin"))
-attempt("conf-write", lambda: open(r + "/etc/request-key.conf", "w"))
-attempt("conf-dir-add", lambda: open(r + "/etc/request-key.d/x.conf", "w"))
-open(r + "/etc/planted.conf", "w").close()
-attempt("conf-replace", lambda: os.rename(r + "/etc/planted.conf", r + "/etc/request-key.conf"))
-attempt("conf-remove", lambda: os.unlink(r + "/etc/request-key.conf"))
 attempt("link-replace", lambda: os.unlink(r + "/sbin"))
 attempt("mkdir-top", lambda: os.mkdir(r + "/newdir"))
 attempt("rename-etc", lambda: os.rename(r + "/etc", r + "/etc-moved"))
@@ -582,10 +605,6 @@ attempt("rename-usr", lambda: os.rename(r + "/usr", r + "/usr-moved"))
             "rename EPERM"
         },
         "remove EROFS",
-        "conf-write EROFS",
-        "conf-dir-add EROFS",
-        "conf-replace EBUSY",
-        "conf-remove EBUSY",
     ];
     if ramfs {
         // Without the attribute: the documented residual (an ancestor can move).

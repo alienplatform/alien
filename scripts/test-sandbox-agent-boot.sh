@@ -10,11 +10,18 @@ image="alien-agent-boot-test:$$"
 trap 'docker image rm "$image" >/dev/null 2>&1 || true; rm -rf "$fixture"' EXIT
 cat > "$fixture/Dockerfile" <<'DOCKERFILE'
 FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl python3 util-linux iproute2 procps && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl python3 util-linux iproute2 procps keyutils && rm -rf /var/lib/apt/lists/*
 DOCKERFILE
 cat > "$fixture/boot.sh" <<'BOOT'
 set -euo pipefail
 variant=$1
+# The kernel starts request-key from kthreadd's mount namespace (PID 2). This container's first
+# child stands in for it, so the agent blocks the container's own copy, not the host's.
+sleep infinity &
+[ "$!" = 2 ] || { echo "FAIL: the kthreadd stand-in is PID $!, not 2"; exit 1; }
+echo kthreadd > /tmp/kthreadd-comm
+mount --bind /tmp/kthreadd-comm /proc/2/comm
+[ -x /sbin/request-key ] || { echo "FAIL: no request-key in the test image"; exit 1; }
 mkdir -p /session /opt/alien
 # The image's command; its argument marks it in the process list.
 printf '%s\n' '{"user":"0","workingDirectory":"/","command":["/bin/sleep","3601"],"env":{"PATH":"/usr/bin:/bin"}}' \
@@ -98,6 +105,11 @@ if [ "$variant" = started ]; then
     || fail "the seal did not write the inheritable stand-in"
   [ ! -e /proc/sys/kernel/modprobe ] || [ -z "$(cat /tmp/kernel-settings/modprobe)" ] \
     || fail "the seal did not write the modprobe stand-in"
+  # Blocked in the kernel's helper namespace: /dev/null (1:3), and exec fails before any loader.
+  [ "$(stat -L -c %t:%T /sbin/request-key)" = 1:3 ] || fail "request-key is not /dev/null"
+  ! /sbin/request-key 2>/dev/null || fail "request-key ran"
+  grep -q '^seal: request-key: /sbin/request-key.*: /dev/null' /run/alien/boot-report \
+    || fail "boot report: $(cat /run/alien/boot-report)"
   echo "boot report:"; sed 's/^/  /' /run/alien/boot-report
   echo "OK started: run hook 200, image running, exec ran, declared path created before the seal"
 else

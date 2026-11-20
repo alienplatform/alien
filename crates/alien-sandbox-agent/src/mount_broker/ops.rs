@@ -284,6 +284,7 @@ fn wait_for_renames_in_parent(target: &OwnedFd) -> Result<(), Refusal> {
 
 /// `mount_setattr` flag for a read-only mount.
 const MOUNT_ATTR_RDONLY: u64 = 0x1;
+const MOUNT_ATTR_NOEXEC: u64 = 0x8;
 
 const RESOLVE_IN_ROOT: u64 = 0x10;
 /// `FS_IOC_GETFLAGS` / `FS_IOC_SETFLAGS` (`_IOR('f', 1, long)` / `_IOW('f', 2, long)`).
@@ -474,6 +475,119 @@ fn bind_read_only(object: &OwnedFd, path: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Makes `path` (resolved under `root` as the kernel resolves it, symbolic links followed but never
+/// out of `root`) unrunnable: `/dev/null`, read-only and `noexec`, is bound over it. Called in the
+/// mount namespace the kernel starts its own helpers in, where the kernel's `exec` of the path then
+/// fails before any loader or library is read, whatever the image wrote. A path that is not there
+/// is reported and left alone: the kernel's call fails the same way. Returns the report line.
+pub fn block_kernel_helper(root: &str, path: &str) -> Result<String, String> {
+    let open_dir = |name: &str| -> Result<OwnedFd, String> {
+        let name_c = CString::new(name).map_err(|_| "a NUL byte".to_string())?;
+        // SAFETY: a valid path; the descriptor is owned below.
+        let fd = unsafe { libc::open(name_c.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return Err(format!(
+                "cannot open {name}: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: a descriptor the kernel just returned that nothing else owns.
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    };
+    let root_fd = open_dir(root)?;
+    let object = match open_in_root(&root_fd, path, libc::O_PATH) {
+        Ok(fd) => fd,
+        Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
+            return Ok(format!("{path}: absent"));
+        }
+        Err(error) => return Err(format!("cannot open {path}: {error}")),
+    };
+    let null = open_dir("/dev/null")?;
+    let null_stat = fstat(&null).map_err(|error| format!("cannot inspect /dev/null: {error}"))?;
+    let is_null = |stat: &libc::stat| {
+        stat.st_mode & libc::S_IFMT == libc::S_IFCHR && stat.st_rdev == null_stat.st_rdev
+    };
+    let before = fstat(&object).map_err(|error| format!("cannot inspect {path}: {error}"))?;
+    if before.st_mode & libc::S_IFMT == libc::S_IFDIR {
+        return Err(format!("{path} is a directory"));
+    }
+    if !is_null(&before) {
+        let empty = c"";
+        // SAFETY: valid descriptor, empty path with AT_EMPTY_PATH.
+        let tree = unsafe {
+            libc::syscall(
+                libc::SYS_open_tree,
+                null.as_raw_fd(),
+                empty.as_ptr(),
+                OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | libc::AT_EMPTY_PATH as u32,
+            )
+        };
+        if tree < 0 {
+            return Err(format!(
+                "cannot copy /dev/null: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: a descriptor the kernel just returned that nothing else owns.
+        let tree = unsafe { OwnedFd::from_raw_fd(tree as RawFd) };
+        let attr = MountAttr {
+            attr_set: MOUNT_ATTR_RDONLY | MOUNT_ATTR_NOEXEC | MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV,
+            attr_clr: 0,
+            propagation: 0,
+            userns_fd: 0,
+        };
+        // SAFETY: valid descriptor and a correctly sized mount_attr.
+        if unsafe {
+            libc::syscall(
+                libc::SYS_mount_setattr,
+                tree.as_raw_fd(),
+                empty.as_ptr(),
+                libc::AT_EMPTY_PATH,
+                &attr as *const MountAttr,
+                size_of::<MountAttr>(),
+            )
+        } != 0
+        {
+            return Err(format!(
+                "cannot make the /dev/null copy read-only and noexec: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: valid descriptors and empty paths with the EMPTY_PATH flags.
+        if unsafe {
+            libc::syscall(
+                libc::SYS_move_mount,
+                tree.as_raw_fd(),
+                empty.as_ptr(),
+                object.as_raw_fd(),
+                empty.as_ptr(),
+                MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH,
+            )
+        } != 0
+        {
+            return Err(format!(
+                "cannot bind /dev/null over {path}: {}",
+                io::Error::last_os_error()
+            ));
+        }
+    }
+    // What the kernel now finds at the path.
+    let check = open_in_root(&root_fd, path, libc::O_PATH)
+        .map_err(|error| format!("cannot open {path} after blocking it: {error}"))?;
+    let after = fstat(&check).map_err(|error| format!("cannot inspect {path}: {error}"))?;
+    if !is_null(&after) {
+        return Err(format!("{path} is not /dev/null after blocking it"));
+    }
+    let target = std::fs::read_link(format!("/proc/self/fd/{}", object.as_raw_fd()))
+        .map(|link| link.display().to_string())
+        .unwrap_or_default();
+    let shown = match target.strip_prefix(root.trim_end_matches('/')) {
+        Some(inside) if inside != path && !inside.is_empty() => format!("{path} -> {inside}"),
+        _ => path.to_string(),
+    };
+    Ok(format!("{shown}: /dev/null"))
 }
 
 /// The paths the kernel reads when it runs a helper on its own (`/sbin/request-key`, its
