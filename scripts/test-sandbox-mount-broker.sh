@@ -34,9 +34,15 @@ docker run --rm --privileged --cgroupns=private \
     # with "writing fd to kernel failed: errno 111".
     rpcbind -w
     rpc.mountd -N 2 -N 3
-    # The kernel enables every NFSv4 minor version by default; only NFSv3 is turned off. Newer
-    # kernels keep the versions per network namespace, so print what this one serves.
-    rpc.nfsd -N 3 2
+    # Kernels from 6.11 keep the served versions per network namespace, and their default in a
+    # new one differs (6.12: NFSv3 only). Set them before the nfsd threads start, one token at a
+    # time so a version the kernel lacks is named, and give rpc.nfsd the same set.
+    echo "nfsd versions before: $(cat /proc/fs/nfsd/versions) (kernel $(uname -r))"
+    grep -qE "(^| )[+-]4( |$)" /proc/fs/nfsd/versions || { echo "the host kernel nfsd has no NFSv4 (CONFIG_NFSD_V4)" >&2; exit 1; }
+    for v in +4 +4.1 +4.2 -3; do
+      echo "$v" > /proc/fs/nfsd/versions || { echo "the kernel refused nfsd version $v" >&2; exit 1; }
+    done
+    rpc.nfsd -N 3 -V 4 -V 4.1 -V 4.2 2
     echo "nfsd versions: $(cat /proc/fs/nfsd/versions) (kernel $(uname -r))"
     grep -qw "+4.2" /proc/fs/nfsd/versions || { echo "the test NFS server does not serve NFSv4.2" >&2; exit 1; }
     # The kernel client against the server directly: a failure here is the fixture, not the broker.
