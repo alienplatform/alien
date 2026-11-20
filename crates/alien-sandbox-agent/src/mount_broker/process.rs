@@ -609,17 +609,45 @@ unsafe fn join_cgroup(tag: u8) -> io::Result<()> {
     let sent = receive_timeout(fds[0], &broker.answer_within)
         .and_then(|()| send_with_fds(broker.join.as_raw_fd(), tag, &[fds[1]]));
     libc::close(fds[1]);
-    let result = sent.and_then(|()| {
-        let mut ack = [0u8];
-        let n = libc::recv(fds[0], ack.as_mut_ptr().cast(), 1, 0);
-        if n == 1 && ack[0] == b'k' {
-            Ok(())
-        } else {
-            Err(io::Error::from_raw_os_error(libc::EPERM))
-        }
-    });
+    let result = sent.and_then(|()| join_answer(fds[0]));
     libc::close(fds[0]);
     result
+}
+
+/// The broker's answer to a cgroup join: `k`, or `e` and the errno of the step that failed. A
+/// signal during the wait is not an answer (the receive timeout makes it EINTR), and a failed
+/// receive keeps its own errno. Allocates nothing: it runs between fork and exec.
+fn join_answer(socket: RawFd) -> io::Result<()> {
+    let mut ack = [0u8; 5];
+    loop {
+        // SAFETY: reading into a buffer we own, at most its length.
+        let n = unsafe { libc::recv(socket, ack.as_mut_ptr().cast(), ack.len(), 0) };
+        if n < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        return join_ack(&ack[..n as usize]);
+    }
+}
+
+fn join_ack(ack: &[u8]) -> io::Result<()> {
+    match ack {
+        [b'k'] => Ok(()),
+        [b'e', errno @ ..] if errno.len() == 4 => {
+            let errno = i32::from_le_bytes([errno[0], errno[1], errno[2], errno[3]]);
+            Err(io::Error::from_raw_os_error(if errno > 0 {
+                errno
+            } else {
+                libc::EPERM
+            }))
+        }
+        // The broker closed the socket without an answer.
+        [] => Err(io::Error::from_raw_os_error(libc::ECONNRESET)),
+        _ => Err(io::Error::from_raw_os_error(libc::EPROTO)),
+    }
 }
 
 /// Installs a filter that lets the broker create only `AF_UNIX` sockets.
@@ -1044,34 +1072,58 @@ impl Loop<'_> {
         let Some(reply) = message.fds.into_iter().next() else {
             return;
         };
-        let directory = match message.tag {
-            b'J' => Some(self.config.cgroup_dir.clone()),
-            b'j' => {
-                let steps = self.config.cgroup_dir.join(STEPS_CGROUP);
-                match std::fs::create_dir(&steps) {
-                    Ok(()) => Some(steps),
-                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Some(steps),
-                    Err(_) => None,
-                }
+        let tag = message.tag as char;
+        let ack = match self.move_joiner(message.tag, message.credentials) {
+            Ok(()) => vec![b'k'],
+            Err((errno, reason)) => {
+                eprintln!("mount broker: cgroup join '{tag}': {reason}");
+                let mut ack = vec![b'e'];
+                ack.extend_from_slice(&errno.to_le_bytes());
+                ack
             }
-            _ => None,
         };
-        let moved = match (message.credentials, directory) {
-            (Some((pid, 0)), Some(directory)) if pid > 0 => {
-                std::fs::write(directory.join("cgroup.procs"), pid.to_string()).is_ok()
-            }
-            _ => false,
-        };
-        let ack = [if moved { b'k' } else { b'e' }];
-        // SAFETY: writing one byte from a buffer we own.
+        // SAFETY: writing a buffer we own, at most its length.
         unsafe {
             libc::send(
                 reply.as_raw_fd(),
                 ack.as_ptr().cast(),
-                1,
+                ack.len(),
                 libc::MSG_NOSIGNAL,
             )
         };
+    }
+
+    /// Moves the asking process (by its kernel-checked credentials) into the cgroup its tag
+    /// names. A failure carries the errno the caller gets and the reason the broker logs.
+    fn move_joiner(&self, tag: u8, credentials: Option<(i32, u32)>) -> Result<(), (i32, String)> {
+        let failed = |what: String, error: io::Error| {
+            (
+                error.raw_os_error().unwrap_or(libc::EIO),
+                format!("{what}: {error}"),
+            )
+        };
+        let directory = match tag {
+            b'J' => self.config.cgroup_dir.clone(),
+            b'j' => {
+                let steps = self.config.cgroup_dir.join(STEPS_CGROUP);
+                match std::fs::create_dir(&steps) {
+                    Ok(()) => steps,
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => steps,
+                    Err(error) => return Err(failed(format!("create {}", steps.display()), error)),
+                }
+            }
+            other => return Err((libc::EINVAL, format!("unknown tag {other}"))),
+        };
+        let pid = match credentials {
+            Some((pid, 0)) if pid > 0 => pid,
+            Some((pid, uid)) => {
+                return Err((libc::EPERM, format!("pid {pid} uid {uid}: not root")))
+            }
+            None => return Err((libc::EPERM, "no credentials".to_owned())),
+        };
+        let procs = directory.join("cgroup.procs");
+        std::fs::write(&procs, pid.to_string())
+            .map_err(|error| failed(format!("write pid {pid} to {}", procs.display()), error))
     }
 
     /// Only a root process in the image cgroup may ask.
@@ -1514,6 +1566,39 @@ mod tests {
             inheritable: dir.join("inheritable"),
             modprobe: dir.join("modprobe"),
         }
+    }
+
+    /// A refused cgroup join reaches the image spawn with the errno of the step that failed,
+    /// not a blanket EPERM; a closed or garbled answer is named as such.
+    #[test]
+    fn a_cgroup_join_answer_carries_the_real_errno() {
+        assert!(join_ack(b"k").is_ok());
+        let mut ack = vec![b'e'];
+        ack.extend_from_slice(&libc::EBUSY.to_le_bytes());
+        assert_eq!(
+            join_ack(&ack).unwrap_err().raw_os_error(),
+            Some(libc::EBUSY)
+        );
+        assert_eq!(
+            join_ack(b"").unwrap_err().raw_os_error(),
+            Some(libc::ECONNRESET)
+        );
+        assert_eq!(
+            join_ack(b"e").unwrap_err().raw_os_error(),
+            Some(libc::EPROTO)
+        );
+
+        let (agent, broker) = UnixStream::pair().unwrap();
+        (&broker).write_all(&ack).unwrap();
+        assert_eq!(
+            join_answer(agent.as_raw_fd()).unwrap_err().raw_os_error(),
+            Some(libc::EBUSY)
+        );
+        drop(broker);
+        assert_eq!(
+            join_answer(agent.as_raw_fd()).unwrap_err().raw_os_error(),
+            Some(libc::ECONNRESET)
+        );
     }
 
     /// A signal while the agent waits for the broker (its runtime's SIGCHLD, say) is not an
