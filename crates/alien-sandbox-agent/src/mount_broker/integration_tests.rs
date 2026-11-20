@@ -132,7 +132,7 @@ while True:
 "#;
 
 #[test]
-#[ignore = "requires a disposable privileged container with cgroup2, an NFSv4.2 server (knfsd or nfs-ganesha) exporting a directory with hello.txt as / on 127.0.0.1:2049, python3, and the agent binary at /agent; run by scripts/test-sandbox-mount-broker.sh"]
+#[ignore = "requires a disposable privileged container with cgroup2, an NFSv4.2 server (knfsd or nfs-ganesha) exporting a directory with hello.txt as / on 127.0.0.1:2049 from /export, python3, and the agent binary at /agent; run by scripts/test-sandbox-mount-broker.sh"]
 fn broker_allows_declared_mounts_and_refuses_everything_else() {
     // An agent started without a capability the broker needs is told which one.
     missing_capability_is_named(21, "start", "the broker needs CAP_SYS_ADMIN");
@@ -730,7 +730,10 @@ print(results)
         )
         .unwrap_err();
         let took = started.elapsed();
-        assert!(error.contains("its processes were killed"), "{error}");
+        assert!(
+            error.contains("did not finish within 2s; its processes were killed"),
+            "{error}"
+        );
         std::thread::sleep(Duration::from_millis(300));
         let left = Command::new("pgrep")
             .args(["-f", "sleep 30[012]"])
@@ -787,6 +790,35 @@ print(results)
         "the NFS mount is still there"
     );
     println!("PAUSE    a failed pause step detached the broker's NFS mount");
+
+    // A step whose program is on an NFS mount whose server stopped answering: loading the
+    // program blocks in exec, and the deadline covers that too. The program is written on the
+    // server's side so the client has nothing of it cached.
+    std::fs::write("/export/step-on-nfs", "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        "/export/step-on-nfs",
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let mut frozen = spawn_image("exec python3 /tmp/forward.py 20129 2049");
+    wait_for_listener(20129);
+    allowed("/opt/alien/bin/mount.nfs4 127.0.0.1:/ /workspace -o nfsvers=4.2,port=20129,soft,timeo=600,retrans=1");
+    // SAFETY: stopping the proxy this test started.
+    unsafe { libc::kill(frozen.id() as i32, libc::SIGSTOP) };
+    let started = Instant::now();
+    let error = step(&["/workspace/step-on-nfs"], 2).unwrap_err();
+    let took = started.elapsed();
+    // SAFETY: resuming the proxy this test stopped.
+    unsafe { libc::kill(frozen.id() as i32, libc::SIGCONT) };
+    allowed("/opt/alien/bin/alien-mount umount /workspace");
+    let _ = frozen.kill();
+    let _ = frozen.wait();
+    assert!(
+        took < Duration::from_secs(10),
+        "a step blocked loading its program ran {took:?} past its 2s deadline: {error}"
+    );
+    assert!(error.contains("did not start within 2s"), "{error}");
+    println!("STEP     a step blocked in exec on a stopped NFS server failed at its deadline ({took:?}): {error}");
 
     // An NFS mount off every declared path (where a helper killed between attach and check
     // would leave one the image moved) goes at the pause detach too.

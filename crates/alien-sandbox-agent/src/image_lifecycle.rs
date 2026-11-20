@@ -70,10 +70,25 @@ pub async fn run(name: &str, command: &[String], deadline: Duration) -> Result<(
     }
     let mut process = tokio::process::Command::from(process);
     process.kill_on_drop(true);
-    let (mut child, _registration) = crate::children::spawn(&mut process)
-        .map_err(|error| format!("{name}: cannot start {program:?}: {error}"))?;
+    // Starting the step waits for its exec, which reads the program: on an NFS mount whose server
+    // stopped answering that blocks. The deadline covers the start too.
+    let started = std::time::Instant::now();
+    let mut spawning = tokio::task::spawn_blocking(move || crate::children::spawn(&mut process));
+    let (mut child, _registration) = match tokio::time::timeout(deadline, &mut spawning).await {
+        Ok(spawned) => spawned
+            .map_err(|error| format!("{name}: cannot start {program:?}: {error}"))?
+            .map_err(|error| format!("{name}: cannot start {program:?}: {error}"))?,
+        Err(_) => return Err(abandon_start(name, spawning, deadline).await),
+    };
     let group = child.id().map(|pid| pid as i32);
-    let outcome = finish(name, &mut child, group, deadline).await;
+    let outcome = finish(
+        name,
+        &mut child,
+        group,
+        deadline,
+        deadline.saturating_sub(started.elapsed()),
+    )
+    .await;
     // What the step left running (a proxy for a remount, say) joins the image's own processes.
     if let Err(error) = tokio::task::spawn_blocking(crate::mount_broker::end_steps)
         .await
@@ -85,13 +100,41 @@ pub async fn run(name: &str, command: &[String], deadline: Duration) -> Result<(
     outcome
 }
 
+/// A step that did not start within its deadline: the child (already in the steps cgroup, waiting
+/// in exec) is killed with the cgroup, which ends the exec, and reaped.
+async fn abandon_start(
+    name: &str,
+    spawning: tokio::task::JoinHandle<
+        std::io::Result<(tokio::process::Child, crate::children::Registration)>,
+    >,
+    deadline: Duration,
+) -> String {
+    let killed = tokio::task::spawn_blocking(crate::mount_broker::kill_steps).await;
+    if let Ok(Ok(Ok((mut child, _registration)))) =
+        tokio::time::timeout(Duration::from_secs(5), spawning).await
+    {
+        let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    }
+    if !matches!(killed, Ok(Ok(()))) {
+        return format!(
+            "{name} did not start within {}s (loading its program blocked); its processes could not all be killed",
+            deadline.as_secs()
+        );
+    }
+    format!(
+        "{name} did not start within {}s (loading its program blocked); its processes were killed",
+        deadline.as_secs()
+    )
+}
+
 async fn finish(
     name: &str,
     child: &mut tokio::process::Child,
     group: Option<i32>,
     deadline: Duration,
+    remaining: Duration,
 ) -> Result<(), String> {
-    match tokio::time::timeout(deadline, child.wait()).await {
+    match tokio::time::timeout(remaining, child.wait()).await {
         Ok(Ok(status)) if status.success() => Ok(()),
         Ok(Ok(status)) => Err(format!("{name} exited with {status}")),
         Ok(Err(error)) => Err(format!("{name}: {error}")),
