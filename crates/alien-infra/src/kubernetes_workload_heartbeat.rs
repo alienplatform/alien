@@ -1,7 +1,7 @@
 use alien_core::{
     HeartbeatBackend, KubernetesWorkloadKind, Platform, ResourceHeartbeat, ResourceType,
 };
-use alien_error::Context;
+use alien_error::{AlienError, Context};
 use alien_k8s_clients::read_kubernetes_workload;
 pub use alien_k8s_clients::{
     label_selector, KubernetesWorkload, KubernetesWorkloadDataKind, KubernetesWorkloadReadInput,
@@ -15,6 +15,115 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 
 pub(crate) const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
+
+/// Polls (5 s apart) a re-apply whose pod template did not change waits for readiness: nothing
+/// rolls, so the workload is either already healthy or still failing, and 2 minutes (the ready
+/// hold plus a margin) tells which.
+pub(crate) const UNCHANGED_REAPPLY_MAX_POLLS: u32 = 24;
+
+/// The polls an update waits for readiness: the full rollout limit when the apply changed the
+/// pod template (pods roll), the short bound when it did not.
+pub(crate) fn update_wait_max_polls(template_unchanged: bool) -> u32 {
+    if template_unchanged {
+        UNCHANGED_REAPPLY_MAX_POLLS
+    } else {
+        KUBERNETES_WORKLOAD_READY_MAX_POLLS
+    }
+}
+
+/// How long a Running workload may stay not ready, from the first not-ready check, before its
+/// refresh fails. A node that joins with its pod still pulling an image, or a pod that restarts,
+/// is not ready for a minute or two; five minutes separates that from a workload that is down.
+pub(crate) const REFRESH_NOT_READY_BOUND_SECS: i64 = 300;
+
+/// Since when a Running workload has been not ready. A ready check clears it, so a workload that
+/// recovers starts a new bound the next time it is not ready.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NotReadyObservations {
+    #[serde(default)]
+    since_unix: Option<i64>,
+}
+
+impl NotReadyObservations {
+    /// Records a not-ready observation; true once the workload has been not ready for
+    /// `REFRESH_NOT_READY_BOUND_SECS` since the first one.
+    pub(crate) fn observe(&mut self, now_unix: i64) -> bool {
+        let since = *self.since_unix.get_or_insert(now_unix);
+        now_unix.saturating_sub(since) >= REFRESH_NOT_READY_BOUND_SECS
+    }
+
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Whether a not-ready bound is running.
+    pub(crate) fn is_active(&self) -> bool {
+        self.since_unix.is_some()
+    }
+
+    /// A workload that has been not ready since `since_unix` (tests).
+    #[cfg(test)]
+    pub(crate) fn since(since_unix: i64) -> Self {
+        Self {
+            since_unix: Some(since_unix),
+        }
+    }
+
+    /// The outcome of a not-ready refresh check. Inside the bound the check is repeated without
+    /// an error (the resource stays Running, checked again after the returned delay); past it the error is final so the resource reaches
+    /// RefreshFailed. While a refresh-failed resource is re-checked (`recovering`) the error stays
+    /// retryable and nothing is counted. The error code is `WORKLOAD_NOT_READY` either way.
+    pub(crate) fn outcome(
+        &mut self,
+        mut error: alien_error::AlienError<ErrorData>,
+        recovering: bool,
+        now_unix: i64,
+    ) -> Result<std::time::Duration> {
+        if recovering {
+            return Err(error);
+        }
+        if self.observe(now_unix) {
+            error.retryable = false;
+            return Err(error);
+        }
+        Ok(std::time::Duration::from_secs(10))
+    }
+}
+
+/// Text of the reason for a pod that keeps exiting with an error while it is polled in the
+/// Running or Terminated state (not Waiting), so no back-off reason is visible.
+const CRASH_LOOP_MARKER: &str = "is crash-looping";
+
+/// Restarts of a not-ready container, with a non-zero last exit code, that count as a crash loop.
+const CRASH_LOOP_MIN_RESTARTS: i32 = 2;
+/// The last crash must be this recent (seconds) for a pod to count as crash-looping.
+const CRASH_LOOP_RECENT_SECS: i64 = 600;
+
+/// Pod reasons that will not clear by waiting: an update over them fails now.
+const FAIL_FAST_POD_REASONS: [&str; 5] = [
+    "CrashLoopBackOff",
+    CRASH_LOOP_MARKER,
+    "ImagePullBackOff",
+    "ErrImagePull",
+    "CreateContainerConfigError",
+];
+
+/// Whether an update wait that ran out of time, over a pod template that did not change, goes
+/// back to the refresh check (which looks again later) instead of failing the update. An update
+/// failure is never re-checked; a workload that is slowly recovering (waiting for a node, a slow
+/// pull) must not get stuck there. A crash loop or an image back-off fails now.
+pub(crate) fn unchanged_update_rechecks(
+    template_unchanged: bool,
+    pod_reason: Option<&str>,
+) -> bool {
+    template_unchanged
+        && !pod_reason.is_some_and(|reason| {
+            FAIL_FAST_POD_REASONS
+                .iter()
+                .any(|code| reason.contains(code))
+        })
+}
 
 /// Kubernetes omits replica counters when their value is zero.
 pub(crate) fn deployment_has_ready_replicas(deployment: &Deployment) -> bool {
@@ -341,23 +450,109 @@ pub(crate) fn stalled_rollout_message(
 
 /// What the pods of a workload report while they are not ready: the first waiting container
 /// reason (ImagePullBackOff, CrashLoopBackOff, ...) with the pod name.
-pub(crate) fn pod_waiting_reason(pods: &[k8s_openapi::api::core::v1::Pod]) -> Option<String> {
+pub(crate) fn pod_waiting_reason(
+    pods: &[k8s_openapi::api::core::v1::Pod],
+    now_unix: i64,
+) -> Option<String> {
     pods.iter()
         .filter(|pod| pod.metadata.deletion_timestamp.is_none())
         .find_map(|pod| {
             let waiting = pod
                 .status
-                .as_ref()?
-                .container_statuses
-                .as_deref()?
-                .iter()
-                .find_map(|status| status.state.as_ref()?.waiting.as_ref())?;
-            let reason = waiting.reason.as_deref()?;
-            Some(format!(
-                "pod {} is waiting: {reason}",
-                pod.metadata.name.as_deref().unwrap_or("?")
-            ))
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_deref())
+                .and_then(|statuses| {
+                    statuses
+                        .iter()
+                        .find_map(|status| status.state.as_ref()?.waiting.as_ref())
+                })
+                .and_then(|waiting| waiting.reason.as_deref());
+            let name = pod.metadata.name.as_deref().unwrap_or("?");
+            match waiting {
+                Some(reason) => Some(format!("pod {name} is waiting: {reason}")),
+                None => crash_loop_reason(pod, now_unix)
+                    .map(|why| format!("pod {name} {CRASH_LOOP_MARKER}: {why}"))
+                    .or_else(|| {
+                        unscheduled_reason(pod).map(|why| format!("pod {name} is Pending: {why}"))
+                    }),
+            }
         })
+}
+
+/// A container that is not ready, has restarted repeatedly and last exited with an error: a
+/// crash loop seen between back-offs (Running or Terminated), e.g. "restarted 3 times, last
+/// exit code 1".
+fn crash_loop_reason(pod: &k8s_openapi::api::core::v1::Pod, now_unix: i64) -> Option<String> {
+    pod.status
+        .as_ref()?
+        .container_statuses
+        .as_deref()?
+        .iter()
+        .filter(|status| !status.ready && status.restart_count >= CRASH_LOOP_MIN_RESTARTS)
+        .find_map(|status| {
+            let terminated = status.last_state.as_ref()?.terminated.as_ref()?;
+            let code = terminated.exit_code;
+            // restartCount and lastState persist for the life of the pod: only a recent crash
+            // counts. A missing finish time is not a crash loop.
+            let finished = terminated.finished_at.as_ref()?.0.timestamp();
+            (code != 0 && now_unix - finished <= CRASH_LOOP_RECENT_SECS).then(|| {
+                format!(
+                    "restarted {} times, last exit code {code}",
+                    status.restart_count
+                )
+            })
+        })
+}
+
+/// Why the scheduler has not placed a pod, from its `PodScheduled` condition, such as
+/// `Unschedulable "0/10 nodes are available: Insufficient cpu"`.
+fn unscheduled_reason(pod: &k8s_openapi::api::core::v1::Pod) -> Option<String> {
+    let condition = pod
+        .status
+        .as_ref()?
+        .conditions
+        .as_deref()?
+        .iter()
+        .find(|c| c.type_ == "PodScheduled" && c.status == "False")?;
+    Some(
+        match (condition.reason.as_deref(), condition.message.as_deref()) {
+            (Some(reason), Some(message)) => format!("{reason} \"{message}\""),
+            (Some(reason), None) => reason.to_string(),
+            (None, Some(message)) => format!("\"{message}\""),
+            (None, None) => "not scheduled".to_string(),
+        },
+    )
+}
+
+/// True on the last poll of a `Stay` that allows `max_times` polls. The step then fails with
+/// the workload's own state instead of the generic polling timeout.
+pub(crate) fn last_poll(stay_count: Option<u32>, max_times: u32) -> bool {
+    stay_count.unwrap_or(0) + 1 >= max_times
+}
+
+/// The error of a rollout wait whose whole budget is spent: not retryable, so the executor
+/// fails the step now instead of waiting out another budget on each retry. It keeps the
+/// `WORKLOAD_NOT_READY` code, so a manual retry still re-applies the spec. Ordinary not-ready
+/// observations stay retryable.
+pub(crate) fn rollout_budget_exhausted(mut error: AlienError<ErrorData>) -> AlienError<ErrorData> {
+    error.retryable = false;
+    error
+}
+
+/// The message of a rollout wait that ran out of time: the counts, and the first pod that is
+/// not ready with its reason.
+pub(crate) fn rollout_timeout_message(
+    kind: &str,
+    workload_name: &str,
+    counts: &str,
+    pod_reason: Option<&str>,
+) -> String {
+    match pod_reason {
+        Some(reason) => format!(
+            "{kind} '{workload_name}' did not finish rolling out in time: {counts}; {reason}"
+        ),
+        None => format!("{kind} '{workload_name}' did not finish rolling out in time: {counts}"),
+    }
 }
 
 /// Best effort: a failure to list pods must not hide the drift being reported.
@@ -379,7 +574,7 @@ pub(crate) async fn workload_pod_reason(
             .ok()
     }
     .await;
-    let from_pods = pods.and_then(|pods| pod_waiting_reason(&pods.items));
+    let from_pods = pods.and_then(|pods| pod_waiting_reason(&pods.items, Utc::now().timestamp()));
     match (from_pods, workload_failure) {
         (Some(pods), Some(failure)) => Some(format!("{pods}; {failure}")),
         (Some(pods), None) => Some(pods),
@@ -420,6 +615,190 @@ pub(crate) fn recovery_check(
     } else {
         false
     }
+}
+
+/// Consecutive polls a finished-looking rollout must stay ready before it counts as complete.
+pub(crate) const READY_HOLD_POLLS: u32 = 3;
+/// Seconds the ready polls must span: a container that runs for a while before it crashes
+/// (no readiness probe) is ready for the whole of one up period, so the hold outlasts it.
+pub(crate) const READY_HOLD_MIN_SECS: i64 = 60;
+
+/// Whether readiness holds across the polls of a create or update wait. A container without a
+/// readiness probe is ready for a moment after each start, so one ready poll proves nothing: the
+/// rollout is complete only after `READY_HOLD_POLLS` ready polls spanning `READY_HOLD_MIN_SECS`,
+/// with no restart of a ready pod across them. A not-ready or restarted poll starts over.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReadyHold {
+    #[serde(default)]
+    polls: u32,
+    #[serde(default)]
+    first_unix: Option<i64>,
+    /// Restart count of each ready pod at the last ready poll.
+    #[serde(default)]
+    restarts: std::collections::BTreeMap<String, i32>,
+    /// Result of the restart check made by the current refresh check, so the check that
+    /// follows it in the same pass reuses it: a second look would see unchanged counts.
+    #[serde(default)]
+    restart_checked: Option<bool>,
+}
+
+impl ReadyHold {
+    pub(crate) fn clear_restart_check(&mut self) {
+        self.restart_checked = None;
+    }
+
+    /// The restart check already made in this pass, consumed once.
+    pub(crate) fn take_restart_check(&mut self) -> Option<bool> {
+        self.restart_checked.take()
+    }
+
+    /// Whether a ready pod's restart count is higher than at the last ready poll.
+    fn restarted(&self, ready_pod_restarts: &std::collections::BTreeMap<String, i32>) -> bool {
+        ready_pod_restarts
+            .iter()
+            .any(|(pod, count)| self.restarts.get(pod).is_some_and(|before| count > before))
+    }
+
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Records a poll that found the rollout complete; `ready_pod_restarts` maps each ready pod
+    /// to its container restart count. True once readiness has held.
+    pub(crate) fn observe_ready(
+        &mut self,
+        ready_pod_restarts: std::collections::BTreeMap<String, i32>,
+        now_unix: i64,
+    ) -> bool {
+        let restarted = self.restarted(&ready_pod_restarts);
+        if restarted {
+            self.polls = 0;
+            self.first_unix = None;
+        }
+        self.restarts = ready_pod_restarts;
+        self.polls += 1;
+        let first = *self.first_unix.get_or_insert(now_unix);
+        self.polls >= READY_HOLD_POLLS && now_unix.saturating_sub(first) >= READY_HOLD_MIN_SECS
+    }
+}
+
+/// Restart counts of the ready pods in `pods`.
+pub(crate) fn ready_pod_restarts(
+    pods: &[k8s_openapi::api::core::v1::Pod],
+) -> std::collections::BTreeMap<String, i32> {
+    pods.iter()
+        .filter(|pod| pod.metadata.deletion_timestamp.is_none())
+        .filter(|pod| {
+            pod.status
+                .as_ref()
+                .and_then(|status| status.conditions.as_deref())
+                .is_some_and(|conditions| {
+                    conditions
+                        .iter()
+                        .any(|c| c.type_ == "Ready" && c.status == "True")
+                })
+        })
+        .map(|pod| {
+            let restarts = pod
+                .status
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_deref())
+                .map(|statuses| statuses.iter().map(|s| s.restart_count).sum())
+                .unwrap_or(0);
+            (pod.metadata.name.clone().unwrap_or_default(), restarts)
+        })
+        .collect()
+}
+
+/// For the refresh that follows a failure: true when no ready pod restarted since the last
+/// check, so a pod that is ready for a moment on each restart does not count as recovered. A
+/// failure to list pods is not a pass.
+pub(crate) async fn recovery_restart_free(
+    ctx: &ResourceControllerContext<'_>,
+    hold: &mut ReadyHold,
+    namespace: &str,
+    selector: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    let pods = async {
+        let client = ctx
+            .service_provider
+            .get_kubernetes_pod_client(ctx.get_kubernetes_config().ok()?)
+            .await
+            .ok()?;
+        client
+            .list_pods(namespace, Some(label_selector(selector)), None)
+            .await
+            .ok()
+    }
+    .await;
+    let Some(pods) = pods else {
+        hold.restart_checked = Some(false);
+        return false;
+    };
+    let restarts = ready_pod_restarts(&pods.items);
+    let restarted = hold.restarted(&restarts);
+    hold.restarts = restarts;
+    hold.restart_checked = Some(!restarted);
+    !restarted
+}
+
+/// Called by a wait that found the rollout complete: true once readiness holds. A failure to
+/// list pods is an error, not a pass.
+pub(crate) async fn readiness_holds(
+    ctx: &ResourceControllerContext<'_>,
+    hold: &mut ReadyHold,
+    namespace: &str,
+    selector: &std::collections::BTreeMap<String, String>,
+) -> Result<bool> {
+    let client = ctx
+        .service_provider
+        .get_kubernetes_pod_client(ctx.get_kubernetes_config()?)
+        .await?;
+    let pods = client
+        .list_pods(namespace, Some(label_selector(selector)), None)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to list pods in '{namespace}' to confirm readiness"),
+            resource_id: None,
+        })?;
+    Ok(hold.observe_ready(ready_pod_restarts(&pods.items), hold_now_unix()))
+}
+
+/// The time of a not-ready observation. In tests every observation takes the 10 s a real
+/// re-check waits, so the bound is reached in a few dozen steps. The clock is per test thread.
+#[cfg(not(test))]
+pub(crate) fn not_ready_now_unix() -> i64 {
+    Utc::now().timestamp()
+}
+
+#[cfg(test)]
+pub(crate) fn not_ready_now_unix() -> i64 {
+    thread_local! {
+        static TICKS: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+    }
+    TICKS.with(|ticks| {
+        ticks.set(ticks.get() + 10);
+        Utc::now().timestamp() + ticks.get()
+    })
+}
+
+#[cfg(not(test))]
+fn hold_now_unix() -> i64 {
+    Utc::now().timestamp()
+}
+
+/// In tests every poll advances the clock by 30 s, so the 60 s hold is reached after a few
+/// polls without waiting. The clock is per test thread.
+#[cfg(test)]
+fn hold_now_unix() -> i64 {
+    thread_local! {
+        static TICKS: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+    }
+    TICKS.with(|ticks| {
+        ticks.set(ticks.get() + 30);
+        Utc::now().timestamp() + ticks.get()
+    })
 }
 
 pub(crate) fn deployment_rollout_complete(
@@ -541,6 +920,161 @@ pub async fn emit_kubernetes_workload_heartbeat(
 
 #[cfg(test)]
 mod tests {
+    fn pods(restarts: &[(&str, i32)]) -> std::collections::BTreeMap<String, i32> {
+        restarts.iter().map(|(n, r)| (n.to_string(), *r)).collect()
+    }
+
+    #[test]
+    fn readiness_holds_after_three_polls_spanning_a_minute() {
+        let mut hold = ReadyHold::default();
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_000));
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_030));
+        assert!(hold.observe_ready(pods(&[("a", 0)]), 1_060));
+    }
+
+    #[test]
+    fn three_polls_in_quick_succession_do_not_hold() {
+        let mut hold = ReadyHold::default();
+        for _ in 0..5 {
+            assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_000));
+        }
+        assert!(hold.observe_ready(pods(&[("a", 0)]), 1_060));
+    }
+
+    #[test]
+    fn a_restart_of_a_ready_pod_starts_the_hold_again() {
+        let mut hold = ReadyHold::default();
+        assert!(!hold.observe_ready(pods(&[("a", 7)]), 1_000));
+        assert!(!hold.observe_ready(pods(&[("a", 7)]), 1_030));
+        // Ready again after one more restart: the count starts over.
+        assert!(!hold.observe_ready(pods(&[("a", 8)]), 1_060));
+        assert!(!hold.observe_ready(pods(&[("a", 8)]), 1_090));
+        assert!(hold.observe_ready(pods(&[("a", 8)]), 1_120));
+    }
+
+    #[test]
+    fn a_pod_that_is_ready_for_twelve_seconds_per_cycle_never_holds() {
+        // Up for 12 s, polled every 5 s, then it exits and restarts: ready, not ready, ready...
+        let mut hold = ReadyHold::default();
+        let mut now = 1_000;
+        for restarts in 0..40 {
+            for _ in 0..3 {
+                assert!(!hold.observe_ready(pods(&[("a", restarts)]), now));
+                now += 5;
+            }
+            hold.reset();
+            now += 20;
+        }
+    }
+
+    #[test]
+    fn a_not_ready_poll_resets_the_hold() {
+        let mut hold = ReadyHold::default();
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_000));
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_030));
+        hold.reset();
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_060));
+    }
+
+    #[test]
+    fn a_replaced_pod_is_not_a_restart() {
+        let mut hold = ReadyHold::default();
+        assert!(!hold.observe_ready(pods(&[("old", 3)]), 1_000));
+        assert!(!hold.observe_ready(pods(&[("new", 0)]), 1_030));
+        assert!(hold.observe_ready(pods(&[("new", 0)]), 1_060));
+    }
+
+    #[test]
+    fn a_node_that_joins_and_is_ready_within_the_bound_never_fails() {
+        // Not ready for 30 s while the image pulls, then ready: stays Running.
+        let mut watch = NotReadyObservations::default();
+        assert!(!watch.observe(1_000));
+        assert!(!watch.observe(1_030));
+        watch.clear();
+        // The next not-ready read starts a new bound; it is not final at once.
+        assert!(!watch.observe(2_000));
+    }
+
+    #[test]
+    fn not_ready_for_the_whole_bound_is_final() {
+        let mut watch = NotReadyObservations::default();
+        assert!(!watch.observe(1_000));
+        assert!(!watch.observe(1_000 + REFRESH_NOT_READY_BOUND_SECS - 1));
+        assert!(watch.observe(1_000 + REFRESH_NOT_READY_BOUND_SECS));
+    }
+
+    #[test]
+    fn the_outcome_waits_inside_the_bound_and_is_final_at_it() {
+        let make = || {
+            alien_error::AlienError::new(ErrorData::WorkloadNotReady {
+                resource_id: "x".into(),
+                message: "none ready".into(),
+            })
+        };
+        let mut watch = NotReadyObservations::default();
+        assert!(matches!(watch.outcome(make(), false, 1_000), Ok(_)));
+        assert!(matches!(watch.outcome(make(), false, 1_100), Ok(_)));
+        let last = watch
+            .outcome(make(), false, 1_000 + REFRESH_NOT_READY_BOUND_SECS)
+            .unwrap_err();
+        assert!(!last.retryable);
+        assert_eq!(last.code, "WORKLOAD_NOT_READY");
+        // A refresh-failed resource being re-checked is neither counted nor final.
+        let mut watch = NotReadyObservations::default();
+        for now in 0..10 {
+            assert!(
+                watch
+                    .outcome(make(), true, now * 1_000)
+                    .unwrap_err()
+                    .retryable
+            );
+        }
+    }
+
+    #[test]
+    fn an_unchanged_update_that_times_out_is_rechecked_unless_it_crash_loops() {
+        assert!(unchanged_update_rechecks(true, None));
+        assert!(unchanged_update_rechecks(
+            true,
+            Some("pod x is Pending: Unschedulable \"0/3 nodes are available\"")
+        ));
+        assert!(unchanged_update_rechecks(
+            true,
+            Some("pod x is Pending: ContainerCreating")
+        ));
+        for reason in [
+            "CrashLoopBackOff",
+            "ImagePullBackOff",
+            "ErrImagePull",
+            "CreateContainerConfigError",
+        ] {
+            assert!(!unchanged_update_rechecks(
+                true,
+                Some(&format!("pod x is Waiting: {reason}"))
+            ));
+        }
+        // A changed template keeps the update failure.
+        assert!(!unchanged_update_rechecks(false, None));
+    }
+
+    #[test]
+    fn the_wait_state_serializes_in_camel_case() {
+        let value = serde_json::to_value(NotReadyObservations::default()).unwrap();
+        assert!(value.get("sinceUnix").is_some());
+        let hold = serde_json::to_value(ReadyHold::default()).unwrap();
+        assert!(hold.get("firstUnix").is_some() && hold.get("polls").is_some());
+    }
+
+    #[test]
+    fn an_update_that_changed_nothing_waits_the_short_bound() {
+        assert_eq!(update_wait_max_polls(true), UNCHANGED_REAPPLY_MAX_POLLS);
+        assert_eq!(
+            update_wait_max_polls(false),
+            KUBERNETES_WORKLOAD_READY_MAX_POLLS
+        );
+        assert_eq!(UNCHANGED_REAPPLY_MAX_POLLS * 5, 120);
+    }
+
     use super::*;
     use k8s_openapi::api::apps::v1::{
         DeploymentCondition, DeploymentSpec, DeploymentStatus, StatefulSetSpec, StatefulSetStatus,
@@ -904,6 +1438,86 @@ mod tests {
         for part in ["gateway", "ProgressDeadlineExceeded", "ImagePullBackOff"] {
             assert!(message.contains(part), "{message}");
         }
+    }
+
+    #[test]
+    fn a_pod_the_scheduler_cannot_place_is_reported_with_its_condition_message() {
+        let pods: Vec<k8s_openapi::api::core::v1::Pod> =
+            serde_json::from_value(serde_json::json!([
+                {"metadata":{"name":"agent-ok"},"status":{"phase":"Running"}},
+                {"metadata":{"name":"agent-x7k2p"},"status":{"phase":"Pending","conditions":[
+                    {"type":"PodScheduled","status":"False","reason":"Unschedulable",
+                     "message":"0/10 nodes are available: Insufficient cpu"}]}}
+            ]))
+            .unwrap();
+        assert_eq!(
+            pod_waiting_reason(&pods, Utc::now().timestamp()).as_deref(),
+            Some("pod agent-x7k2p is Pending: Unschedulable \"0/10 nodes are available: Insufficient cpu\"")
+        );
+    }
+
+    #[test]
+    fn a_pod_polled_while_running_between_crashes_is_a_crash_loop() {
+        let now = 1_800_000_000_i64;
+        let at = |ago: i64| {
+            k8s_openapi::chrono::DateTime::from_timestamp(now - ago, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        let pods_with = |restarts: i32, code: i32, ready: bool, finished: Option<String>| {
+            let mut terminated = serde_json::json!({"exitCode": code});
+            if let Some(finished) = finished {
+                terminated["finishedAt"] = serde_json::json!(finished);
+            }
+            let pods: Vec<k8s_openapi::api::core::v1::Pod> =
+                serde_json::from_value(serde_json::json!([
+                    {"metadata":{"name":"web-x"},"status":{"phase":"Running","containerStatuses":[
+                        {"name":"web","image":"i","imageID":"","ready":ready,"restartCount":restarts,
+                         "state":{"running":{}},
+                         "lastState":{"terminated":terminated}}]}}
+                ]))
+                .unwrap();
+            pods
+        };
+        // A crash 30 s ago is a crash loop.
+        let reason = pod_waiting_reason(&pods_with(3, 1, false, Some(at(30))), now).unwrap();
+        assert_eq!(
+            reason,
+            "pod web-x is crash-looping: restarted 3 times, last exit code 1"
+        );
+        assert!(!unchanged_update_rechecks(true, Some(&reason)));
+        // A crash 2 h ago, a missing finish time, one restart, a clean exit, or a ready
+        // container is not a crash loop.
+        for pods in [
+            pods_with(3, 1, false, Some(at(7200))),
+            pods_with(3, 1, false, None),
+            pods_with(1, 1, false, Some(at(30))),
+            pods_with(3, 0, false, Some(at(30))),
+            pods_with(3, 1, true, Some(at(30))),
+        ] {
+            assert_eq!(pod_waiting_reason(&pods, now), None);
+        }
+    }
+
+    #[test]
+    fn the_last_poll_is_the_one_that_would_have_timed_out() {
+        assert!(!last_poll(None, 3));
+        assert!(!last_poll(Some(1), 3));
+        assert!(last_poll(Some(2), 3));
+    }
+
+    #[test]
+    fn a_rollout_timeout_message_carries_the_counts_and_the_pod_reason() {
+        let message = rollout_timeout_message(
+            "DaemonSet",
+            "agent",
+            "desired 10, updated 6, available 6",
+            Some("pod agent-1 is Pending: Unschedulable"),
+        );
+        assert_eq!(
+            message,
+            "DaemonSet 'agent' did not finish rolling out in time: desired 10, updated 6, available 6; pod agent-1 is Pending: Unschedulable"
+        );
     }
 
     #[test]

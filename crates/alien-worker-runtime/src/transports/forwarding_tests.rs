@@ -15,7 +15,7 @@ use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle, time::timeout};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
-use super::{create_forward_client, forward_http_request};
+use super::{create_forward_client, create_forward_client_with_floor, forward_http_request};
 
 struct Server {
     port: u16,
@@ -152,7 +152,7 @@ where
 
 #[tokio::test]
 async fn redirects_preserve_status_location_cookies_body_and_never_replay() {
-    let client = create_forward_client();
+    let client = create_forward_client(std::time::Duration::from_secs(300));
     assert_application_redirects_are_returned(|method, app_port| {
         let client = client.clone();
         async move {
@@ -184,7 +184,7 @@ async fn normal_response_is_preserved() {
     })))
     .await;
     let response = forward_http_request(
-        &create_forward_client(),
+        &create_forward_client(std::time::Duration::from_secs(300)),
         Request::new(Body::empty()),
         app.port,
         CancellationToken::new(),
@@ -211,7 +211,7 @@ async fn streaming_is_progressive_and_disconnect_releases_upstream() {
     let mut response = timeout(
         Duration::from_secs(5),
         forward_http_request(
-            &create_forward_client(),
+            &create_forward_client(std::time::Duration::from_secs(300)),
             Request::new(Body::empty()),
             app.port,
             CancellationToken::new(),
@@ -319,4 +319,118 @@ async fn transports_return_application_redirects_over_http() {
         assert_eq!(location.unwrap(), "/destination");
         assert_eq!(body, "redirect from app");
     }
+}
+
+async fn silent_upstream(silence: Duration) -> Server {
+    Server::start(Router::new().fallback(any(move || async move {
+        tokio::time::sleep(silence).await;
+        "late answer"
+    })))
+    .await
+}
+
+#[tokio::test]
+async fn a_silent_upstream_longer_than_the_read_timeout_fails() {
+    let app = silent_upstream(Duration::from_millis(1500)).await;
+    let response = forward_http_request(
+        &create_forward_client_with_floor(Duration::from_millis(300), Duration::ZERO),
+        Request::new(Body::empty()),
+        app.port,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn a_silent_upstream_within_the_read_timeout_is_answered() {
+    let app = silent_upstream(Duration::from_millis(1500)).await;
+    let response = forward_http_request(
+        &create_forward_client_with_floor(Duration::from_secs(5), Duration::ZERO),
+        Request::new(Body::empty()),
+        app.port,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        "late answer"
+    );
+}
+
+#[tokio::test]
+async fn a_response_that_keeps_sending_outlives_the_read_timeout() {
+    // Total time (1.8 s) is longer than the read timeout (0.5 s); no gap is.
+    let app = Server::start(Router::new().fallback(any(|| async {
+        let (tx, rx) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+        tokio::spawn(async move {
+            for _ in 0..6 {
+                tx.send(Ok(Bytes::from_static(b"x"))).await.ok();
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+        });
+        Body::from_stream(ReceiverStream::new(rx))
+    })))
+    .await;
+    let response = forward_http_request(
+        &create_forward_client_with_floor(Duration::from_millis(500), Duration::ZERO),
+        Request::new(Body::empty()),
+        app.port,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .len(),
+        6
+    );
+}
+
+// These tests scale the floor down (the real one is 300 s) so they run in seconds.
+#[tokio::test]
+async fn a_worker_configured_below_the_floor_keeps_the_floor() {
+    // Configured 100 ms, floor 3 s, upstream silent 1.5 s: answered, not cut at 100 ms.
+    let app = silent_upstream(Duration::from_millis(1500)).await;
+    let response = forward_http_request(
+        &create_forward_client_with_floor(Duration::from_millis(100), Duration::from_secs(3)),
+        Request::new(Body::empty()),
+        app.port,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_worker_configured_above_the_floor_waits_for_its_own_timeout() {
+    // Configured 30 s, floor 300 ms, upstream silent 1.5 s: answered, not cut at the floor.
+    let app = silent_upstream(Duration::from_millis(1500)).await;
+    let response = forward_http_request(
+        &create_forward_client_with_floor(Duration::from_secs(30), Duration::from_millis(300)),
+        Request::new(Body::empty()),
+        app.port,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_floor_cuts_a_silent_upstream_when_configured_is_lower() {
+    let app = silent_upstream(Duration::from_millis(1500)).await;
+    let response = forward_http_request(
+        &create_forward_client_with_floor(Duration::from_millis(100), Duration::from_millis(300)),
+        Request::new(Body::empty()),
+        app.port,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
 }

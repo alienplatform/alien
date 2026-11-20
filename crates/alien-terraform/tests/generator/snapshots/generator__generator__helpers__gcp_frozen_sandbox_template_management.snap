@@ -618,6 +618,67 @@ resource "google_vertex_ai_reasoning_engine_iam_member" "gcp_role_sandbox_templa
   member           = "serviceAccount:${google_service_account.management.email}"
 }
 
+resource "google_artifact_registry_repository" "agents_image" {
+  project       = var.gcp_project
+  location      = var.gcp_region
+  repository_id = replace(lower(format("%s-agents-img", local.resource_prefix)), "_", "-")
+  format        = "DOCKER"
+  description   = "Image of sandbox 'agents'"
+  labels = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents"
+    "resource-type" = "sandbox"
+  }
+
+  docker_config {
+    immutable_tags = true
+  }
+
+  cleanup_policies {
+    id     = "delete-untagged"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "UNTAGGED"
+      older_than = "604800s"
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(replace(lower(format("%s-agents-img", local.resource_prefix)), "_", "-")) <= 63
+      error_message = "The image repository name of sandbox 'agents' (resource_prefix, the sandbox id and '-img') is longer than the 63 characters Artifact Registry allows. Use a shorter resource_prefix."
+    }
+  }
+}
+
+resource "google_project_iam_custom_role" "gcp_role_sandbox_image_write" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_sandbox_image_write", local.gcp_custom_role_prefix)
+  title       = "Copy a sandbox image into its repository"
+  description = "Read, upload and tag in a sandbox image repository. Cannot delete."
+  stage       = "GA"
+  permissions = [
+    "artifactregistry.repositories.get",
+    "artifactregistry.repositories.downloadArtifacts",
+    "artifactregistry.repositories.uploadArtifacts",
+    "artifactregistry.tags.create",
+    "artifactregistry.tags.get",
+    "artifactregistry.tags.list",
+    "artifactregistry.versions.get"
+  ]
+}
+
+resource "google_artifact_registry_repository_iam_member" "agents_image_write" {
+  project    = var.gcp_project
+  location   = google_artifact_registry_repository.agents_image.location
+  repository = google_artifact_registry_repository.agents_image.name
+  role       = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sandbox_image_write[0].name : format("projects/%s/roles/role_%s_sandbox_image_write", var.gcp_project, local.gcp_custom_role_prefix)
+  member     = "serviceAccount:${google_service_account.management.email}"
+}
+
 === iam_propagation.tf ===
 resource "time_sleep" "gcp_iam_propagation" {
   create_duration = "120s"
@@ -657,6 +718,9 @@ resource "terraform_data" "deployment_registration" {
     google_service_account_iam_member.management_manager,
     google_project_iam_custom_role.gcp_role_sandbox_templates,
     google_vertex_ai_reasoning_engine_iam_member.gcp_role_sandbox_templates_agents_engine_templates_0,
+    google_artifact_registry_repository.agents_image,
+    google_project_iam_custom_role.gcp_role_sandbox_image_write,
+    google_artifact_registry_repository_iam_member.agents_image_write,
     time_sleep.gcp_iam_propagation
   ]
 

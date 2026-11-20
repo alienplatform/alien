@@ -1877,7 +1877,7 @@ async fn deployment_events_task(
 
 /// Lists the deployment's events with its status changes (update started or
 /// ended, waiting for a secret). A platform that predates them rejects the
-/// option, so the list is asked for again without it.
+/// option (400, or 422 for request validation), so the list is asked for again without it.
 async fn list_deployment_events(
     client: &alien_platform_api::Client,
     workspace: &str,
@@ -1897,7 +1897,7 @@ async fn list_deployment_events(
         None,
     )
     .await?;
-    let (status, text) = if status == 400 {
+    let (status, text) = if status == 400 || status == 422 {
         value_access::platform_request(client, reqwest::Method::GET, &path, workspace, None).await?
     } else {
         (status, text)

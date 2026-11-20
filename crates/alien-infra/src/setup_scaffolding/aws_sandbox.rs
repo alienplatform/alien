@@ -163,9 +163,9 @@ pub(super) async fn reconcile(
     }
 
     if let Some(network_id) = egress_network {
-        let SetupScaffolding::AwsSandbox { egress, .. } = records
-            .get_mut(&sandbox.id)
-            .unwrap_or_else(|| unreachable!("recorded above"));
+        let Some(SetupScaffolding::AwsSandbox { egress, .. }) = records.get_mut(&sandbox.id) else {
+            unreachable!("recorded above")
+        };
         if aws_sandbox_egress::reconcile(ctx, aws, sandbox, network_id, stack_state, egress).await?
             == ScaffoldingProgress::InProgress
         {
@@ -1013,7 +1013,7 @@ mod tests {
             service_provider: &provider,
             resource_prefix: PREFIX,
         };
-        super::super::teardown(&ctx, records).await
+        super::super::teardown(&ctx, records, &mut BTreeMap::new()).await
     }
 
     fn recorded() -> BTreeMap<String, SetupScaffolding> {
@@ -1353,6 +1353,8 @@ mod tests {
             &client_config(),
             installed,
             &records,
+            &BTreeMap::new(),
+            &StackState::new(platform),
             target,
             platform,
         )
@@ -1502,6 +1504,8 @@ mod tests {
                 &client_config(),
                 &allow,
                 &BTreeMap::new(),
+                &BTreeMap::new(),
+                &StackState::new(Platform::Aws),
                 &allow,
                 Platform::Aws
             )

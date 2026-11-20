@@ -5,21 +5,21 @@
 //! the single internet-access switch cannot express a hostname list.
 
 use crate::{
-    block::{attr, resource_block},
+    block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::{
         agent_platform_engine::ENGINE_RESOURCE,
         helpers::{
-            binding_label_for_role, downcast, emit_custom_roles_for_bindings, permission_context,
-            required_label, role_expression_for_binding, service_account_id_template,
-            service_account_member_for_label,
+            binding_label_for_role, downcast, emit_custom_roles_for_bindings, labels,
+            permission_context, required_label, role_expression_for_binding,
+            service_account_id_template, service_account_member_for_label,
         },
     },
     expr,
 };
 use alien_core::{
     import::EmitContext, ErrorData, GcpAgentPlatformEngine, RemoteBindings, RemoteStackManagement,
-    ResourceLifecycle, Result, Sandbox, SandboxEgress,
+    ResourceLifecycle, Result, Sandbox, SandboxEgress, SigningVerifier,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -232,32 +232,250 @@ fn emit_remote_access(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Resul
     )
 }
 
-/// Lets the stack's management identity create and replace this sandbox's templates, on its
-/// engine only. Frozen only: a Live engine's manager already holds `sandbox/provision`.
-fn emit_template_management(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
+/// Whether the stack grants its management identity `sandbox/templates` on this Frozen sandbox,
+/// so it creates and replaces the sandbox's templates. Frozen only: a Live engine's manager
+/// already holds `sandbox/provision`.
+fn grants_template_management(ctx: &EmitContext<'_>) -> bool {
     const TEMPLATES: &str = "sandbox/templates";
-    let granted = ctx
-        .stack
-        .management()
-        .profile()
-        .and_then(|profile| profile.0.get(ctx.resource_id))
-        .is_some_and(|refs| refs.iter().any(|reference| reference.id() == TEMPLATES));
-    if !granted || ctx.resource.lifecycle != ResourceLifecycle::Frozen {
-        return Ok(());
-    }
-    // No management resource means no remote manager identity: the deploying credentials run the
-    // template controller, so there is no member to bind.
+    ctx.resource.lifecycle == ResourceLifecycle::Frozen
+        && ctx
+            .stack
+            .management()
+            .profile()
+            .and_then(|profile| profile.0.get(ctx.resource_id))
+            .is_some_and(|refs| refs.iter().any(|reference| reference.id() == TEMPLATES))
+}
+
+/// Label of the stack's management identity, which copies the sandbox image into the repository.
+/// `None` when there is no remote manager identity: the deploying credentials run the template
+/// controller, so there is no member to bind.
+fn management_label<'a>(ctx: &'a EmitContext<'_>) -> Result<Option<&'a str>> {
     let Some(management_id) = ctx.stack.resources().find_map(|(id, entry)| {
         (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE).then_some(id)
     }) else {
-        return Ok(());
+        return Ok(None);
     };
-    let management_label = ctx.name_for(management_id).ok_or_else(|| {
+    ctx.name_for(management_id).map(Some).ok_or_else(|| {
         AlienError::new(ErrorData::GenericError {
             message: format!("management resource '{management_id}' has no Terraform name"),
         })
-    })?;
-    emit_engine_grant(ctx, fragment, TEMPLATES, management_label, "templates")
+    })
+}
+
+/// Lets the stack's management identity create and replace this sandbox's templates, on its
+/// engine only, and makes the sandbox's image repository. The repository is made whether or not
+/// there is a manager identity, as direct setup does: a setup that finds it missing asks for a
+/// rerun.
+fn emit_template_management(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
+    let management_label = management_label(ctx)?;
+    if let (true, Some(management_label)) = (grants_template_management(ctx), management_label) {
+        emit_engine_grant(
+            ctx,
+            fragment,
+            "sandbox/templates",
+            management_label,
+            "templates",
+        )?;
+    }
+    emit_image_repository(ctx, fragment, management_label)
+}
+
+// Permissions of the custom role that lets the manager copy the sandbox image in; shared with
+// direct setup, so the two grant the same thing.
+use alien_core::gar_repository::SANDBOX_IMAGE_WRITE_PERMISSIONS as IMAGE_WRITE_PERMISSIONS;
+
+/// Terraform label of the stack-wide custom role carrying [`IMAGE_WRITE_PERMISSIONS`].
+const IMAGE_WRITE_ROLE_LABEL: &str = "gcp_role_sandbox_image_write";
+
+/// Creates this sandbox's dedicated image repository and lets the manager write to it, and to
+/// nothing else.
+///
+/// The manager's registry may be in another project or cloud, and Agent Platform refuses an image
+/// the creating identity cannot read, so the controller copies the image here by digest before it
+/// creates the template. The repository is never the stack's registry: that one has a push identity
+/// and workload bindings. Name, format and cleanup policy match what the controller would create,
+/// so a repository made here is the one it finds.
+fn emit_image_repository(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    management_label: Option<&str>,
+) -> Result<()> {
+    let label = format!("{}_image", required_label(ctx)?);
+    let repository_name = format!(
+        "replace(lower(format(\"%s-{}-img\", local.resource_prefix)), \"_\", \"-\")",
+        ctx.resource_id
+    );
+    // The repository is refused until the Artifact Registry API is on, so it waits for the
+    // stack's activation of it.
+    let registry_api = ctx.stack.resources().find_map(|(id, entry)| {
+        entry
+            .config
+            .downcast_ref::<alien_core::ServiceActivation>()
+            .filter(|activation| activation.service_name == "artifactregistry.googleapis.com")
+            .and_then(|_| ctx.name_for(id))
+    });
+    let depends_on = registry_api.map(|name| {
+        attr(
+            "depends_on",
+            expr::raw(format!("[google_project_service.{name}]")),
+        )
+    });
+    fragment.resource_blocks.push(resource_block(
+        "google_artifact_registry_repository",
+        &label,
+        [
+            attr("project", expr::raw("var.gcp_project")),
+            attr("location", expr::raw("var.gcp_region")),
+            attr("repository_id", expr::raw(repository_name.clone())),
+            attr("format", Expression::String("DOCKER".to_string())),
+            attr(
+                "description",
+                expr::template(format!("Image of sandbox '{}'", ctx.resource_id)),
+            ),
+            attr("labels", labels(ctx, "sandbox")),
+        ]
+        .into_iter()
+        .chain(depends_on)
+        .chain([
+            // Tags are made from the digest they name and never move.
+            nested(block(
+                "docker_config",
+                [attr("immutable_tags", Expression::Bool(true))],
+            )),
+            nested(block(
+                "cleanup_policies",
+                [
+                    attr("id", Expression::String("delete-untagged".to_string())),
+                    attr("action", Expression::String("DELETE".to_string())),
+                    nested(block(
+                        "condition",
+                        [
+                            attr("tag_state", Expression::String("UNTAGGED".to_string())),
+                            attr("older_than", Expression::String("604800s".to_string())),
+                        ],
+                    )),
+                ],
+            )),
+            // A repository id is at most 63 characters; the same limit direct setup applies.
+            nested(block(
+                "lifecycle",
+                [nested(block(
+                    "precondition",
+                    [
+                        attr(
+                            "condition",
+                            expr::raw(format!("length({repository_name}) <= 63")),
+                        ),
+                        attr(
+                            "error_message",
+                            Expression::String(format!(
+                                "The image repository name of sandbox '{}' (resource_prefix, the sandbox id and '-img') is longer than the 63 characters Artifact Registry allows. Use a shorter resource_prefix.",
+                                ctx.resource_id
+                            )),
+                        ),
+                    ],
+                ))],
+            )),
+        ]),
+    ));
+    emit_verifier_read(ctx, fragment, &label);
+    let Some(management_label) = management_label else {
+        // Nobody to grant: the repository is all there is, as in direct setup.
+        return Ok(());
+    };
+    fragment.push_shared_resource(resource_block(
+        "google_project_iam_custom_role",
+        IMAGE_WRITE_ROLE_LABEL,
+        [
+            attr("count", expr::raw("var.gcp_manage_custom_roles ? 1 : 0")),
+            attr("project", expr::raw("var.gcp_project")),
+            attr(
+                "role_id",
+                expr::raw("format(\"role_%s_sandbox_image_write\", local.gcp_custom_role_prefix)"),
+            ),
+            attr(
+                "title",
+                expr::template("Copy a sandbox image into its repository".to_string()),
+            ),
+            attr(
+                "description",
+                expr::template(
+                    "Read, upload and tag in a sandbox image repository. Cannot delete."
+                        .to_string(),
+                ),
+            ),
+            attr("stage", Expression::String("GA".to_string())),
+            attr(
+                "permissions",
+                Expression::Array(
+                    IMAGE_WRITE_PERMISSIONS
+                        .iter()
+                        .map(|permission| Expression::String((*permission).to_string()))
+                        .collect(),
+                ),
+            ),
+        ],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "google_artifact_registry_repository_iam_member",
+        &format!("{label}_write"),
+        [
+            attr("project", expr::raw("var.gcp_project")),
+            attr(
+                "location",
+                expr::traversal(["google_artifact_registry_repository", label.as_str(), "location"]),
+            ),
+            attr(
+                "repository",
+                expr::traversal(["google_artifact_registry_repository", label.as_str(), "name"]),
+            ),
+            attr(
+                "role",
+                expr::raw(format!(
+                    "var.gcp_manage_custom_roles ? google_project_iam_custom_role.{IMAGE_WRITE_ROLE_LABEL}[0].name : format(\"projects/%s/roles/role_%s_sandbox_image_write\", var.gcp_project, local.gcp_custom_role_prefix)"
+                )),
+            ),
+            attr("member", service_account_member_for_label(management_label)),
+        ],
+    ));
+    Ok(())
+}
+
+/// On a protected install the signing verifier creates the template, and Agent Platform checks
+/// that the creating identity can read the image. It reads this one repository and nothing else.
+/// Granted whenever a verifier exists, with or without a management identity.
+fn emit_verifier_read(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) {
+    if ctx
+        .stack
+        .resources()
+        .any(|(_, entry)| entry.config.resource_type() == SigningVerifier::RESOURCE_TYPE)
+    {
+        fragment.resource_blocks.push(resource_block(
+            "google_artifact_registry_repository_iam_member",
+            &format!("{label}_verifier_read"),
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "location",
+                    expr::traversal(["google_artifact_registry_repository", label, "location"]),
+                ),
+                attr(
+                    "repository",
+                    expr::traversal(["google_artifact_registry_repository", label, "name"]),
+                ),
+                attr(
+                    "role",
+                    Expression::String("roles/artifactregistry.reader".to_string()),
+                ),
+                attr(
+                    "member",
+                    expr::template(
+                        "serviceAccount:${google_service_account.signing_verifier.email}",
+                    ),
+                ),
+            ],
+        ));
+    }
 }
 
 /// Binds `permission_set_id` to `member_label`'s service account on this sandbox's engine.
@@ -615,21 +833,203 @@ mod tests {
                 "{member:?}"
             );
 
-            // A sandbox nobody published gets no grant, whatever else the stack declares.
+            // A sandbox nobody published gets no engine grant, whatever else the stack declares.
             let unpublished =
                 stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Frozen, false);
             let fragment = with_context(&unpublished, |ctx| {
                 GcpAgentPlatformSandboxEmitter.emit(ctx).expect("renders")
             });
-            assert!(fragment.resource_blocks.is_empty(), "{fragment:?}");
+            assert!(
+                !fragment.resource_blocks.iter().any(|block| {
+                    block.labels.first().map(|l| l.as_str())
+                        == Some("google_vertex_ai_reasoning_engine_iam_member")
+                }),
+                "{fragment:?}"
+            );
         }
 
         /// The engine grant follows the profile: one member when `sandbox/templates` is granted on
         /// this sandbox, none without it. Where the member lands is pinned by the generator test
         /// `a_frozen_gcp_sandbox_manager_gets_template_verbs_on_its_engine_only`.
         #[test]
+        fn a_live_sandbox_gets_its_image_repository_but_no_engine_grant() {
+            let sandbox = Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            let stack = Stack::new("acme".to_string())
+                .add(
+                    GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .add(
+                    RemoteStackManagement::new("manager".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(sandbox, ResourceLifecycle::Live)
+                .build();
+            let mut names = names();
+            names.insert("manager".to_string(), "manager".to_string());
+            let resource = stack.resources.get("agents").expect("sandbox");
+            let settings = StackSettings::default();
+            let ctx = EmitContext {
+                stack: &stack,
+                resource,
+                resource_id: "agents",
+                platform: alien_core::Platform::Gcp,
+                targets_kubernetes: false,
+                stack_settings: &settings,
+                names: &names,
+                pins: &alien_core::SetupPins::default(),
+            };
+            let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
+            let kinds: Vec<_> = fragment
+                .resource_blocks
+                .iter()
+                .filter_map(|block| block.labels.first().map(|l| l.as_str().to_string()))
+                .collect();
+            assert!(
+                kinds.contains(&"google_artifact_registry_repository".to_string()),
+                "{kinds:?}"
+            );
+            assert!(
+                !kinds.contains(&"google_vertex_ai_reasoning_engine_iam_member".to_string()),
+                "{kinds:?}"
+            );
+        }
+
+        /// Direct setup always makes the repository, so a template install does too: with no
+        /// management identity it is the only thing emitted (no role, no grant), and it refuses a
+        /// name longer than Artifact Registry allows.
+        #[test]
+        fn the_image_repository_is_made_without_a_management_identity() {
+            let sandbox = Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            let stack = Stack::new("acme".to_string())
+                .add(
+                    GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .add(sandbox, ResourceLifecycle::Live)
+                .build();
+            let resource = stack.resources.get("agents").expect("sandbox");
+            let settings = StackSettings::default();
+            let names = names();
+            let ctx = EmitContext {
+                stack: &stack,
+                resource,
+                resource_id: "agents",
+                platform: alien_core::Platform::Gcp,
+                targets_kubernetes: false,
+                stack_settings: &settings,
+                names: &names,
+                pins: &alien_core::SetupPins::default(),
+            };
+            let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
+            let kinds: Vec<_> = fragment
+                .resource_blocks
+                .iter()
+                .filter_map(|block| block.labels.first().map(|l| l.as_str().to_string()))
+                .collect();
+            assert_eq!(
+                kinds,
+                vec!["google_artifact_registry_repository".to_string()],
+                "{fragment:?}"
+            );
+            let rendered = format!("{:?}", fragment.resource_blocks[0]);
+            assert!(
+                rendered.contains("precondition") && rendered.contains("63"),
+                "{rendered}"
+            );
+        }
+
+        #[test]
+        fn the_image_repository_waits_for_the_registry_api_activation() {
+            let sandbox = Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            let stack = Stack::new("acme".to_string())
+                .add(
+                    GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .add(
+                    RemoteStackManagement::new("manager".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    alien_core::ServiceActivation::new("enable-artifact-registry".to_string())
+                        .service_name("artifactregistry.googleapis.com".to_string())
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(sandbox, ResourceLifecycle::Live)
+                .build();
+            let mut names = names();
+            names.insert("manager".to_string(), "manager".to_string());
+            names.insert(
+                "enable-artifact-registry".to_string(),
+                "enable_artifact_registry".to_string(),
+            );
+            let resource = stack.resources.get("agents").expect("sandbox");
+            let settings = StackSettings::default();
+            let ctx = EmitContext {
+                stack: &stack,
+                resource,
+                resource_id: "agents",
+                platform: alien_core::Platform::Gcp,
+                targets_kubernetes: false,
+                stack_settings: &settings,
+                names: &names,
+                pins: &alien_core::SetupPins::default(),
+            };
+            let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
+            let kinds: Vec<_> = fragment
+                .resource_blocks
+                .iter()
+                .filter_map(|block| block.labels.first().map(|l| l.as_str().to_string()))
+                .collect();
+            let repository = fragment
+                .resource_blocks
+                .iter()
+                .find(|block| {
+                    block
+                        .labels
+                        .first()
+                        .is_some_and(|l| l.as_str() == "google_artifact_registry_repository")
+                })
+                .expect("repository");
+            assert!(attribute(repository, "depends_on")
+                .contains("google_project_service.enable_artifact_registry"));
+        }
+
+        #[test]
         fn template_management_is_bound_only_when_granted() {
-            let granted = |with_profile: bool| {
+            let render = |with_profile: bool, with_verifier: bool, with_manager: bool| {
                 let sandbox = Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
@@ -647,11 +1047,19 @@ mod tests {
                         GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
                         ResourceLifecycle::Frozen,
                     )
-                    .add(
+                    .add(sandbox, ResourceLifecycle::Frozen);
+                if with_manager {
+                    builder = builder.add(
                         RemoteStackManagement::new("manager".to_string()).build(),
                         ResourceLifecycle::Frozen,
-                    )
-                    .add(sandbox, ResourceLifecycle::Frozen);
+                    );
+                }
+                if with_verifier {
+                    builder = builder.add(
+                        alien_core::SigningVerifier::new("verifier".to_string()).build(),
+                        ResourceLifecycle::Frozen,
+                    );
+                }
                 if with_profile {
                     builder =
                         builder.management(alien_core::permissions::ManagementPermissions::Extend(
@@ -676,8 +1084,29 @@ mod tests {
                 };
                 GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders")
             };
+            let granted =
+                |with_profile: bool, with_verifier: bool| render(with_profile, with_verifier, true);
 
-            let fragment = granted(true);
+            // A protected install with no management identity still lets the verifier read the
+            // image repository, and gets no writer grant.
+            let unmanaged = render(false, true, false);
+            assert!(
+                unmanaged.resource_blocks.iter().any(|block| {
+                    block.labels.get(1).map(|l| l.as_str()) == Some("agents_image_verifier_read")
+                }),
+                "{unmanaged:?}"
+            );
+            assert!(!unmanaged.resource_blocks.iter().any(|block| {
+                block.labels.get(1).map(|l| l.as_str()) == Some("agents_image_write")
+            }));
+            assert!(!render(false, false, false)
+                .resource_blocks
+                .iter()
+                .any(|block| {
+                    block.labels.get(1).map(|l| l.as_str()) == Some("agents_image_verifier_read")
+                }));
+
+            let fragment = granted(true, false);
             let members: Vec<_> = fragment
                 .resource_blocks
                 .iter()
@@ -687,7 +1116,55 @@ mod tests {
                 })
                 .collect();
             assert_eq!(members.len(), 1, "{fragment:?}");
-            assert!(granted(false).resource_blocks.is_empty());
+            assert!(!granted(false, false).resource_blocks.iter().any(|block| {
+                block.labels.first().map(|l| l.as_str())
+                    == Some("google_vertex_ai_reasoning_engine_iam_member")
+            }));
+
+            // On a protected install the verifier creates the template, so it reads the image
+            // repository too: one reader member on that repository, none without a verifier.
+            let protected = granted(true, true);
+            let verifier_reads: Vec<_> = protected
+                .resource_blocks
+                .iter()
+                .filter(|block| {
+                    block.labels.get(1).map(|l| l.as_str()) == Some("agents_image_verifier_read")
+                })
+                .collect();
+            assert_eq!(verifier_reads.len(), 1, "{protected:?}");
+            assert_eq!(
+                attribute(verifier_reads[0], "role"),
+                "\"roles/artifactregistry.reader\""
+            );
+            assert!(!fragment.resource_blocks.iter().any(|block| {
+                block.labels.get(1).map(|l| l.as_str()) == Some("agents_image_verifier_read")
+            }));
+
+            // The same grant gives the manager a dedicated image repository to copy into, with a
+            // writer role that can upload and tag but never delete.
+            let kinds = |kind: &str| {
+                fragment
+                    .resource_blocks
+                    .iter()
+                    .filter(|block| block.labels.first().map(|l| l.as_str()) == Some(kind))
+                    .count()
+            };
+            assert_eq!(
+                kinds("google_artifact_registry_repository"),
+                1,
+                "{fragment:?}"
+            );
+            assert_eq!(
+                kinds("google_artifact_registry_repository_iam_member"),
+                1,
+                "{fragment:?}"
+            );
+            assert!(fragment.resource_blocks.iter().any(|block| {
+                block.labels.get(1).map(|l| l.as_str()) == Some(IMAGE_WRITE_ROLE_LABEL)
+            }));
+            assert!(IMAGE_WRITE_PERMISSIONS
+                .iter()
+                .all(|permission| !permission.contains("delete")));
         }
 
         /// A sandbox that declares preview ports gets its own edge-signing identity: it holds the
@@ -757,9 +1234,10 @@ mod tests {
             };
 
             let (none, binding, none_import) = render(vec![], true);
-            assert!(
-                kinds(&none).is_empty(),
-                "no preview ports, no identity: {none:?}"
+            assert_eq!(
+                kinds(&none),
+                vec!["google_artifact_registry_repository".to_string()],
+                "no preview ports, no identity, and no manager to grant: {none:?}"
             );
             assert!(!object_keys(&binding).contains("previewServiceAccount"));
             assert!(!object_keys(&none_import).contains("previewServiceAccount"));
@@ -1012,6 +1490,12 @@ mod tests {
                         "google_service_account" => "preview-signer-account".to_string(),
                         "google_project_iam_custom_role" => "preview-sign-role".to_string(),
                         "google_service_account_iam_member" => "preview-sign-binding".to_string(),
+                        "google_artifact_registry_repository" => "image-repository".to_string(),
+                        "google_artifact_registry_repository_iam_member"
+                            if label.ends_with("_write") =>
+                        {
+                            "image-repository-write".to_string()
+                        }
                         other => panic!(
                             "the Google Cloud sandbox emitter produced `{other}` ({label}), which \
                              alien_core::sandbox_setup_parity does not account for. Add it there \
