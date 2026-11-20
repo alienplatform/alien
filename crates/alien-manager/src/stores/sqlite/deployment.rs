@@ -1034,9 +1034,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             runtime_metadata,
             setup_metadata,
             current_release_id,
-            setup_target,
-            setup_fingerprint,
-            setup_fingerprint_version,
+            setup_lane,
             activation_status,
             schedule_reconciliation,
             expected_updated_at,
@@ -1093,14 +1091,18 @@ impl DeploymentStore for SqliteDeploymentStore {
                     setup_metadata.map(|metadata| metadata.to_string()),
                 )
                 .value(Deployments::InputValues, input_values_json)
-                .value(Deployments::SetupTarget, setup_target)
-                .value(Deployments::SetupFingerprint, setup_fingerprint)
-                .value(
-                    Deployments::SetupFingerprintVersion,
-                    setup_fingerprint_version as i64,
-                )
                 .value(Deployments::UpdatedAt, now.to_rfc3339())
                 .and_where(Expr::col(Deployments::Id).eq(deployment_id));
+            // No lane in the params keeps the stored one.
+            if let Some(lane) = setup_lane {
+                update
+                    .value(Deployments::SetupTarget, lane.target)
+                    .value(Deployments::SetupFingerprint, lane.fingerprint)
+                    .value(
+                        Deployments::SetupFingerprintVersion,
+                        lane.fingerprint_version as i64,
+                    );
+            }
             if let Some(expected) = expected_updated_at {
                 update.and_where(Expr::col(Deployments::UpdatedAt).eq(expected.to_rfc3339()));
             }
@@ -1583,17 +1585,15 @@ impl DeploymentStore for SqliteDeploymentStore {
             .value(Deployments::Status, "update-pending")
             .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(id))
-            .and_where(
-                Expr::col(Deployments::Status).is_not_in([
-                    "retention-required",
-                    "retained",
-                    "delete-pending",
-                    "deleting",
-                    "deleted",
-                    "teardown-required",
-                    "teardown-failed",
-                ]),
-            )
+            .and_where(Expr::col(Deployments::Status).is_not_in([
+                "retention-required",
+                "retained",
+                "delete-pending",
+                "deleting",
+                "deleted",
+                "teardown-required",
+                "teardown-failed",
+            ]))
             .to_string(SqliteQueryBuilder);
         let changed = self.db.execute_returning_rows_affected(&sql).await?;
         if changed == 0 && self.get_deployment(caller, id).await?.is_some() {

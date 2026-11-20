@@ -34,7 +34,7 @@ pub use deployment_store::{
     CreateImportedDeploymentParams, DeploymentAcquireMode, DeploymentAcquireResult,
     DeploymentAcquireUnavailableReason, DeploymentFilter, DeploymentGroupRecord,
     DeploymentGroupSetup, DeploymentRecord, DeploymentStore, ReconcileData, ReconcileInput,
-    ReconcileInputBuilder, ReconcileOutcome, SetupReservation, SuppliedStacks,
+    ReconcileInputBuilder, ReconcileOutcome, SetupLane, SetupReservation, SuppliedStacks,
     UnacquiredDeployment, UpdateImportedDeploymentParams,
 };
 pub use extension_bundle_store::{BundleObject, ExtensionBundleStore};

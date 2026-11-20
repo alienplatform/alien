@@ -55,8 +55,8 @@ use crate::auth::{verified_setup::VerifiedSetupImport, Role, Scope, Subject};
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::{
-    CreateImportedDeploymentParams, CreateTokenParams, DeploymentRecord, ReleaseRecord, TokenType,
-    UpdateImportedDeploymentParams,
+    CreateImportedDeploymentParams, CreateTokenParams, DeploymentRecord, ReleaseRecord, SetupLane,
+    TokenType, UpdateImportedDeploymentParams,
 };
 
 pub fn router() -> Router<AppState> {
@@ -833,9 +833,11 @@ async fn stack_import_as(
             runtime_metadata: runtime_metadata.clone(),
             setup_metadata,
             current_release_id: Some(release.id.clone()),
-            setup_target: req.setup_target.clone(),
-            setup_fingerprint: req.setup_fingerprint.clone(),
-            setup_fingerprint_version: req.setup_fingerprint_version,
+            setup_lane: Some(SetupLane {
+                target: req.setup_target.clone(),
+                fingerprint: req.setup_fingerprint.clone(),
+                fingerprint_version: req.setup_fingerprint_version,
+            }),
             activation_status,
             schedule_reconciliation: should_reconcile,
             expected_updated_at: None,

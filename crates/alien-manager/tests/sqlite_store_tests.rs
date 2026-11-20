@@ -343,9 +343,11 @@ async fn input_values_survive_create_import_and_reimport() {
                 runtime_metadata: RuntimeMetadata::default(),
                 setup_metadata: None,
                 current_release_id: None,
-                setup_target: "test".to_string(),
-                setup_fingerprint: "test".to_string(),
-                setup_fingerprint_version: 1,
+                setup_lane: Some(alien_manager::traits::SetupLane {
+                    target: "test".to_string(),
+                    fingerprint: "test".to_string(),
+                    fingerprint_version: 1,
+                }),
                 activation_status: None,
                 schedule_reconciliation: false,
                 expected_updated_at: None,
@@ -368,14 +370,63 @@ fn import_params(
         runtime_metadata: RuntimeMetadata::default(),
         setup_metadata: None,
         current_release_id: None,
-        setup_target: "test".to_string(),
-        setup_fingerprint: "test".to_string(),
-        setup_fingerprint_version: 1,
+        setup_lane: Some(alien_manager::traits::SetupLane {
+            target: "test".to_string(),
+            fingerprint: "test".to_string(),
+            fingerprint_version: 1,
+        }),
         activation_status: None,
         schedule_reconciliation: false,
         expected_updated_at,
         input_values: HashMap::new(),
     }
+}
+
+/// An import with no lane leaves the stored lane as it is, and one with a lane
+/// replaces it.
+#[tokio::test]
+async fn an_import_without_a_lane_keeps_the_stored_lane() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "dep-lane", Platform::Aws).await;
+    let lane = |record: &alien_manager::traits::DeploymentRecord| {
+        (
+            record.setup_target.clone(),
+            record.setup_fingerprint.clone(),
+            record.setup_fingerprint_version,
+        )
+    };
+
+    let recorded = store
+        .update_imported_stack_state(
+            &test_subject(),
+            &dep.id,
+            import_params(StackState::new(Platform::Aws), None),
+        )
+        .await
+        .unwrap();
+    let expected = (Some("test".to_string()), Some("test".to_string()), Some(1));
+    assert_eq!(lane(&recorded), expected);
+
+    let mut params = import_params(StackState::new(Platform::Aws), None);
+    params.setup_lane = None;
+    params.runtime_metadata.cloud_setup_required = Some(alien_core::CloudSetupRequired {
+        release_id: "rel_1".to_string(),
+        reason: "written".to_string(),
+    });
+    let kept = store
+        .update_imported_stack_state(&test_subject(), &dep.id, params)
+        .await
+        .unwrap();
+    assert!(
+        kept.runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.cloud_setup_required.as_ref())
+            .is_some(),
+        "the rest of the import is written"
+    );
+    assert_eq!(lane(&kept), expected, "no lane keeps the stored lane");
 }
 
 #[tokio::test]
