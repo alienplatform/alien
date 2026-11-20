@@ -411,3 +411,94 @@ fn declared_lifecycle_steps_enable_the_session_hooks_they_need() {
         })
     );
 }
+
+/// Two connections on one port reach the same network range, so they share one rule: AWS
+/// refuses a group whose rules repeat a protocol, port and range (only the description would
+/// differ). Each still gets its own approval statement.
+#[test]
+fn connections_on_one_port_share_one_rule() {
+    let mut permissions = designed();
+    permissions.connections = vec![
+        SandboxImageConnection {
+            to: ResourceRef::new(ResourceType::from("acme/files"), "workspace-files"),
+            port: 2049,
+        },
+        SandboxImageConnection {
+            to: ResourceRef::new(ResourceType::from("acme/files"), "cache-files"),
+            port: 2049,
+        },
+        SandboxImageConnection {
+            to: ResourceRef::new(ResourceType::from("acme/files"), "cache-files"),
+            port: 8443,
+        },
+    ];
+    let network = created();
+    let settings = StackSettings {
+        network: Some(network.clone()),
+        ..StackSettings::default()
+    };
+    let mut stack = Stack::new("acme-image-permissions".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(network)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            CustomResource::from_untagged("acme/files", json!({ "id": "workspace-files" }))
+                .unwrap(),
+            ResourceLifecycle::Live,
+        )
+        .add(
+            CustomResource::from_untagged("acme/files", json!({ "id": "cache-files" })).unwrap(),
+            ResourceLifecycle::Live,
+        )
+        .add(sandbox(Some(permissions)), ResourceLifecycle::Live)
+        .build();
+    stack.extensions = vec![serde_json::from_value(manifest()).unwrap()];
+    let (template, _) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "connections on one port",
+    );
+    let rules =
+        json_of(&template.resources["AgentsEgressSecurityGroup"].properties["SecurityGroupEgress"]);
+    let direct: Vec<&Value> = rules
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|rule| rule["IpProtocol"] == "tcp")
+        .collect();
+    let mut keys: Vec<String> = direct
+        .iter()
+        .map(|rule| format!("{}-{}-{}", rule["FromPort"], rule["ToPort"], rule["CidrIp"]))
+        .collect();
+    assert_eq!(direct.len(), 2, "{rules:#}");
+    keys.sort();
+    keys.dedup();
+    assert_eq!(
+        keys.len(),
+        2,
+        "no two rules repeat a port and range: {rules:#}"
+    );
+    let shared = direct
+        .iter()
+        .find(|rule| rule["FromPort"] == 2049)
+        .expect("the 2049 rule");
+    let description = shared["Description"].as_str().unwrap();
+    assert!(
+        description.contains("workspace-files") && description.contains("cache-files"),
+        "{description}"
+    );
+    let statements = template.metadata["SandboxImagePermissions"][0]["statements"].to_string();
+    for expected in [
+        "connect directly to workspace-files on TCP port 2049",
+        "connect directly to cache-files on TCP port 2049",
+        "connect directly to cache-files on TCP port 8443",
+    ] {
+        assert!(statements.contains(expected), "{expected}: {statements}");
+    }
+}

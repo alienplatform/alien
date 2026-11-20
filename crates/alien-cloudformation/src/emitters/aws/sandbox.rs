@@ -947,7 +947,9 @@ fn image_connection_cidr(ctx: &EmitContext<'_>) -> Result<CfExpression> {
     ))
 }
 
-/// Exactly one connector egress rule per declared connection.
+/// One connector egress rule per declared port. Every connection's rule is the network's range,
+/// so connections on one port share a rule (AWS refuses a group whose rules repeat a protocol,
+/// port and range); its description names each target.
 fn image_connection_rules(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Vec<CfExpression>> {
     let Some(permissions) = &sandbox.image_permissions else {
         return Ok(Vec::new());
@@ -956,29 +958,34 @@ fn image_connection_rules(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Ve
         return Ok(Vec::new());
     }
     let cidr = image_connection_cidr(ctx)?;
-    Ok(permissions
-        .connections
-        .iter()
-        .map(|connection| {
+    let mut ports: Vec<(u16, Vec<&str>)> = Vec::new();
+    for connection in &permissions.connections {
+        match ports.iter_mut().find(|(port, _)| *port == connection.port) {
+            Some((_, targets)) => targets.push(&connection.to.id),
+            None => ports.push((connection.port, vec![&connection.to.id])),
+        }
+    }
+    Ok(ports
+        .into_iter()
+        .map(|(port, targets)| {
+            let mut description = format!(
+                "Sandbox image direct connection to {}, outside the egress gateway and its \
+                 connection log",
+                targets.join(", ")
+            );
+            // AWS caps a rule description at 255 characters.
+            if description.len() > 255 {
+                description = format!(
+                    "Sandbox image direct connections on TCP port {port}, outside the egress \
+                     gateway and its connection log"
+                );
+            }
             CfExpression::object([
                 ("IpProtocol", CfExpression::from("tcp")),
-                (
-                    "FromPort",
-                    CfExpression::Integer(i64::from(connection.port)),
-                ),
-                ("ToPort", CfExpression::Integer(i64::from(connection.port))),
+                ("FromPort", CfExpression::Integer(i64::from(port))),
+                ("ToPort", CfExpression::Integer(i64::from(port))),
                 ("CidrIp", cidr.clone()),
-                (
-                    "Description",
-                    CfExpression::from(
-                        format!(
-                            "Sandbox image direct connection to {}, outside the egress gateway \
-                             and its connection log",
-                            connection.to.id
-                        )
-                        .as_str(),
-                    ),
-                ),
+                ("Description", CfExpression::from(description.as_str())),
             ])
         })
         .collect())
