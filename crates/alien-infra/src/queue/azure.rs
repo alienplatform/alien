@@ -840,6 +840,7 @@ mod tests {
         props
     }
 
+    /// This pins existing behaviour: it passes without the intent-then-write change.
     #[tokio::test]
     async fn a_resume_in_the_update_applying_step_clears_the_settings() {
         let cloud = resumed_in(AzureQueueState::ApplyingDeadLetterUpdate).await;
@@ -847,6 +848,7 @@ mod tests {
         assert_eq!(cloud.max_delivery_count, Some(10));
     }
 
+    /// This pins existing behaviour: it passes without the intent-then-write change.
     #[tokio::test]
     async fn a_resume_in_the_create_applying_step_clears_the_settings() {
         let cloud = resumed_in(AzureQueueState::ApplyingDeadLetter).await;
@@ -854,19 +856,20 @@ mod tests {
         assert_eq!(cloud.max_delivery_count, Some(10));
     }
 
-    /// An update entered for another reason on a setup-owned queue at runtime writes nothing.
+    /// An update on an imported setup-owned queue whose desired stack declares a dead letter, with
+    /// nothing recorded and no intent saved (a queue that predates the setting), writes nothing
+    /// at runtime.
     #[tokio::test]
     async fn an_update_on_a_setup_owned_queue_never_writes_the_dead_letter_settings() {
         let cloud = Arc::new(std::sync::Mutex::new(Props::default()));
         let puts = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let plain = Queue::new("work".into()).build();
+        let desired = with_dead_letter(7);
         let mut run = SingleControllerExecutor::builder()
-            .resource(plain.clone())
+            .resource(desired.clone())
             .controller(AzureQueueController {
                 state: AzureQueueState::Ready,
                 namespace_name: Some("test-bus".into()),
                 queue_name: Some("test-work".into()),
-                dead_letter_write_started: true,
                 ..Default::default()
             })
             .platform(Platform::Azure)
@@ -874,10 +877,14 @@ mod tests {
             .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
             .service_provider(recording_provider(cloud, puts.clone()))
             .with_test_dependencies()
+            .with_stack_resource(
+                Queue::new("failed".into()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
             .build()
             .await
             .unwrap();
-        run.update(plain).unwrap();
+        run.update(desired).unwrap();
         run.run_until_terminal().await.unwrap();
         assert!(puts.lock().unwrap().is_empty());
     }

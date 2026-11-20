@@ -372,16 +372,15 @@ async fn a_resume_in_the_create_applying_step_clears_the_policy_and_retention() 
     );
 }
 
-/// An update entered for another reason on a setup-owned queue at runtime writes nothing,
-/// even when a dead-letter intent is saved.
+/// An update on an imported setup-owned queue whose desired stack declares a dead letter, with
+/// nothing recorded and no intent saved (the state of a queue that predates the setting), writes
+/// nothing at runtime.
 #[tokio::test]
 async fn an_update_on_a_setup_owned_queue_never_writes_the_dead_letter_attributes() {
     let writes: Writes = Default::default();
-    let mut saved = controller("tasks");
-    saved.dead_letter_write_started = true;
     let mut run = SingleControllerExecutor::builder()
         .resource(with_dead_letter(5))
-        .controller(saved)
+        .controller(controller("tasks"))
         .platform(Platform::Aws)
         .resource_lifecycle(ResourceLifecycle::Frozen)
         .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)

@@ -234,29 +234,31 @@ pub async fn check_dead_letter(
             // The Worker's own count is the wrong instrument on GCP: Pub/Sub counts every push
             // attempt, including one that failed before it reached the Worker (a cold start
             // answering 5xx). The push body carries Pub/Sub's own attempt number when the
-            // subscription has a dead-letter policy. Pub/Sub moves the message once
-            // `maxDeliveryAttempts` attempts failed, so no delivery carries a higher number;
-            // the highest one seen is `MAX_ATTEMPTS`, or one less when the last attempt never
-            // reached the Worker.
+            // subscription has a dead-letter policy. Pub/Sub moves the message after
+            // `maxDeliveryAttempts` attempts, so the highest number seen is about `MAX_ATTEMPTS`:
+            // one less when the last attempt never reached the Worker, up to two more because the
+            // limit is best effort.
             // A Worker image from before the runtime passed the number on reports none (the
             // attempt then reads as 1 on every delivery). The bound is then on the Worker's own
-            // count: the same tolerance as AWS and Azure (Pub/Sub's limit is best effort, so no lower
-            // bound and at most `MAX_ATTEMPTS + 2`), and the subscription's own policy is
-            // checked against the cloud by `check_gcp_subscription_policy`.
+            // count and has an upper limit only (Pub/Sub's limit is best effort: at most
+            // `MAX_ATTEMPTS + 2`; the Worker can also miss attempts that failed before it).
+            // The subscription's own policy is checked against the cloud by
+            // `check_gcp_subscription_policy`.
+            let worker_deliveries = counts.get(&id).copied().unwrap_or_else(|| {
+                panic!("{id} was dead-lettered but the Worker recorded no delivery for it")
+            });
             let seen = highest.get(&id).copied().unwrap_or(1);
             if highest.values().any(|attempt| *attempt > 1) {
                 assert!(
-                    (MAX_ATTEMPTS - 1..=MAX_ATTEMPTS).contains(&seen),
+                    (MAX_ATTEMPTS - 1..=MAX_ATTEMPTS + 2).contains(&seen),
                     "{id}: highest attempt Pub/Sub reported was {seen}; {MAX_ATTEMPTS} expected \
-                     (Worker saw {} deliveries)",
-                    counts[&id]
+                     (Worker saw {worker_deliveries} deliveries)"
                 );
             } else {
-                info!(%id, worker_deliveries = counts[&id], "Worker image does not report Pub/Sub's attempt number");
+                info!(%id, worker_deliveries, "Worker image does not report Pub/Sub's attempt number");
                 assert!(
-                    counts[&id] as u64 <= MAX_ATTEMPTS + 2,
-                    "{id}: the Worker saw {} deliveries; at most {} expected",
-                    counts[&id],
+                    worker_deliveries as u64 <= MAX_ATTEMPTS + 2,
+                    "{id}: the Worker saw {worker_deliveries} deliveries; at most {} expected",
                     MAX_ATTEMPTS + 2
                 );
             }
