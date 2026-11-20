@@ -33,10 +33,23 @@ fn lowest_recorded(platform: &str) -> u64 {
 /// before the cloud answered (a timeout is not an empty queue).
 const EMPTY_CONFIRMATIONS: usize = 6;
 
+/// How long (ms) the Worker's `receive` may wait on an empty queue before it counts as giving up.
+/// Longer than the platform's own empty-queue wait in the queue binding (SQS long-polls 20 s,
+/// Service Bus 30 s), so an empty queue answers "empty"; on GCP a pull can wait indefinitely, so
+/// a short bound is used and a give-up is asked again. The Worker's timeout is 45 s.
+fn receive_wait_ms(platform: &str) -> u64 {
+    match platform {
+        "aws" => 25_000,
+        "azure" => 35_000,
+        _ => 8_000,
+    }
+}
+
 /// One drain of `path`: the messages it returned, and whether the Worker's receive gave up
 /// before the cloud answered (which says nothing about the queue being empty).
-async fn drain_once(client: &Client, url: &str, path: &str) -> (Vec<Value>, bool) {
-    let drained = json_request(client, client.post(format!("{url}{path}"))).await;
+async fn drain_once(client: &Client, url: &str, path: &str, platform: &str) -> (Vec<Value>, bool) {
+    let wait = receive_wait_ms(platform);
+    let drained = json_request(client, client.post(format!("{url}{path}?waitMs={wait}"))).await;
     (
         drained["messages"].as_array().unwrap().to_vec(),
         drained["timedOut"] == true,
@@ -46,10 +59,10 @@ async fn drain_once(client: &Client, url: &str, path: &str) -> (Vec<Value>, bool
 /// Everything `path` returns until a drain ends on a real empty answer. A give-up is asked again
 /// (bounded); never counting it as empty keeps "nothing arrived" checks from passing on a slow
 /// cloud.
-async fn drain_confirmed(client: &Client, url: &str, path: &str) -> Vec<Value> {
+async fn drain_confirmed(client: &Client, url: &str, path: &str, platform: &str) -> Vec<Value> {
     let mut all = Vec::new();
     for _ in 0..EMPTY_CONFIRMATIONS {
-        let (messages, timed_out) = drain_once(client, url, path).await;
+        let (messages, timed_out) = drain_once(client, url, path, platform).await;
         all.extend(messages);
         if !timed_out {
             return all;
@@ -140,7 +153,8 @@ pub async fn check_without_dead_letter(
                 > MAX_ATTEMPTS
         });
         if past {
-            let drained = drain_confirmed(&client, url, "/failed/drain").await;
+            let drained =
+                drain_confirmed(&client, url, "/failed/drain", &deployment.platform).await;
             assert!(
                 drained.is_empty(),
                 "nothing may reach tasks-failed without a dead-letter setting: {drained:?}"
@@ -190,7 +204,7 @@ pub async fn check_dead_letter(
             good_seen.len()
         );
         // The pull path: whatever has arrived in `tasks-failed` so far.
-        let (drained, _) = drain_once(&client, url, "/failed/drain").await;
+        let (drained, _) = drain_once(&client, url, "/failed/drain", &deployment.platform).await;
         for entry in drained {
             let id = entry["task"]["id"].as_str().unwrap().to_string();
             failed.insert(id, entry);
@@ -280,7 +294,14 @@ pub async fn check_dead_letter(
         sleep(Duration::from_secs(20)).await;
         let mut left = json!(null);
         for _ in 0..EMPTY_CONFIRMATIONS {
-            left = json_request(&client, client.post(format!("{url}/tasks/peek"))).await;
+            left = json_request(
+                &client,
+                client.post(format!(
+                    "{url}/tasks/peek?waitMs={}",
+                    receive_wait_ms(&deployment.platform)
+                )),
+            )
+            .await;
             if left["timedOut"] != true {
                 break;
             }
@@ -323,6 +344,7 @@ pub async fn check_pull(deployment: &TestDeployment, prefix: &str) -> BTreeMap<S
         GOOD,
         nack,
         lowest_recorded(&deployment.platform),
+        &deployment.platform,
     )
     .await
 }
@@ -336,6 +358,7 @@ async fn await_pull(
     good: usize,
     nack: bool,
     lowest: u64,
+    platform: &str,
 ) -> BTreeMap<String, u64> {
     let started = Instant::now();
     let mut failed: BTreeMap<String, Value> = BTreeMap::new();
@@ -362,7 +385,7 @@ async fn await_pull(
                 good_seen.insert(id);
             }
         }
-        let (drained, _) = drain_once(client, url, "/pull/failed/drain").await;
+        let (drained, _) = drain_once(client, url, "/pull/failed/drain", platform).await;
         for entry in drained {
             let id = entry["task"]["id"].as_str().unwrap().to_string();
             failed.insert(id, entry);
@@ -440,6 +463,7 @@ pub async fn check_upgrade(ctx: &mut alien_test::TestContext) {
         2,
         ctx.deployment.platform != "azure",
         lowest_recorded(&ctx.deployment.platform),
+        &ctx.deployment.platform,
     )
     .await;
     check_dead_letter(&ctx.deployment, "after", false).await;

@@ -49,6 +49,17 @@ async function receiveWithin(
   }
 }
 
+/**
+ * How long a request lets one `receive` wait, from the `waitMs` query parameter. The harness
+ * passes a bound longer than the platform's own empty-queue wait (SQS 20 s, Service Bus 30 s),
+ * so an empty queue answers "empty" instead of "gave up"; on Google Cloud, where a pull can wait
+ * indefinitely, it passes a short one. Capped below the Worker's own timeout.
+ */
+function waitFrom(c: { req: { query: (name: string) => string | undefined } }): number {
+  const asked = Number(c.req.query("waitMs") ?? 8000)
+  return Number.isFinite(asked) ? Math.min(Math.max(asked, 1000), 40000) : 8000
+}
+
 const app = new Hono()
 app.onError(async (error, c) => {
   const failure = (await AlienError.from(error)).withContext(
@@ -102,7 +113,7 @@ app.post("/failed/drain", async c => {
   const drained: { task: unknown; attempt: number }[] = []
   let timedOut = false
   for (;;) {
-    const received = await receiveWithin(failed, 10)
+    const received = await receiveWithin(failed, 10, waitFrom(c))
     const messages = received.messages
     if (messages.length === 0) {
       timedOut = received.timedOut
@@ -179,7 +190,7 @@ app.post("/pull/failed/drain", async c => {
   const drained: { task: unknown; attempt: number }[] = []
   let timedOut = false
   for (;;) {
-    const received = await receiveWithin(failed, 10)
+    const received = await receiveWithin(failed, 10, waitFrom(c))
     const messages = received.messages
     if (messages.length === 0) {
       timedOut = received.timedOut
@@ -209,7 +220,7 @@ app.post("/pull/peek", async c => {
 /** Reads `tasks` with `receive` (the pull path) and gives every message back; shows what is left. */
 app.post("/tasks/peek", async c => {
   const tasks = queue("tasks")
-  const { messages, timedOut } = await receiveWithin(tasks, 10)
+  const { messages, timedOut } = await receiveWithin(tasks, 10, waitFrom(c))
   await Promise.all(messages.map(message => tasks.nack(message.receiptHandle)))
   return c.json({ visible: messages.length, timedOut })
 })
