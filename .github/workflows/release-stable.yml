@@ -19,14 +19,21 @@ permissions:
   id-token: write
   # The called release workflow records build provenance (actions/attest-build-provenance).
   attestations: write
+  # The full test suites that qualification calls (full-suite.yml) declare these.
+  actions: read
+  pull-requests: read
+  issues: write
+  checks: write
 
 jobs:
   resolve:
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     outputs:
       commit: ${{ steps.release.outputs.commit }}
       version: ${{ steps.release.outputs.version }}
       qualification_run_id: ${{ steps.release.outputs.qualification_run_id }}
+      reuse: ${{ steps.release.outputs.reuse }}
+      qualified_commit: ${{ steps.release.outputs.qualified_commit }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -48,6 +55,53 @@ jobs:
             exit 1
           fi
 
+          # The qualification run must have passed every qualification job (the release builds
+          # and the full test suites), and its artifacts must still be downloadable.
+          verify_qualification_run() {
+            local run_id="$1" qualified_commit="$2" qualified_version qualified_jobs available_artifacts required
+            qualified_version=$(git show "${qualified_commit}:Cargo.toml" |
+              sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p')
+            if [ "$qualified_version" != "$VERSION" ]; then
+              echo "::error::Qualified commit has version ${qualified_version}, expected ${VERSION}"
+              return 1
+            fi
+            qualified_jobs=$(gh api --paginate --slurp \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" |
+              jq '[.[] | .jobs[] | select(.name | startswith("qualify /"))]')
+            if ! jq -e '
+              (length > 0) and
+              (any(.[]; .name == "qualify / prepare" and .conclusion == "success")) and
+              (any(.[]; .name == "qualify / qualify-images" and .conclusion == "success")) and
+              (any(.[]; .name == "qualify / full-suite / Full suite passed" and .conclusion == "success")) and
+              (all(.[]; .conclusion == "success" or .conclusion == "skipped"))
+            ' <<< "$qualified_jobs" >/dev/null; then
+              echo "::error::Prior qualification jobs did not all pass"
+              return 1
+            fi
+            available_artifacts=$(gh api --paginate --slurp \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" |
+              jq '[.[] | .artifacts[] | select(.expired == false) | .name]')
+            for required in \
+              addon-darwin-arm64 addon-darwin-x64 \
+              addon-linux-arm64-gnu addon-linux-x64-gnu \
+              ai-gateway-bin-darwin-arm64 ai-gateway-bin-darwin-x64 \
+              ai-gateway-bin-linux-arm64 ai-gateway-bin-linux-x64 \
+              binaries-aarch64-apple-darwin binaries-aarch64-unknown-linux-musl \
+              binaries-x86_64-pc-windows-msvc binaries-x86_64-unknown-linux-musl \
+              qualified-ai-gateway qualified-bindings \
+              qualified-client-sdks qualified-crates \
+              qualified-image-digests qualified-npm \
+              qualified-python-linux-aarch64 qualified-python-linux-x86_64 \
+              qualified-python-macos-aarch64 qualified-python-macos-x86_64; do
+              if ! jq -e --arg name "$required" 'index($name) != null' \
+                <<< "$available_artifacts" >/dev/null; then
+                echo "::error::Required qualification artifact ${required} is missing or expired"
+                return 1
+              fi
+            done
+          }
+
+          REUSE=false
           if [ -n "$RESUME_RUN_ID" ]; then
             if ! [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]]; then
               echo "::error::Qualification run ID must be numeric"
@@ -68,52 +122,39 @@ jobs:
               echo "::error::Qualified commit is not an ancestor of main"
               exit 1
             fi
-            qualified_version=$(git show "${RELEASE_COMMIT}:Cargo.toml" |
-              sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p')
-            if [ "$qualified_version" != "$VERSION" ]; then
-              echo "::error::Qualified commit has version ${qualified_version}, expected ${VERSION}"
-              exit 1
-            fi
-            qualified_jobs=$(gh api --paginate --slurp \
-              "/repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}/jobs?per_page=100" |
-              jq '[.[] | .jobs[] | select(.name | startswith("qualify /"))]')
-            if ! jq -e '
-              (length > 0) and
-              (any(.[]; .name == "qualify / prepare" and .conclusion == "success")) and
-              (any(.[]; .name == "qualify / qualify-images" and .conclusion == "success")) and
-              (all(.[]; .conclusion == "success" or .conclusion == "skipped"))
-            ' <<< "$qualified_jobs" >/dev/null; then
-              echo "::error::Prior qualification jobs did not all pass"
-              exit 1
-            fi
-            available_artifacts=$(gh api --paginate --slurp \
-              "/repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}/artifacts?per_page=100" |
-              jq '[.[] | .artifacts[] | select(.expired == false) | .name]')
-            for required in \
-              addon-darwin-arm64 addon-darwin-x64 \
-              addon-linux-arm64-gnu addon-linux-x64-gnu \
-              ai-gateway-bin-darwin-arm64 ai-gateway-bin-darwin-x64 \
-              ai-gateway-bin-linux-arm64 ai-gateway-bin-linux-x64 \
-              binaries-aarch64-apple-darwin binaries-aarch64-unknown-linux-musl \
-              binaries-x86_64-pc-windows-msvc binaries-x86_64-unknown-linux-musl \
-              qualified-ai-gateway qualified-bindings \
-              qualified-client-sdks qualified-crates \
-              qualified-image-digests qualified-npm \
-              qualified-python-linux-aarch64 qualified-python-linux-x86_64 \
-              qualified-python-macos-aarch64 qualified-python-macos-x86_64; do
-              if ! jq -e --arg name "$required" 'index($name) != null' \
-                <<< "$available_artifacts" >/dev/null; then
-                echo "::error::Required qualification artifact ${required} is missing or expired"
-                exit 1
-              fi
-            done
+            verify_qualification_run "$RESUME_RUN_ID" "$RELEASE_COMMIT" || exit 1
             echo "Resuming v${VERSION} from qualified run ${RESUME_RUN_ID} at ${RELEASE_COMMIT}"
             echo "qualification_run_id=$RESUME_RUN_ID" >> "$GITHUB_OUTPUT"
+            echo "qualified_commit=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
+            REUSE=true
           else
-            # Publish the reviewed tip and the artifacts qualified by this run.
+            # By default, reuse the qualification run of the version pull request that
+            # produced this commit. It qualified the pull request's head commit, so it counts
+            # only when that commit's files are exactly the files on main now.
             RELEASE_COMMIT=$(git rev-parse HEAD)
-            echo "qualification_run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+            pr_head=$(gh api "/repos/${GITHUB_REPOSITORY}/commits/${RELEASE_COMMIT}/pulls" \
+              --jq '[.[] | select(.merged_at != null and .base.ref == "main")][0].head.sha // ""')
+            pr_run_id=""
+            if [ -n "$pr_head" ]; then
+              pr_run_id=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/release-qualification.yml/runs?head_sha=${pr_head}&event=pull_request&status=success&per_page=1" \
+                --jq '.workflow_runs[0].id // ""')
+            fi
+            if [ -n "$pr_run_id" ] &&
+               git fetch --no-tags --quiet origin "$pr_head" &&
+               git diff --quiet "$pr_head" "$RELEASE_COMMIT" &&
+               verify_qualification_run "$pr_run_id" "$pr_head"; then
+              echo "Reusing the version pull request's qualification run ${pr_run_id} (qualified ${pr_head}, identical to ${RELEASE_COMMIT})"
+              echo "qualification_run_id=$pr_run_id" >> "$GITHUB_OUTPUT"
+              # The reused artifacts record the pull request's head commit, not main's.
+              echo "qualified_commit=$pr_head" >> "$GITHUB_OUTPUT"
+              REUSE=true
+            else
+              # Publish the reviewed tip and the artifacts qualified by this run.
+              echo "No reusable qualification run for ${RELEASE_COMMIT}; qualifying in this run"
+              echo "qualification_run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+            fi
           fi
+          echo "reuse=$REUSE" >> "$GITHUB_OUTPUT"
 
           echo "Publishing v${VERSION} from ${RELEASE_COMMIT}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -121,7 +162,7 @@ jobs:
 
   qualify:
     needs: resolve
-    if: ${{ inputs.qualification_run_id == '' }}
+    if: ${{ needs.resolve.outputs.reuse != 'true' }}
     uses: ./.github/workflows/release.yml
     with:
       mode: stable
@@ -132,7 +173,7 @@ jobs:
   # PyPI trusted publishing requires the protected job in this top-level workflow.
   publish-python:
     needs: [resolve, qualify]
-    if: ${{ always() && needs.resolve.result == 'success' && (needs.qualify.result == 'success' || inputs.qualification_run_id != '') }}
+    if: ${{ always() && needs.resolve.result == 'success' && (needs.qualify.result == 'success' || needs.resolve.outputs.reuse == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment:
@@ -238,11 +279,12 @@ jobs:
 
   publish:
     needs: [resolve, qualify, publish-python]
-    if: ${{ always() && needs.resolve.result == 'success' && needs.publish-python.result == 'success' && (needs.qualify.result == 'success' || inputs.qualification_run_id != '') }}
+    if: ${{ always() && needs.resolve.result == 'success' && needs.publish-python.result == 'success' && (needs.qualify.result == 'success' || needs.resolve.outputs.reuse == 'true') }}
     uses: ./.github/workflows/release.yml
     with:
       mode: stable
       stable_action: publish
       source_ref: ${{ needs.resolve.outputs.commit }}
       qualification_run_id: ${{ needs.resolve.outputs.qualification_run_id }}
+      qualified_commit: ${{ needs.resolve.outputs.qualified_commit }}
     secrets: inherit

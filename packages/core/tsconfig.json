@@ -1,4 +1,8 @@
 {
   "extends": "@alienplatform/typescript-config/base.json",
-  "exclude": ["node_modules", "kubb.config.ts"]
+  "exclude": [
+    "node_modules",
+    "kubb.config.ts",
+    "src/__tests__/platform-binding-serialization.test.ts"
+  ]
 }

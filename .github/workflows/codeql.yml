@@ -2,7 +2,7 @@ name: CodeQL
 
 on:
   # Weekly, and only when main changed since the last green run. The Rust analysis needs more
-  # memory than a standard runner has; on one it was killed in 80% of the nightly runs.
+  # memory than a standard runner has (it was killed in most runs on one), so that job adds swap.
   schedule:
     - cron: "0 0 * * 1"
   workflow_dispatch:
@@ -48,10 +48,20 @@ jobs:
             runner: ubuntu-latest
           - language: rust
             build-mode: none
-            runner: depot-ubuntu-24.04-8
+            runner: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      # The Rust analysis outgrows the 16 GB of a standard runner; swap keeps it from being killed.
+      - name: Add swap for the Rust analysis
+        if: matrix.language == 'rust'
+        run: |
+          sudo fallocate -l 12G /mnt/codeql.swap
+          sudo chmod 600 /mnt/codeql.swap
+          sudo mkswap /mnt/codeql.swap
+          sudo swapon /mnt/codeql.swap
+          free -h
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

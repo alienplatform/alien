@@ -1,6 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{Map, Value};
+
+// The full client merges more repeated schemas than the default one: it also merges schemas
+// that differ only in documentation text, and shares strings with a pattern. The default client
+// keeps its generated type names, which handwritten code imports. Set once per build, before
+// any schema is read.
+static MERGE_REPEATED_SCHEMAS: AtomicBool = AtomicBool::new(false);
 
 const HTTP_METHODS: &[&str] = &[
     "delete", "get", "head", "options", "patch", "post", "put", "trace",
@@ -308,7 +315,22 @@ fn deduplicate_anonymous_schemas(
 }
 
 fn is_shareable_anonymous_schema(schema: &Value) -> bool {
-    schema.get("$ref").is_none() && schema.get("type").and_then(Value::as_str) == Some("object")
+    if schema.get("$ref").is_some() {
+        return false;
+    }
+    match schema.get("type").and_then(Value::as_str) {
+        Some("object") => true,
+        // A string with a pattern becomes its own validated Rust type at every use. Enums
+        // are left alone: they are nullable in places, and merging them changes the argument
+        // types of the generated builders.
+        Some("string") => {
+            MERGE_REPEATED_SCHEMAS.load(Ordering::Relaxed)
+                && schema.get("pattern").is_some()
+                && schema.get("enum").is_none()
+                && schema.get("nullable").is_none()
+        }
+        _ => false,
+    }
 }
 
 fn collect_shareable_schema_keys(value: &Value, keys: &mut BTreeSet<String>) -> Result<(), String> {
@@ -355,7 +377,7 @@ fn collect_schema_occurrences(
 ) {
     if collect_current && is_shareable_anonymous_schema(value) {
         let schema = value.clone();
-        let key = serde_json::to_string(&schema).expect("JSON schema serializes");
+        let key = canonical_schema_key(&schema).expect("JSON schema serializes");
         occurrences
             .entry(key)
             .and_modify(|(count, _)| *count += 1)
@@ -504,8 +526,61 @@ fn for_schema_children_mut<E>(
     Ok(())
 }
 
+// Two schemas with the same structure but different documentation text are one Rust type.
+// The API spec repeats shared object schemas inline with a per-use description, which
+// otherwise generates one copy of the type, its builder and its conversions per use.
 fn canonical_schema_key(schema: &Value) -> Result<String, String> {
-    serde_json::to_string(schema).map_err(|error| format!("failed to serialize schema: {error}"))
+    let result = if MERGE_REPEATED_SCHEMAS.load(Ordering::Relaxed) {
+        serde_json::to_string(&without_documentation(schema))
+    } else {
+        serde_json::to_string(schema)
+    };
+    result.map_err(|error| format!("failed to serialize schema: {error}"))
+}
+
+fn without_documentation(schema: &Value) -> Value {
+    match schema {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "description" | "title" | "example"))
+                .map(|(key, value)| {
+                    // `properties` maps field names to schemas: a field called
+                    // `description` is a field, not documentation.
+                    let value = if key == "properties" {
+                        match value {
+                            Value::Object(fields) => Value::Object(
+                                fields
+                                    .iter()
+                                    .map(|(name, field)| {
+                                        (name.clone(), without_documentation(field))
+                                    })
+                                    .collect(),
+                            ),
+                            other => other.clone(),
+                        }
+                    } else {
+                        without_documentation(value)
+                    };
+                    (key.clone(), value)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(without_documentation).collect()),
+        other => other.clone(),
+    }
+}
+
+// Full client only: share repeated schemas so the generated client stays small enough to
+// compile in under 8 GB. Run after `normalize_openapi`.
+#[allow(dead_code)] // the tests include this file but only the build script merges
+pub fn merge_repeated_schemas(document: &Value) -> Result<Value, String> {
+    let mut root = document
+        .as_object()
+        .ok_or_else(|| "OpenAPI document must be a JSON object".to_string())?
+        .clone();
+    MERGE_REPEATED_SCHEMAS.store(true, Ordering::Relaxed);
+    deduplicate_anonymous_schemas(&mut root, false)?;
+    Ok(Value::Object(root))
 }
 
 pub fn normalize_openapi(document: &Value) -> Result<Value, String> {

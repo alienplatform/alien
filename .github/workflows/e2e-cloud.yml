@@ -154,7 +154,7 @@ permissions:
 env:
   ALIEN_E2E_SLOT: "03"
   # Fall back to local compilation when the shared sccache backend returns a
-  # transient error (e.g. webdav 403) instead of failing the whole build.
+  # transient error (e.g. an HTTP 403) instead of failing the whole build.
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
 
 jobs:
@@ -242,7 +242,7 @@ jobs:
       (needs.compute-matrix.outputs.build_images == 'true' ||
        needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true') &&
       needs.compute-matrix.outputs.needs_x86_64 == 'true'
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: "0"
@@ -252,7 +252,6 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
         with:
-          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
           repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
           targets: x86_64-unknown-linux-musl
           install-protoc: "true"
@@ -291,7 +290,7 @@ jobs:
           if [ "${{ needs.compute-matrix.outputs.build_operator_image }}" = "true" ]; then
             PACKAGES+=("-p" "alien-operator")
           fi
-          depot cargo build --release "${PACKAGES[@]}" --target x86_64-unknown-linux-musl
+          cargo build --release "${PACKAGES[@]}" --target x86_64-unknown-linux-musl
 
       - name: Install zig and cargo-zigbuild
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
@@ -346,7 +345,7 @@ jobs:
       (needs.compute-matrix.outputs.build_images == 'true' ||
        needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true') &&
       needs.compute-matrix.outputs.needs_aarch64 == 'true'
-    runs-on: depot-ubuntu-24.04-arm-16
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: "0"
@@ -356,7 +355,6 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
         with:
-          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
           repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
           targets: aarch64-unknown-linux-musl
           install-protoc: "true"
@@ -395,7 +393,7 @@ jobs:
           if [ "${{ needs.compute-matrix.outputs.build_operator_image }}" = "true" ]; then
             PACKAGES+=("-p" "alien-operator")
           fi
-          depot cargo build --release "${PACKAGES[@]}" --target aarch64-unknown-linux-musl
+          cargo build --release "${PACKAGES[@]}" --target aarch64-unknown-linux-musl
 
       - name: Install zig and cargo-zigbuild
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
@@ -452,7 +450,7 @@ jobs:
       !cancelled() && !failure() &&
       needs.compute-matrix.outputs.build_base_image == 'true' &&
       (needs.build-x86_64.result == 'success' || needs.build-aarch64.result == 'success')
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     outputs:
       base_image: ghcr.io/alienplatform/alien-base@${{ steps.publish_base.outputs.digest }}
@@ -531,13 +529,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: depot/setup-action@v1
+      # The Dockerfiles copy prebuilt binaries, so emulation only touches the final
+      # stages of the non-native architecture.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Build and push alien-base
         id: publish_base
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-base
           platforms: ${{ steps.platforms.outputs.platforms }}
@@ -550,9 +551,8 @@ jobs:
         if: |
           needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true' ||
           needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-worker-typescript
           build-args: |
@@ -602,7 +602,7 @@ jobs:
       !cancelled() && !failure() &&
       needs.compute-matrix.outputs.build_operator_image == 'true' &&
       (needs.build-x86_64.result == 'success' || needs.build-aarch64.result == 'success')
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     outputs:
       operator_image: ghcr.io/alienplatform/alien-operator:${{ github.sha }}
@@ -647,12 +647,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: depot/setup-action@v1
+      # The Dockerfiles copy prebuilt binaries, so emulation only touches the final
+      # stages of the non-native architecture.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Build and push alien-operator
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-operator
           platforms: ${{ steps.platforms.outputs.platforms }}
@@ -673,7 +676,7 @@ jobs:
     concurrency:
       group: terraform-test-infra
       cancel-in-progress: false
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -972,7 +975,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.compute-matrix.outputs.push_matrix) }}
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: ${{ matrix.timeout_minutes }}
     env:
       CARGO_INCREMENTAL: "0"
@@ -1035,16 +1038,12 @@ jobs:
           install_args: rust
           cache: false
 
-      - uses: depot/setup-action@v1
-
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
         with:
           platforms: arm64
 
-      - uses: mozilla-actions/sccache-action@v0.0.11
-        continue-on-error: true
-        with:
-          version: v0.16.0
+      - name: Install sccache
+        uses: ./.github/actions/setup-sccache
 
       - uses: taiki-e/install-action@cargo-nextest
 
@@ -1107,7 +1106,7 @@ jobs:
         run: |
           set -a && source .env.test && set +a
           export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}"
-          depot cargo nextest run -p alien-test --test push ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
+          cargo nextest run -p alien-test --test push ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
   # ── E2E CloudFormation distribution matrix ─────────────────────────
 
@@ -1120,7 +1119,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.compute-matrix.outputs.cloudformation_matrix) }}
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 75
     env:
       CARGO_INCREMENTAL: "0"
@@ -1153,16 +1152,12 @@ jobs:
           install_args: rust
           cache: false
 
-      - uses: depot/setup-action@v1
-
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
         with:
           platforms: arm64
 
-      - uses: mozilla-actions/sccache-action@v0.0.11
-        continue-on-error: true
-        with:
-          version: v0.16.0
+      - name: Install sccache
+        uses: ./.github/actions/setup-sccache
 
       - uses: taiki-e/install-action@cargo-nextest
 
@@ -1230,7 +1225,7 @@ jobs:
           set -a && source .env.test && set +a
           export ALIEN_TEST_BUN_BINARY="$(command -v bun)"
           export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}"
-          depot cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
+          cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
   # ── E2E Terraform distribution matrix ──────────────────────────────
 
@@ -1244,7 +1239,7 @@ jobs:
       fail-fast: false
       max-parallel: ${{ (inputs.run_kubernetes_aws_terraform_helm || inputs.run_kubernetes_gcp_terraform_helm || inputs.run_kubernetes_azure_terraform_helm) && 1 || 4 }}
       matrix: ${{ fromJSON(needs.compute-matrix.outputs.terraform_matrix) }}
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: "0"
@@ -1314,16 +1309,12 @@ jobs:
           install_args: rust
           cache: false
 
-      - uses: depot/setup-action@v1
-
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
         with:
           platforms: arm64
 
-      - uses: mozilla-actions/sccache-action@v0.0.11
-        continue-on-error: true
-        with:
-          version: v0.16.0
+      - name: Install sccache
+        uses: ./.github/actions/setup-sccache
 
       - uses: taiki-e/install-action@cargo-nextest
 
@@ -1490,19 +1481,14 @@ jobs:
           install_args: rust
           cache: false
 
-      # depot cargo works on Linux/macOS; Windows uses sccache directly
-      - uses: depot/setup-action@v1
-        if: runner.os != 'Windows'
-
-      - uses: docker/setup-qemu-action@v3
+      # cargo works on Linux/macOS; Windows uses sccache directly
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
         if: runner.os == 'Linux'
         with:
           platforms: arm64
 
-      - uses: mozilla-actions/sccache-action@v0.0.11
-        continue-on-error: true
-        with:
-          version: v0.16.0
+      - name: Install sccache
+        uses: ./.github/actions/setup-sccache
 
       - uses: taiki-e/install-action@cargo-nextest
 
@@ -1555,7 +1541,7 @@ jobs:
 
       - name: Build alien-operator and alien-deploy (Unix)
         if: runner.os != 'Windows'
-        run: depot cargo build -p alien-operator -p alien-deploy-cli
+        run: cargo build -p alien-operator -p alien-deploy-cli
 
       - name: Build alien-operator and alien-deploy (Windows)
         if: runner.os == 'Windows'
@@ -1595,7 +1581,7 @@ jobs:
           ALIEN_E2E_FOREGROUND: ${{ inputs.foreground_agent && '1' || '' }}
         run: |
           set -a && source .env.test && set +a
-          depot cargo nextest run -p alien-test --test pull ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
+          cargo nextest run -p alien-test --test pull ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
       - name: Run E2E local test (Windows)
         if: runner.os == 'Windows'
@@ -1629,7 +1615,7 @@ jobs:
       always() &&
       needs.compute-matrix.outputs.skip_cleanup != 'true' &&
       needs.setup.result == 'success'
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7

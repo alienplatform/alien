@@ -12,11 +12,16 @@ permissions:
   contents: write
   packages: write
   id-token: write
+  # The full test suites that qualification calls (full-suite.yml) declare these.
+  actions: read
+  pull-requests: read
+  issues: write
+  checks: write
   attestations: write
 
 jobs:
   detect:
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     outputs:
       is_release: ${{ steps.release.outputs.is_release }}
       source_ref: ${{ steps.release.outputs.source_ref }}
@@ -175,7 +180,7 @@ jobs:
     name: Release qualification
     needs: [detect, qualify]
     if: always()
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Require qualification for release pull requests
         env:

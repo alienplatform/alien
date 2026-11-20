@@ -4,9 +4,14 @@ name: Kind lifecycle
 # (and only when main changed since the last green run) instead of on every PR push or merge.
 # Start this workflow manually on a branch to run them before merging. A failure on main opens
 # an issue. A PR that changes this file runs it, so the workflow itself is tested before merge.
+# Release qualification calls it too.
 on:
-  schedule:
-    - cron: "23 1 * * *"
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to test (default the triggering commit)
+        type: string
+        default: ""
   pull_request:
     paths:
       - '.github/workflows/kind-lifecycle.yml'
@@ -16,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: kind-lifecycle-${{ github.ref }}
+  group: kind-lifecycle-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -43,7 +48,7 @@ jobs:
     if: needs.gate.outputs.changed == 'true'
     # The tests wait on clusters and rollouts; the smaller runner doubles the compile time, not
     # the price, and nobody waits on a nightly run.
-    runs-on: depot-ubuntu-24.04-arm-4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 150
     env:
       CARGO_INCREMENTAL: "0"
@@ -51,6 +56,8 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Install Rust toolchain
         uses: jdx/mise-action@v5

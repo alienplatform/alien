@@ -1,9 +1,9 @@
 name: Set up sccache
 description: >-
-  Install sccache and route rustc through it. `mozilla-actions/sccache-action` installs the binary
-  and starts nothing else: without `RUSTC_WRAPPER` cargo never calls it, and its stats show 0
-  compile requests. The cache backend comes from the runner's environment. A failed install only
-  costs the cache: the build then compiles without it.
+  Install sccache and route rustc through it, with GitHub's own Actions cache as the storage.
+  `mozilla-actions/sccache-action` installs the binary and starts nothing else: without
+  `RUSTC_WRAPPER` cargo never calls it, and its stats show 0 compile requests. A failed install
+  only costs the cache: the build then compiles without it.
 
 runs:
   using: composite
@@ -23,6 +23,7 @@ runs:
       run: |
         {
           echo "RUSTC_WRAPPER=sccache"
+          echo "SCCACHE_GHA_ENABLED=true"
           # Fall back to local compilation when the cache service returns a transient error.
           echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1"
         } >> "$GITHUB_ENV"

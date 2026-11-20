@@ -1,10 +1,25 @@
 // The filtered SDK exposes the same heartbeat contract through resource details;
-// the full SDK also sends it in reconciliation requests.
+// the full SDK also sends it in reconciliation requests. The full SDK shares the
+// generated heartbeat type between operations, so it is reached through the request.
 #[cfg(not(feature = "full-api"))]
 use alien_platform_api::types::GetResourceDeploymentDetailResponseHeartbeatHeartbeat as Heartbeat;
-#[cfg(feature = "full-api")]
-use alien_platform_api::types::SyncReconcileRequestResourceHeartbeatsItem as Heartbeat;
 use serde_json::{json, Value};
+
+#[cfg(not(feature = "full-api"))]
+fn decode_and_encode(value: Value) -> serde_json::Result<Value> {
+    serde_json::to_value(serde_json::from_value::<Heartbeat>(value)?)
+}
+
+#[cfg(feature = "full-api")]
+fn decode_and_encode(value: Value) -> serde_json::Result<Value> {
+    fn through<T: serde::de::DeserializeOwned + serde::Serialize>(
+        _item_of: fn(&alien_platform_api::types::SyncReconcileRequest) -> &Vec<T>,
+        value: Value,
+    ) -> serde_json::Result<Value> {
+        serde_json::to_value(serde_json::from_value::<T>(value)?)
+    }
+    through(|request| &request.resource_heartbeats, value)
+}
 
 fn sandbox_heartbeats() -> Vec<Value> {
     [
@@ -35,11 +50,8 @@ fn without_nulls(value: Value) -> Value {
 #[test]
 fn sandbox_heartbeat_backends_preserve_complete_payloads() {
     for original in sandbox_heartbeats() {
-        let decoded: Heartbeat = serde_json::from_value(original.clone()).unwrap();
-        assert_eq!(
-            without_nulls(serde_json::to_value(decoded).unwrap()),
-            original
-        );
+        let decoded = decode_and_encode(original.clone()).unwrap();
+        assert_eq!(without_nulls(decoded), original);
     }
 }
 
@@ -49,10 +61,7 @@ fn sandbox_heartbeat_tags_and_required_fields_are_validated() {
         for pointer in ["/data/resourceType", "/data/data/backend"] {
             let mut invalid = original.clone();
             *invalid.pointer_mut(pointer).unwrap() = json!("unknown");
-            assert!(
-                serde_json::from_value::<Heartbeat>(invalid).is_err(),
-                "invalid {pointer}"
-            );
+            assert!(decode_and_encode(invalid).is_err(), "invalid {pointer}");
         }
         for (pointer, field) in [
             ("/data", "resourceType"),
@@ -68,7 +77,7 @@ fn sandbox_heartbeat_tags_and_required_fields_are_validated() {
                 .unwrap()
                 .remove(field);
             assert!(
-                serde_json::from_value::<Heartbeat>(invalid).is_err(),
+                decode_and_encode(invalid).is_err(),
                 "missing {pointer}/{field}"
             );
         }
