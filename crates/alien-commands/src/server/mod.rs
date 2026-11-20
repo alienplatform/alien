@@ -26,6 +26,24 @@ use object_store::path::Path as StoragePath;
 use crate::error::{ErrorData, Result};
 use crate::types::*;
 use crate::INLINE_MAX_BYTES;
+/// Lifetime of a wake key. A waiter only compares two reads taken seconds
+/// apart, so an old value is never needed; the lifetime lets the key go away
+/// with its deployment.
+const WAKE_KEY_TTL: Duration = Duration::from_secs(3600);
+
+use lease_wait::{
+    LeaseWaiters, WaitLimits, DEFAULT_LEASE_WAIT_PROBE_INTERVAL, DEFAULT_MAX_OPEN_LEASE_WAITS,
+    DEFAULT_MAX_OPEN_LEASE_WAITS_PER_DEPLOYMENT, DEFAULT_MAX_OPEN_LEASE_WAITS_PER_TARGET,
+};
+
+/// Longest a store call inside a waiting lease request may take: the wake-key
+/// read and the scan. Waiters of one target take turns on both, so one hung
+/// call must not hold the others past their window.
+const WAIT_STORE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A waiting lease request ends this long before the caller's credential
+/// expires, leaving room for its last scan's own authority check.
+const WAIT_AUTHORITY_MARGIN: Duration = Duration::from_secs(3);
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -42,6 +60,7 @@ fn is_definite_dispatch_rejection(error: &crate::error::Error) -> bool {
 
 pub mod axum_handlers;
 pub mod command_registry;
+pub mod lease_wait;
 pub mod storage;
 
 pub use crate::dispatchers::{CommandDispatcher, NullCommandDispatcher};
@@ -121,6 +140,11 @@ pub struct CommandServer {
     base_url: String,
     response_signing_key: Vec<u8>,
     clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
+    lease_waiters: Arc<LeaseWaiters>,
+    max_open_lease_waits: usize,
+    max_open_lease_waits_per_target: usize,
+    max_open_lease_waits_per_deployment: usize,
+    lease_wait_probe_interval: Duration,
 }
 
 impl CommandServer {
@@ -148,6 +172,11 @@ impl CommandServer {
             base_url,
             response_signing_key,
             clock: Arc::new(Utc::now),
+            lease_waiters: Arc::new(LeaseWaiters::default()),
+            max_open_lease_waits: DEFAULT_MAX_OPEN_LEASE_WAITS,
+            max_open_lease_waits_per_target: DEFAULT_MAX_OPEN_LEASE_WAITS_PER_TARGET,
+            max_open_lease_waits_per_deployment: DEFAULT_MAX_OPEN_LEASE_WAITS_PER_DEPLOYMENT,
+            lease_wait_probe_interval: DEFAULT_LEASE_WAIT_PROBE_INTERVAL,
         }
     }
 
@@ -170,6 +199,11 @@ impl CommandServer {
             base_url,
             response_signing_key,
             clock: Arc::new(Utc::now),
+            lease_waiters: Arc::new(LeaseWaiters::default()),
+            max_open_lease_waits: DEFAULT_MAX_OPEN_LEASE_WAITS,
+            max_open_lease_waits_per_target: DEFAULT_MAX_OPEN_LEASE_WAITS_PER_TARGET,
+            max_open_lease_waits_per_deployment: DEFAULT_MAX_OPEN_LEASE_WAITS_PER_DEPLOYMENT,
+            lease_wait_probe_interval: DEFAULT_LEASE_WAIT_PROBE_INTERVAL,
         }
     }
 
@@ -177,6 +211,45 @@ impl CommandServer {
     pub fn with_clock(mut self, clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// Limit the lease requests this process holds open while waiting for a
+    /// command (default 5,000). Over the limit a request is answered at once.
+    pub fn with_max_open_lease_waits(mut self, max: usize) -> Self {
+        self.max_open_lease_waits = max;
+        self
+    }
+
+    /// Limit the lease requests this process holds open for one (deployment,
+    /// target) while they wait (default 8). Over the limit a request is
+    /// answered at once.
+    pub fn with_max_open_lease_waits_per_target(mut self, max: usize) -> Self {
+        self.max_open_lease_waits_per_target = max;
+        self
+    }
+
+    /// Limit the lease requests this process holds open for one deployment,
+    /// over all its targets, while they wait (default 64). Over the limit a
+    /// request is answered at once. A target id is whatever the caller sends,
+    /// so this is the cap that bounds what one deployment's credentials can
+    /// take.
+    pub fn with_max_open_lease_waits_per_deployment(mut self, max: usize) -> Self {
+        self.max_open_lease_waits_per_deployment = max;
+        self
+    }
+
+    /// How often the waiting lease requests of one target read its wake key,
+    /// together (default 1 s). A command queued through another manager replica
+    /// is found within about this interval; one queued through this process
+    /// wakes waiters at once.
+    pub fn with_lease_wait_probe_interval(mut self, interval: Duration) -> Self {
+        self.lease_wait_probe_interval = interval;
+        self
+    }
+
+    /// Lease requests currently held open waiting for a command.
+    pub fn open_lease_waits(&self) -> usize {
+        self.lease_waiters.open_waits()
     }
 
     fn now(&self) -> DateTime<Utc> {
@@ -978,12 +1051,262 @@ impl CommandServer {
 
     /// Lease commands without delegating response or storage authority beyond
     /// the authenticated receiver's absolute deadline. None retains legacy policy.
+    ///
+    /// With `wait_seconds > 0` and nothing queued, the request is held open and
+    /// answered as soon as a command for the target is queued, or empty when
+    /// the wait ends. The wait is capped at [`MAX_LEASE_WAIT_SECONDS`] and ends
+    /// when the caller's credential does. Every scan, first or repeated, is the
+    /// same scan and atomic lease write as a request that does not wait.
+    ///
+    /// The caller's credential is not known to be bound to the target, so a
+    /// request to wait is held only for a target the deployment has; see
+    /// [`Self::acquire_lease_for_bound_target`].
     pub async fn acquire_lease_with_deadline(
         &self,
         deployment_id: &str,
         lease_request: &LeaseRequest,
         authority_deadline: Option<DateTime<Utc>>,
     ) -> Result<LeaseResponse> {
+        self.acquire_lease_inner(deployment_id, lease_request, authority_deadline, false)
+            .await
+    }
+
+    /// Like [`Self::acquire_lease_with_deadline`], for a caller whose credential
+    /// is bound to exactly this target (a receive capability), so the target is
+    /// known to exist. Any other credential may name any target id; a wait for
+    /// a target the deployment does not have is refused (answered at once, like
+    /// a wait over a cap), so invented targets cost a store read and no wait.
+    pub async fn acquire_lease_for_bound_target(
+        &self,
+        deployment_id: &str,
+        lease_request: &LeaseRequest,
+        authority_deadline: Option<DateTime<Utc>>,
+    ) -> Result<LeaseResponse> {
+        self.acquire_lease_inner(deployment_id, lease_request, authority_deadline, true)
+            .await
+    }
+
+    /// Whether `target` is one the deployment has: a reserved operations target
+    /// with its expected type, or a command-capable resource of its current
+    /// release (the registry's own resolution). A registry error is "unknown":
+    /// the wait is refused and the request is answered at once.
+    async fn target_is_known(&self, deployment_id: &str, target: &CommandTarget) -> bool {
+        if command_registry::is_operations_target(target) {
+            return true;
+        }
+        matches!(
+            self.command_registry
+                .resolve_target(deployment_id, "", Some(&target.resource_id))
+                .await,
+            Ok(resolved) if resolved.target == *target
+        )
+    }
+
+    async fn acquire_lease_inner(
+        &self,
+        deployment_id: &str,
+        lease_request: &LeaseRequest,
+        authority_deadline: Option<DateTime<Utc>>,
+        target_is_bound: bool,
+    ) -> Result<LeaseResponse> {
+        if lease_request.wait_seconds == 0 {
+            return self
+                .acquire_lease_once(deployment_id, lease_request, authority_deadline, false)
+                .await;
+        }
+        // Over a cap, answer at once, as a request that did not ask to wait.
+        // The caps are counters: nothing is read from a store before them.
+        let Some(wait) = self.lease_waiters.register(
+            deployment_id,
+            &lease_request.target.resource_id,
+            WaitLimits {
+                process: self.max_open_lease_waits,
+                deployment: self.max_open_lease_waits_per_deployment,
+                target: self.max_open_lease_waits_per_target,
+            },
+        ) else {
+            debug!("Too many open lease waits; answering without waiting");
+            return self
+                .acquire_lease_once(deployment_id, lease_request, authority_deadline, false)
+                .await;
+        };
+        // A target the credential is not bound to is checked once, here, and
+        // only after the caps: a wait for a target the deployment does not
+        // have is refused like a wait over a cap.
+        if !target_is_bound
+            && !self
+                .target_is_known(deployment_id, &lease_request.target)
+                .await
+        {
+            drop(wait);
+            debug!(
+                "Lease wait for a target the deployment does not have; answering without waiting"
+            );
+            return self
+                .acquire_lease_once(deployment_id, lease_request, authority_deadline, false)
+                .await;
+        }
+
+        let mut window =
+            Duration::from_secs(lease_request.wait_seconds.min(MAX_LEASE_WAIT_SECONDS));
+        if let Some(deadline) = authority_deadline {
+            // End the wait before the credential does, with room for the last
+            // scan's own authority check: the request is then answered empty
+            // and the receiver's next request meets the normal checks.
+            let left = (deadline - self.now()).to_std().unwrap_or(Duration::ZERO);
+            window = window.min(left.saturating_sub(WAIT_AUTHORITY_MARGIN));
+        }
+        let end = tokio::time::Instant::now() + window;
+        let target = lease_request.target.resource_id.as_str();
+        // When this waiter was woken and has not scanned since.
+        let mut woken_at: Option<tokio::time::Instant> = None;
+        loop {
+            // Listen, and read the wake key, before scanning: a command queued
+            // after the scan (here or through another replica) must still wake
+            // this request.
+            let notified = wait.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let (seen, _) = wait
+                .wake_value(tokio::time::Instant::now(), || {
+                    self.read_wake_key(deployment_id, target)
+                })
+                .await;
+
+            // Waiters on one target scan one at a time. One woken after a scan
+            // that began later found the queue empty needs no scan of its own.
+            let scanned = wait
+                .scan_in_turn(woken_at.take(), || async {
+                    // Every scan of a waiting request reads consistently: a
+                    // command queued just before the request arrived, or just
+                    // before a wake-up, must not be hidden by a lagging read
+                    // for the rest of the wait.
+                    let result = self
+                        .acquire_lease_scan(deployment_id, lease_request, authority_deadline, true)
+                        .await;
+                    // Only a scan that reached the end of the queue may stop
+                    // the other waiters' scans; one that stopped at its limit
+                    // may have missed a command a larger request would reach.
+                    let found_nothing = matches!(&result, Ok((r, true)) if r.leases.is_empty());
+                    (result.map(|(response, _)| response), found_nothing)
+                })
+                .await;
+            match scanned {
+                Some(Err(error)) => return Err(error),
+                Some(Ok(response)) if !response.leases.is_empty() => return Ok(response),
+                Some(Ok(response)) if tokio::time::Instant::now() >= end => return Ok(response),
+                None if tokio::time::Instant::now() >= end => {
+                    return Ok(LeaseResponse { leases: Vec::new() })
+                }
+                _ => {}
+            }
+            loop {
+                let next_probe =
+                    end.min(tokio::time::Instant::now() + self.lease_wait_probe_interval);
+                tokio::select! {
+                    _ = &mut notified => {
+                        woken_at = Some(wait.last_signal());
+                        break;
+                    }
+                    _ = tokio::time::sleep_until(next_probe) => {}
+                }
+                let now = tokio::time::Instant::now();
+                if now >= end {
+                    break; // one last scan, then answer
+                }
+                let recent = now
+                    .checked_sub(self.lease_wait_probe_interval / 2)
+                    .unwrap_or(now);
+                let (value, read_at) = wait
+                    .wake_value(recent, || self.read_wake_key(deployment_id, target))
+                    .await;
+                if value != seen {
+                    // The change was written before this read began.
+                    woken_at = Some(read_at);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// The wake key of a target: one small KV item, overwritten with a fresh
+    /// value by every create. A waiter that sees it change scans for the command
+    /// even when the create went through another manager replica.
+    fn wake_key(deployment_id: &str, target_resource_id: &str) -> String {
+        format!("target:{deployment_id}:{target_resource_id}:wake")
+    }
+
+    /// Announce a queued command to waiters on every replica. Best effort: the
+    /// command is already queued, so a failure here only delays waiters on other
+    /// replicas until their next request.
+    async fn write_wake_key(&self, deployment_id: &str, target_resource_id: &str) {
+        let key = Self::wake_key(deployment_id, target_resource_id);
+        let result = self
+            .kv
+            .put(
+                &key,
+                Uuid::new_v4().as_bytes().to_vec(),
+                Some(PutOptions {
+                    ttl: Some(WAKE_KEY_TTL),
+                    condition: PutCondition::None,
+                }),
+            )
+            .await;
+        if let Err(error) = result {
+            warn!(%key, %error, "Failed to write the lease wake key; waiters on other replicas find the command at their next request");
+        }
+    }
+
+    /// Current wake key value; `None` when it is missing or cannot be read (a
+    /// changed answer then only costs one extra scan).
+    async fn read_wake_key(
+        &self,
+        deployment_id: &str,
+        target_resource_id: &str,
+    ) -> Option<Vec<u8>> {
+        let key = Self::wake_key(deployment_id, target_resource_id);
+        // Bounded: the waiters of a target share this read behind one lock.
+        match tokio::time::timeout(WAIT_STORE_CALL_TIMEOUT, self.kv.get(&key)).await {
+            Ok(Ok(entry)) => entry.map(|entry| entry.value),
+            Ok(Err(error)) => {
+                debug!(%key, %error, "Failed to read the lease wake key");
+                None
+            }
+            Err(_) => {
+                warn!(%key, "Reading the lease wake key timed out");
+                None
+            }
+        }
+    }
+
+    async fn acquire_lease_once(
+        &self,
+        deployment_id: &str,
+        lease_request: &LeaseRequest,
+        authority_deadline: Option<DateTime<Utc>>,
+        consistent_scan: bool,
+    ) -> Result<LeaseResponse> {
+        self.acquire_lease_scan(
+            deployment_id,
+            lease_request,
+            authority_deadline,
+            consistent_scan,
+        )
+        .await
+        .map(|(response, _)| response)
+    }
+
+    /// One scan and lease attempt. The flag says whether the scan reached the
+    /// end of the target's queue (it saw fewer entries than its limit and no
+    /// more pages), so an empty answer means the queue holds nothing for
+    /// anyone, not only nothing within this request's limit.
+    async fn acquire_lease_scan(
+        &self,
+        deployment_id: &str,
+        lease_request: &LeaseRequest,
+        authority_deadline: Option<DateTime<Utc>>,
+        consistent_scan: bool,
+    ) -> Result<(LeaseResponse, bool)> {
         if let Some(deadline) = authority_deadline {
             self.remaining_authority(deadline)?;
         }
@@ -995,17 +1318,38 @@ impl CommandServer {
             "target:{}:{}:pending:",
             deployment_id, lease_request.target.resource_id
         );
-        let scan_result = self
-            .kv
-            .scan_prefix(&target_prefix, Some(lease_request.max_leases * 2), None)
+        let scan_limit = Some(lease_request.max_leases * 2);
+        let scan_result = if consistent_scan {
+            // A waiting request's scan runs while holding its target's scan
+            // turn; bound it so a hung store cannot hold the other waiters.
+            match tokio::time::timeout(
+                WAIT_STORE_CALL_TIMEOUT,
+                self.kv
+                    .scan_prefix_consistent(&target_prefix, scan_limit, None),
+            )
             .await
-            .into_alien_error()
-            .context(ErrorData::KvOperationFailed {
-                operation: "scan_prefix".to_string(),
-                key: target_prefix.clone(),
-                message: "Failed to scan for pending commands".to_string(),
-            })?;
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    return Err(AlienError::new(ErrorData::KvOperationFailed {
+                        operation: "scan_prefix".to_string(),
+                        key: target_prefix,
+                        message: "Scanning for pending commands timed out".to_string(),
+                    }))
+                }
+            }
+        } else {
+            self.kv.scan_prefix(&target_prefix, scan_limit, None).await
+        }
+        .into_alien_error()
+        .context(ErrorData::KvOperationFailed {
+            operation: "scan_prefix".to_string(),
+            key: target_prefix.clone(),
+            message: "Failed to scan for pending commands".to_string(),
+        })?;
 
+        let reached_end = scan_result.next_cursor.is_none()
+            && scan_result.items.len() < lease_request.max_leases * 2;
         for entry in scan_result.items {
             let index_key = entry.key;
             if leases.len() >= lease_request.max_leases {
@@ -1213,7 +1557,7 @@ impl CommandServer {
             });
         }
 
-        Ok(LeaseResponse { leases })
+        Ok((LeaseResponse { leases }, reached_end))
     }
 
     /// Rewrite manager-origin URLs in a lease-served envelope to references
@@ -1303,6 +1647,25 @@ impl CommandServer {
                 // 4. Increment the attempt only for a command that was
                 // actually released for redelivery.
                 self.command_registry.increment_attempt(command_id).await?;
+                // 5. A redelivery is a queued command again: wake waiters like
+                // a create does. (A lease that expires by TTL signals nothing;
+                // waiters find it at their next request.)
+                // The release has taken effect: a failed status read only costs
+                // the wake-up, so it must not turn the release into an error.
+                match self.command_registry.get_command_status(command_id).await {
+                    Ok(Some(status)) => {
+                        self.lease_waiters
+                            .notify(&status.deployment_id, &status.target.resource_id);
+                        self.write_wake_key(&status.deployment_id, &status.target.resource_id)
+                            .await;
+                    }
+                    Ok(None) => {}
+                    Err(error) => warn!(
+                        command_id,
+                        %error,
+                        "Could not read a released command to wake lease waiters; they find it at their next request"
+                    ),
+                }
             }
 
             // Note: Pending index is NOT removed on lease, so command is still there
@@ -1832,6 +2195,9 @@ impl CommandServer {
                 key: key.clone(),
                 message: "Failed to create pending index".to_string(),
             })?;
+        // Only after the write: a waiter woken by this scans and finds the key.
+        self.lease_waiters.notify(deployment_id, target_resource_id);
+        self.write_wake_key(deployment_id, target_resource_id).await;
         Ok(())
     }
 

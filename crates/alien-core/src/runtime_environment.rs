@@ -81,6 +81,9 @@ pub const ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS: &str = "ALIEN_COMMANDS_POLL_INTER
 pub const ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS: &str = "ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS";
 /// Fractional jitter applied to command receiver poll intervals.
 pub const ENV_ALIEN_COMMANDS_POLL_JITTER: &str = "ALIEN_COMMANDS_POLL_JITTER";
+/// How long a command receiver asks the manager to hold an empty lease request
+/// open, in seconds (default 25, at most 25). 0 turns waiting off.
+pub const ENV_ALIEN_COMMANDS_LEASE_WAIT_SECONDS: &str = "ALIEN_COMMANDS_LEASE_WAIT_SECONDS";
 /// Graceful command receiver drain timeout, in milliseconds.
 pub const ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS: &str = "ALIEN_COMMANDS_DRAIN_TIMEOUT_MS";
 /// Identifies which stack resource an app-owned command receiver leases for.
@@ -520,6 +523,7 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS
                 | ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS
                 | ENV_ALIEN_COMMANDS_POLL_JITTER
+                | ENV_ALIEN_COMMANDS_LEASE_WAIT_SECONDS
                 | ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS
                 | ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
                 | ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE
@@ -673,6 +677,10 @@ mod tests {
                 "ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS",
             ),
             (ENV_ALIEN_COMMANDS_POLL_JITTER, "ALIEN_COMMANDS_POLL_JITTER"),
+            (
+                ENV_ALIEN_COMMANDS_LEASE_WAIT_SECONDS,
+                "ALIEN_COMMANDS_LEASE_WAIT_SECONDS",
+            ),
             (
                 ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS,
                 "ALIEN_COMMANDS_DRAIN_TIMEOUT_MS",

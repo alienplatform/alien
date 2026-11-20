@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -37,7 +37,30 @@ pub struct FaultInjectingKv {
     fail_pending_scan: AtomicBool,
     fail_next_response_store: AtomicBool,
     idempotency_get_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
+    fail_wake_key_writes: AtomicBool,
+    fail_wake_key_reads: AtomicBool,
+    wake_key_reads: AtomicUsize,
+    pending_scans: AtomicUsize,
+    /// When set, a plain pending-index scan does not see writes younger than
+    /// this (a store whose scans lag behind acknowledged writes); a consistent
+    /// scan always does.
+    scan_lag: Mutex<Option<std::time::Duration>>,
+    pending_writes: Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    #[allow(clippy::type_complexity)]
+    after_pending_scan: HookSlot,
 }
+
+struct HookSlot(Mutex<Option<AfterScanHook>>);
+
+impl std::fmt::Debug for HookSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HookSlot")
+    }
+}
+
+/// Runs once, after a pending-index scan has returned its answer.
+pub type AfterScanHook =
+    Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
 
 impl FaultInjectingKv {
     fn new(inner: Arc<LocalKv>) -> Self {
@@ -46,7 +69,51 @@ impl FaultInjectingKv {
             fail_pending_scan: AtomicBool::new(false),
             fail_next_response_store: AtomicBool::new(false),
             idempotency_get_barrier: Mutex::new(None),
+            fail_wake_key_writes: AtomicBool::new(false),
+            fail_wake_key_reads: AtomicBool::new(false),
+            wake_key_reads: AtomicUsize::new(0),
+            scan_lag: Mutex::new(None),
+            pending_writes: Mutex::new(Default::default()),
+            pending_scans: AtomicUsize::new(0),
+            after_pending_scan: HookSlot(Mutex::new(None)),
         }
+    }
+
+    /// Number of pending-index scans made so far (leasing and cleanup).
+    pub fn pending_scans(&self) -> usize {
+        self.pending_scans.load(Ordering::SeqCst)
+    }
+
+    /// Number of wake key reads made so far.
+    pub fn wake_key_reads(&self) -> usize {
+        self.wake_key_reads.load(Ordering::SeqCst)
+    }
+
+    /// Arm the fault: reads of a target's lease wake key fail.
+    pub fn arm_wake_key_read_failure(&self) {
+        self.fail_wake_key_reads.store(true, Ordering::SeqCst);
+    }
+
+    /// Make plain pending-index scans lag: they miss entries written less than
+    /// `lag` ago. Consistent scans are unaffected.
+    pub fn arm_lagging_pending_scans(&self, lag: std::time::Duration) {
+        *self.scan_lag.lock().expect("scan lag lock") = Some(lag);
+    }
+
+    /// Arm the fault: writes of a target's lease wake key fail.
+    pub fn arm_wake_key_write_failure(&self) {
+        self.fail_wake_key_writes.store(true, Ordering::SeqCst);
+    }
+
+    /// Run `hook` once, right after the next pending-index scan returned its
+    /// answer: the scan's result is already decided when the hook acts, so
+    /// whatever the hook queues lands between that scan and whatever follows.
+    pub fn arm_after_next_pending_scan(&self, hook: AfterScanHook) {
+        *self
+            .after_pending_scan
+            .0
+            .lock()
+            .expect("after-scan hook lock should not be poisoned") = Some(hook);
     }
 
     /// Arm the fault: subsequent `scan_prefix` calls over a `target:…` (pending
@@ -78,6 +145,16 @@ impl Binding for FaultInjectingKv {}
 #[async_trait]
 impl Kv for FaultInjectingKv {
     async fn get(&self, key: &str) -> alien_bindings::Result<Option<KvEntry>> {
+        if key.ends_with(":wake") {
+            self.wake_key_reads.fetch_add(1, Ordering::SeqCst);
+            if self.fail_wake_key_reads.load(Ordering::SeqCst) {
+                return Err(alien_error::AlienError::new(ErrorData::KvOperationFailed {
+                    operation: "get".to_string(),
+                    key: key.to_string(),
+                    reason: "injected fault: wake key read failure".to_string(),
+                }));
+            }
+        }
         let value = self.inner.get(key).await?;
         let barrier = if key.starts_with("idem:") && value.is_none() {
             self.idempotency_get_barrier
@@ -99,6 +176,13 @@ impl Kv for FaultInjectingKv {
         value: Vec<u8>,
         options: Option<PutOptions>,
     ) -> alien_bindings::Result<bool> {
+        if key.ends_with(":wake") && self.fail_wake_key_writes.load(Ordering::SeqCst) {
+            return Err(alien_error::AlienError::new(ErrorData::KvOperationFailed {
+                operation: "put".to_string(),
+                key: key.to_string(),
+                reason: "injected fault: wake key write failure".to_string(),
+            }));
+        }
         if key.ends_with(":response") && self.fail_next_response_store.swap(false, Ordering::SeqCst)
         {
             return Err(alien_error::AlienError::new(ErrorData::KvOperationFailed {
@@ -106,6 +190,12 @@ impl Kv for FaultInjectingKv {
                 key: key.to_string(),
                 reason: "injected fault: response store failure".to_string(),
             }));
+        }
+        if key.contains(":pending:") {
+            self.pending_writes
+                .lock()
+                .expect("pending writes lock")
+                .insert(key.to_string(), std::time::Instant::now());
         }
         self.inner.put(key, value, options).await
     }
@@ -124,6 +214,27 @@ impl Kv for FaultInjectingKv {
         limit: Option<usize>,
         cursor: Option<String>,
     ) -> alien_bindings::Result<ScanResult> {
+        self.scan(prefix, limit, cursor, false).await
+    }
+
+    async fn scan_prefix_consistent(
+        &self,
+        prefix: &str,
+        limit: Option<usize>,
+        cursor: Option<String>,
+    ) -> alien_bindings::Result<ScanResult> {
+        self.scan(prefix, limit, cursor, true).await
+    }
+}
+
+impl FaultInjectingKv {
+    async fn scan(
+        &self,
+        prefix: &str,
+        limit: Option<usize>,
+        cursor: Option<String>,
+        consistent: bool,
+    ) -> alien_bindings::Result<ScanResult> {
         if self.fail_pending_scan.load(Ordering::SeqCst) && prefix.starts_with("target:") {
             return Err(alien_error::AlienError::new(ErrorData::KvOperationFailed {
                 operation: "scan_prefix".to_string(),
@@ -131,7 +242,29 @@ impl Kv for FaultInjectingKv {
                 reason: "injected fault: pending-index scan failure".to_string(),
             }));
         }
-        self.inner.scan_prefix(prefix, limit, cursor).await
+        let mut result = self.inner.scan_prefix(prefix, limit, cursor).await;
+        if prefix.contains(":pending:") {
+            let lag = *self.scan_lag.lock().expect("scan lag lock");
+            if let (Some(lag), false, Ok(found)) = (lag, consistent, result.as_mut()) {
+                let writes = self.pending_writes.lock().expect("pending writes lock");
+                found.items.retain(|entry| {
+                    writes
+                        .get(&entry.key)
+                        .is_none_or(|written| written.elapsed() >= lag)
+                });
+            }
+            self.pending_scans.fetch_add(1, Ordering::SeqCst);
+            let hook = self
+                .after_pending_scan
+                .0
+                .lock()
+                .expect("after-scan hook lock should not be poisoned")
+                .take();
+            if let Some(hook) = hook {
+                hook().await;
+            }
+        }
+        result
     }
 }
 
@@ -274,6 +407,7 @@ impl TestCommandServer {
             target: self.default_target.clone(),
             max_leases: 1,
             lease_seconds: 60,
+            wait_seconds: 0,
         };
         let response = self.acquire_lease(deployment_id, lease_request).await?;
         Ok(response.leases.into_iter().next())
@@ -389,6 +523,10 @@ pub struct TestCommandServerBuilder {
     storage: Option<Arc<LocalStorage>>,
     dispatcher: Option<Arc<dyn CommandDispatcher>>,
     fault_injection: bool,
+    max_open_lease_waits: Option<usize>,
+    max_open_lease_waits_per_target: Option<usize>,
+    max_open_lease_waits_per_deployment: Option<usize>,
+    lease_wait_probe_interval: Option<std::time::Duration>,
 }
 
 impl TestCommandServerBuilder {
@@ -398,7 +536,35 @@ impl TestCommandServerBuilder {
             storage: None,
             dispatcher: None,
             fault_injection: false,
+            max_open_lease_waits: None,
+            max_open_lease_waits_per_target: None,
+            max_open_lease_waits_per_deployment: None,
+            lease_wait_probe_interval: None,
         }
+    }
+
+    /// Limit the lease requests the server holds open while waiting.
+    pub fn with_max_open_lease_waits(mut self, max: usize) -> Self {
+        self.max_open_lease_waits = Some(max);
+        self
+    }
+
+    /// Limit the lease requests the server holds open for one target.
+    pub fn with_max_open_lease_waits_per_target(mut self, max: usize) -> Self {
+        self.max_open_lease_waits_per_target = Some(max);
+        self
+    }
+
+    /// Limit the lease requests the server holds open for one deployment.
+    pub fn with_max_open_lease_waits_per_deployment(mut self, max: usize) -> Self {
+        self.max_open_lease_waits_per_deployment = Some(max);
+        self
+    }
+
+    /// How often the waiting lease requests of a target read its wake key.
+    pub fn with_lease_wait_probe_interval(mut self, interval: std::time::Duration) -> Self {
+        self.lease_wait_probe_interval = Some(interval);
+        self
     }
 
     /// Wrap the KV store in a [`FaultInjectingKv`] so tests can simulate a
@@ -516,14 +682,27 @@ impl TestCommandServerBuilder {
                 (kv.clone() as Arc<dyn Kv>, None)
             };
 
-        let command_server = Arc::new(CommandServer::new(
+        let mut command_server = CommandServer::new(
             kv_for_server,
             storage.clone() as Arc<dyn Storage>,
             dispatcher.clone(),
             registry.clone(),
             command_base_url,
             b"test-signing-key-for-commands".to_vec(),
-        ));
+        );
+        if let Some(max) = self.max_open_lease_waits {
+            command_server = command_server.with_max_open_lease_waits(max);
+        }
+        if let Some(max) = self.max_open_lease_waits_per_target {
+            command_server = command_server.with_max_open_lease_waits_per_target(max);
+        }
+        if let Some(max) = self.max_open_lease_waits_per_deployment {
+            command_server = command_server.with_max_open_lease_waits_per_deployment(max);
+        }
+        if let Some(interval) = self.lease_wait_probe_interval {
+            command_server = command_server.with_lease_wait_probe_interval(interval);
+        }
+        let command_server = Arc::new(command_server);
 
         let commands_router: Router<Arc<CommandServer>> = create_axum_router();
         let router = Router::new()

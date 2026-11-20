@@ -264,6 +264,10 @@ async fn start_with_access(
         deployment_interval_secs: 999,
         heartbeat_interval_secs: 999,
         self_heartbeat_interval_secs: 999,
+        lease_wait_probe_interval_secs: 1,
+        max_open_lease_waits: 5_000,
+        max_open_lease_waits_per_target: 8,
+        max_open_lease_waits_per_deployment: 64,
         otlp_endpoint: None,
         base_url: Some(url.clone()),
         releases_url: None,
@@ -1156,13 +1160,7 @@ async fn raw(
     )
 }
 
-async fn put_scope(
-    server: &Server,
-    scope: &str,
-    slot: &str,
-    value: &str,
-    headers: &[(&str, String)],
-) -> u16 {
+async fn put_scope(server: &Server, scope: &str, slot: &str, value: &str, headers: &[(&str, String)]) -> u16 {
     raw(
         server,
         reqwest::Method::PUT,
@@ -1196,24 +1194,11 @@ async fn slots_of(server: &Server, scope: &str) -> Vec<String> {
 async fn a_registration_claim_moves_its_values_and_a_replay_changes_nothing() {
     let server = start_with_access(false, Backend::Sqlite, Some(Arc::new(ClaimAuthorizer))).await;
     let dep = server.scope();
-    assert_eq!(
-        put_scope(&server, "reg:reg_1", "env:A", "\"a\"", &[]).await,
-        200
-    );
-    assert_eq!(
-        put_scope(&server, "reg:reg_1", "env:B", "b", &[]).await,
-        200
-    );
+    assert_eq!(put_scope(&server, "reg:reg_1", "env:A", "\"a\"", &[]).await, 200);
+    assert_eq!(put_scope(&server, "reg:reg_1", "env:B", "b", &[]).await, 200);
     let headers = claim("reg:reg_1", &dep, "claim-1");
 
-    let (status, moved) = raw(
-        &server,
-        reqwest::Method::POST,
-        "/v1/values/reg:reg_1/move",
-        &headers,
-        None,
-    )
-    .await;
+    let (status, moved) = raw(&server, reqwest::Method::POST, "/v1/values/reg:reg_1/move", &headers, None).await;
     assert_eq!(status, 200, "{moved}");
     assert_eq!(moved["slots"].as_array().unwrap().len(), 2);
     assert_eq!(slots_of(&server, "reg:reg_1").await, Vec::<String>::new());
@@ -1221,40 +1206,16 @@ async fn a_registration_claim_moves_its_values_and_a_replay_changes_nothing() {
 
     // The deployment drops a slot, and a new slot appears on the source. The
     // same claim presented again must not undo or add anything.
-    let (status, _) = raw(
-        &server,
-        reqwest::Method::DELETE,
-        &format!("/v1/values/{dep}/env:A"),
-        &[],
-        None,
-    )
-    .await;
+    let (status, _) = raw(&server, reqwest::Method::DELETE, &format!("/v1/values/{dep}/env:A"), &[], None).await;
     assert_eq!(status, 204);
-    assert_eq!(
-        put_scope(&server, "reg:reg_1", "env:C", "c", &[]).await,
-        200
-    );
-    let (status, replay) = raw(
-        &server,
-        reqwest::Method::POST,
-        "/v1/values/reg:reg_1/move",
-        &headers,
-        None,
-    )
-    .await;
+    assert_eq!(put_scope(&server, "reg:reg_1", "env:C", "c", &[]).await, 200);
+    let (status, replay) = raw(&server, reqwest::Method::POST, "/v1/values/reg:reg_1/move", &headers, None).await;
     assert_eq!(status, 200, "{replay}");
     assert_eq!(slots_of(&server, &dep).await, ["env:B"]);
     assert_eq!(slots_of(&server, "reg:reg_1").await, ["env:C"]);
 
     // A different claim is a different move.
-    let (status, _) = raw(
-        &server,
-        reqwest::Method::POST,
-        "/v1/values/reg:reg_1/move",
-        &claim("reg:reg_1", &dep, "claim-2"),
-        None,
-    )
-    .await;
+    let (status, _) = raw(&server, reqwest::Method::POST, "/v1/values/reg:reg_1/move", &claim("reg:reg_1", &dep, "claim-2"), None).await;
     assert_eq!(status, 200);
     assert_eq!(slots_of(&server, &dep).await, ["env:B", "env:C"]);
 }
@@ -1263,18 +1224,8 @@ async fn a_registration_claim_moves_its_values_and_a_replay_changes_nothing() {
 async fn a_setup_link_claim_copies_and_keeps_the_link_values() {
     let server = start_with_access(false, Backend::Sqlite, Some(Arc::new(ClaimAuthorizer))).await;
     let dep = server.scope();
-    assert_eq!(
-        put_scope(&server, "link:lnk_1", "input:key", "\"s\"", &[]).await,
-        200
-    );
-    let (status, copied) = raw(
-        &server,
-        reqwest::Method::POST,
-        "/v1/values/link:lnk_1/move",
-        &claim("link:lnk_1", &dep, "c1"),
-        None,
-    )
-    .await;
+    assert_eq!(put_scope(&server, "link:lnk_1", "input:key", "\"s\"", &[]).await, 200);
+    let (status, copied) = raw(&server, reqwest::Method::POST, "/v1/values/link:lnk_1/move", &claim("link:lnk_1", &dep, "c1"), None).await;
     assert_eq!(status, 200, "{copied}");
     assert_eq!(slots_of(&server, "link:lnk_1").await, ["input:key"]);
     assert_eq!(slots_of(&server, &dep).await, ["input:key"]);
@@ -1284,54 +1235,20 @@ async fn a_setup_link_claim_copies_and_keeps_the_link_values() {
 async fn a_claim_for_another_source_or_a_non_deployment_destination_is_refused() {
     let server = start_with_access(false, Backend::Sqlite, Some(Arc::new(ClaimAuthorizer))).await;
     let dep = server.scope();
-    assert_eq!(
-        put_scope(&server, "reg:reg_a", "env:A", "a", &[]).await,
-        200
-    );
-    assert_eq!(
-        put_scope(&server, "reg:reg_b", "env:B", "b", &[]).await,
-        200
-    );
+    assert_eq!(put_scope(&server, "reg:reg_a", "env:A", "a", &[]).await, 200);
+    assert_eq!(put_scope(&server, "reg:reg_b", "env:B", "b", &[]).await, 200);
 
     // Wrong source: a claim for reg_b presented on reg_a's path.
-    let (status, _) = raw(
-        &server,
-        reqwest::Method::POST,
-        "/v1/values/reg:reg_a/move",
-        &claim("reg:reg_b", &dep, "c1"),
-        None,
-    )
-    .await;
+    let (status, _) = raw(&server, reqwest::Method::POST, "/v1/values/reg:reg_a/move", &claim("reg:reg_b", &dep, "c1"), None).await;
     assert_eq!(status, 403);
     // Non-deployment destination.
-    let (status, _) = raw(
-        &server,
-        reqwest::Method::POST,
-        "/v1/values/reg:reg_a/move",
-        &claim("reg:reg_a", "link:lnk_x", "c2"),
-        None,
-    )
-    .await;
+    let (status, _) = raw(&server, reqwest::Method::POST, "/v1/values/reg:reg_a/move", &claim("reg:reg_a", "link:lnk_x", "c2"), None).await;
     assert_eq!(status, 403);
     // A deployment as the source is not movable.
-    let (status, _) = raw(
-        &server,
-        reqwest::Method::POST,
-        &format!("/v1/values/{dep}/move"),
-        &claim(&dep, &dep, "c3"),
-        None,
-    )
-    .await;
+    let (status, _) = raw(&server, reqwest::Method::POST, &format!("/v1/values/{dep}/move"), &claim(&dep, &dep, "c3"), None).await;
     assert_eq!(status, 400);
     // No claim at all.
-    let (status, _) = raw(
-        &server,
-        reqwest::Method::POST,
-        "/v1/values/reg:reg_a/move",
-        &[],
-        None,
-    )
-    .await;
+    let (status, _) = raw(&server, reqwest::Method::POST, "/v1/values/reg:reg_a/move", &[], None).await;
     assert_eq!(status, 401);
 
     assert_eq!(slots_of(&server, "reg:reg_a").await, ["env:A"]);
@@ -1343,47 +1260,20 @@ async fn a_claim_for_another_source_or_a_non_deployment_destination_is_refused()
 async fn deleting_a_scope_needs_a_grant_over_the_whole_scope_and_refuses_deployments() {
     let server = start_with_access(false, Backend::Sqlite, Some(Arc::new(ClaimAuthorizer))).await;
     let dep = server.scope();
-    assert_eq!(
-        put_scope(&server, "link:lnk_1", "env:A", "a", &[]).await,
-        200
-    );
-    assert_eq!(
-        put_scope(&server, "link:lnk_2", "env:A", "a", &[]).await,
-        200
-    );
+    assert_eq!(put_scope(&server, "link:lnk_1", "env:A", "a", &[]).await, 200);
+    assert_eq!(put_scope(&server, "link:lnk_2", "env:A", "a", &[]).await, 200);
 
     // A token limited to some slots cannot empty the scope.
     let limited = [("x-slots", "env:A".to_string())];
-    let (status, _) = raw(
-        &server,
-        reqwest::Method::DELETE,
-        "/v1/values/link:lnk_1",
-        &limited,
-        None,
-    )
-    .await;
+    let (status, _) = raw(&server, reqwest::Method::DELETE, "/v1/values/link:lnk_1", &limited, None).await;
     assert_eq!(status, 403);
     assert_eq!(slots_of(&server, "link:lnk_1").await, ["env:A"]);
 
-    let (status, _) = raw(
-        &server,
-        reqwest::Method::DELETE,
-        "/v1/values/link:lnk_1",
-        &[],
-        None,
-    )
-    .await;
+    let (status, _) = raw(&server, reqwest::Method::DELETE, "/v1/values/link:lnk_1", &[], None).await;
     assert_eq!(status, 204);
     assert!(slots_of(&server, "link:lnk_1").await.is_empty());
     assert_eq!(slots_of(&server, "link:lnk_2").await, ["env:A"]);
 
-    let (status, _) = raw(
-        &server,
-        reqwest::Method::DELETE,
-        &format!("/v1/values/{dep}"),
-        &[],
-        None,
-    )
-    .await;
+    let (status, _) = raw(&server, reqwest::Method::DELETE, &format!("/v1/values/{dep}"), &[], None).await;
     assert_eq!(status, 400);
 }

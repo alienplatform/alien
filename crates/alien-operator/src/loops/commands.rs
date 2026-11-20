@@ -263,6 +263,7 @@ async fn lease_and_dispatch_target(
         deployment_id: deployment_id.to_string(),
         max_leases: target.max_leases,
         lease_seconds: target.lease_seconds,
+        wait_seconds: 0,
     };
 
     let commands_endpoint =
