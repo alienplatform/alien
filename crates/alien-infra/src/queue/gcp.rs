@@ -1700,7 +1700,7 @@ mod tests {
         *run.desired_resource_config_mut("tasks").unwrap() =
             alien_core::Resource::new(source.clone());
         run.update(source).unwrap();
-        let _ = run.run_until_terminal().await;
+        run.run_until_terminal().await.unwrap();
         assert!(
             !run.needs_update().unwrap(),
             "the project grant alone does not ask for an update outside a setup run"
@@ -1804,7 +1804,7 @@ mod tests {
 
         // The next release drops the setting.
         let mut run = build(serde_json::from_value(saved).unwrap()).await;
-        let _ = run.run_until_terminal().await;
+        run.run_until_terminal().await.unwrap();
         if run.needs_update().unwrap() {
             run.update(plain.clone()).unwrap();
             run.run_until_terminal().await.unwrap();
