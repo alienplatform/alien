@@ -427,6 +427,7 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::StorageLifecycleRulesCheck));
         registry.add_compile_time_check(Box::new(compile_time::StorageCorsCheck));
         registry.add_compile_time_check(Box::new(compile_time::StorageNotificationsCheck));
+        registry.add_compile_time_check(Box::new(compile_time::QueueDeadLetterCheck));
         registry.add_compile_time_check(Box::new(compile_time::VolumeBackupsCheck));
         registry.add_compile_time_check(Box::new(compile_time::HealthCheckStartupTimeoutCheck));
         registry.add_compile_time_check(Box::new(

@@ -442,6 +442,7 @@ export type { PublicEndpointTargetSettings } from "./public-endpoint-target-sett
 export type { PushProgress } from "./push-progress-schema.js";
 export type { QueueBatchConfig } from "./queue-batch-config-schema.js";
 export type { QueueBinding } from "./queue-binding-schema.js";
+export type { QueueDeadLetter } from "./queue-dead-letter-schema.js";
 export type { QueueHeartbeatData } from "./queue-heartbeat-data-schema.js";
 export type { QueueHeartbeatStatus } from "./queue-heartbeat-status-schema.js";
 export type { QueueMessage } from "./queue-message-schema.js";
@@ -1015,6 +1016,7 @@ export { PublicEndpointTargetSettingsSchema } from "./public-endpoint-target-set
 export { PushProgressSchema } from "./push-progress-schema.js";
 export { QueueBatchConfigSchema } from "./queue-batch-config-schema.js";
 export { QueueBindingSchema } from "./queue-binding-schema.js";
+export { QueueDeadLetterSchema } from "./queue-dead-letter-schema.js";
 export { QueueHeartbeatDataSchema } from "./queue-heartbeat-data-schema.js";
 export { QueueHeartbeatStatusSchema } from "./queue-heartbeat-status-schema.js";
 export { QueueMessageSchema } from "./queue-message-schema.js";

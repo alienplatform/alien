@@ -128,6 +128,12 @@ impl TfEmitter for GcpVerifierEmitter {
             management_label(ctx),
             &runtime_service_accounts,
             networks(ctx, registry)?,
+            ctx.stack.resources().any(|(_, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<alien_core::Queue>()
+                    .is_some_and(|queue| queue.dead_letter.is_some())
+            }),
         )?))
     }
 
@@ -644,6 +650,10 @@ const GCP_VERIFIER_SCHEDULE_PERMISSIONS: &[&str] = &["cloudscheduler.jobs.create
 const GCP_VERIFIER_QUEUE_CREATE_PERMISSIONS: &[&str] =
     &["pubsub.topics.create", "pubsub.subscriptions.create"];
 
+/// Read of the project's number, which names the Pub/Sub service agent a dead-letter grant may
+/// name. Only a stack with a dead-letter queue holds it.
+const GCP_VERIFIER_PROJECT_READ_PERMISSIONS: &[&str] = &["resourcemanager.projects.get"];
+
 const GCP_VERIFIER_QUEUE_PERMISSIONS: &[&str] = &[
     "pubsub.topics.getIamPolicy",
     "pubsub.topics.setIamPolicy",
@@ -673,6 +683,7 @@ fn gcp_verifier_blocks(
     management_label: Option<&str>,
     runtime_service_accounts: &[String],
     networks: VerifierNetworks,
+    dead_letter: bool,
 ) -> Result<Vec<Block>> {
     let image = pins
         .gcp_verifier_image
@@ -772,7 +783,12 @@ fn gcp_verifier_blocks(
             "signing_verifier_queues",
             "verifier_queues",
             "verifier: the install's queues",
-            GCP_VERIFIER_QUEUE_PERMISSIONS,
+            &GCP_VERIFIER_QUEUE_PERMISSIONS
+                .iter()
+                .copied()
+                // Only a stack with a dead-letter queue patches a subscription's policy.
+                .chain(dead_letter.then_some("pubsub.subscriptions.update"))
+                .collect::<Vec<_>>(),
         ),
         custom_role(
             "signing_verifier_queue_create",
@@ -983,6 +999,30 @@ fn gcp_verifier_blocks(
             ],
         ),
     ];
+    if dead_letter {
+        blocks.push(custom_role(
+            "signing_verifier_project_read",
+            "verifier_project_read",
+            "verifier: read the project number",
+            GCP_VERIFIER_PROJECT_READ_PERMISSIONS,
+        ));
+        blocks.push(resource_block(
+            "google_project_iam_member",
+            "signing_verifier_project_read",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    expr::traversal([
+                        "google_project_iam_custom_role",
+                        "signing_verifier_project_read",
+                        "name",
+                    ]),
+                ),
+                attr("member", member.clone()),
+            ],
+        ));
+    }
     // On the ledger secret alone: read its newest version and add one.
     for (label, role) in [
         (

@@ -1194,6 +1194,7 @@ fn handled() -> Vec<(&'static str, &'static str, Handling)> {
             F(&REPLICATION_REGIONS_INPUT),
         ),
         ("Postgres", "encryption_key", F(&DATABASE_ENCRYPTION_KEY)),
+        ("Queue", "dead_letter", F(&QUEUE_DEAD_LETTER)),
         ("Sandbox", "default_policy", F(&SANDBOX_POLICY)),
         ("Sandbox", "links", F(&SANDBOX_POLICY)),
         ("Sandbox", "image_user", F(&SANDBOX_IMAGE_USER)),

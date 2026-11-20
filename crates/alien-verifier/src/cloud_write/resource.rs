@@ -129,6 +129,10 @@ pub enum ResourceWrite {
     /// Pub/Sub create subscription, with the subscription as the client sends it (its topic only).
     #[serde(rename_all = "camelCase")]
     CreateSubscription { subscription: String, body: Value },
+    /// Pub/Sub patch of a queue's pull subscription: the request as the client sends it, which may
+    /// change only the dead-letter policy.
+    #[serde(rename_all = "camelCase")]
+    PatchSubscription { subscription: String, body: Value },
     /// Pub/Sub create of a worker's commands push subscription: it delivers to the worker's own
     /// Cloud Run service, as the worker's own service account when the worker is private.
     #[serde(rename_all = "camelCase")]
@@ -222,6 +226,7 @@ impl ResourceWrite {
             ResourceWrite::SetPublicAccessPrevention { .. } => "SetPublicAccessPrevention",
             ResourceWrite::CreateTopic { .. } => "CreateTopic",
             ResourceWrite::CreateSubscription { .. } => "CreateSubscription",
+            ResourceWrite::PatchSubscription { .. } => "PatchSubscription",
             ResourceWrite::CreateCommandSubscription { .. } => "CreateCommandSubscription",
             ResourceWrite::CreateSchedulerJob { .. } => "CreateSchedulerJob",
             ResourceWrite::SetTopicIamPolicy { .. } => "SetTopicIamPolicy",
@@ -510,6 +515,65 @@ pub fn check_aws_write(
                         )
                         .map_err(refused)?;
                     }
+                    // Only what the signed stack declares: the dead-letter target is a queue
+                    // of this stack, in this account and region, under this install's prefix.
+                    "RedrivePolicy" if value.is_empty() => {
+                        if signed_dead_letter(facts).is_some() {
+                            return Err(refused(
+                                "RedrivePolicy is cleared, but the signed stack gives the queue a \
+                                 dead-letter queue"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                    "RedrivePolicy" => {
+                        let document: Value = serde_json::from_str(value).map_err(|error| {
+                            refused(format!("the redrive policy is not JSON: {error}"))
+                        })?;
+                        let Some((target, max_attempts)) = signed_dead_letter(facts) else {
+                            return Err(refused(
+                                "RedrivePolicy is set, but the signed stack gives the queue no \
+                                 dead-letter queue"
+                                    .to_string(),
+                            ));
+                        };
+                        let expected_arn = format!(
+                            "arn:{}:sqs:{region}:{account}:{}",
+                            aws_partition(&region),
+                            aws_resource_policies::aws_prefixed_resource_name(
+                                &facts.place.prefix,
+                                &target
+                            )
+                        );
+                        let expected = serde_json::json!({
+                            "deadLetterTargetArn": expected_arn,
+                            "maxReceiveCount": max_attempts,
+                        });
+                        if document != expected {
+                            return Err(refused(format!(
+                                "the redrive policy is {document}, not {expected}, what the \
+                                 signed stack declares for queue '{}'",
+                                facts.resource_id
+                            )));
+                        }
+                    }
+                    "MessageRetentionPeriod" => {
+                        let is_target =
+                            !alien_core::queues_dead_lettering_to(&facts.stack, facts.resource_id)
+                                .is_empty();
+                        let expected = if is_target {
+                            alien_core::AWS_DEAD_LETTER_TARGET_RETENTION_SECONDS
+                        } else {
+                            alien_core::AWS_DEFAULT_RETENTION_SECONDS
+                        };
+                        if *value != expected.to_string() {
+                            return Err(refused(format!(
+                                "MessageRetentionPeriod {value} is not {expected}, what the \
+                                 signed stack gives queue '{}'",
+                                facts.resource_id
+                            )));
+                        }
+                    }
                     other => {
                         return Err(refused(format!(
                             "SetQueueAttributes sets attribute {other}, which is not one the \
@@ -549,6 +613,7 @@ pub fn check_aws_write(
         | ResourceWrite::SetPublicAccessPrevention { .. }
         | ResourceWrite::CreateTopic { .. }
         | ResourceWrite::CreateSubscription { .. }
+        | ResourceWrite::PatchSubscription { .. }
         | ResourceWrite::CreateCommandSubscription { .. }
         | ResourceWrite::CreateSchedulerJob { .. }
         | ResourceWrite::SetTopicIamPolicy { .. }
@@ -883,6 +948,18 @@ fn check_notification_document(
     Ok(())
 }
 
+/// The dead-letter target id and attempts the signed stack declares for the queue being written.
+fn signed_dead_letter(facts: &ResourceFacts<'_>) -> Option<(String, u32)> {
+    let queue = facts
+        .stack
+        .resources
+        .get(facts.resource_id)?
+        .config
+        .downcast_ref::<alien_core::Queue>()?;
+    let dead_letter = queue.dead_letter.as_ref()?;
+    Some((dead_letter.queue.id.clone(), dead_letter.max_attempts))
+}
+
 fn own_queue_name(facts: &ResourceFacts<'_>) -> String {
     aws_resource_policies::aws_prefixed_resource_name(&facts.place.prefix, facts.resource_id)
 }
@@ -1082,6 +1159,7 @@ pub async fn forward_aws_write(
         | ResourceWrite::SetPublicAccessPrevention { .. }
         | ResourceWrite::CreateTopic { .. }
         | ResourceWrite::CreateSubscription { .. }
+        | ResourceWrite::PatchSubscription { .. }
         | ResourceWrite::CreateCommandSubscription { .. }
         | ResourceWrite::CreateSchedulerJob { .. }
         | ResourceWrite::SetTopicIamPolicy { .. }
@@ -1170,11 +1248,15 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
                 .ok_or_else(|| refused("the subscription is not a JSON object"))?;
             if let Some(field) = fields
                 .keys()
-                .find(|key| !matches!(key.as_str(), "name" | "topic"))
+                .find(|key| !matches!(key.as_str(), "name" | "topic" | "deadLetterPolicy"))
             {
                 return Err(refused(format!(
-                    "CreateSubscription sets '{field}': a pull subscription has only its topic"
+                    "CreateSubscription sets '{field}': a pull subscription has only its topic \
+                     and the dead-letter policy the signed stack declares"
                 )));
+            }
+            if fields.contains_key("deadLetterPolicy") {
+                check_dead_letter_policy(facts, &project, fields.get("deadLetterPolicy"))?;
             }
             if fields.get("topic").and_then(Value::as_str)
                 != Some(format!("projects/{project}/topics/{topic}").as_str())
@@ -1189,6 +1271,43 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
                 }
             }
             Ok(())
+        }
+        ResourceWrite::PatchSubscription { subscription, body } => {
+            facts.queue()?;
+            if *subscription != gcp_subscription_name(facts) {
+                return Err(refused(format!(
+                    "PatchSubscription names {subscription}, not {}",
+                    gcp_subscription_name(facts)
+                )));
+            }
+            let project = gcp_project(facts)?;
+            let request = body
+                .as_object()
+                .ok_or_else(|| refused("the subscription patch is not a JSON object"))?;
+            if let Some(field) = request
+                .keys()
+                .find(|key| !matches!(key.as_str(), "subscription" | "updateMask"))
+            {
+                return Err(refused(format!("PatchSubscription sets '{field}'")));
+            }
+            if request.get("updateMask").and_then(Value::as_str) != Some("deadLetterPolicy") {
+                return Err(refused(
+                    "PatchSubscription's update mask is not deadLetterPolicy alone",
+                ));
+            }
+            let patched = request
+                .get("subscription")
+                .and_then(Value::as_object)
+                .ok_or_else(|| refused("the subscription patch has no subscription"))?;
+            if let Some(field) = patched
+                .keys()
+                .find(|key| key.as_str() != "deadLetterPolicy")
+            {
+                return Err(refused(format!(
+                    "PatchSubscription sets '{field}': only the dead-letter policy may change"
+                )));
+            }
+            check_dead_letter_policy(facts, &project, patched.get("deadLetterPolicy"))
         }
         ResourceWrite::CreateCommandSubscription { subscription, body } => {
             check_command_subscription(facts, subscription, body, None)
@@ -1221,6 +1340,59 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
             Ok(())
         }
         other => Err(refused(format!("GCP takes no {} write", other.operation()))),
+    }
+}
+
+/// A subscription's dead-letter policy is exactly what the signed stack declares for the queue:
+/// the target queue's topic in this project under this install's prefix, and its attempts. No
+/// policy is accepted only when the signed stack gives the queue none.
+fn check_dead_letter_policy(
+    facts: &ResourceFacts<'_>,
+    project: &str,
+    policy: Option<&Value>,
+) -> Result<()> {
+    match (policy, signed_dead_letter(facts)) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(refused(
+            "the dead-letter policy is cleared, but the signed stack gives the queue one",
+        )),
+        (Some(_), None) => Err(refused(
+            "a dead-letter policy is set, but the signed stack gives the queue none",
+        )),
+        (Some(policy), Some((target, max_attempts))) => {
+            let expected = json!({
+                "deadLetterTopic": format!(
+                    "projects/{project}/topics/{}-{target}",
+                    facts.place.prefix
+                ),
+                "maxDeliveryAttempts": max_attempts,
+            });
+            if *policy == expected {
+                Ok(())
+            } else {
+                Err(refused(format!(
+                    "the dead-letter policy is {policy}, not {expected}, what the signed stack \
+                     declares for queue '{}'",
+                    facts.resource_id
+                )))
+            }
+        }
+    }
+}
+
+fn pubsub_agent_binding(
+    role: &str,
+    agent: &str,
+    kind: alien_permissions::generators::gcp_runtime::GcpBindingResourceKind,
+) -> alien_permissions::generators::gcp_runtime::GcpIamBinding {
+    use alien_permissions::generators::gcp_runtime::{GcpBindingTargetScope, GcpIamBinding};
+    GcpIamBinding {
+        role: role.to_string(),
+        members: vec![format!("serviceAccount:{agent}")],
+        target: GcpBindingTargetScope::CurrentResource,
+        target_resource_name: None,
+        resource_kind: Some(kind),
+        condition: None,
     }
 }
 
@@ -1758,13 +1930,23 @@ fn own_topic(facts: &ResourceFacts<'_>, topic: &str, operation: &str) -> Result<
 /// Check a GCP write against `current`, the IAM policy the bucket holds now: a new policy may
 /// grant only what the bucket already holds, what the signed stack grants this bucket (derived
 /// from the stack and this install alone) or the public read the stack declares.
+/// The service agents of the project that a write may grant, when the check has looked them up.
+#[derive(Clone, Copy, Default)]
+pub struct GcpAgents<'a> {
+    /// The Cloud Storage service agent's email, for a topic that takes storage notifications.
+    pub storage: Option<&'a str>,
+    /// The Pub/Sub service agent's email, for a dead-letter target topic or source subscription.
+    pub pubsub: Option<&'a str>,
+}
+
 pub fn check_gcp_state(
     facts: &ResourceFacts<'_>,
     write: &ResourceWrite,
     current: &Value,
     region: &str,
-    storage_agent: Option<&str>,
+    agents: GcpAgents<'_>,
 ) -> Result<()> {
+    let storage_agent = agents.storage;
     use alien_permissions::generators::gcp_runtime::{
         GcpBindingResourceKind, GcpBindingTargetScope, GcpIamBinding,
     };
@@ -1815,19 +1997,40 @@ pub fn check_gcp_state(
                     });
                 }
             }
+            // ...and the project's Pub/Sub service agent publishes the dead letters of the
+            // queues the signed stack points here.
+            if !alien_core::queues_dead_lettering_to(&facts.stack, facts.resource_id).is_empty() {
+                if let Some(agent) = agents.pubsub {
+                    derived.push(pubsub_agent_binding(
+                        "roles/pubsub.publisher",
+                        agent,
+                        GcpBindingResourceKind::PubsubTopic,
+                    ));
+                }
+            }
             check_bucket_iam(policy, current, &derived, false).map_err(refused)
         }
         ResourceWrite::SetSubscriptionIamPolicy {
             subscription,
             policy,
         } => {
-            let derived: Vec<GcpIamBinding> = derive("queue", &gcp_topic_name(facts))?
+            let mut derived: Vec<GcpIamBinding> = derive("queue", &gcp_topic_name(facts))?
                 .into_iter()
                 .filter(|binding| {
                     binding.resource_kind == Some(GcpBindingResourceKind::PubsubSubscription)
                 })
                 .collect();
             let _ = subscription;
+            // ...and acknowledges on the subscription of a queue the signed stack dead-letters.
+            if signed_dead_letter(facts).is_some() {
+                if let Some(agent) = agents.pubsub {
+                    derived.push(pubsub_agent_binding(
+                        "roles/pubsub.subscriber",
+                        agent,
+                        GcpBindingResourceKind::PubsubSubscription,
+                    ));
+                }
+            }
             check_bucket_iam(policy, current, &derived, false).map_err(refused)
         }
         _ => Ok(()),
@@ -2286,6 +2489,10 @@ pub async fn forward_gcp_write(gcp: &crate::gcp::Gcp, write: &ResourceWrite) -> 
         ResourceWrite::CreateSubscription { subscription, body } => {
             gcp.create_pubsub("subscriptions", subscription, body)
                 .await?;
+            Ok(json!({ "subscription": subscription }))
+        }
+        ResourceWrite::PatchSubscription { subscription, body } => {
+            gcp.patch_pubsub_subscription(subscription, body).await?;
             Ok(json!({ "subscription": subscription }))
         }
         ResourceWrite::CreateCommandSubscription { subscription, body } => {

@@ -1,0 +1,26 @@
+{
+  "id": "worker/dead-letter",
+  "description": "Allows reconciling the Pub/Sub service agent's subscriber grant on a worker's queue push subscriptions",
+  "platforms": {
+    "gcp": [
+      {
+        // Granted to management only when the trigger queue is Live. With a Frozen trigger queue
+        // this set is not attached: setup grants the Pub/Sub service agent subscriber for the
+        // project instead. (A stack with any Live queue already holds
+        // pubsub.subscriptions.setIamPolicy project-wide through queue/provision.)
+        // A worker's push subscription for a queue trigger is named <stack prefix>-<worker>-<queue>.
+        // Pub/Sub does not honor an IAM condition on a subscription's name for getIamPolicy and
+        // setIamPolicy (a real project answered 403 with a name condition and succeeded without
+        // one), so, as in queue/provision, the project is the boundary. Creating and patching the
+        // subscription is already in worker/provision.
+        "grant": {
+          "permissions": ["pubsub.subscriptions.getIamPolicy", "pubsub.subscriptions.setIamPolicy"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ]
+  }
+}

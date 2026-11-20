@@ -26,6 +26,7 @@ pub mod network_required;
 pub mod permission_profiles_exist;
 pub mod permission_sets_exist;
 pub mod public_worker_lifecycle;
+pub mod queue_dead_letter;
 pub mod redis_persistence;
 pub mod resource_enabled_valid;
 pub mod resource_id_pattern;
@@ -72,6 +73,7 @@ pub use network_required::{
 pub use permission_profiles_exist::PermissionProfilesExistCheck;
 pub use permission_sets_exist::PermissionSetsExistCheck;
 pub use public_worker_lifecycle::PublicWorkerLifecycleCheck;
+pub use queue_dead_letter::QueueDeadLetterCheck;
 pub use redis_persistence::RedisPersistenceCheck;
 pub use resource_enabled_valid::ResourceEnabledValidCheck;
 pub use resource_id_pattern::ResourceIdPatternCheck;

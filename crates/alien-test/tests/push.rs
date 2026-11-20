@@ -432,3 +432,76 @@ e2e_test_context!(
 async fn push_azure_storage_notifications(ctx: &mut AzureNotifications) {
     common::storage_notifications::check_delivery(&ctx.ctx.deployment).await;
 }
+
+e2e_test_context!(
+    AwsQueueDeadLetter,
+    Platform::Aws,
+    DeploymentModel::Push,
+    TestApp::QueueDeadLetter
+);
+
+#[test_context(AwsQueueDeadLetter)]
+#[tokio::test]
+async fn push_aws_queue_dead_letter(ctx: &mut AwsQueueDeadLetter) {
+    common::queue_dead_letter::check(&ctx.ctx, "m", true).await;
+}
+
+e2e_test_context!(
+    GcpQueueDeadLetter,
+    Platform::Gcp,
+    DeploymentModel::Push,
+    TestApp::QueueDeadLetter
+);
+
+#[test_context(GcpQueueDeadLetter)]
+#[tokio::test]
+async fn push_gcp_queue_dead_letter(ctx: &mut GcpQueueDeadLetter) {
+    common::queue_dead_letter::check(&ctx.ctx, "m", false).await;
+}
+
+/// The same stack with Live queues (`DLQ_E2E_LIVE=1`): the controllers, not setup, own the
+/// queues and the Pub/Sub grants.
+struct GcpLiveQueueDeadLetter {
+    ctx: alien_test::TestContext,
+}
+
+impl test_context::AsyncTestContext for GcpLiveQueueDeadLetter {
+    async fn setup() -> Self {
+        alien_test::e2e::init_tracing();
+        std::env::set_var("DLQ_E2E_LIVE", "1");
+        let ctx = alien_test::e2e::setup(
+            Platform::Gcp,
+            DeploymentModel::Push,
+            TestApp::QueueDeadLetter,
+        )
+        .await
+        .expect("GcpLiveQueueDeadLetter setup failed");
+        Self { ctx }
+    }
+
+    async fn teardown(self) {
+        self.ctx
+            .cleanup()
+            .await
+            .expect("E2E cleanup must reach a safe terminal state");
+    }
+}
+
+#[test_context(GcpLiveQueueDeadLetter)]
+#[tokio::test]
+async fn push_gcp_live_queue_dead_letter(ctx: &mut GcpLiveQueueDeadLetter) {
+    common::queue_dead_letter::check(&ctx.ctx, "m", false).await;
+}
+
+e2e_test_context!(
+    AzureQueueDeadLetter,
+    Platform::Azure,
+    DeploymentModel::Push,
+    TestApp::QueueDeadLetter
+);
+
+#[test_context(AzureQueueDeadLetter)]
+#[tokio::test]
+async fn push_azure_queue_dead_letter(ctx: &mut AzureQueueDeadLetter) {
+    common::queue_dead_letter::check(&ctx.ctx, "m", true).await;
+}
