@@ -48,8 +48,69 @@ pub fn protect(binary: &Path, metadata: &Path) -> io::Result<()> {
     bind(binary, true)?;
     bind(metadata, true)?;
     for path in READ_ONLY_KERNEL_PATHS {
-        read_only_tree(Path::new(path))
-            .map_err(|error| io::Error::new(error.kind(), format!("{path}: {error}")))?;
+        match read_only_tree(Path::new(path)) {
+            // Not every kernel has every entry (no IRQ or bus directories, no /sys).
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            result => {
+                result.map_err(|error| io::Error::new(error.kind(), format!("{path}: {error}")))?
+            }
+        }
+    }
+    for path in MASKED_KERNEL_PATHS {
+        mask(Path::new(path))
+            .map_err(|error| io::Error::new(error.kind(), format!("mask {path}: {error}")))?;
+    }
+    Ok(())
+}
+
+/// Kernel information the image has no use for and container runtimes hide: memory (`kcore`), the
+/// key list, timer and scheduler internals, and hardware tables. A file is covered by `/dev/null`,
+/// a directory by an empty read-only tmpfs; one the kernel does not have is skipped.
+const MASKED_KERNEL_PATHS: [&str; 10] = [
+    "/proc/kcore",
+    "/proc/keys",
+    "/proc/timer_list",
+    "/proc/latency_stats",
+    "/proc/sched_debug",
+    "/proc/acpi",
+    "/proc/scsi",
+    "/proc/asound",
+    "/sys/firmware",
+    "/sys/devices/virtual/powercap",
+];
+
+fn mask(path: &Path) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let target = CString::new(path.as_os_str().as_bytes())?;
+    let result = if metadata.is_dir() {
+        // SAFETY: valid NUL-terminated strings.
+        unsafe {
+            libc::mount(
+                c"tmpfs".as_ptr(),
+                target.as_ptr(),
+                c"tmpfs".as_ptr(),
+                libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+                c"size=0,mode=555".as_ptr().cast(),
+            )
+        }
+    } else {
+        // SAFETY: valid NUL-terminated strings.
+        unsafe {
+            libc::mount(
+                c"/dev/null".as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                libc::MS_BIND,
+                std::ptr::null(),
+            )
+        }
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
     }
     Ok(())
 }
@@ -64,7 +125,15 @@ pub fn protect(binary: &Path, metadata: &Path) -> io::Result<()> {
 /// `/sys` too: root-writable files there act on the whole VM as well (`kernel/uevent_helper` names
 /// a program the kernel runs as root on every device event; module parameters, memory settings).
 /// The agent writes nothing below `/sys` after this point (the guest cgroup is set up before).
-const READ_ONLY_KERNEL_PATHS: [&str; 3] = ["/proc/sys", "/proc/sysrq-trigger", "/sys"];
+/// And the other `/proc` entries runtimes make read-only: bus, filesystem and IRQ settings.
+const READ_ONLY_KERNEL_PATHS: [&str; 6] = [
+    "/proc/sys",
+    "/proc/sysrq-trigger",
+    "/sys",
+    "/proc/bus",
+    "/proc/fs",
+    "/proc/irq",
+];
 
 /// Binds `path` over itself with every mount below it, then makes each of those mounts read-only.
 /// Recursive, because a user namespace refuses a plain bind that would uncover locked mounts
@@ -369,6 +438,24 @@ for point, options in visible.items():
     if point == '/sys' or point.startswith('/sys/'):
         assert 'ro' in options, (point, options)
 assert pathlib.Path('/sys/class/net/lo/mtu').read_text().strip()
+# The other runtime read-only entries, where the kernel has them, and the masked ones.
+for path in ['/proc/irq/default_smp_affinity', '/proc/fs/nfsd/threads', '/proc/bus/pci/devices']:
+    if not os.path.exists(path): continue
+    try: fd = os.open(path, os.O_WRONLY)
+    except OSError as e: assert e.errno == errno.EROFS, (path, e)
+    else:
+        os.close(fd)
+        raise AssertionError(f'root opened {path} for writing')
+for path in ['/proc/kcore', '/proc/keys', '/proc/timer_list', '/proc/sched_debug']:
+    if not os.path.exists(path): continue
+    assert os.stat(path).st_rdev == os.stat('/dev/null').st_rdev, (path, 'not masked')
+    assert open(path, 'rb').read() == b'', path
+for path in ['/proc/acpi', '/proc/scsi', '/sys/firmware']:
+    if not os.path.isdir(path): continue
+    assert os.listdir(path) == [], (path, os.listdir(path))
+    try: os.mkdir(path + '/x')
+    except OSError as e: assert e.errno in [errno.EROFS, errno.EACCES], (path, e)
+    else: raise AssertionError(f'root wrote into masked {path}')
 # The inherited descriptor is CLOEXEC, and root cannot reopen the agent's FD.
 try: os.open(f'/proc/{sys.argv[4]}/fd/{sys.argv[5]}', os.O_WRONLY)
 except OSError as e: assert e.errno in [errno.EACCES, errno.EPERM], e
