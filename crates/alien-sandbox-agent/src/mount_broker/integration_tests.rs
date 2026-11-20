@@ -1,4 +1,4 @@
-//! The broker against a real kernel NFS server, in a disposable privileged container
+//! The broker against a real NFS server, in a disposable privileged container
 //! (`scripts/test-sandbox-mount-broker.sh`). One test: the broker is forked once per process.
 
 use std::{
@@ -132,7 +132,7 @@ while True:
 "#;
 
 #[test]
-#[ignore = "requires a disposable privileged container with cgroup2, a kernel NFS server exporting a directory with hello.txt as / on 127.0.0.1:2049, python3, and the agent binary at /agent; run by scripts/test-sandbox-mount-broker.sh"]
+#[ignore = "requires a disposable privileged container with cgroup2, an NFSv4.2 server (knfsd or nfs-ganesha) exporting a directory with hello.txt as / on 127.0.0.1:2049, python3, and the agent binary at /agent; run by scripts/test-sandbox-mount-broker.sh"]
 fn broker_allows_declared_mounts_and_refuses_everything_else() {
     // An agent started without a capability the broker needs is told which one.
     missing_capability_is_named(21, "start", "the broker needs CAP_SYS_ADMIN");
