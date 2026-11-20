@@ -376,16 +376,62 @@ fn drain_late_acks(socket: RawFd) {
 
 fn wait_ack(socket: RawFd, what: &str) -> io::Result<String> {
     let mut ack = [0u8; 2048];
-    // SAFETY: reading into a buffer we own, at most its length.
-    let n = unsafe { libc::recv(socket, ack.as_mut_ptr().cast(), ack.len(), 0) };
-    if n < 0 {
+    // A receive timeout makes the kernel answer a signal with EINTR even for SA_RESTART handlers
+    // (the agent's runtime takes SIGCHLD for its own children): retry within the same timeout.
+    let within = receive_timeout_of(socket)?;
+    let started = Instant::now();
+    loop {
+        // SAFETY: reading into a buffer we own, at most its length.
+        let n = unsafe { libc::recv(socket, ack.as_mut_ptr().cast(), ack.len(), 0) };
+        if n >= 0 {
+            receive_timeout(socket, &to_timeval(within))?;
+            return ack_result(&ack[..n as usize], what);
+        }
         let error = io::Error::last_os_error();
+        let left = within.saturating_sub(started.elapsed());
+        if error.kind() == io::ErrorKind::Interrupted && (within.is_zero() || !left.is_zero()) {
+            if !within.is_zero() {
+                // At least one microsecond: zero would mean no timeout at all.
+                receive_timeout(socket, &to_timeval(left.max(Duration::from_micros(1))))?;
+            }
+            continue;
+        }
+        receive_timeout(socket, &to_timeval(within))?;
         return Err(io::Error::new(
             error.kind(),
             format!("the mount broker did not answer {what}: {error}"),
         ));
     }
-    ack_result(&ack[..n as usize], what)
+}
+
+fn to_timeval(duration: Duration) -> libc::timeval {
+    libc::timeval {
+        tv_sec: duration.as_secs() as libc::time_t,
+        tv_usec: duration.subsec_micros() as libc::suseconds_t,
+    }
+}
+
+/// The socket's current receive timeout (zero: none).
+fn receive_timeout_of(socket: RawFd) -> io::Result<Duration> {
+    let mut value = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    let mut len = std::mem::size_of::<libc::timeval>() as libc::socklen_t;
+    // SAFETY: reading the option into a value we own, with its size.
+    if unsafe {
+        libc::getsockopt(
+            socket,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            (&mut value as *mut libc::timeval).cast(),
+            &mut len,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(Duration::from_secs(value.tv_sec as u64) + Duration::from_micros(value.tv_usec as u64))
 }
 
 /// `k` followed by what the broker reports (may be empty), or `e` followed by its reason.
@@ -1675,6 +1721,50 @@ mod tests {
             inheritable: dir.join("inheritable"),
             modprobe: dir.join("modprobe"),
         }
+    }
+
+    /// A signal while the agent waits for the broker (its runtime's SIGCHLD, say) is not an
+    /// answer: the wait goes on within its timeout.
+    #[test]
+    fn a_signal_does_not_end_the_wait_for_the_broker() {
+        extern "C" fn ignore(_: libc::c_int) {}
+        // SAFETY: a no-op handler with SA_RESTART, as the agent's runtime installs.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = ignore as usize;
+            action.sa_flags = libc::SA_RESTART;
+            libc::sigaction(libc::SIGUSR2, &action, std::ptr::null_mut());
+        }
+        let (agent, broker) = UnixStream::pair().unwrap();
+        receive_timeout(
+            agent.as_raw_fd(),
+            &libc::timeval {
+                tv_sec: 5,
+                tv_usec: 0,
+            },
+        )
+        .unwrap();
+        // SAFETY: our own thread's handle.
+        let waiter = unsafe { libc::pthread_self() } as usize;
+        let answer = std::thread::spawn(move || {
+            for _ in 0..5 {
+                std::thread::sleep(Duration::from_millis(100));
+                // SAFETY: signalling the waiting thread, which outlives this one (joined below).
+                unsafe { libc::pthread_kill(waiter as libc::pthread_t, libc::SIGUSR2) };
+            }
+            (&broker).write_all(b"ksealed").unwrap();
+            broker
+        });
+        let started = Instant::now();
+        let result = wait_ack(agent.as_raw_fd(), "to start");
+        let _broker = answer.join().unwrap();
+        assert_eq!(result.unwrap(), "sealed");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // The timeout the caller set is the socket's again.
+        assert_eq!(
+            receive_timeout_of(agent.as_raw_fd()).unwrap(),
+            Duration::from_secs(5)
+        );
     }
 
     #[test]
