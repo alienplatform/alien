@@ -3504,6 +3504,17 @@
           "currentState": {
             "description": "Authoritative deployment state from the manager.\n\nReturned when a pull deployment attaches with an empty local state while\nthe manager already has imported or previously reconciled state."
           },
+          "domainMetadata": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DomainMetadata",
+                "description": "The deployment's current domain metadata, on every sync, apart from\nthe target: a certificate issued while an operation runs reaches the\nOperator without a new claim. Older Operators ignore the field."
+              }
+            ]
+          },
           "executionClaim": {
             "oneOf": [
               {
@@ -8016,6 +8027,18 @@
           }
         }
       },
+      "CertificateStatus": {
+        "type": "string",
+        "description": "Certificate status in the certificate lifecycle",
+        "enum": [
+          "pending",
+          "issued",
+          "renewing",
+          "renewal-failed",
+          "failed",
+          "deleting"
+        ]
+      },
       "ClientApi": {
         "type": "string",
         "description": "A public API accepted from an application client.",
@@ -10003,6 +10026,51 @@
               "null"
             ],
             "description": "The release the deployment is sent: the pin, else the channel's release."
+          }
+        }
+      },
+      "DnsRecordStatus": {
+        "type": "string",
+        "description": "DNS record status in the DNS lifecycle",
+        "enum": [
+          "pending",
+          "active",
+          "updating",
+          "deleting",
+          "failed"
+        ]
+      },
+      "DomainMetadata": {
+        "type": "object",
+        "description": "Domain metadata for auto-managed public resources (no private keys).",
+        "required": [
+          "baseDomain",
+          "publicSubdomain",
+          "hostedZoneId",
+          "resources"
+        ],
+        "properties": {
+          "baseDomain": {
+            "type": "string",
+            "description": "Base domain for auto-generated domains (e.g., \"vpc.direct\")."
+          },
+          "hostedZoneId": {
+            "type": "string",
+            "description": "Hosted zone ID for DNS records."
+          },
+          "publicSubdomain": {
+            "type": "string",
+            "description": "Deployment public subdomain (e.g., \"k8f2j3\")."
+          },
+          "resources": {
+            "type": "object",
+            "description": "Metadata per resource ID.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ResourceDomainInfo"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -16138,6 +16206,62 @@
         "description": "Managed certificate issuance settings.",
         "additionalProperties": false
       },
+      "ManagedDomainInfo": {
+        "type": "object",
+        "description": "Certificate and DNS metadata for a managed hostname.\n\nIncludes decrypted certificate data for issued certificates.\nPrivate keys are deployment-scoped secrets (like environment variables).",
+        "required": [
+          "fqdn",
+          "certificateId",
+          "certificateStatus",
+          "dnsStatus"
+        ],
+        "properties": {
+          "certificateChain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full PEM certificate chain (only present if status is \"issued\")."
+          },
+          "certificateId": {
+            "type": "string",
+            "description": "Certificate ID (for tracking/logging)."
+          },
+          "certificateStatus": {
+            "$ref": "#/components/schemas/CertificateStatus",
+            "description": "Current certificate status"
+          },
+          "dnsError": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last DNS error message. Present when DNS previously failed, even if status\nwas reset to pending for retry. Used to surface actionable error context\nin WaitingForDns failure messages."
+          },
+          "dnsStatus": {
+            "$ref": "#/components/schemas/DnsRecordStatus",
+            "description": "Current DNS record status"
+          },
+          "fqdn": {
+            "type": "string",
+            "description": "Fully qualified domain name."
+          },
+          "issuedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO 8601 timestamp when certificate was issued (for renewal detection)."
+          },
+          "privateKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Decrypted private key (only present if status is \"issued\")."
+          }
+        }
+      },
       "ManagedRuntimeEventInvolvedObject": {
         "type": "object",
         "properties": {
@@ -20566,6 +20690,79 @@
           }
         },
         "additionalProperties": false
+      },
+      "ResourceDomainInfo": {
+        "type": "object",
+        "description": "Certificate and DNS metadata for a public resource.\n\nThe direct fields describe the primary endpoint hostname. `endpoints`\ncontains endpoint-scoped metadata keyed by endpoint name. `aliases` contains\nadditional managed hostnames that route directly to the primary endpoint.",
+        "required": [
+          "fqdn",
+          "certificateId",
+          "certificateStatus",
+          "dnsStatus"
+        ],
+        "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedDomainInfo"
+            },
+            "description": "Additional managed hostnames for the resource."
+          },
+          "certificateChain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full PEM certificate chain (only present if status is \"issued\")."
+          },
+          "certificateId": {
+            "type": "string",
+            "description": "Certificate ID (for tracking/logging)."
+          },
+          "certificateStatus": {
+            "$ref": "#/components/schemas/CertificateStatus",
+            "description": "Current certificate status"
+          },
+          "dnsError": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last DNS error message."
+          },
+          "dnsStatus": {
+            "$ref": "#/components/schemas/DnsRecordStatus",
+            "description": "Current DNS record status"
+          },
+          "endpoints": {
+            "type": "object",
+            "description": "Endpoint-scoped metadata keyed by endpoint name.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ManagedDomainInfo"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "fqdn": {
+            "type": "string",
+            "description": "Fully qualified domain name."
+          },
+          "issuedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO 8601 timestamp when certificate was issued (for renewal detection)."
+          },
+          "privateKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Decrypted private key (only present if status is \"issued\")."
+          }
+        }
       },
       "ResourceEntry": {
         "type": "object",

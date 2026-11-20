@@ -547,6 +547,33 @@ async fn sync_with_manager(
     if let (Some((manager_url, audience)), Some(target)) = (&identity, durable_target.as_mut()) {
         sanitize_identity_config(&mut target.config, manager_url, audience)?;
     }
+    // Certificate and DNS status are live platform data: a certificate issued
+    // during an operation reaches the Operator here, apart from the target
+    // (which keeps the claim's immutable inputs). Only the live fields of
+    // hostnames the stored metadata already has are merged, into the stored
+    // target (so a replay keeps them) and into the stored config the running
+    // deployment reads. Hostnames and everything structural change only with a
+    // target. A protected Operator takes no metadata from a manager, and the
+    // manager sends none for it.
+    if !state.config.is_protected() {
+        if let Some(live) = sync_response.domain_metadata.as_ref() {
+            if let Some(target) = durable_target.as_mut() {
+                if let Some(stored) = target.config.domain_metadata.as_mut() {
+                    merge_live_domain_status(stored, live);
+                }
+            }
+            if let Some(mut config) = state.db.get_deployment_config().await? {
+                let changed = config
+                    .domain_metadata
+                    .as_mut()
+                    .is_some_and(|stored| merge_live_domain_status(stored, live));
+                if changed {
+                    state.db.set_deployment_config(&config).await?;
+                    info!("Updated the deployment's certificate and DNS status from the manager");
+                }
+            }
+        }
+    }
     // A claim and its target are one durable receipt. Persist them in one
     // SQLite value before changing deployment state/config so a crash can
     // resume the exact immutable target rather than asking for "latest".
@@ -1287,10 +1314,140 @@ pub(crate) async fn accept_target(
     Ok(())
 }
 
+/// Copy the live certificate and DNS fields of `live` onto the same hostnames
+/// of `stored`, and nothing else. A hostname matches by resource id and primary
+/// fqdn, by endpoint name and fqdn, or by alias fqdn; a hostname `stored` does
+/// not have is ignored. Returns whether anything changed.
+fn merge_live_domain_status(
+    stored: &mut alien_core::DomainMetadata,
+    live: &alien_core::DomainMetadata,
+) -> bool {
+    use alien_core::{ManagedDomainInfo as Managed, ResourceDomainInfo as Resource};
+
+    /// The six fields that change while a hostname's certificate and DNS settle.
+    #[derive(PartialEq)]
+    struct Live {
+        certificate_status: alien_core::CertificateStatus,
+        dns_status: alien_core::DnsRecordStatus,
+        dns_error: Option<String>,
+        certificate_chain: Option<String>,
+        private_key: Option<String>,
+        issued_at: Option<String>,
+    }
+    impl Live {
+        fn of_managed(info: &Managed) -> Self {
+            Self {
+                certificate_status: info.certificate_status,
+                dns_status: info.dns_status,
+                dns_error: info.dns_error.clone(),
+                certificate_chain: info.certificate_chain.clone(),
+                private_key: info.private_key.clone(),
+                issued_at: info.issued_at.clone(),
+            }
+        }
+        fn of_resource(info: &Resource) -> Self {
+            Self {
+                certificate_status: info.certificate_status,
+                dns_status: info.dns_status,
+                dns_error: info.dns_error.clone(),
+                certificate_chain: info.certificate_chain.clone(),
+                private_key: info.private_key.clone(),
+                issued_at: info.issued_at.clone(),
+            }
+        }
+    }
+    fn merge_managed(to: &mut Managed, from: &Managed) -> bool {
+        let live = Live::of_managed(from);
+        if to.fqdn != from.fqdn || Live::of_managed(to) == live {
+            return false;
+        }
+        to.certificate_status = live.certificate_status;
+        to.dns_status = live.dns_status;
+        to.dns_error = live.dns_error;
+        to.certificate_chain = live.certificate_chain;
+        to.private_key = live.private_key;
+        to.issued_at = live.issued_at;
+        true
+    }
+
+    let mut changed = false;
+    for (id, to) in stored.resources.iter_mut() {
+        let Some(from) = live.resources.get(id) else {
+            continue;
+        };
+        let live_fields = Live::of_resource(from);
+        if to.fqdn == from.fqdn && Live::of_resource(to) != live_fields {
+            to.certificate_status = live_fields.certificate_status;
+            to.dns_status = live_fields.dns_status;
+            to.dns_error = live_fields.dns_error;
+            to.certificate_chain = live_fields.certificate_chain;
+            to.private_key = live_fields.private_key;
+            to.issued_at = live_fields.issued_at;
+            changed = true;
+        }
+        for (name, endpoint) in to.endpoints.iter_mut() {
+            if let Some(live_endpoint) = from.endpoints.get(name) {
+                changed |= merge_managed(endpoint, live_endpoint);
+            }
+        }
+        for alias in to.aliases.iter_mut() {
+            if let Some(live_alias) = from.aliases.iter().find(|a| a.fqdn == alias.fqdn) {
+                changed |= merge_managed(alias, live_alias);
+            }
+        }
+    }
+    changed
+}
+
+/// Remove the live certificate and DNS fields from the serialized domain
+/// metadata of a configuration, leaving every hostname and structural field.
+fn strip_live_domain_status(config: &mut serde_json::Value) {
+    const LIVE: [&str; 6] = [
+        "certificateStatus",
+        "certificateChain",
+        "privateKey",
+        "issuedAt",
+        "dnsStatus",
+        "dnsError",
+    ];
+    fn strip(value: &mut serde_json::Value) {
+        if let Some(object) = value.as_object_mut() {
+            for key in LIVE {
+                object.remove(key);
+            }
+        }
+    }
+    let Some(resources) = config
+        .get_mut("domainMetadata")
+        .and_then(|metadata| metadata.get_mut("resources"))
+        .and_then(|resources| resources.as_object_mut())
+    else {
+        return;
+    };
+    for resource in resources.values_mut() {
+        strip(resource);
+        if let Some(endpoints) = resource
+            .get_mut("endpoints")
+            .and_then(|value| value.as_object_mut())
+        {
+            endpoints.values_mut().for_each(strip);
+        }
+        if let Some(aliases) = resource
+            .get_mut("aliases")
+            .and_then(|value| value.as_array_mut())
+        {
+            aliases.iter_mut().for_each(strip);
+        }
+    }
+}
+
 /// Whether a target re-sent by the manager is the one a stored approval
 /// record covers: the release and the whole configuration are equal as
 /// serialized values. Only fields the manager regenerates on every sync are
 /// left out:
+/// - the live certificate and DNS fields of `domainMetadata` (status, chain,
+///   key, issue time, DNS status and error), which the manager updates between
+///   claims; its hostnames and structure stay compared;
 /// - `deploymentToken`: the Operator's own bearer token, taken from the sync
 ///   request's header;
 /// - `environmentVariables.createdAt`: the snapshot's creation timestamp (its
@@ -1312,6 +1469,9 @@ fn same_target(
         config: &alien_core::DeploymentConfig,
     ) -> Option<serde_json::Value> {
         let mut config = serde_json::to_value(config).ok()?;
+        // Live platform data (a certificate issued mid-operation), not part of
+        // what was approved; hostnames still are.
+        strip_live_domain_status(&mut config);
         let object = config.as_object_mut()?;
         object.remove("deploymentToken");
         if let Some(snapshot) = object
@@ -2360,8 +2520,9 @@ mod tests {
     use super::{
         accept_target_release, apply_manager_control_signals, apply_manager_control_state,
         create_authenticated_client, dynamic_containers_capability,
-        is_uninitialized_deployment_state, operation_command_address_capability,
-        report_operator_capabilities, reported_operations_config, sync_with_manager,
+        is_uninitialized_deployment_state, merge_live_domain_status,
+        operation_command_address_capability, report_operator_capabilities,
+        reported_operations_config, same_target, strip_live_domain_status, sync_with_manager,
         InstalledConfig,
     };
     use crate::{db::OperatorDb, OperatorConfig, OperatorState, SyncConfig};
@@ -4752,6 +4913,173 @@ mod tests {
         let _ = tokio::time::timeout(std::time::Duration::ZERO, state.db.wait_for_sync()).await;
     }
 
+    /// A certificate the platform issues while an operation runs reaches the
+    /// Operator on the sync that carries the in-progress claim: only the
+    /// domain metadata of the stored configuration (and of the stored target,
+    /// which later syncs replay) changes. The claim, the target's release and
+    /// the status stay, and nothing else in the configuration moves.
+    #[tokio::test]
+    async fn live_domain_metadata_reaches_an_operation_in_progress() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        type Response = Arc<Mutex<Value>>;
+        async fn serve(State(response): State<Response>) -> Json<Value> {
+            Json(response.lock().unwrap().clone())
+        }
+
+        let vault_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_VAULT_DATA_DIR", vault_dir.path());
+        let response: Response = Arc::new(Mutex::new(json!({})));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/sync", post(serve))
+            .with_state(response.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_live_domain").await.unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(directory)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        let url = format!("http://{address}");
+        let release = ReleaseInfo {
+            release_id: Some("rel_install".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            stack: Stack::new("live-domain".to_string())
+                .add(
+                    alien_core::Storage::new("files".to_string()).build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .build(),
+            signed: None,
+            signer_lists: Vec::new(),
+        };
+        let metadata = |status: alien_core::CertificateStatus| {
+            let issued = status == alien_core::CertificateStatus::Issued;
+            alien_core::DomainMetadata {
+                base_domain: "example.test".to_string(),
+                public_subdomain: "k8f2j3".to_string(),
+                hosted_zone_id: "zone".to_string(),
+                resources: std::collections::HashMap::from([(
+                    "api".to_string(),
+                    alien_core::ResourceDomainInfo {
+                        fqdn: "api.k8f2j3.example.test".to_string(),
+                        certificate_id: "cert_1".to_string(),
+                        certificate_status: status,
+                        dns_status: alien_core::DnsRecordStatus::Pending,
+                        dns_error: None,
+                        certificate_chain: issued.then(|| "CHAIN".to_string()),
+                        private_key: issued.then(|| "KEY".to_string()),
+                        issued_at: issued.then(|| "2026-01-01T00:00:00Z".to_string()),
+                        endpoints: Default::default(),
+                        aliases: Vec::new(),
+                    },
+                )]),
+            }
+        };
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![alien_core::EnvironmentVariable {
+                    name: "MODE".to_string(),
+                    value: "claimed".to_string(),
+                    var_type: alien_core::EnvironmentVariableType::Plain,
+                    target_resources: None,
+                }],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .domain_metadata(metadata(alien_core::CertificateStatus::Pending))
+            .build();
+        let claim = json!({ "operationId": "duop_install", "attemptId": "att_1" });
+
+        // The claim arrives with the certificate still pending.
+        *response.lock().unwrap() = json!({
+            "executionClaim": claim,
+            "target": { "releaseInfo": release, "config": config },
+            "domainMetadata": metadata(alien_core::CertificateStatus::Pending),
+        });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let state_before = state.db.get_deployment_state().await.unwrap().unwrap();
+        let config_before = state.db.get_deployment_config().await.unwrap().unwrap();
+        let execution_before = state.db.get_sync_execution().await.unwrap().unwrap();
+        assert_eq!(
+            config_before.domain_metadata,
+            Some(metadata(alien_core::CertificateStatus::Pending))
+        );
+
+        // The certificate is issued while the claim is in progress: the sync
+        // carries the claim and the metadata, and no target.
+        *response.lock().unwrap() = json!({
+            "executionClaim": claim,
+            "domainMetadata": metadata(alien_core::CertificateStatus::Issued),
+        });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+
+        let issued = metadata(alien_core::CertificateStatus::Issued);
+        let config_after = state.db.get_deployment_config().await.unwrap().unwrap();
+        assert_eq!(config_after.domain_metadata, Some(issued.clone()));
+        let mut expected = config_before.clone();
+        expected.domain_metadata = Some(issued.clone());
+        assert_eq!(
+            serde_json::to_value(&config_after).unwrap(),
+            serde_json::to_value(&expected).unwrap(),
+            "only the domain metadata of the configuration changes"
+        );
+        let state_after = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(state_after.status, state_before.status);
+        assert_eq!(
+            serde_json::to_value(&state_after.target_release).unwrap(),
+            serde_json::to_value(&state_before.target_release).unwrap()
+        );
+        let execution_after = state.db.get_sync_execution().await.unwrap().unwrap();
+        assert_eq!(execution_after.claim, execution_before.claim);
+        let stored_target = execution_after.target.expect("the target stays stored");
+        assert_eq!(stored_target.config.domain_metadata, Some(issued.clone()));
+        let mut stored_expected = execution_before.target.unwrap().config;
+        stored_expected.domain_metadata = Some(issued.clone());
+        assert_eq!(
+            serde_json::to_value(&stored_target.config).unwrap(),
+            serde_json::to_value(&stored_expected).unwrap(),
+            "only the domain metadata of the stored target changes"
+        );
+
+        // A later sync with the claim and nothing else replays the stored
+        // target; the metadata stays.
+        *response.lock().unwrap() = json!({ "executionClaim": claim });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let replayed = state.db.get_deployment_config().await.unwrap().unwrap();
+        assert_eq!(replayed.domain_metadata, Some(issued));
+
+        server.abort();
+        std::env::remove_var("TEST_VAULT_DATA_DIR");
+    }
+
     /// A manager that issues no execution claims (the OSS SQLite manager) sends
     /// `{}` once the release is installed. The Operator used to replay the stored
     /// install target as a new update on every sync, so the deployment never
@@ -6545,6 +6873,322 @@ mod tests {
                 InstalledConfig::WithoutCommandsKey
             );
         }
+    }
+
+    /// Domain metadata for the live-merge tests: one resource with a primary
+    /// hostname, one endpoint and one alias.
+    fn domain_fixture(status: alien_core::CertificateStatus) -> alien_core::DomainMetadata {
+        let issued = status == alien_core::CertificateStatus::Issued;
+        let managed = |fqdn: &str| alien_core::ManagedDomainInfo {
+            fqdn: fqdn.to_string(),
+            certificate_id: "cert_1".to_string(),
+            certificate_status: status,
+            dns_status: if issued {
+                alien_core::DnsRecordStatus::Active
+            } else {
+                alien_core::DnsRecordStatus::Pending
+            },
+            dns_error: None,
+            certificate_chain: issued.then(|| "CHAIN".to_string()),
+            private_key: issued.then(|| "KEY".to_string()),
+            issued_at: issued.then(|| "2026-01-01T00:00:00Z".to_string()),
+        };
+        let primary = managed("api.k8f2j3.example.test");
+        alien_core::DomainMetadata {
+            base_domain: "example.test".to_string(),
+            public_subdomain: "k8f2j3".to_string(),
+            hosted_zone_id: "zone".to_string(),
+            resources: std::collections::HashMap::from([(
+                "api".to_string(),
+                alien_core::ResourceDomainInfo {
+                    fqdn: primary.fqdn.clone(),
+                    certificate_id: primary.certificate_id.clone(),
+                    certificate_status: primary.certificate_status,
+                    dns_status: primary.dns_status,
+                    dns_error: None,
+                    certificate_chain: primary.certificate_chain.clone(),
+                    private_key: primary.private_key.clone(),
+                    issued_at: primary.issued_at.clone(),
+                    endpoints: std::collections::HashMap::from([(
+                        "web".to_string(),
+                        managed("web.k8f2j3.example.test"),
+                    )]),
+                    aliases: vec![managed("alias.k8f2j3.example.test")],
+                },
+            )]),
+        }
+    }
+
+    #[test]
+    fn live_merge_copies_the_live_fields_of_known_hostnames() {
+        let mut stored = domain_fixture(alien_core::CertificateStatus::Pending);
+        let live = domain_fixture(alien_core::CertificateStatus::Issued);
+        assert!(merge_live_domain_status(&mut stored, &live));
+        assert_eq!(stored, live);
+        let resource = &stored.resources["api"];
+        assert_eq!(resource.private_key.as_deref(), Some("KEY"));
+        assert_eq!(
+            resource.endpoints["web"].private_key.as_deref(),
+            Some("KEY")
+        );
+        assert_eq!(resource.aliases[0].private_key.as_deref(), Some("KEY"));
+        // Nothing left to change.
+        assert!(!merge_live_domain_status(&mut stored, &live));
+    }
+
+    #[test]
+    fn live_merge_never_changes_structure() {
+        let pending = domain_fixture(alien_core::CertificateStatus::Pending);
+        let issued = domain_fixture(alien_core::CertificateStatus::Issued);
+        let changes: Vec<(&str, Box<dyn Fn(&mut alien_core::DomainMetadata)>)> = vec![
+            (
+                "primary fqdn",
+                Box::new(|m| m.resources.get_mut("api").unwrap().fqdn = "evil.example.test".into()),
+            ),
+            (
+                "base domain",
+                Box::new(|m| m.base_domain = "evil.test".into()),
+            ),
+            (
+                "subdomain",
+                Box::new(|m| m.public_subdomain = "other".into()),
+            ),
+            (
+                "hosted zone",
+                Box::new(|m| m.hosted_zone_id = "other".into()),
+            ),
+            (
+                "certificate id",
+                Box::new(|m| m.resources.get_mut("api").unwrap().certificate_id = "cert_2".into()),
+            ),
+            (
+                "added resource",
+                Box::new(|m| {
+                    let extra = m.resources["api"].clone();
+                    m.resources.insert("extra".into(), extra);
+                }),
+            ),
+            (
+                "removed resource",
+                Box::new(|m| {
+                    m.resources.clear();
+                }),
+            ),
+            (
+                "endpoint fqdn",
+                Box::new(|m| {
+                    m.resources
+                        .get_mut("api")
+                        .unwrap()
+                        .endpoints
+                        .get_mut("web")
+                        .unwrap()
+                        .fqdn = "evil.example.test".into()
+                }),
+            ),
+            (
+                "renamed endpoint",
+                Box::new(|m| {
+                    let r = m.resources.get_mut("api").unwrap();
+                    let endpoint = r.endpoints.remove("web").unwrap();
+                    r.endpoints.insert("other".into(), endpoint);
+                }),
+            ),
+            (
+                "added endpoint",
+                Box::new(|m| {
+                    let r = m.resources.get_mut("api").unwrap();
+                    let endpoint = r.endpoints["web"].clone();
+                    r.endpoints.insert("extra".into(), endpoint);
+                }),
+            ),
+            (
+                "alias fqdn",
+                Box::new(|m| {
+                    m.resources.get_mut("api").unwrap().aliases[0].fqdn = "evil.example.test".into()
+                }),
+            ),
+            (
+                "added alias",
+                Box::new(|m| {
+                    let r = m.resources.get_mut("api").unwrap();
+                    let mut alias = r.aliases[0].clone();
+                    alias.fqdn = "new.example.test".into();
+                    r.aliases.push(alias);
+                }),
+            ),
+            (
+                "removed alias",
+                Box::new(|m| m.resources.get_mut("api").unwrap().aliases.clear()),
+            ),
+        ];
+        for (name, change) in &changes {
+            // The live side differs structurally and also carries live fields.
+            let mut live = issued.clone();
+            change(&mut live);
+            let mut stored = pending.clone();
+            merge_live_domain_status(&mut stored, &live);
+            let mut stripped_stored = json!({ "domainMetadata": stored });
+            let mut stripped_pending = json!({ "domainMetadata": pending });
+            strip_live_domain_status(&mut stripped_stored);
+            strip_live_domain_status(&mut stripped_pending);
+            assert_eq!(
+                stripped_stored, stripped_pending,
+                "{name}: structure changed"
+            );
+        }
+        // Live fields of a hostname the store does not have are not merged.
+        let mut live = issued.clone();
+        live.resources.get_mut("api").unwrap().aliases[0].fqdn = "new.example.test".into();
+        live.resources
+            .get_mut("api")
+            .unwrap()
+            .endpoints
+            .get_mut("web")
+            .unwrap()
+            .fqdn = "new-web.example.test".into();
+        let mut stored = pending.clone();
+        merge_live_domain_status(&mut stored, &live);
+        let resource = &stored.resources["api"];
+        assert_eq!(resource.aliases[0].private_key, None);
+        assert_eq!(resource.endpoints["web"].private_key, None);
+        // A primary fqdn that moved takes none of the live fields either.
+        let mut live = issued.clone();
+        live.resources.get_mut("api").unwrap().fqdn = "evil.example.test".into();
+        let mut stored = pending.clone();
+        merge_live_domain_status(&mut stored, &live);
+        assert_eq!(stored.resources["api"].private_key, None);
+        assert_eq!(
+            stored.resources["api"].certificate_status,
+            alien_core::CertificateStatus::Pending
+        );
+    }
+
+    fn approval_inputs(
+        metadata: alien_core::DomainMetadata,
+    ) -> (ReleaseInfo, alien_core::DeploymentConfig) {
+        let release = ReleaseInfo {
+            release_id: Some("rel_1".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            stack: Stack::new("approval".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
+        };
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .domain_metadata(metadata)
+            .build();
+        (release, config)
+    }
+
+    #[test]
+    fn same_target_ignores_only_live_domain_fields() {
+        let (release, stored) =
+            approval_inputs(domain_fixture(alien_core::CertificateStatus::Pending));
+        let same = |metadata: alien_core::DomainMetadata| {
+            let (_, incoming) = approval_inputs(metadata);
+            same_target(Some(&release), &stored, &release, &incoming)
+        };
+        assert!(same(domain_fixture(alien_core::CertificateStatus::Pending)));
+        assert!(
+            same(domain_fixture(alien_core::CertificateStatus::Issued)),
+            "only live fields differ"
+        );
+
+        let issued = domain_fixture(alien_core::CertificateStatus::Issued);
+        let mut changed = issued.clone();
+        changed.resources.get_mut("api").unwrap().fqdn = "evil.example.test".into();
+        assert!(!same(changed));
+        let mut changed = issued.clone();
+        changed.resources.get_mut("api").unwrap().aliases[0].fqdn = "evil.example.test".into();
+        assert!(!same(changed));
+        let mut changed = issued.clone();
+        changed.resources.get_mut("api").unwrap().aliases.clear();
+        assert!(!same(changed));
+        let mut changed = issued.clone();
+        changed.resources.get_mut("api").unwrap().endpoints.clear();
+        assert!(!same(changed));
+        let mut changed = issued.clone();
+        changed
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .endpoints
+            .get_mut("web")
+            .unwrap()
+            .fqdn = "evil.example.test".into();
+        assert!(!same(changed));
+        let mut changed = issued.clone();
+        let extra = changed.resources["api"].clone();
+        changed.resources.insert("extra".into(), extra);
+        assert!(!same(changed));
+        let mut changed = issued.clone();
+        changed.base_domain = "evil.test".into();
+        assert!(!same(changed));
+    }
+
+    /// A protected Operator takes no domain metadata from a manager.
+    #[tokio::test]
+    async fn a_protected_operator_ignores_domain_metadata_from_the_manager() {
+        type Response = Arc<Mutex<Value>>;
+        async fn serve(State(response): State<Response>) -> Json<Value> {
+            Json(response.lock().unwrap().clone())
+        }
+        let vault_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_VAULT_DATA_DIR", vault_dir.path());
+        let response: Response = Arc::new(Mutex::new(json!({})));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/sync", post(serve))
+            .with_state(response.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_protected_domain").await.unwrap();
+        let mut config = OperatorConfig::builder()
+            .platform(Platform::Test)
+            .data_dir(directory)
+            .encryption_key(TEST_ENCRYPTION_KEY)
+            .build();
+        config.release_signing = Some(crate::protected::test_signing("shop"));
+        assert!(config.is_protected());
+        let state = OperatorState {
+            config,
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let (_, stored) = approval_inputs(domain_fixture(alien_core::CertificateStatus::Pending));
+        state.db.set_deployment_config(&stored).await.unwrap();
+        let before = serde_json::to_value(&stored).unwrap();
+
+        let mut evil = domain_fixture(alien_core::CertificateStatus::Issued);
+        evil.resources.get_mut("api").unwrap().fqdn = "evil.example.test".into();
+        *response.lock().unwrap() = json!({ "domainMetadata": evil });
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        let _ = sync_with_manager(&state, &client, &format!("http://{address}"), false, None).await;
+
+        let after = state.db.get_deployment_config().await.unwrap().unwrap();
+        assert_eq!(serde_json::to_value(&after).unwrap(), before);
+        server.abort();
+        std::env::remove_var("TEST_VAULT_DATA_DIR");
     }
 }
 

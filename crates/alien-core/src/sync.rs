@@ -558,6 +558,13 @@ pub struct SyncResponse {
     /// newer than the config it last applied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signed_config: Option<crate::SignedStatement>,
+    /// The deployment's current domain metadata, on every sync for a
+    /// deployment that has any. It is live platform data, not part of the
+    /// operation: a certificate issued while an operation runs shows up here
+    /// while the in-flight target keeps the metadata it was claimed with. An
+    /// Operator merges only this field into its stored configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_metadata: Option<crate::DomainMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -642,6 +649,7 @@ mod tests {
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
             target_operator_image: None,
+            domain_metadata: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         // target is None → should be omitted
@@ -661,6 +669,7 @@ mod tests {
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
             target_operator_image: None,
+            domain_metadata: None,
         };
         let serialized = serde_json::to_string(&resp).unwrap();
         let deserialized: SyncResponse = serde_json::from_str(&serialized).unwrap();
@@ -757,6 +766,7 @@ mod tests {
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
             target_operator_image: None,
+            domain_metadata: None,
         };
 
         let serialized = serde_json::to_string(&resp).unwrap();
@@ -991,6 +1001,7 @@ mod tests {
             }),
             target_dynamic_containers: None,
             target_operator_image: None,
+            domain_metadata: None,
         };
 
         let json = serde_json::to_value(&resp).unwrap();
@@ -1031,6 +1042,7 @@ mod tests {
             target_operations_bundle_set: None,
             target_dynamic_containers: Some(vec![]),
             target_operator_image: None,
+            domain_metadata: None,
         };
         let json = serde_json::to_value(&empty_target).unwrap();
         assert_eq!(json["targetDynamicContainers"], serde_json::json!([]));
