@@ -30,9 +30,11 @@ on:
 permissions:
   contents: read
 
-# A new push to a PR makes the previous run's result useless.
+# A new push to a PR makes the previous run's result useless. Any other run (a merge group, or a
+# call from the nightly run, release qualification or a deploy gate) gets a group of its own: the
+# commit it tests plus the run, so overlapping calls never cancel each other's pending run.
 concurrency:
-  group: ci-fast-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-fast-${{ github.workflow }}-${{ github.event.pull_request.number || format('{0}-{1}', inputs.ref || github.sha, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

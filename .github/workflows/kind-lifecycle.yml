@@ -20,8 +20,10 @@ on:
 permissions:
   contents: read
 
+# One group per commit and run: overlapping nightly, qualification and gate calls must not cancel
+# each other's pending run.
 concurrency:
-  group: kind-lifecycle-${{ github.workflow }}-${{ github.ref }}
+  group: kind-lifecycle-${{ github.workflow }}-${{ inputs.ref || github.sha }}-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
