@@ -37,6 +37,8 @@ export type {
   AiConnection,
   AiModel,
   ChatCompletionCreateParams,
+  ModelApiCapabilities,
+  ModelCapabilitySupport,
   ResponseCreateParams,
 } from "./client.js"
 export { Ai } from "./client.js"

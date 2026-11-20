@@ -1,3 +1,4 @@
+use alien_core::ai_catalog::{ModelApiCapabilities, ModelCapabilitySupport};
 use alien_core::sync::{
     DynamicContainerHealthCheck, DynamicContainerReport, DynamicContainerStatus,
     ObservedApplicationImage, ObservedApplicationReport, ObservedApplicationSource,
@@ -154,6 +155,8 @@ use utoipa::OpenApi;
     RedisEvictionPolicy,
     Ai,
     AiOutputs,
+    ModelApiCapabilities,
+    ModelCapabilitySupport,
     Queue,
     QueueOutputs,
     QueueDeadLetter,
