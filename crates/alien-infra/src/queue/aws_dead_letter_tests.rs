@@ -88,9 +88,9 @@ async fn adding_then_removing_a_dead_letter_writes_and_clears_the_redrive_policy
         let writes = writes.lock().unwrap();
         assert_eq!(writes.len(), 1);
         assert_eq!(
-            writes[0].len(),
-            1,
-            "a source queue's retention is untouched"
+            writes[0]["MessageRetentionPeriod"],
+            AWS_DEFAULT_RETENTION_SECONDS.to_string(),
+            "both attributes are written; a source queue keeps the default retention"
         );
         let policy: Value = serde_json::from_str(&writes[0]["RedrivePolicy"]).unwrap();
         assert_eq!(
@@ -133,10 +133,11 @@ async fn a_target_keeps_messages_fourteen_days_and_returns_to_the_default() {
     run.update(failed.clone()).unwrap();
     run.run_until_terminal().await.unwrap();
     assert!(!run.needs_update().unwrap());
-    assert_eq!(
-        writes.lock().unwrap()[0],
-        HashMap::from([("MessageRetentionPeriod".to_string(), "1209600".to_string())])
-    );
+    {
+        let writes = writes.lock().unwrap();
+        assert_eq!(writes[0]["MessageRetentionPeriod"], "1209600");
+        assert_eq!(writes[0]["RedrivePolicy"], "", "a target has no policy");
+    }
 
     *run.desired_resource_config_mut("tasks").unwrap() =
         Resource::new(Queue::new("tasks".into()).build());
@@ -322,4 +323,77 @@ async fn the_intent_is_saved_before_the_write_is_sent() {
     assert!(writes.lock().unwrap().is_empty(), "nothing sent yet");
     run.run_until_terminal().await.unwrap();
     assert_eq!(writes.lock().unwrap().len(), 1);
+}
+
+/// The manager stopped inside the applying step after SQS applied a write: the saved state is
+/// that step with the intent set and nothing recorded. A release without the setting lands
+/// before the resume, which starts in the applying step directly. Both attributes are cleared.
+async fn resumed_in(state: AwsQueueState) -> Vec<HashMap<String, String>> {
+    let writes: Writes = Default::default();
+    let plain = Queue::new("tasks".into()).build();
+    let mut saved = controller("tasks");
+    saved.state = state;
+    saved.dead_letter_write_started = true;
+    let mut run = SingleControllerExecutor::builder()
+        .resource(plain)
+        .controller(saved)
+        .platform(Platform::Aws)
+        .resource_lifecycle(ResourceLifecycle::Live)
+        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+        .with_stack_resource(Queue::new("failed".into()).build(), ResourceLifecycle::Live)
+        .service_provider(provider(&writes))
+        .build()
+        .await
+        .unwrap();
+    run.run_until_terminal().await.unwrap();
+    let writes = writes.lock().unwrap().clone();
+    writes
+}
+
+#[tokio::test]
+async fn a_resume_in_the_update_applying_step_clears_the_policy_and_retention() {
+    let writes = resumed_in(AwsQueueState::ApplyingDeadLetterUpdate).await;
+    assert_eq!(writes.len(), 1, "the clearing write is sent: {writes:?}");
+    assert_eq!(writes[0]["RedrivePolicy"], "");
+    assert_eq!(
+        writes[0]["MessageRetentionPeriod"],
+        AWS_DEFAULT_RETENTION_SECONDS.to_string()
+    );
+}
+
+#[tokio::test]
+async fn a_resume_in_the_create_applying_step_clears_the_policy_and_retention() {
+    let writes = resumed_in(AwsQueueState::ApplyingDeadLetter).await;
+    assert_eq!(writes.len(), 1, "the clearing write is sent: {writes:?}");
+    assert_eq!(writes[0]["RedrivePolicy"], "");
+    assert_eq!(
+        writes[0]["MessageRetentionPeriod"],
+        AWS_DEFAULT_RETENTION_SECONDS.to_string()
+    );
+}
+
+/// An update entered for another reason on a setup-owned queue at runtime writes nothing,
+/// even when a dead-letter intent is saved.
+#[tokio::test]
+async fn an_update_on_a_setup_owned_queue_never_writes_the_dead_letter_attributes() {
+    let writes: Writes = Default::default();
+    let mut saved = controller("tasks");
+    saved.dead_letter_write_started = true;
+    let mut run = SingleControllerExecutor::builder()
+        .resource(with_dead_letter(5))
+        .controller(saved)
+        .platform(Platform::Aws)
+        .resource_lifecycle(ResourceLifecycle::Frozen)
+        .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+        .with_stack_resource(
+            Queue::new("failed".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .service_provider(provider(&writes))
+        .build()
+        .await
+        .unwrap();
+    run.update(with_dead_letter(5)).unwrap();
+    run.run_until_terminal().await.unwrap();
+    assert!(writes.lock().unwrap().is_empty());
 }

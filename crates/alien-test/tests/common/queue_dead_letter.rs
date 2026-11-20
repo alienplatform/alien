@@ -240,8 +240,8 @@ pub async fn check_dead_letter(
             // reached the Worker.
             // A Worker image from before the runtime passed the number on reports none (the
             // attempt then reads as 1 on every delivery). The bound is then on the Worker's own
-            // count: at least one delivery, never more than `MAX_ATTEMPTS` (Pub/Sub moves the
-            // message once that many attempts failed), and the subscription's own policy is
+            // count: the same tolerance as AWS and Azure (Pub/Sub's limit is best effort, so no lower
+            // bound and at most `MAX_ATTEMPTS + 2`), and the subscription's own policy is
             // checked against the cloud by `check_gcp_subscription_policy`.
             let seen = highest.get(&id).copied().unwrap_or(1);
             if highest.values().any(|attempt| *attempt > 1) {
@@ -254,9 +254,10 @@ pub async fn check_dead_letter(
             } else {
                 info!(%id, worker_deliveries = counts[&id], "Worker image does not report Pub/Sub's attempt number");
                 assert!(
-                    (1..=MAX_ATTEMPTS).contains(&(counts[&id] as u64)),
-                    "{id}: the Worker saw {} deliveries; between 1 and {MAX_ATTEMPTS} expected",
-                    counts[&id]
+                    counts[&id] as u64 <= MAX_ATTEMPTS + 2,
+                    "{id}: the Worker saw {} deliveries; at most {} expected",
+                    counts[&id],
+                    MAX_ATTEMPTS + 2
                 );
             }
         } else {

@@ -33,7 +33,6 @@ impl ResourceImporter for AwsQueueImporter {
             redrive_policy: None,
             dead_letter_target: false,
             dead_letter_write_started: false,
-            dead_letter_rewrite: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

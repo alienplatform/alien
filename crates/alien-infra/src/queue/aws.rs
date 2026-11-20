@@ -41,14 +41,11 @@ pub struct AwsQueueController {
     /// The intent to write the dead-letter attributes, recorded (and saved with the state) in
     /// a step of its own before the write is sent in the next step, and cleared once SQS
     /// answered. If the manager stops after the write was sent, this is still set in the saved
-    /// state although the recorded values were not updated.
+    /// state although the recorded values were not updated, so while it is set the write sends
+    /// both attributes from the desired stack (clearing them if need be), never comparing with
+    /// the recorded values.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) dead_letter_write_started: bool,
-    /// Set when a step finds the intent above already saved: an earlier write may have been
-    /// applied, so the next write sends both attributes from the desired stack (including
-    /// clearing them) instead of comparing with the recorded values.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) dead_letter_rewrite: bool,
 }
 
 #[controller]
@@ -580,9 +577,12 @@ impl AwsQueueController {
     /// when this step returns, and only the next step sends the write. An intent that is
     /// already saved means an earlier write may have been applied.
     fn prepare_dead_letter(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
-        if self.dead_letter_write_started {
-            self.dead_letter_rewrite = true;
-        } else if self.dead_letter_changed(ctx)? {
+        let queue = ctx.desired_resource_config::<Queue>()?;
+        // An update entered for another reason on a setup-owned queue must not write it.
+        if !may_manage_storage_ingress(ctx, &queue.id) {
+            return Ok(());
+        }
+        if self.dead_letter_write_started || self.dead_letter_changed(ctx)? {
             self.dead_letter_write_started = true;
         }
         Ok(())
@@ -592,7 +592,7 @@ impl AwsQueueController {
     /// and clears both when the setting is removed. Queues without either are not written.
     async fn reconcile_dead_letter(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let queue = ctx.desired_resource_config::<Queue>()?;
-        if !self.dead_letter_write_started {
+        if !self.dead_letter_write_started || !may_manage_storage_ingress(ctx, &queue.id) {
             return Ok(());
         }
         let url = self.queue_url.clone().ok_or_else(|| {
@@ -603,35 +603,25 @@ impl AwsQueueController {
         })?;
         let desired = desired_redrive_policy(ctx, &queue)?;
         let is_target = !queues_dead_lettering_to(ctx.desired_stack, &queue.id).is_empty();
-        let mut attributes = std::collections::HashMap::new();
-        // After a possibly lost write the recorded values cannot be trusted: write both.
-        let rewrite = self.dead_letter_rewrite;
-        if rewrite || desired != self.redrive_policy {
-            // An empty value removes the policy.
-            attributes.insert(
+        // The intent is saved, so an earlier write may have been applied without the recorded
+        // values knowing: always write both attributes from the desired stack. An empty
+        // policy removes it.
+        let retention = if is_target {
+            AWS_DEAD_LETTER_TARGET_RETENTION_SECONDS
+        } else {
+            AWS_DEFAULT_RETENTION_SECONDS
+        };
+        let attributes = std::collections::HashMap::from([
+            (
                 "RedrivePolicy".to_string(),
                 desired.clone().unwrap_or_default(),
-            );
-        }
-        if rewrite || is_target != self.dead_letter_target {
-            let retention = if is_target {
-                AWS_DEAD_LETTER_TARGET_RETENTION_SECONDS
-            } else {
-                AWS_DEFAULT_RETENTION_SECONDS
-            };
-            attributes.insert("MessageRetentionPeriod".to_string(), retention.to_string());
-        }
-        if attributes.is_empty() {
-            self.dead_letter_write_started = false;
-            return Ok(());
-        }
+            ),
+            ("MessageRetentionPeriod".to_string(), retention.to_string()),
+        ]);
         let client = ctx
             .service_provider
             .get_aws_sqs_client(ctx.get_aws_config()?)
             .await?;
-        // A retry of this step after a failed send (response lost) must not trust the recorded
-        // values either.
-        self.dead_letter_rewrite = true;
         set_queue_attributes(
             ctx,
             client.as_ref(),
@@ -644,7 +634,6 @@ impl AwsQueueController {
         self.redrive_policy = desired;
         self.dead_letter_target = is_target;
         self.dead_letter_write_started = false;
-        self.dead_letter_rewrite = false;
         Ok(())
     }
 

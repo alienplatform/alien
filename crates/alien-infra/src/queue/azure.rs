@@ -381,6 +381,10 @@ impl AzureQueueController {
     /// when this step returns, and only the next step sends the write.
     fn prepare_dead_letter(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let queue = ctx.desired_resource_config::<Queue>()?;
+        // An update entered for another reason on a setup-owned queue must not write it.
+        if !super::may_change_queue_settings(ctx, &queue.id) {
+            return Ok(());
+        }
         if self.dead_letter_write_started
             || desired_dead_letter(ctx, &queue).map(dead_letter_key) != self.dead_letter
         {
@@ -393,7 +397,7 @@ impl AzureQueueController {
     async fn apply_dead_letter(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let config = ctx.desired_resource_config::<Queue>()?;
         let desired = desired_dead_letter(ctx, &config);
-        if self.dead_letter_write_started {
+        if self.dead_letter_write_started && super::may_change_queue_settings(ctx, &config.id) {
             let cfg = ctx.get_azure_config()?;
             let mgmt = ctx
                 .service_provider
@@ -804,6 +808,78 @@ mod tests {
         assert_eq!(cloud.max_delivery_count, Some(10));
         drop(cloud);
         assert!(!run.needs_update().unwrap());
+    }
+
+    /// The manager stopped inside the applying step after Service Bus applied the write, and a
+    /// release without the setting landed before the resume: the saved state is that step with
+    /// the intent set and nothing recorded. The settings are cleared.
+    async fn resumed_in(state: AzureQueueState) -> Props {
+        let cloud = Arc::new(std::sync::Mutex::new(Props {
+            forward_dead_lettered_messages_to: Some("test-failed".into()),
+            max_delivery_count: Some(7),
+            ..Default::default()
+        }));
+        let puts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut run = SingleControllerExecutor::builder()
+            .resource(Queue::new("work".into()).build())
+            .controller(AzureQueueController {
+                state,
+                namespace_name: Some("test-bus".into()),
+                queue_name: Some("test-work".into()),
+                dead_letter_write_started: true,
+                ..Default::default()
+            })
+            .platform(Platform::Azure)
+            .service_provider(recording_provider(cloud.clone(), puts))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        run.run_until_terminal().await.unwrap();
+        let props = cloud.lock().unwrap().clone();
+        props
+    }
+
+    #[tokio::test]
+    async fn a_resume_in_the_update_applying_step_clears_the_settings() {
+        let cloud = resumed_in(AzureQueueState::ApplyingDeadLetterUpdate).await;
+        assert_eq!(cloud.forward_dead_lettered_messages_to, None);
+        assert_eq!(cloud.max_delivery_count, Some(10));
+    }
+
+    #[tokio::test]
+    async fn a_resume_in_the_create_applying_step_clears_the_settings() {
+        let cloud = resumed_in(AzureQueueState::ApplyingDeadLetter).await;
+        assert_eq!(cloud.forward_dead_lettered_messages_to, None);
+        assert_eq!(cloud.max_delivery_count, Some(10));
+    }
+
+    /// An update entered for another reason on a setup-owned queue at runtime writes nothing.
+    #[tokio::test]
+    async fn an_update_on_a_setup_owned_queue_never_writes_the_dead_letter_settings() {
+        let cloud = Arc::new(std::sync::Mutex::new(Props::default()));
+        let puts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let plain = Queue::new("work".into()).build();
+        let mut run = SingleControllerExecutor::builder()
+            .resource(plain.clone())
+            .controller(AzureQueueController {
+                state: AzureQueueState::Ready,
+                namespace_name: Some("test-bus".into()),
+                queue_name: Some("test-work".into()),
+                dead_letter_write_started: true,
+                ..Default::default()
+            })
+            .platform(Platform::Azure)
+            .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+            .service_provider(recording_provider(cloud, puts.clone()))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        run.update(plain).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert!(puts.lock().unwrap().is_empty());
     }
 
     /// The create request never carries the dead-letter settings: a retried create (response
