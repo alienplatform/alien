@@ -52,29 +52,10 @@ const BROKER_CAPABILITIES: u32 = (1 << 21) | (1 << 18) | (1 << 19) | (1 << 2) | 
 /// write `usermodehelper/bset` and `inheritable`).
 const SEAL_CAPABILITIES: u32 = (1 << 8) | (1 << 16);
 
-/// Kept until the seal when the agent has it: sets the immutable attribute on `/` and `/usr`.
-const IMMUTABLE_CAPABILITY: u32 = 1 << 9;
-
-/// Where the kernel finds its helpers (`/sbin/request-key`, `/sbin/modprobe`); read-only in the
-/// image's mount namespace. The `/dev/null` bound over [`KERNEL_HELPER`] in the kernel's own
-/// namespace covers the file the path names there: the image must not be able to unlink or rename
-/// that file in its own view and put a new one at the path. `/usr/sbin` first: `/sbin` is often a
-/// link to it.
-const SYSTEM_PATHS: &[(&str, ops::SystemPath)] = &[
-    ("/usr/sbin", ops::SystemPath::Directory),
-    ("/sbin", ops::SystemPath::Directory),
-];
-
-/// Directories whose entries the image must not create, remove or rename: the image could
-/// otherwise move `/usr` aside or replace the `/sbin` link and put its own `sbin` in their place,
-/// outside the read-only binds.
-const IMMUTABLE_DIRECTORIES: &[&str] = &["/", "/usr"];
-
 /// The kernel settings for the programs it runs on its own (`request-key`, `modprobe`). The
-/// image's NFS server can make the kernel call `request-key` (an ID mapping or a DNS referral), and
-/// the image can write the files that choose what that runs. Before the image starts, the broker
-/// empties the capability sets every such program gets and stops module loading by program (the
-/// filesystems the broker mounts are loaded first).
+/// image's NFS server can make the kernel call `request-key` (an ID mapping or a DNS referral).
+/// Before the image starts, the broker empties the capability sets every such program gets and
+/// stops module loading by program (the filesystems the broker mounts are loaded first).
 #[derive(Debug, Clone)]
 pub struct HelperSettings {
     pub bset: PathBuf,
@@ -101,36 +82,11 @@ pub struct Config {
     pub deadline: Duration,
     /// Host-wide kernel settings; tests point them elsewhere.
     pub helpers: HelperSettings,
-    /// The image's `/` for [`SYSTEM_PATHS`] and [`IMMUTABLE_DIRECTORIES`]; tests use a stand-in.
-    pub system_root: PathBuf,
-    /// The mount namespace the kernel starts its own helpers (`request-key`) in: the one of
-    /// `kthreadd`, which [`HelperNamespace::comm`] names. Tests use their own.
-    pub helper_namespace: HelperNamespace,
+    /// `/proc/2/comm`: `kthreadd` there means the agent shares the kernel's initial PID
+    /// namespace, so the image's `/` may be the root the kernel runs its helpers from. Tests use a
+    /// stand-in.
+    pub kernel_thread_parent: PathBuf,
 }
-
-/// Where [`KERNEL_HELPER`] is blocked: a `/proc/<pid>/ns/mnt` path and, when set, the `comm` file
-/// that must say `kthreadd` (the PID is checked to be the kernel's helper parent, not reused).
-#[derive(Debug, Clone)]
-pub struct HelperNamespace {
-    pub namespace: PathBuf,
-    pub comm: Option<PathBuf>,
-}
-
-impl Default for HelperNamespace {
-    fn default() -> Self {
-        Self {
-            namespace: "/proc/2/ns/mnt".into(),
-            comm: Some("/proc/2/comm".into()),
-        }
-    }
-}
-
-/// The program the kernel runs for a key request (an NFS ID mapping or DNS referral the image's
-/// server can cause), as root, outside the image's cgroup and filter, from the root filesystem the
-/// image shares. Blocked before the image starts so that nothing the image writes (a loader
-/// preload, a library, a configuration) can run there; NFS with `sec=sys`, numeric IDs and an IP
-/// address does not need it (an ID mapping that cannot run falls back to `nobody`).
-const KERNEL_HELPER: &str = "/sbin/request-key";
 
 impl Default for Config {
     fn default() -> Self {
@@ -139,8 +95,7 @@ impl Default for Config {
             cgroup_name: IMAGE_CGROUP_NAME.into(),
             deadline: REQUEST_DEADLINE,
             helpers: HelperSettings::default(),
-            system_root: "/".into(),
-            helper_namespace: HelperNamespace::default(),
+            kernel_thread_parent: "/proc/2/comm".into(),
         }
     }
 }
@@ -573,79 +528,6 @@ pub fn detach_nfs_mounts() -> io::Result<()> {
     )
 }
 
-/// Binds `/dev/null` over [`KERNEL_HELPER`] in the kernel's helper namespace, from a forked child
-/// (`setns` needs a single-threaded caller, and the broker keeps its own namespace).
-fn block_kernel_helper(target: &HelperNamespace, root: &str) -> Result<String, String> {
-    if let Some(comm) = &target.comm {
-        let name = std::fs::read_to_string(comm)
-            .map_err(|error| format!("cannot read {}: {error}", comm.display()))?;
-        if name.trim() != "kthreadd" {
-            return Err(format!(
-                "{} is {:?}, not kthreadd: the kernel's helper namespace is not known",
-                comm.display(),
-                name.trim()
-            ));
-        }
-    }
-    let namespace = std::fs::File::open(&target.namespace)
-        .map_err(|error| format!("cannot open {}: {error}", target.namespace.display()))?;
-    let mut pipe = [0; 2];
-    // SAFETY: a two-element buffer for pipe2.
-    if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-        return Err(format!("pipe: {}", io::Error::last_os_error()));
-    }
-    // SAFETY: pipe2 returned two descriptors we now own.
-    let (read_end, write_end) =
-        unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) };
-    // SAFETY: the broker is single-threaded, so the child may allocate.
-    let pid = unsafe { libc::fork() };
-    if pid < 0 {
-        return Err(format!("fork: {}", io::Error::last_os_error()));
-    }
-    if pid == 0 {
-        drop(read_end);
-        // SAFETY: a mount namespace descriptor; the child is single-threaded.
-        let result = if unsafe { libc::setns(namespace.as_raw_fd(), libc::CLONE_NEWNS) } != 0 {
-            Err(format!(
-                "cannot enter {}: {}",
-                target.namespace.display(),
-                io::Error::last_os_error()
-            ))
-        } else {
-            ops::block_kernel_helper(root, KERNEL_HELPER)
-        };
-        let (code, text) = match result {
-            Ok(text) => (0, text),
-            Err(text) => (1, text),
-        };
-        // SAFETY: writing from a buffer we own to our pipe.
-        unsafe {
-            libc::write(
-                write_end.as_raw_fd(),
-                text.as_ptr().cast(),
-                text.len().min(600),
-            )
-        };
-        // SAFETY: leaving the forked child.
-        unsafe { libc::_exit(code) };
-    }
-    drop(write_end);
-    let mut status = 0;
-    // SAFETY: waiting for our own child (local filesystem calls only).
-    if unsafe { libc::waitpid(pid, &mut status, 0) } < 0 {
-        return Err(format!("wait: {}", io::Error::last_os_error()));
-    }
-    let mut text = String::new();
-    let _ = std::fs::File::from(read_end).read_to_string(&mut text);
-    if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0 {
-        Ok(text)
-    } else if text.is_empty() {
-        Err("the helper failed".into())
-    } else {
-        Err(text)
-    }
-}
-
 /// Sends a control message without descriptors and waits for its answer within `within`.
 fn control_message(tag: u8, what: &str, within: Duration) -> io::Result<()> {
     let broker = BROKER
@@ -878,9 +760,7 @@ fn broker_main(
     close_other_fds(&[control.as_raw_fd(), join.as_raw_fd()]);
     // The seal's capabilities only where the agent has them: without them the seal fails, by
     // name, when the image is about to start.
-    crate::privilege::restrict_capabilities(
-        BROKER_CAPABILITIES | ((SEAL_CAPABILITIES | IMMUTABLE_CAPABILITY) & permitted),
-    )?;
+    crate::privilege::restrict_capabilities(BROKER_CAPABILITIES | (SEAL_CAPABILITIES & permitted))?;
     deny_network()?;
     let one: libc::c_int = 1;
     // SAFETY: a valid descriptor and option.
@@ -1036,7 +916,7 @@ impl Loop<'_> {
             || (message.tag == b'S' && message.fds.len() == 2);
         let mut reason = String::new();
         if message.tag == b'S' && ok {
-            match self.seal(message.fds[1].as_raw_fd()) {
+            match self.seal() {
                 // On success the ack carries the seal's report for the agent's boot report.
                 Ok(report) => reason = report,
                 Err(error) => {
@@ -1066,13 +946,15 @@ impl Loop<'_> {
         };
     }
 
-    /// Before the image first starts: loads the filesystems the broker mounts, makes what the
-    /// kernel reads to run a helper ([`SYSTEM_PATHS`]) read-only in the image's mount namespace,
-    /// sets the immutable attribute on [`IMMUTABLE_DIRECTORIES`] (required), empties
-    /// the capability sets of every program the kernel runs on its own and stops module loading
-    /// by program, then drops the capabilities that took. Any other failure keeps the image from
-    /// starting.
-    fn seal(&mut self, namespace: RawFd) -> Result<String, String> {
+    /// Before the image first starts: loads the filesystems the broker mounts, empties the
+    /// capability sets of every program the kernel runs on its own and stops module loading by
+    /// program, then drops the capabilities that took. Any failure keeps the image from starting.
+    ///
+    /// The kernel runs those programs (`request-key`, `modprobe`, a `core_pattern` pipe) from its
+    /// own root. Where image permissions are accepted the image's `/` is a subtree the provider
+    /// prepared, in its own PID and mount namespaces, not that root: a helper the kernel starts
+    /// does not see the image's files. An agent in the kernel's initial PID namespace is refused.
+    fn seal(&mut self) -> Result<String, String> {
         if let Some(report) = &self.sealed {
             return Ok(report.clone());
         }
@@ -1086,126 +968,30 @@ impl Loop<'_> {
                 self.boot_capabilities
             ));
         }
-        ops::load_filesystems();
-        let mut pipe = [0; 2];
-        // SAFETY: a two-element buffer for pipe2.
-        if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-            return Err(format!(
-                "step read-only system paths: pipe: {}",
-                io::Error::last_os_error()
-            ));
-        }
-        // SAFETY: pipe2 returned two descriptors we now own.
-        let (read_end, write_end) =
-            unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) };
-        // SAFETY: the broker is single-threaded, so the child may allocate.
-        let pid = unsafe { libc::fork() };
-        if pid < 0 {
-            return Err(format!(
-                "step read-only system paths: fork: {}",
-                io::Error::last_os_error()
-            ));
-        }
-        if pid == 0 {
-            drop(read_end);
-            // SAFETY: a mount namespace descriptor; the child is single-threaded.
-            let failure = if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } != 0 {
-                Some(format!(
-                    "cannot enter the image's mount namespace: {}",
-                    io::Error::last_os_error()
+        // The kernel runs its helpers from its own root. With the agent in the kernel's initial
+        // PID namespace the image's `/` may be that root, and the image could choose what runs.
+        let parent = match std::fs::read_to_string(&self.config.kernel_thread_parent) {
+            Ok(name) => name,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(error) => {
+                return Err(format!(
+                    "step own namespaces: cannot read {}: {error}",
+                    self.config.kernel_thread_parent.display()
                 ))
-            } else {
-                let root = self.config.system_root.to_string_lossy();
-                match ops::protect_system_paths(&root, SYSTEM_PATHS) {
-                    // Created what was missing first: nothing new is needed at the top level now.
-                    Ok(protected) => {
-                        let mut report = format!("read-only: {}", protected.join(", "));
-                        // Before the immutable attribute, which would keep them from appearing.
-                        let declared: Vec<&str> = self
-                            .declared
-                            .permissions
-                            .mounts
-                            .iter()
-                            .map(|mount| mount.path.as_str())
-                            .collect();
-                        for line in ops::create_declared_paths(&root, &declared) {
-                            report.push_str("; ");
-                            report.push_str(&line);
-                        }
-                        match ops::make_immutable(&root, IMMUTABLE_DIRECTORIES) {
-                            Ok(lines) => {
-                                for line in lines {
-                                    report.push_str("; ");
-                                    report.push_str(&line);
-                                }
-                                // SAFETY: writing from a buffer we own to our pipe.
-                                unsafe {
-                                    libc::write(
-                                        write_end.as_raw_fd(),
-                                        report.as_ptr().cast(),
-                                        report.len().min(1000),
-                                    )
-                                };
-                                None
-                            }
-                            Err(reason) => Some(reason),
-                        }
-                    }
-                    Err(reason) => Some(reason),
-                }
-            };
-            let code = match failure {
-                None => 0,
-                Some(reason) => {
-                    // SAFETY: writing from a buffer we own to our pipe.
-                    unsafe {
-                        libc::write(
-                            write_end.as_raw_fd(),
-                            reason.as_ptr().cast(),
-                            reason.len().min(400),
-                        )
-                    };
-                    1
-                }
-            };
-            // SAFETY: leaving the forked child.
-            unsafe { libc::_exit(code) };
-        }
-        drop(write_end);
-        let mut status = 0;
-        // SAFETY: waiting for our own child (local filesystem calls only).
-        if unsafe { libc::waitpid(pid, &mut status, 0) } < 0 {
+            }
+        };
+        if parent.trim() == "kthreadd" {
             return Err(format!(
-                "step read-only system paths: wait: {}",
-                io::Error::last_os_error()
+                "step own namespaces: {} is kthreadd: the agent runs in the kernel's initial PID namespace, and image permissions need the image in its own PID and mount namespaces below the VM's root (the kernel runs its helpers from that root)",
+                self.config.kernel_thread_parent.display()
             ));
         }
-        let mut report = String::new();
-        let _ = std::fs::File::from(read_end).read_to_string(&mut report);
-        if !libc::WIFEXITED(status) || libc::WEXITSTATUS(status) != 0 {
-            return Err(format!(
-                "step read-only system paths: {}",
-                if report.is_empty() {
-                    "the helper failed"
-                } else {
-                    &report
-                }
-            ));
-        }
-        // After the image's binds: where the two namespaces are one (tests), a later copy of
-        // `/usr/sbin` would cover this mount.
-        let blocked = block_kernel_helper(
-            &self.config.helper_namespace,
-            &self.config.system_root.to_string_lossy(),
-        )
-        .map_err(|reason| format!("step request-key: {reason}"))?;
-        let report = format!("request-key: {blocked}; {report}");
-        eprintln!("mount broker: sealed: {report}");
+        ops::load_filesystems();
         seal_helper_settings(&self.config.helpers)?;
-        crate::privilege::restrict_capabilities(BROKER_CAPABILITIES).map_err(|error| {
-            format!("step drop SETPCAP, SYS_MODULE and LINUX_IMMUTABLE: {error}")
-        })?;
-        let report = format!("{report}; {}", helper_settings_report(&self.config.helpers));
+        crate::privilege::restrict_capabilities(BROKER_CAPABILITIES)
+            .map_err(|error| format!("step drop SETPCAP and SYS_MODULE: {error}"))?;
+        let report = helper_settings_report(&self.config.helpers);
+        eprintln!("mount broker: sealed: {report}");
         self.sealed = Some(report.clone());
         Ok(report)
     }
@@ -1731,7 +1517,7 @@ mod tests {
         // SAFETY: a no-op handler with SA_RESTART, as the agent's runtime installs.
         unsafe {
             let mut action: libc::sigaction = std::mem::zeroed();
-            action.sa_sigaction = ignore as usize;
+            action.sa_sigaction = ignore as *const () as usize;
             action.sa_flags = libc::SA_RESTART;
             libc::sigaction(libc::SIGUSR2, &action, std::ptr::null_mut());
         }

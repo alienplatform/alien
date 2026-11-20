@@ -141,27 +141,18 @@ fn broker_allows_declared_mounts_and_refuses_everything_else() {
         "seal",
         "step usermodehelper bset: writing it needs CAP_SETPCAP and CAP_SYS_MODULE, and the agent was started without CAP_SYS_MODULE",
     );
-    // Without the immutable attribute on the image's `/` and `/usr` the image could replace the
-    // `/sbin` link or move `/usr` aside: the seal fails closed, on a filesystem without the
-    // attribute (ramfs) and for a broker without CAP_LINUX_IMMUTABLE.
-    for (capability, fs, expect) in [
-        (None, "ramfs", "no immutable attribute"),
-        (Some(9), "tmpfs", "the broker needs CAP_LINUX_IMMUTABLE"),
-    ] {
-        let root = format!("/tmp/refused-root-{fs}");
-        stand_in_root(&root, fs);
-        std::fs::create_dir_all(format!("{root}/usr/sbin")).unwrap();
-        symlink("usr/sbin", format!("{root}/sbin")).unwrap();
-        seal_or_start_refused(
-            capability,
-            Some(&root),
-            "seal",
-            &[
-                "step read-only system paths: immutable: cannot set it on / (",
-                expect,
-            ],
-        );
-    }
+    // An agent in the kernel's initial PID namespace (PID 2 is kthreadd): the image's `/` may be
+    // the root the kernel runs its helpers from. The seal refuses, before anything is mounted.
+    std::fs::write("/tmp/kthreadd-comm-standin", "kthreadd\n").unwrap();
+    seal_or_start_refused(
+        None,
+        Some("/tmp/kthreadd-comm-standin"),
+        "seal",
+        &[
+            "step own namespaces: /tmp/kthreadd-comm-standin is kthreadd",
+            "image permissions need the image in its own PID and mount namespaces",
+        ],
+    );
     // The broker must be forked by a single-threaded process, as the agent does at boot; libtest
     // runs this test on a thread of its own, so the scenario runs in a forked child.
     // SAFETY: the child only runs the scenario and leaves with _exit.
@@ -182,192 +173,16 @@ fn broker_allows_declared_mounts_and_refuses_everything_else() {
     );
 }
 
-/// A fresh filesystem of type `fs` at `path`, standing in for the image's `/`: the seal changes
-/// what it protects there, and these are disposable (the container's own `/` is not).
-fn stand_in_root(path: &str, fs: &str) {
-    std::fs::create_dir_all(path).unwrap();
-    let status = Command::new("mount")
-        .args(["-t", fs, fs, path])
-        .status()
-        .unwrap();
-    assert!(status.success(), "mount {fs} at {path}");
-}
-
-/// Whether the immutable attribute is set on `path`.
-fn immutable(path: &str) -> bool {
-    let file = std::fs::File::open(path).unwrap();
-    let mut flags: libc::c_int = 0;
-    // SAFETY: valid descriptor and an int for FS_IOC_GETFLAGS.
-    let rc = unsafe {
-        libc::ioctl(
-            std::os::fd::AsRawFd::as_raw_fd(&file),
-            0x8008_6601_u32 as _,
-            &mut flags,
-        )
-    };
-    rc == 0 && flags & 0x10 != 0
-}
-
-fn read_only(path: &str) -> bool {
-    let name = std::ffi::CString::new(path).unwrap();
-    // SAFETY: a zeroed statvfs for statvfs to fill.
-    let mut fs: libc::statvfs = unsafe { std::mem::zeroed() };
-    // SAFETY: valid path and buffer.
-    unsafe { libc::statvfs(name.as_ptr(), &mut fs) == 0 && fs.f_flag & libc::ST_RDONLY != 0 }
-}
-
-/// The request-key paths for an image that has them, lacks them, reaches them through links
-/// (also ones that try to leave the root), or has a link that leads nowhere.
-fn system_path_variants() {
-    use super::ops::{self, SystemPath};
-    let paths: &[(&str, SystemPath)] = &[
-        ("/usr/sbin", SystemPath::Directory),
-        ("/sbin", SystemPath::Directory),
-        ("/etc/request-key.conf", SystemPath::File),
-        ("/etc/request-key.d", SystemPath::Directory),
-    ];
-    let all_read_only = |root: &str| {
-        for (path, _) in paths {
-            let full = format!("{root}{path}");
-            assert!(read_only(&full), "{full} is not read-only");
-        }
-    };
-
-    // Present.
-    let root = "/tmp/variants/present";
-    stand_in_root(root, "tmpfs");
-    for dir in ["usr/sbin", "sbin", "etc/request-key.d"] {
-        std::fs::create_dir_all(format!("{root}/{dir}")).unwrap();
-    }
-    std::fs::write(format!("{root}/etc/request-key.conf"), "").unwrap();
-    let done = ops::protect_system_paths(root, paths).expect("present");
-    assert_eq!(
-        done,
-        [
-            "/usr/sbin",
-            "/sbin",
-            "/etc/request-key.conf",
-            "/etc/request-key.d"
-        ]
-    );
-    all_read_only(root);
-
-    // Absent (an image FROM scratch): created first, root-owned, then protected.
-    let root = "/tmp/variants/absent";
-    stand_in_root(root, "tmpfs");
-    ops::protect_system_paths(root, paths).expect("absent");
-    all_read_only(root);
-    for (path, mode, dir) in [
-        ("/usr/sbin", 0o755, true),
-        ("/sbin", 0o755, true),
-        ("/etc/request-key.conf", 0o644, false),
-        ("/etc/request-key.d", 0o755, true),
-    ] {
-        use std::os::unix::fs::MetadataExt;
-        let meta = std::fs::symlink_metadata(format!("{root}{path}")).unwrap();
-        assert_eq!(meta.is_dir(), dir, "{path}");
-        assert_eq!(meta.mode() & 0o7777, mode, "{path}");
-        assert_eq!((meta.uid(), meta.gid()), (0, 0), "{path}");
-    }
-
-    // Linked (`/sbin -> usr/sbin` as on AL2023, absolute links, a link that tries to leave the
-    // root): each resolves inside the root and its target is protected; the links stay.
-    let root = "/tmp/variants/linked";
-    stand_in_root(root, "tmpfs");
-    for dir in ["usr/sbin", "etc/keys/request-key.d"] {
-        std::fs::create_dir_all(format!("{root}/{dir}")).unwrap();
-    }
-    std::fs::write(format!("{root}/etc/keys/request-key.conf"), "").unwrap();
-    symlink("usr/sbin", format!("{root}/sbin")).unwrap();
-    symlink(
-        "/etc/keys/request-key.conf",
-        format!("{root}/etc/request-key.conf"),
-    )
-    .unwrap();
-    symlink(
-        "../../../../../etc/keys/request-key.d",
-        format!("{root}/etc/request-key.d"),
-    )
-    .unwrap();
-    let done = ops::protect_system_paths(root, paths).expect("linked");
-    assert_eq!(
-        done,
-        [
-            "/usr/sbin",
-            "/sbin -> /usr/sbin",
-            "/etc/request-key.conf -> /etc/keys/request-key.conf",
-            "/etc/request-key.d -> /etc/keys/request-key.d",
-        ]
-    );
-    // Checked at the targets: from here (outside the root) the absolute links lead elsewhere.
-    for target in [
-        "/usr/sbin",
-        "/etc/keys/request-key.conf",
-        "/etc/keys/request-key.d",
-    ] {
-        assert!(read_only(&format!("{root}{target}")), "{target}");
-    }
-    assert!(std::fs::symlink_metadata(format!("{root}/sbin"))
-        .unwrap()
-        .file_type()
-        .is_symlink());
-    // Nothing outside the root was touched.
-    assert!(!read_only("/etc/keys"), "outside the root");
-
-    // A link that leads nowhere: refused by name, nothing created through it.
-    let root = "/tmp/variants/dangling";
-    stand_in_root(root, "tmpfs");
-    std::fs::create_dir_all(format!("{root}/usr/sbin")).unwrap();
-    symlink("/nowhere/sbin", format!("{root}/sbin")).unwrap();
-    let error = ops::protect_system_paths(root, paths).expect_err("dangling");
-    assert!(
-        error.contains("/sbin is a symbolic link to nothing"),
-        "{error}"
-    );
-    assert!(!Path::new(&format!("{root}/nowhere")).exists());
-
-    // A non-directory where a directory is expected: protected as it is.
-    let root = "/tmp/variants/file";
-    stand_in_root(root, "tmpfs");
-    std::fs::create_dir_all(format!("{root}/usr/sbin")).unwrap();
-    std::fs::write(format!("{root}/sbin"), "").unwrap();
-    ops::protect_system_paths(root, paths).expect("a file at /sbin");
-    all_read_only(root);
-
-    // The immutable attribute where the filesystem has it, and an error naming the directory
-    // where it has not (ramfs: no attributes at all).
-    let lines = ops::make_immutable("/tmp/variants/present", &["/", "/usr"]);
-    assert_eq!(
-        lines,
-        Ok(vec![
-            "immutable: / set".to_string(),
-            "immutable: /usr set".to_string()
-        ]),
-        "{lines:?}"
-    );
-    assert!(immutable("/tmp/variants/present"));
-    let root = "/tmp/variants/ramfs";
-    stand_in_root(root, "ramfs");
-    std::fs::create_dir_all(format!("{root}/usr")).unwrap();
-    let error = ops::make_immutable(root, &["/", "/usr"]).expect_err("ramfs has no attribute");
-    assert!(
-        error.contains("cannot set it on /") && error.contains("no immutable attribute"),
-        "{error}"
-    );
-    println!("system path variants: {error}");
-}
-
 /// In a forked child (single-threaded, as the agent at boot) that drops `capability` first: the
 /// broker's start or its seal fails with `expect` in the error, before anything is mounted.
 fn missing_capability_is_named(capability: u32, at: &str, expect: &str) {
     seal_or_start_refused(Some(capability), None, at, &[expect])
 }
 
-/// As [`missing_capability_is_named`], optionally with the image's `/` at `system_root` (a
-/// stand-in; the seal's read-only binds there are the only mounts it may leave).
+/// As [`missing_capability_is_named`], optionally with a stand-in for `/proc/2/comm`.
 fn seal_or_start_refused(
     capability: Option<u32>,
-    system_root: Option<&str>,
+    kernel_thread_parent: Option<&str>,
     at: &str,
     expect: &[&str],
 ) {
@@ -384,7 +199,6 @@ fn seal_or_start_refused(
                 std::fs::read_to_string("/proc/thread-self/mountinfo")
                     .unwrap()
                     .lines()
-                    .filter(|line| system_root.is_none_or(|root| !line.contains(root)))
                     .map(str::to_string)
                     .collect::<Vec<_>>()
             };
@@ -397,7 +211,9 @@ fn seal_or_start_refused(
                         inheritable: "/tmp/caps-helpers/inheritable".into(),
                         modprobe: "/tmp/caps-helpers/modprobe".into(),
                     },
-                    system_root: system_root.map_or_else(|| "/".into(), Into::into),
+                    kernel_thread_parent: kernel_thread_parent
+                        .unwrap_or("/tmp/no-kernel-thread-parent/comm")
+                        .into(),
                     ..Default::default()
                 },
             );
@@ -411,7 +227,9 @@ fn seal_or_start_refused(
                     .expect_err("seal without the capability")
                     .to_string()
             };
-            println!("missing capability {capability:?}, root {system_root:?} ({at}): {error}");
+            println!(
+                "missing capability {capability:?}, PID 2 {kernel_thread_parent:?} ({at}): {error}"
+            );
             assert!(expect.iter().all(|part| error.contains(part)), "{error}");
             assert_eq!(mounts(), mounts_before, "nothing mounted");
         })
@@ -425,32 +243,13 @@ fn seal_or_start_refused(
     unsafe { libc::waitpid(pid, &mut status, 0) };
     assert!(
         libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
-        "refused at {at}: capability {capability:?}, root {system_root:?}"
+        "refused at {at}: capability {capability:?}, PID 2 {kernel_thread_parent:?}"
     );
 }
 
 fn scenario() {
-    system_path_variants();
     let declared = image_permissions::parse(DECLARATION).expect("declaration");
-    // The image's `/` for the seal: as on AL2023 (`/sbin -> usr/sbin`), without the request-key
-    // configuration. (A filesystem without the immutable attribute fails the seal: see
-    // `seal_or_start_refused` above.)
-    stand_in_root("/tmp/sysroot", "tmpfs");
-    std::fs::create_dir_all("/tmp/sysroot/usr/sbin").unwrap();
-    std::fs::create_dir_all("/tmp/sysroot/etc").unwrap();
-    std::fs::write("/tmp/sysroot/usr/sbin/nologin", "").unwrap();
-    // The kernel's key-request program; it leaves a mark if it ever runs.
-    std::fs::write(
-        "/tmp/sysroot/usr/sbin/request-key",
-        "#!/bin/sh\ntouch /tmp/request-key-ran\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(
-        "/tmp/sysroot/usr/sbin/request-key",
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .unwrap();
-    symlink("usr/sbin", "/tmp/sysroot/sbin").unwrap();
+    std::fs::write("/tmp/pid2-comm-standin", "sh\n").unwrap();
     std::fs::create_dir_all(mount_broker::IMAGE_CGROUP).expect("image cgroup");
     // The kernel's helper settings are host-wide and can only be lowered until reboot: the test
     // points the broker at stand-ins and checks what it writes.
@@ -476,19 +275,9 @@ fn scenario() {
                 inheritable: "/tmp/helpers/inheritable".into(),
                 modprobe: modprobe.into(),
             },
-            system_root: "/tmp/sysroot".into(),
-            // This thread's namespace stands in for the kernel's helper namespace (the process's
-            // path would name the thread-group leader's).
-            helper_namespace: mount_broker::HelperNamespace {
-                namespace: format!(
-                    "/proc/{}/task/{}/ns/mnt",
-                    std::process::id(),
-                    // SAFETY: gettid has no preconditions.
-                    unsafe { libc::gettid() }
-                )
-                .into(),
-                comm: None,
-            },
+            // PID 2 is some other process: the agent has its own PID namespace (the refusal
+            // tests above have no PID 2 at all, and the seal goes on there too).
+            kernel_thread_parent: "/tmp/pid2-comm-standin".into(),
             ..Default::default()
         },
     )
@@ -533,37 +322,10 @@ fn scenario() {
         assert_eq!(std::fs::read_to_string(modprobe).unwrap(), "\n");
     }
     assert_eq!(
-        capabilities(broker) & ((1 << 8) | (1 << 9) | (1 << 16)),
+        capabilities(broker) & ((1 << 8) | (1 << 16)),
         0,
-        "the broker dropped SETPCAP, LINUX_IMMUTABLE and SYS_MODULE"
+        "the broker dropped SETPCAP and SYS_MODULE"
     );
-    assert!(
-        read_only("/tmp/sysroot/usr/sbin"),
-        "{:?}",
-        mount_line("/tmp/sysroot/usr/sbin")
-    );
-    // In the helper namespace the program is /dev/null: the kernel's exec fails before any loader
-    // or library is read, whatever the image wrote.
-    let blocked = std::fs::metadata("/tmp/sysroot/sbin/request-key").unwrap();
-    assert!(
-        std::os::unix::fs::FileTypeExt::is_char_device(&blocked.file_type()),
-        "request-key is not /dev/null: {blocked:?}"
-    );
-    let ran = Command::new("/tmp/sysroot/sbin/request-key").status();
-    assert_eq!(
-        ran.as_ref().map_err(|error| error.raw_os_error()).err(),
-        Some(Some(libc::EACCES)),
-        "{ran:?}"
-    );
-    assert!(!Path::new("/tmp/request-key-ran").exists());
-    assert_eq!(
-        (immutable("/tmp/sysroot"), immutable("/tmp/sysroot/usr")),
-        (true, true),
-        "the immutable attribute on / and /usr"
-    );
-    // A declared path whose parent is immutable, as `/` is after the seal: the broker still
-    // mounts there (a disposable tmpfs parent, not the container's own filesystem).
-    stand_in_root("/var/lib/app", "tmpfs");
     for directory in [
         "/workspace",
         "/var/lib/app/scratch",
@@ -572,10 +334,6 @@ fn scenario() {
     ] {
         std::fs::create_dir_all(directory).unwrap();
     }
-    assert_eq!(
-        super::ops::make_immutable("/var/lib/app", &["/"]),
-        Ok(vec!["immutable: / set".to_string()])
-    );
     std::fs::write("/tmp/forward.py", FORWARD).unwrap();
 
     // The image's loopback proxy, a foreign one (not in the image cgroup), a hung one and a slow
@@ -615,60 +373,6 @@ fn scenario() {
         "the image holds SYS_ADMIN: {status}"
     );
     assert!(status.contains("0::/alien-guest/image"), "{status}");
-
-    // Image root cannot write, replace or move the kernel's helper directory.
-    std::fs::write("/tmp/planted", "#!/bin/sh\n").unwrap();
-    let attempts = allowed(
-        r#"exec python3 -I -c '
-import errno, os
-def attempt(name, action):
-    try:
-        action()
-        print(name, "OK")
-    except OSError as error:
-        print(name, errno.errorcode[error.errno])
-r = "/tmp/sysroot"
-attempt("write", lambda: open(r + "/usr/sbin/request-key", "w"))
-attempt("write-link", lambda: open(r + "/sbin/request-key", "w"))
-attempt("replace", lambda: os.rename(r + "/usr/sbin/nologin", r + "/usr/sbin/request-key"))
-attempt("move-in", lambda: os.rename("/tmp/planted", r + "/usr/sbin/request-key"))
-attempt("rename", lambda: os.rename(r + "/usr/sbin", r + "/usr/sbin-moved"))
-attempt("remove", lambda: os.unlink(r + "/usr/sbin/nologin"))
-attempt("link-replace", lambda: os.unlink(r + "/sbin"))
-attempt("mkdir-top", lambda: os.mkdir(r + "/newdir"))
-attempt("rename-etc", lambda: os.rename(r + "/etc", r + "/etc-moved"))
-attempt("rename-usr", lambda: os.rename(r + "/usr", r + "/usr-moved"))
-'"#,
-    );
-    let attempts = String::from_utf8_lossy(&attempts.stdout).to_string();
-    println!("{attempts}");
-    let mut expected = vec![
-        "write EROFS",
-        "write-link EROFS",
-        "replace EROFS",
-        "move-in EXDEV",
-        // The immutable `/usr` refuses before the mount point does.
-        "rename EPERM",
-        "remove EROFS",
-        // The `/sbin` link cannot be replaced, nor `/usr` moved aside.
-        "link-replace EPERM",
-        "mkdir-top EPERM",
-        "rename-etc EPERM",
-        "rename-usr EPERM",
-    ];
-    for expected in expected {
-        // Here the image shares the namespace the program is blocked in, so it finds /dev/null
-        // on a read-only mount: opening that for writing is EACCES rather than EROFS.
-        let alternative = match expected {
-            "write EROFS" => "write EACCES",
-            "write-link EROFS" => "write-link EACCES",
-            other => other,
-        };
-        assert!(
-            attempts.lines().any(|l| l == expected || l == alternative),
-            "{expected}: {attempts}"
-        );
-    }
 
     // Allowed: NFS through the image's proxy with the traced options; tmpfs; bind from it.
     allowed(&format!(

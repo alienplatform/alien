@@ -15,16 +15,18 @@ DOCKERFILE
 cat > "$fixture/boot.sh" <<'BOOT'
 set -euo pipefail
 variant=$1
-# The kernel starts request-key from kthreadd's mount namespace (PID 2). The first child in a
-# fresh PID namespace stands in for it, so the agent blocks this container's copy, not the host's.
+# A fresh PID namespace, as the agent has where image permissions are accepted: no kthreadd at
+# PID 2 (the first child, gone by the time the agent runs). The `initial-pid-namespace` variant
+# puts a kthreadd stand-in there, as an agent in the kernel's initial PID namespace would see.
 if [ -z "${BOOT_FRESH_PID_NAMESPACE:-}" ]; then
   exec env BOOT_FRESH_PID_NAMESPACE=1 unshare --fork --pid --mount-proc bash "$0" "$@"
 fi
-sleep infinity &
-[ "$!" = 2 ] || { echo "FAIL: the kthreadd stand-in is PID $!, not 2"; exit 1; }
-echo kthreadd > /tmp/kthreadd-comm
-mount --bind /tmp/kthreadd-comm /proc/2/comm
-[ -x /sbin/request-key ] || { echo "FAIL: no request-key in the test image"; exit 1; }
+if [ "$variant" = initial-pid-namespace ]; then
+  sleep infinity &
+  [ "$!" = 2 ] || { echo "FAIL: the kthreadd stand-in is PID $!, not 2"; exit 1; }
+  echo kthreadd > /tmp/kthreadd-comm
+  mount --bind /tmp/kthreadd-comm /proc/2/comm
+fi
 mkdir -p /session /opt/alien
 # The image's command; its argument marks it in the process list.
 printf '%s\n' '{"user":"0","workingDirectory":"/","command":["/bin/sleep","3601"],"env":{"PATH":"/usr/bin:/bin"}}' \
@@ -53,6 +55,7 @@ case "$variant" in
   started) ;;
   # The seal needs SYS_MODULE: an agent started without it must not start the image.
   seal-fails) start=(setpriv --bounding-set -sys_module /agent) ;;
+  initial-pid-namespace) ;;
   # A step of the run hook itself fails: something answers at 1.1.1.1:443 without the gateway,
   # so the egress check refuses.
   run-hook-step-fails)
@@ -93,12 +96,10 @@ if [ "$variant" = started ]; then
   fi
   [ ! -e /run/alien/boot-error ] || fail "boot error without a failure: $(cat /run/alien/boot-error)"
   grep -q '"data":"ZXhlYy1yYW4K"' <<<"$exec_body" || fail "exec did not run"
-  grep -q 'mount broker: sealed:.*created: /var/lib/app/scratch' /tmp/agent.log \
-    || fail "the seal did not create the missing declared path"
-  [ -d /var/lib/app/scratch ] || fail "/var/lib/app/scratch missing"
+  [ ! -d /proc/2 ] || [ "$(cat /proc/2/comm)" != kthreadd ] || fail "PID 2 is kthreadd"
   [ "$(stat -c %a /run/alien/boot-report)" = 644 ] || fail "boot-report mode"
   for fact in '^ip6 nftables: installed$' '^ipv6 addresses (/proc/net/if_inet6): ' \
-    '^ipv6 default route (/proc/net/ipv6_route): ' '^seal: request-key: .*read-only: .*usermodehelper bset .*modprobe '; do
+    '^ipv6 default route (/proc/net/ipv6_route): ' '^seal: usermodehelper bset .*modprobe '; do
     grep -q "$fact" /run/alien/boot-report || fail "boot report lacks $fact: $(cat /run/alien/boot-report)"
   done
   grep -q 'boot report' /tmp/agent.log || fail "the boot report is not in the log"
@@ -112,11 +113,6 @@ if [ "$variant" = started ]; then
     || fail "the seal did not write the inheritable stand-in"
   [ ! -e /proc/sys/kernel/modprobe ] || [ -z "$(cat /tmp/kernel-settings/modprobe)" ] \
     || fail "the seal did not write the modprobe stand-in"
-  # Blocked in the kernel's helper namespace: /dev/null (1:3), and exec fails before any loader.
-  [ "$(stat -L -c %t:%T /sbin/request-key)" = 1:3 ] || fail "request-key is not /dev/null"
-  ! /sbin/request-key 2>/dev/null || fail "request-key ran"
-  grep -q '^seal: request-key: /sbin/request-key.*: /dev/null' /run/alien/boot-report \
-    || fail "boot report: $(cat /run/alien/boot-report)"
   # The provider's suspend and resume: each answers 200 at once, runs the image's step and
   # leaves its timeline in the lifecycle report.
   for hook in suspend resume; do
@@ -136,7 +132,7 @@ if [ "$variant" = started ]; then
   [ "$(stat -c %a /run/alien/lifecycle-report)" = 644 ] || fail "lifecycle-report mode"
   echo "lifecycle report:"; sed 's/^/  /' /run/alien/lifecycle-report
   echo "boot report:"; sed 's/^/  /' /run/alien/boot-report
-  echo "OK started: run hook 200, image running, exec ran, declared path created before the seal"
+  echo "OK started: run hook 200, image running, exec ran, sealed"
 else
   ! pgrep -f '^/bin/sleep 3601$' >/dev/null || fail "the image started"
   [ -r /run/alien/boot-error ] || fail "no /run/alien/boot-error"
@@ -149,6 +145,8 @@ else
     seal-fails) grep -q 'SYS_MODULE' <<<"$reason" || fail "reason: $reason"
       grep -q '^seal: failed: .*SYS_MODULE' /run/alien/boot-report || fail "boot report: $(cat /run/alien/boot-report)" ;;
     run-hook-step-fails) grep -q '1.1.1.1:443 is reachable without the gateway' <<<"$reason" || fail "reason: $reason" ;;
+    initial-pid-namespace) grep -q 'is kthreadd: the agent runs in the kernel.s initial PID namespace' <<<"$reason" || fail "reason: $reason"
+      grep -q '^seal: failed: .*own namespaces' /run/alien/boot-report || fail "boot report: $(cat /run/alien/boot-report)" ;;
   esac
   echo "OK $variant: run hook 200, image never started, exec answers: $reason"
 fi
@@ -156,7 +154,7 @@ BOOT
 docker build -q -t "$image" "$fixture" >/dev/null
 host_settings() { cat /proc/sys/kernel/usermodehelper/bset /proc/sys/kernel/usermodehelper/inheritable /proc/sys/kernel/modprobe 2>/dev/null || true; }
 before=$(host_settings)
-for variant in started seal-fails run-hook-step-fails; do
+for variant in started seal-fails run-hook-step-fails initial-pid-namespace; do
   docker run --rm --privileged --cgroupns=private --network none \
     --mount "type=bind,source=$agent,target=/agent,readonly" \
     --mount "type=bind,source=$fixture/boot.sh,target=/boot.sh,readonly" \
