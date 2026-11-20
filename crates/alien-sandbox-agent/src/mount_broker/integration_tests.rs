@@ -435,9 +435,16 @@ fn scenario() {
                 modprobe: modprobe.into(),
             },
             system_root: "/tmp/sysroot".into(),
-            // This process's namespace stands in for the kernel's helper namespace.
+            // This thread's namespace stands in for the kernel's helper namespace (the process's
+            // path would name the thread-group leader's).
             helper_namespace: mount_broker::HelperNamespace {
-                namespace: format!("/proc/{}/ns/mnt", std::process::id()).into(),
+                namespace: format!(
+                    "/proc/{}/task/{}/ns/mnt",
+                    std::process::id(),
+                    // SAFETY: gettid has no preconditions.
+                    unsafe { libc::gettid() }
+                )
+                .into(),
                 comm: None,
             },
             ..Default::default()
@@ -623,8 +630,15 @@ attempt("rename-usr", lambda: os.rename(r + "/usr", r + "/usr-moved"))
         ]);
     }
     for expected in expected {
+        // Here the image shares the namespace the program is blocked in, so it finds /dev/null
+        // on a read-only mount: opening that for writing is EACCES rather than EROFS.
+        let alternative = match expected {
+            "write EROFS" => "write EACCES",
+            "write-link EROFS" => "write-link EACCES",
+            other => other,
+        };
         assert!(
-            attempts.lines().any(|l| l == expected),
+            attempts.lines().any(|l| l == expected || l == alternative),
             "{expected}: {attempts}"
         );
     }

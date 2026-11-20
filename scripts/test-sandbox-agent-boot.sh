@@ -15,8 +15,11 @@ DOCKERFILE
 cat > "$fixture/boot.sh" <<'BOOT'
 set -euo pipefail
 variant=$1
-# The kernel starts request-key from kthreadd's mount namespace (PID 2). This container's first
-# child stands in for it, so the agent blocks the container's own copy, not the host's.
+# The kernel starts request-key from kthreadd's mount namespace (PID 2). The first child in a
+# fresh PID namespace stands in for it, so the agent blocks this container's copy, not the host's.
+if [ -z "${BOOT_FRESH_PID_NAMESPACE:-}" ]; then
+  exec env BOOT_FRESH_PID_NAMESPACE=1 unshare --fork --pid --mount-proc bash "$0" "$@"
+fi
 sleep infinity &
 [ "$!" = 2 ] || { echo "FAIL: the kthreadd stand-in is PID $!, not 2"; exit 1; }
 echo kthreadd > /tmp/kthreadd-comm
@@ -95,7 +98,7 @@ if [ "$variant" = started ]; then
   [ -d /var/lib/app/scratch ] || fail "/var/lib/app/scratch missing"
   [ "$(stat -c %a /run/alien/boot-report)" = 644 ] || fail "boot-report mode"
   for fact in '^ip6 nftables: installed$' '^ipv6 addresses (/proc/net/if_inet6): ' \
-    '^ipv6 default route (/proc/net/ipv6_route): ' '^seal: read-only: .*usermodehelper bset .*modprobe '; do
+    '^ipv6 default route (/proc/net/ipv6_route): ' '^seal: request-key: .*read-only: .*usermodehelper bset .*modprobe '; do
     grep -q "$fact" /run/alien/boot-report || fail "boot report lacks $fact: $(cat /run/alien/boot-report)"
   done
   grep -q 'boot report' /tmp/agent.log || fail "the boot report is not in the log"

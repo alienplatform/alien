@@ -1014,11 +1014,6 @@ impl Loop<'_> {
                 self.boot_capabilities
             ));
         }
-        let blocked = block_kernel_helper(
-            &self.config.helper_namespace,
-            &self.config.system_root.to_string_lossy(),
-        )
-        .map_err(|reason| format!("step request-key: {reason}"))?;
         ops::load_filesystems();
         let mut pipe = [0; 2];
         // SAFETY: a two-element buffer for pipe2.
@@ -1120,6 +1115,13 @@ impl Loop<'_> {
                 }
             ));
         }
+        // After the image's binds: where the two namespaces are one (tests), a later copy of
+        // `/usr/sbin` would cover this mount.
+        let blocked = block_kernel_helper(
+            &self.config.helper_namespace,
+            &self.config.system_root.to_string_lossy(),
+        )
+        .map_err(|reason| format!("step request-key: {reason}"))?;
         let report = format!("request-key: {blocked}; {report}");
         eprintln!("mount broker: sealed: {report}");
         seal_helper_settings(&self.config.helpers)?;
