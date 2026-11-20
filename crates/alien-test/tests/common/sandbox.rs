@@ -482,3 +482,136 @@ pub async fn check_remote_interactive_command(
     outcome?;
     ended.context("terminate the session")
 }
+
+/// A deployed GCP sandbox, checked at the cloud: its template is ACTIVE and runs from an image in
+/// the deployment's own project pinned by digest, and a session cut from it runs a command in the
+/// image built from `sandbox/Dockerfile`.
+///
+/// Drives the Agent Platform provider with the target credentials: a remote sandbox binding needs
+/// a kind-scoped capability that only the hosted platform issues.
+pub async fn check_gcp_template_runs_a_command(
+    target_project: &str,
+    region: &str,
+    credentials_json: &str,
+    engine_display_prefix: &str,
+    expected_marker: &str,
+) -> anyhow::Result<String> {
+    use alien_bindings::providers::sandbox::gcp_agent_platform::GcpAgentPlatformSandbox;
+    use alien_bindings::traits::{
+        CommandOutput, CreateSandboxRequest, RunCommandRequest, Sandbox, SandboxState,
+    };
+    use alien_core::{GcpClientConfig, GcpCredentials};
+    use alien_gcp_clients::gcp::agent_platform::{AgentPlatformApi, AgentPlatformClient};
+    use futures::StreamExt;
+
+    let config = GcpClientConfig {
+        project_id: target_project.to_string(),
+        region: region.to_string(),
+        credentials: GcpCredentials::ServiceAccountKey {
+            json: credentials_json.to_string(),
+        },
+        service_overrides: None,
+        project_number: None,
+    };
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()?;
+    let client = std::sync::Arc::new(AgentPlatformClient::new(http, config));
+
+    let engine = client
+        .list_engines()
+        .await
+        .context("list engines")?
+        .into_iter()
+        .find(|engine| {
+            engine
+                .display_name
+                .as_deref()
+                .is_some_and(|name| name.starts_with(engine_display_prefix))
+        })
+        .and_then(|engine| engine.name)
+        .context("the deployment's engine is not listed")?;
+    let engine_id = engine.rsplit('/').next().unwrap_or(&engine).to_string();
+    // A replaced template stays listed, state DELETED, for a while; only live ones count.
+    let templates: Vec<_> = client
+        .list_templates(&engine_id)
+        .await
+        .context("list templates")?
+        .into_iter()
+        .filter(|template| !format!("{:?}", template.state).to_uppercase().contains("DELETED"))
+        .collect();
+    ensure!(
+        templates.len() == 1,
+        "expected one template, found {}",
+        templates.len()
+    );
+    let template = &templates[0];
+    let image = template
+        .custom_container_environment
+        .as_ref()
+        .and_then(|env| env.custom_container_spec.as_ref())
+        .map(|spec| spec.image_uri.clone())
+        .context("the template has no image")?;
+    eprintln!("template state {:?}, image {image}", template.state);
+    ensure!(
+        image.contains(&format!("/{target_project}/")) && image.contains("@sha256:"),
+        "the template does not run from a digest-pinned image in the deployment's project: {image}"
+    );
+
+    let provider = GcpAgentPlatformSandbox::new(
+        client.clone(),
+        engine.clone(),
+        template.name.clone().context("template has no name")?,
+        Some(900),
+    );
+    let created = provider
+        .create(CreateSandboxRequest::default())
+        .await
+        .context("create a sandbox session")?;
+    ensure!(
+        created.state == SandboxState::Running,
+        "state {:?}",
+        created.state
+    );
+    let outcome = async {
+        let mut stream = provider
+            .run_command(
+                &created.sandbox_id,
+                RunCommandRequest {
+                    command: "/bin/sh".into(),
+                    args: vec![
+                        "-c".into(),
+                        "head -n 2 /etc/os-release; cat /etc/sandbox-remote-version".into(),
+                    ],
+                    cwd: None,
+                    env: Default::default(),
+                    timeout: Duration::from_secs(60),
+                },
+            )
+            .await
+            .context("start the command")?;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut exit = None;
+        while let Some(frame) = stream.next().await {
+            match frame.context("decode a frame")? {
+                CommandOutput::Stdout { data, .. } => stdout.extend_from_slice(&data),
+                CommandOutput::Stderr { data, .. } => stderr.extend_from_slice(&data),
+                CommandOutput::Exit { code, .. } => exit = Some(code),
+            }
+        }
+        let out = String::from_utf8_lossy(&stdout).trim().to_string();
+        ensure!(
+            exit == Some(0),
+            "exit {exit:?}, stdout {out:?}, stderr {:?}",
+            String::from_utf8_lossy(&stderr)
+        );
+        ensure!(out.ends_with(expected_marker), "unexpected output {out:?}");
+        eprintln!("exec output: {out}");
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    let _ = provider.terminate(&created.sandbox_id).await;
+    outcome?;
+    Ok(image)
+}

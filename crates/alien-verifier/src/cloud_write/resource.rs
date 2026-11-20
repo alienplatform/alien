@@ -1301,7 +1301,7 @@ pub fn check_sandbox_template(
             "the template's container spec sets a field the controller does not",
         ));
     }
-    if !sandbox_image_is_signed(signed_image, &spec.image_uri) {
+    if !sandbox_image_is_signed(signed_image, &spec.image_uri, prefix, sandbox.id()) {
         return Err(refused(format!(
             "image {} is not the signed sandbox image {signed_image}",
             spec.image_uri
@@ -1348,13 +1348,36 @@ pub fn check_sandbox_template(
     Ok(())
 }
 
-/// Whether `sent` names the signed sandbox image: the same reference, or the same path on an
-/// Artifact Registry host, which is how Agent Platform is told to pull an image the release
-/// pushed through the manager. Artifact Registry paths start with the registry's project, which
-/// only its owner can push to.
-fn sandbox_image_is_signed(signed: &str, sent: &str) -> bool {
+/// Whether `sent` names the signed sandbox image.
+///
+/// A signed reference that names a digest (`<repo>@sha256:...`, which a GCP build now always
+/// records) is satisfied by the same reference, by the same path on an Artifact Registry host
+/// (below), or by exactly this install's own sandbox repository on an Artifact Registry host at
+/// that same digest: the copy the deployment makes into its own project. The project segment is not checked (the verifier does not know it), but
+/// the digest is what the sandbox runs, and another repository or digest is refused.
+///
+/// A signed reference without a digest (a release cut before digests were pinned) keeps the older
+/// rule: the same reference, or the same path on an Artifact Registry host, which is how Agent
+/// Platform is told to pull an image the release pushed through the manager. Artifact Registry
+/// paths start with the registry's project, which only its owner can push to.
+fn sandbox_image_is_signed(signed: &str, sent: &str, prefix: &str, sandbox_id: &str) -> bool {
     if signed == sent {
         return true;
+    }
+    if let (Some((_, digest)), Some(repository)) = (
+        signed.split_once('@'),
+        alien_core::gar_repository::sandbox_image_repository(prefix, sandbox_id),
+    ) {
+        if let Some((host, rest)) = sent.split_once('/') {
+            let segments: Vec<&str> = rest.split('/').collect();
+            if host.ends_with("-docker.pkg.dev")
+                && segments.len() == 3
+                && segments[1] == repository
+                && segments[2].split_once('@') == Some((sandbox_id, digest))
+            {
+                return true;
+            }
+        }
     }
     match (signed.split_once('/'), sent.split_once('/')) {
         (Some((_, signed_path)), Some((sent_host, sent_path))) => {
@@ -2772,5 +2795,65 @@ mod command_subscription_tests {
                 "{name} must be refused"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod sandbox_image_tests {
+    use super::sandbox_image_is_signed;
+
+    const D: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OTHER: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn signed() -> String {
+        format!("mgr.example/mgr-proj/repo-prj-x/prj_x/sbx@{D}")
+    }
+
+    #[test]
+    fn the_install_own_repository_at_the_signed_digest_is_accepted() {
+        let sent = format!("us-central1-docker.pkg.dev/cust-proj/pfx-sbx-img/sbx@{D}");
+        assert!(sandbox_image_is_signed(&signed(), &sent, "pfx", "sbx"));
+    }
+
+    #[test]
+    fn the_uncopied_manager_path_at_the_signed_digest_is_still_accepted() {
+        let sent = format!("us-central1-docker.pkg.dev/mgr-proj/repo-prj-x/prj_x/sbx@{D}");
+        assert!(sandbox_image_is_signed(&signed(), &sent, "pfx", "sbx"));
+    }
+
+    #[test]
+    fn another_digest_repository_or_host_is_refused() {
+        let ok = "us-central1-docker.pkg.dev/cust-proj/pfx-sbx-img/sbx";
+        assert!(!sandbox_image_is_signed(
+            &signed(),
+            &format!("{ok}@{OTHER}"),
+            "pfx",
+            "sbx"
+        ));
+        assert!(!sandbox_image_is_signed(
+            &signed(),
+            &format!("{ok}:latest"),
+            "pfx",
+            "sbx"
+        ));
+        // The stack's registry, another install's repository, another image name.
+        for repo in ["pfx-artifacts", "other-sbx-img", "pfx-other-img"] {
+            let sent = format!("us-central1-docker.pkg.dev/cust-proj/{repo}/sbx@{D}");
+            assert!(
+                !sandbox_image_is_signed(&signed(), &sent, "pfx", "sbx"),
+                "{repo}"
+            );
+        }
+        let sent = format!("us-central1-docker.pkg.dev/cust-proj/pfx-sbx-img/other@{D}");
+        assert!(!sandbox_image_is_signed(&signed(), &sent, "pfx", "sbx"));
+        let sent = format!("evil.example/cust-proj/pfx-sbx-img/sbx@{D}");
+        assert!(!sandbox_image_is_signed(&signed(), &sent, "pfx", "sbx"));
+    }
+
+    #[test]
+    fn a_signed_tag_never_accepts_the_copy() {
+        let signed = "mgr.example/mgr-proj/repo-prj-x/prj_x/sbx:v1";
+        let sent = format!("us-central1-docker.pkg.dev/cust-proj/pfx-sbx-img/sbx@{D}");
+        assert!(!sandbox_image_is_signed(signed, &sent, "pfx", "sbx"));
     }
 }

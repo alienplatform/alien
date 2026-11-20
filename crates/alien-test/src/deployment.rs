@@ -327,6 +327,21 @@ impl TestDeployment {
         Ok(())
     }
 
+    /// The deployment's status as the manager reports it now.
+    pub async fn status(&self) -> Result<String, Box<dyn std::error::Error>> {
+        let resp = self
+            .manager
+            .client()
+            .get_deployment()
+            .id(&self.id)
+            .send()
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("Failed to get deployment {}: {}", self.id, e).into()
+            })?;
+        Ok(resp.status.to_string())
+    }
+
     /// Quick health check: returns `Ok(())` if the deployment is in `"running"`
     /// status, or an error otherwise.
     pub async fn check_health(&self) -> Result<(), Box<dyn std::error::Error>> {

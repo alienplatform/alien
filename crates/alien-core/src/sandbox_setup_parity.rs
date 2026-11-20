@@ -28,6 +28,8 @@ pub const GCP_SANDBOX_ITEMS: &[(&str, DirectSetup)] = &[
     ("preview-signer-account", DirectSetup::Creates),
     ("preview-sign-role", DirectSetup::Creates),
     ("preview-sign-binding", DirectSetup::Creates),
+    ("image-repository", DirectSetup::Creates),
+    ("image-repository-write", DirectSetup::Creates),
 ];
 
 /// Items the Azure sandbox emitter produces, keyed by what each one is for.

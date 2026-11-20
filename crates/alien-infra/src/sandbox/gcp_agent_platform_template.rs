@@ -29,7 +29,10 @@ use alien_gcp_clients::agent_platform::{
     EgressControlConfig, SandboxEnvironmentTemplate,
 };
 use alien_gcp_clients::longrunning::OperationResult;
+use alien_gcp_clients::platform::GcpClientConfigExt;
 use alien_macros::controller;
+
+use super::gcp_image_copy::{copy_image, CopyDestination, CopySource};
 
 /// Lifecycle state the API reports for a template that is ready to cut sessions from.
 const TEMPLATE_ACTIVE: &str = "ACTIVE";
@@ -227,6 +230,204 @@ fn build_template_body(
     })
 }
 
+/// Whether `image` is one the manager's registry serves from another project, so the caller of the
+/// template create cannot read it and Agent Platform's agent would not be allowed to either.
+/// Returns the proxy path (everything after the host) and the reference (`sha256:...` or a tag).
+fn image_to_copy<'a>(
+    image: &'a str,
+    deployment_config: &DeploymentConfig,
+    own_project: &str,
+) -> Option<(&'a str, &'a str)> {
+    let (host, path) = image.split_once('/')?;
+    deployment_config.manager_url.as_ref()?;
+    per_project_image_project_id(path)?;
+    // Already in the deployment's own Artifact Registry project: Agent Platform reads it as is.
+    if host.ends_with("-docker.pkg.dev") && path.split('/').next() == Some(own_project) {
+        return None;
+    }
+    if let Some((name, digest)) = path.split_once('@') {
+        return Some((name, digest));
+    }
+    match path.rsplit_once(':') {
+        Some((name, tag)) if !tag.contains('/') => Some((name, tag)),
+        _ => Some((path, "latest")),
+    }
+}
+
+/// Copy the sandbox image into a repository of the deployment's own project and name the copy, by
+/// digest, in `body`. Without this the create is refused: Agent Platform requires the caller to
+/// be able to read the image. An image already in the project is left alone. There is no fallback
+/// to the uncopied reference when the copy fails.
+async fn copy_image_into_own_project(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox_id: &str,
+    body: &mut SandboxEnvironmentTemplate,
+) -> Result<()> {
+    let Some(spec) = body
+        .custom_container_environment
+        .as_mut()
+        .and_then(|environment| environment.custom_container_spec.as_mut())
+    else {
+        return Ok(());
+    };
+    let gcp_config = ctx.get_gcp_config()?;
+    // `build_template_body` already named the native host; the manager's path is what follows it.
+    let Some((path, reference)) = image_to_copy(
+        &spec.image_uri,
+        ctx.deployment_config,
+        &gcp_config.project_id,
+    ) else {
+        return Ok(());
+    };
+    let (path, reference) = (path.to_string(), reference.to_string());
+    let (Some(manager_url), Some(token)) = (
+        ctx.deployment_config.manager_url.as_deref(),
+        ctx.deployment_config.deployment_token.as_deref(),
+    ) else {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "the sandbox image is in the manager's registry, and the deployment has no \
+                      manager token to copy it with"
+                .to_string(),
+            resource_id: Some(sandbox_id.to_string()),
+        }));
+    };
+    let repository =
+        alien_core::gar_repository::sandbox_image_repository(ctx.resource_prefix, sandbox_id)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "'{}-{sandbox_id}-img' is not a valid repository id",
+                        ctx.resource_prefix
+                    ),
+                    resource_id: Some(sandbox_id.to_string()),
+                })
+            })?;
+    require_image_repository(ctx, sandbox_id, &repository).await?;
+
+    let access_token = gcp_config
+        .get_bearer_token("https://www.googleapis.com/auth/cloud-platform")
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to get a Google access token to copy the sandbox image".to_string(),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+    // No overall timeout: a layer of several GB is legitimate. A stalled stream, though, must not
+    // hold the step forever: each connect and each read gets a bound.
+    let http = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .read_timeout(Duration::from_secs(120))
+        .build()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to build the HTTP client to copy the sandbox image".to_string(),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+    // `path` is `<vendor project>/<repository>/<alien project>/<image>`; the proxy serves it by name.
+    let source = CopySource {
+        base_url: manager_url,
+        repository: &path,
+        token,
+    };
+    // The service override lets tests point the registry host at a local server.
+    let destination_base = gcp_config.get_service_endpoint(
+        "artifactregistry-docker",
+        &format!("https://{}-docker.pkg.dev", gcp_config.region),
+    );
+    let destination_repository = format!("{}/{repository}/{sandbox_id}", gcp_config.project_id);
+    let destination = CopyDestination {
+        base_url: &destination_base,
+        repository: &destination_repository,
+        access_token: &access_token,
+    };
+    // The tag keeps the digest through the repository's cleanup of untagged versions.
+    let digest =
+        crate::sandbox::gcp_image_copy::resolve_digest(&http, &source, &reference, sandbox_id)
+            .await?;
+    let keep_tag = crate::sandbox::gcp_image_copy::keep_tag_for(&digest);
+    copy_image(
+        &http,
+        &source,
+        &destination,
+        &digest,
+        Some(&keep_tag),
+        sandbox_id,
+    )
+    .await?;
+    spec.image_uri = format!(
+        "{destination_base_host}/{destination_repository}@{digest}",
+        destination_base_host = destination_base
+            .split_once("://")
+            .map_or(destination_base.as_str(), |(_, host)| host)
+    );
+    info!(id = %sandbox_id, "Copied the sandbox image into the deployment's own project");
+    Ok(())
+}
+
+/// Check the sandbox's dedicated repository exists and is readable. Setup creates it (direct
+/// setup or the Terraform module), never this controller: at runtime it holds the management
+/// identity, which cannot create repositories. A missing or unreadable repository means the
+/// install was set up before sandbox images were copied into the project, so the answer is
+/// SETUP_RERUN_REQUIRED, before anything is copied or created.
+async fn require_image_repository(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox_id: &str,
+    repository: &str,
+) -> Result<()> {
+    let gcp_config = ctx.get_gcp_config()?;
+    let client = ctx
+        .service_provider
+        .get_gcp_artifact_registry_client(gcp_config)?;
+    let error = match client
+        .get_repository(
+            gcp_config.project_id.clone(),
+            gcp_config.region.clone(),
+            repository.to_string(),
+        )
+        .await
+    {
+        Ok(_) => return Ok(()),
+        Err(e) => e,
+    };
+    let missing = matches!(
+        error.error,
+        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+    );
+    let denied = matches!(
+        error.error,
+        Some(alien_client_core::ErrorData::RemoteAccessDenied { .. })
+    );
+    if !missing && !denied {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: format!("Failed to read the sandbox image repository '{repository}': {error}"),
+            resource_id: Some(sandbox_id.to_string()),
+        }));
+    }
+    // A management identity that may read repositories project-wide sees a missing repository as
+    // not found, one that may not sees it as denied. Both mean setup has not made it.
+    if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        && ctx.deployment_config.setup_run
+    {
+        // Setup's scaffolding makes it in this same run.
+        return Err(AlienError::new(ErrorData::DependencyNotReady {
+            resource_id: sandbox_id.to_string(),
+            dependency_id: repository.to_string(),
+        }));
+    }
+    let how = if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup {
+        "run the deployment's setup again"
+    } else {
+        "update the setup (apply the current setup package)"
+    };
+    Err(AlienError::new(ErrorData::SetupRerunRequired {
+        resource_id: sandbox_id.to_string(),
+        message: format!(
+            "the sandbox image repository '{repository}' is missing or not readable. Setup \
+             creates it and the manager's write access to it; {how}. Nothing was copied or \
+             created"
+        ),
+    }))
+}
+
 /// Create the template under `engine` and answer with the operation to poll. A protected install
 /// has its verifier create it, so the image a sandbox boots is the signed one; any other creates
 /// it directly.
@@ -343,7 +544,8 @@ impl GcpAgentPlatformTemplateController {
             .engine_id
             .ok_or_else(|| missing_state(&config.id, "engine id from the engine dependency"))?;
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
-        let body = build_template_body(config, &display_name, ctx.deployment_config)?;
+        let mut body = build_template_body(config, &display_name, ctx.deployment_config)?;
+        copy_image_into_own_project(ctx, &config.id, &mut body).await?;
 
         self.engine = Some(engine.clone());
         self.project_id = Some(gcp_config.project_id.clone());
@@ -691,7 +893,8 @@ impl GcpAgentPlatformTemplateController {
         })?;
 
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
-        let body = build_template_body(config, &display_name, ctx.deployment_config)?;
+        let mut body = build_template_body(config, &display_name, ctx.deployment_config)?;
+        copy_image_into_own_project(ctx, &config.id, &mut body).await?;
 
         info!(id=%config.id, "sandbox template body changed; creating a replacement");
         let operation_name = create_template(ctx, &client, &config.id, &engine, body).await?;
@@ -1900,6 +2103,35 @@ mod tests {
         })
     }
 
+    #[test]
+    fn only_an_image_in_another_project_is_copied() {
+        let config = deployment_config(Some("https://manager.example.com"), Some(NATIVE_HOST));
+        let other = "us-central1-docker.pkg.dev/vendor/artifacts-prj-abc/prj_abc/agent";
+        assert_eq!(
+            image_to_copy(&format!("{other}@sha256:0123"), &config, "customer"),
+            Some(("vendor/artifacts-prj-abc/prj_abc/agent", "sha256:0123"))
+        );
+        assert_eq!(
+            image_to_copy(&format!("{other}:v1"), &config, "customer"),
+            Some(("vendor/artifacts-prj-abc/prj_abc/agent", "v1"))
+        );
+        // Already in the deployment's own project: nothing to copy.
+        assert_eq!(
+            image_to_copy(&format!("{other}:v1"), &config, "vendor"),
+            None
+        );
+        // Not a manager image, or no manager: untouched.
+        assert_eq!(image_to_copy("ubuntu:24.04", &config, "customer"), None);
+        assert_eq!(
+            image_to_copy(
+                &format!("{other}:v1"),
+                &deployment_config(None, None),
+                "customer"
+            ),
+            None
+        );
+    }
+
     const NATIVE_HOST: &str = "us-central1-docker.pkg.dev";
 
     /// Agent Platform cannot pull through the manager's proxy, so an image a release pushed
@@ -1989,5 +2221,391 @@ mod tests {
             error.to_string().contains("prj_abc:sbx-agent"),
             "names the image: {error}"
         );
+    }
+
+    mod copy_into_own_project {
+        use super::*;
+        use alien_core::ClientConfig;
+        use alien_core::{GcpClientConfig, GcpServiceOverrides as ServiceOverrides};
+        use alien_gcp_clients::artifactregistry::{MockArtifactRegistryApi, Repository};
+        use httpmock::prelude::*;
+        use sha2::{Digest, Sha256};
+
+        const LAYER: &[u8] = b"layer";
+        const CONFIG: &[u8] = b"{}";
+        const SOURCE_IMAGE: &str =
+            "us-central1-docker.pkg.dev/vendor/artifacts-prj-abc/prj_abc/agent:v1";
+
+        fn digest_of(bytes: &[u8]) -> String {
+            format!("sha256:{:x}", Sha256::digest(bytes))
+        }
+
+        fn manifest() -> (String, String) {
+            let body = serde_json::json!({
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "config": {"digest": digest_of(CONFIG)},
+                "layers": [{"digest": digest_of(LAYER)}],
+            })
+            .to_string();
+            let digest = digest_of(body.as_bytes());
+            (body, digest)
+        }
+
+        /// The manager serves the image by name; Artifact Registry accepts every write.
+        fn serve_source(source: &MockServer, body: &str) {
+            source.mock(|w, t| {
+                w.method(GET)
+                    .path("/v2/vendor/artifacts-prj-abc/prj_abc/agent/manifests/v1")
+                    .header("authorization", "Bearer test-deployment-token");
+                t.status(200)
+                    .header("content-type", "application/vnd.oci.image.manifest.v1+json")
+                    .body(body);
+            });
+            // The copy then reads the manifest again by the digest it resolved.
+            let by_digest = digest_of(body.as_bytes());
+            source.mock(|w, t| {
+                w.method(GET).path(format!(
+                    "/v2/vendor/artifacts-prj-abc/prj_abc/agent/manifests/{by_digest}"
+                ));
+                t.status(200)
+                    .header("content-type", "application/vnd.oci.image.manifest.v1+json")
+                    .body(body);
+            });
+            for blob in [CONFIG, LAYER] {
+                let d = digest_of(blob);
+                source.mock(|w, t| {
+                    w.method(GET).path(format!(
+                        "/v2/vendor/artifacts-prj-abc/prj_abc/agent/blobs/{d}"
+                    ));
+                    t.status(200).body(blob);
+                });
+            }
+        }
+
+        fn serve_destination(dest: &MockServer) {
+            dest.mock(|w, t| {
+                w.method(httpmock::Method::HEAD);
+                t.status(404);
+            });
+            dest.mock(|w, t| {
+                w.method(POST);
+                t.status(202).header("location", "/upload");
+            });
+            dest.mock(|w, t| {
+                w.method(PUT).path("/upload");
+                t.status(201);
+            });
+            dest.mock(|w, t| {
+                w.method(PUT).path_contains("/manifests/");
+                t.status(201);
+            });
+        }
+
+        /// The repository setup made exists and is readable.
+        fn provider(client: Arc<MockAgentPlatformApi>) -> Arc<MockPlatformServiceProvider> {
+            provider_reading(client, None)
+        }
+
+        /// The repository read fails: `denied` is a refusal, otherwise not found. The controller
+        /// never creates a repository, so a create call fails the test.
+        fn provider_reading(
+            client: Arc<MockAgentPlatformApi>,
+            failure: Option<bool>,
+        ) -> Arc<MockPlatformServiceProvider> {
+            let mut registry = MockArtifactRegistryApi::new();
+            registry
+                .expect_get_repository()
+                .returning(move |_, _, _| match failure {
+                    None => Ok(Repository::default()),
+                    Some(true) => Err(alien_error::AlienError::new(
+                        alien_client_core::ErrorData::RemoteAccessDenied {
+                            resource_type: "repository".to_string(),
+                            resource_name: "r".to_string(),
+                        },
+                    )),
+                    Some(false) => Err(alien_error::AlienError::new(
+                        alien_client_core::ErrorData::RemoteResourceNotFound {
+                            resource_type: "repository".to_string(),
+                            resource_name: "r".to_string(),
+                        },
+                    )),
+                });
+            registry.expect_create_repository().never();
+            registry.expect_delete_repository().never();
+            let registry = Arc::new(registry);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_gcp_agent_platform_client()
+                .returning(move |_| Ok(client.clone()));
+            provider
+                .expect_get_gcp_artifact_registry_client()
+                .returning(move |_| Ok(registry.clone()));
+            Arc::new(provider)
+        }
+
+        async fn executor(
+            image: &str,
+            source: &MockServer,
+            dest: &MockServer,
+            provider: Arc<MockPlatformServiceProvider>,
+        ) -> SingleControllerExecutor {
+            executor_as(
+                alien_core::InitialSetupAuthority::ImportedHandoff,
+                false,
+                image,
+                source,
+                dest,
+                provider,
+            )
+            .await
+        }
+
+        async fn executor_as(
+            authority: alien_core::InitialSetupAuthority,
+            setup_run: bool,
+            image: &str,
+            source: &MockServer,
+            dest: &MockServer,
+            provider: Arc<MockPlatformServiceProvider>,
+        ) -> SingleControllerExecutor {
+            let config = GcpClientConfig::mock().with_service_overrides(ServiceOverrides {
+                endpoints: std::collections::HashMap::from([(
+                    "artifactregistry-docker".to_string(),
+                    dest.base_url(),
+                )]),
+            });
+            SingleControllerExecutor::builder()
+                .resource(sandbox_with(SandboxEgress::None, image, None, None))
+                .controller(GcpAgentPlatformTemplateController::default())
+                .platform(Platform::Gcp)
+                .client_config(ClientConfig::Gcp(Box::new(config)))
+                .initial_setup_authority(authority)
+                .setup_run(setup_run)
+                .manager_url(source.base_url())
+                .native_image_host("us-central1-docker.pkg.dev")
+                .service_provider(provider)
+                .with_test_dependencies()
+                .with_dependency(
+                    GcpAgentPlatformEngine::new(GcpAgentPlatformEngine::id_for_sandbox(
+                        "agent-sbx",
+                    ))
+                    .build(),
+                    GcpAgentPlatformEngineController::mock_ready("eng"),
+                )
+                .build()
+                .await
+                .expect("executor builds")
+        }
+
+        #[tokio::test]
+        async fn an_image_in_the_managers_project_is_copied_and_the_template_uses_the_copy() {
+            let (body, digest) = manifest();
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            serve_source(&source, &body);
+            serve_destination(&dest);
+            let expected_prefix = format!(
+                "{}/test-project-123/test-agent-sbx-img/agent-sbx@{digest}",
+                dest.base_url().trim_start_matches("http://")
+            );
+            let mut m = MockAgentPlatformApi::new();
+            m.expect_create_template()
+                .withf(move |_, template| {
+                    template
+                        .custom_container_environment
+                        .as_ref()
+                        .and_then(|e| e.custom_container_spec.as_ref())
+                        .map(|s| s.image_uri == expected_prefix)
+                        .unwrap_or(false)
+                })
+                .times(1)
+                .returning(|_, _| Ok(pending_op()));
+            m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
+            m.expect_get_template()
+                .returning(|_, id| Ok(active_template(id)));
+            m.expect_list_templates()
+                .returning(|_| Ok(vec![active_template("tpl1")]));
+            let mut executor = executor(SOURCE_IMAGE, &source, &dest, provider(Arc::new(m))).await;
+            executor.run_until_terminal().await.expect("create runs");
+            assert_eq!(executor.status(), ResourceStatus::Running);
+        }
+
+        fn healthy_client() -> MockAgentPlatformApi {
+            let mut m = MockAgentPlatformApi::new();
+            m.expect_create_template()
+                .returning(|_, _| Ok(pending_op()));
+            m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
+            m.expect_get_template()
+                .returning(|_, id| Ok(active_template(id)));
+            m.expect_list_templates()
+                .returning(|_| Ok(vec![active_template("tpl1")]));
+            m.expect_delete_template().returning(|_, _| Ok(()));
+            m
+        }
+
+        /// A repository setup created (Terraform) belongs to setup; the controller leaves it.
+        #[tokio::test]
+        async fn deleting_the_sandbox_leaves_a_repository_setup_created() {
+            let (body, _) = manifest();
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            serve_source(&source, &body);
+            serve_destination(&dest);
+            let mut executor = executor(
+                SOURCE_IMAGE,
+                &source,
+                &dest,
+                provider(Arc::new(healthy_client())),
+            )
+            .await;
+            executor.run_until_terminal().await.expect("create runs");
+            executor.delete().expect("delete accepted");
+            executor.run_until_terminal().await.expect("delete runs");
+            assert_eq!(executor.status(), ResourceStatus::Deleted);
+        }
+
+        #[tokio::test]
+        async fn an_image_already_in_the_deployments_project_is_not_copied() {
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            let own =
+                "us-central1-docker.pkg.dev/test-project-123/artifacts-prj-abc/prj_abc/agent:v1";
+            let mut m = MockAgentPlatformApi::new();
+            m.expect_create_template()
+                .withf(move |_, template| {
+                    template
+                        .custom_container_environment
+                        .as_ref()
+                        .and_then(|e| e.custom_container_spec.as_ref())
+                        .map(|s| s.image_uri == own)
+                        .unwrap_or(false)
+                })
+                .times(1)
+                .returning(|_, _| Ok(pending_op()));
+            m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
+            m.expect_get_template()
+                .returning(|_, id| Ok(active_template(id)));
+            m.expect_list_templates()
+                .returning(|_| Ok(vec![active_template("tpl1")]));
+            let mut executor = executor(own, &source, &dest, provider(Arc::new(m))).await;
+            executor.run_until_terminal().await.expect("create runs");
+            assert_eq!(executor.status(), ResourceStatus::Running);
+        }
+
+        /// A failed copy is an error of the step; the template is never created from the
+        /// uncopied reference, which Agent Platform would refuse anyway.
+        #[tokio::test]
+        async fn a_failed_copy_creates_no_template_and_the_step_can_run_again() {
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            source.mock(|w, t| {
+                w.method(GET).path_contains("/manifests/");
+                t.status(403);
+            });
+            let mut m = MockAgentPlatformApi::new();
+            m.expect_create_template().never();
+            let mut executor = executor(SOURCE_IMAGE, &source, &dest, provider(Arc::new(m))).await;
+            let first = executor.step().await;
+            let error = first.expect_err("a refused source stops the create");
+            assert!(error.to_string().contains("403"), "{error}");
+            assert!(
+                !error.to_string().contains("test-deployment-token"),
+                "{error}"
+            );
+            // The same step runs again, and the source is refused again.
+            assert!(executor.step().await.is_err());
+        }
+
+        /// An install set up before images were copied has no repository, or none the manager can
+        /// read. Cloud answers 403, or 404 for an identity that may read repositories project-wide;
+        /// both say to rerun setup, and write nothing: no repository, no copy, no template.
+        #[tokio::test]
+        async fn a_missing_or_refused_repository_asks_for_the_setup_rerun_and_writes_nothing() {
+            for denied in [true, false] {
+                let (source, dest) = (MockServer::start(), MockServer::start());
+                let source_requests = source.mock(|w, t| {
+                    w.any_request();
+                    t.status(200);
+                });
+                let dest_requests = dest.mock(|w, t| {
+                    w.any_request();
+                    t.status(200);
+                });
+                let mut m = MockAgentPlatformApi::new();
+                m.expect_create_template().never();
+                let provider = provider_reading(Arc::new(m), Some(denied));
+                let mut executor = executor(SOURCE_IMAGE, &source, &dest, provider).await;
+                let error = executor
+                    .step()
+                    .await
+                    .expect_err("an unusable repository stops the step");
+                assert_eq!(error.code, "SETUP_RERUN_REQUIRED", "{error}");
+                assert!(!error.retryable);
+                assert_eq!(source_requests.hits(), 0);
+                assert_eq!(dest_requests.hits(), 0);
+            }
+        }
+
+        /// A direct setup's scaffolding creates the repository and the manager's write access with
+        /// the deployer's credentials; this controller never creates it on a direct install. During
+        /// the setup run it waits for the scaffolding; afterwards a missing repository says to run
+        /// setup again. Neither creates, copies or touches the template.
+        #[tokio::test]
+        async fn a_direct_install_waits_for_the_repository_setup_makes() {
+            for (setup_run, code) in [
+                (true, "DEPENDENCY_NOT_READY"),
+                (false, "SETUP_RERUN_REQUIRED"),
+            ] {
+                let (source, dest) = (MockServer::start(), MockServer::start());
+                let source_requests = source.mock(|w, t| {
+                    w.any_request();
+                    t.status(200);
+                });
+                let dest_requests = dest.mock(|w, t| {
+                    w.any_request();
+                    t.status(200);
+                });
+                let mut m = MockAgentPlatformApi::new();
+                m.expect_create_template().never();
+                // No repository, and no create call allowed.
+                let provider = provider_reading(Arc::new(m), Some(false));
+                let mut executor = executor_as(
+                    alien_core::InitialSetupAuthority::DirectSetup,
+                    setup_run,
+                    SOURCE_IMAGE,
+                    &source,
+                    &dest,
+                    provider,
+                )
+                .await;
+                let error = executor
+                    .step()
+                    .await
+                    .expect_err("a missing repository stops the step");
+                assert_eq!(error.code, code, "{error}");
+                assert_eq!(source_requests.hits(), 0);
+                assert_eq!(dest_requests.hits(), 0);
+            }
+        }
+
+        /// What setup made is adopted: the copy goes into it, the template uses the copy, and the
+        /// controller records no repository, so its teardown leaves setup's to setup.
+        #[tokio::test]
+        async fn a_direct_install_adopts_the_repository_setup_made() {
+            let (body, _) = manifest();
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            serve_source(&source, &body);
+            serve_destination(&dest);
+            let m = healthy_client();
+            let provider = provider(Arc::new(m));
+            let mut executor = executor_as(
+                alien_core::InitialSetupAuthority::DirectSetup,
+                false,
+                SOURCE_IMAGE,
+                &source,
+                &dest,
+                provider,
+            )
+            .await;
+            executor.run_until_terminal().await.expect("create runs");
+            assert_eq!(executor.status(), ResourceStatus::Running);
+        }
     }
 }

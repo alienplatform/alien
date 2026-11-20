@@ -248,6 +248,7 @@ fn fully_populated_state() -> alien_core::DeploymentState {
         )]
         .into_iter()
         .collect(),
+        gcp_sandbox_scaffolding: Default::default(),
         deployer_secrets: vec![fully_populated_deployer_secret()],
         ai_access_checks: vec![AiAccessCheck {
             resource_id: "ai".to_string(),
