@@ -21,7 +21,11 @@ sha2 = { workspace = true }
 sha1 = { workspace = true }
 hex = { workspace = true }
 hmac = { workspace = true }
-snow = { workspace = true }
 getrandom = { workspace = true }
 url = { workspace = true }
 utoipa = { workspace = true, optional = true }
+
+# snow's `std` feature builds ring, whose C code needs a clang with a wasm32 backend. Extension
+# hooks build for wasm32 through alien-core and never open a session.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+snow = { workspace = true }

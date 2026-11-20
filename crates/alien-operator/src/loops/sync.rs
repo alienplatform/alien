@@ -147,6 +147,14 @@ pub(super) fn sanitize_identity_config(
     Ok(())
 }
 
+/// The version this Operator reports on each sync. Unit tests run against a manager built from
+/// the same tree, which gates features by the release that ships them, so they report a version
+/// it cannot order and treats as current.
+#[cfg(not(test))]
+const REPORTED_VERSION: &str = env!("CARGO_PKG_VERSION");
+#[cfg(test)]
+const REPORTED_VERSION: &str = "dev";
+
 /// Create an authenticated HTTP client
 fn create_authenticated_client(token: &str) -> crate::error::Result<Client> {
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -311,6 +319,7 @@ async fn sync_with_manager(
     };
     let sync_session = durable_execution.session.clone();
     let execution_claim = durable_execution.claim.clone();
+    let refused_target = state.db.get_refused_target().await?;
     let heartbeats = state.db.get_pending_heartbeats().await?;
     let mut observed_inventory_batches = state.db.get_pending_observed_inventory_batches().await?;
     let fresh_inventory_batches = if deployment_state.status == DeploymentStatus::Running
@@ -395,6 +404,27 @@ async fn sync_with_manager(
     {
         deployment_state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
     }
+    // A delete, teardown or retention reports itself: the refused update is no longer the
+    // operation. Another failure reports itself too; the refusal does not hide it.
+    if let (Some(refused), Some(target)) = (&refused_target, &durable_execution.target) {
+        let reports_itself = local_state_is_delete_or_deleted(&deployment_state)
+            || matches!(
+                deployment_state.status,
+                DeploymentStatus::RetentionRequired | DeploymentStatus::Retained
+            )
+            || (deployment_state.status.is_failed()
+                && deployment_state
+                    .error
+                    .as_ref()
+                    .is_none_or(|error| error.code != refused.error.code));
+        if refused.claim == durable_execution.claim
+            && !reports_itself
+            && refused.target_hash
+                == crate::db::approved_target_hash(Some(&target.release_info), &target.config)?
+        {
+            report_refused_target(&mut deployment_state, target, refused);
+        }
+    }
     let installed_config = installed_config(state, &deployment_state).await?;
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
@@ -406,7 +436,7 @@ async fn sync_with_manager(
         heartbeats,
         observed_inventory_batches,
         capabilities: report_operator_capabilities(state, operations_command_address_v1),
-        operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        operator_version: Some(REPORTED_VERSION.to_string()),
         operations_report,
         operations_config: Some(reported_operations_config(state.config.operations.as_ref())),
         installed_setup: reported_installed_setup(&state.config),
@@ -566,9 +596,78 @@ async fn sync_with_manager(
         }
     }
 
+    // A release's extension bundles are downloaded before the release is accepted. A bundle of the
+    // new target that fails its check refuses the target: it is never accepted, not even from the
+    // manager's state, the deployment stays on the release it runs, and the next sync reports the
+    // refusal as the target's failed update. Any other failure leaves the target unverified until
+    // another try; it fails the sync once the manager's control state is applied, so a delete
+    // still reaches the deployment.
+    // A protected Operator takes no release that lists extensions (`verify_release` refuses
+    // one), so it downloads no bundle and leaves the target to `protect_target`.
+    let cache = crate::extension_bundles::cache(&state.config.data_dir);
+    let mut refused = false;
+    let mut target_download = Ok(());
+    if let Some(target) = durable_target.as_ref().filter(|target| {
+        !state.config.is_protected() && !target.release_info.stack.extensions.is_empty()
+    }) {
+        let target_hash =
+            crate::db::approved_target_hash(Some(&target.release_info), &target.config)?;
+        // A refused bundle is not downloaded again while the manager sends its target under
+        // the same claim.
+        refused = refused_target.as_ref().is_some_and(|refused| {
+            refused.target_hash == target_hash && refused.claim == sync_response.execution_claim
+        });
+        if !refused {
+            match crate::extension_bundles::download(
+                &cache,
+                client,
+                base_url,
+                &[&target.release_info.stack],
+            )
+            .await
+            {
+                Ok(()) => {}
+                Err(error) if error.code == "EXTENSION_BUNDLE_REFUSED" => {
+                    warn!(error = %error, "Refused the target release: an extension bundle failed its check");
+                    state
+                        .db
+                        .set_refused_target(Some(&crate::db::RefusedTarget {
+                            target_hash,
+                            claim: sync_response.execution_claim.clone(),
+                            error: error.into_generic(),
+                        }))
+                        .await?;
+                    refused = true;
+                }
+                Err(error) => target_download = Err(error),
+            }
+        }
+    }
+    let verified = !refused && target_download.is_ok();
+    let unverified_release = durable_target
+        .as_ref()
+        .filter(|_| !verified)
+        .map(|target| &target.release_info);
+
+    // A manager that issues no claims asks for another attempt with Retry, in its state. Forgetting
+    // the refusal makes the next sync report the release the deployment runs, which ends the
+    // manager's retry, and download the target again: one attempt per Retry.
+    if refused_target
+        .as_ref()
+        .is_some_and(|refused| refused.claim.is_none())
+        && sync_response
+            .current_state
+            .as_ref()
+            .is_some_and(|manager_state| manager_state.retry_requested)
+    {
+        state.db.set_refused_target(None).await?;
+    }
+
     let mut state_hydrated = false;
-    if let Some(manager_state) = sync_response.current_state {
+    if let Some(mut manager_state) = sync_response.current_state {
         let local_state = state.db.get_deployment_state().await?;
+        let takes_unverified_target = unverified_release.is_some()
+            && manager_state.target_release.as_ref() == unverified_release;
         if state.config.is_protected() {
             // The manager's copy of the state can carry releases and prepared
             // stacks; a protected Operator keeps its own and takes only the
@@ -581,6 +680,7 @@ async fn sync_with_manager(
             if let Some(mut local_state) = state.db.get_deployment_state().await? {
                 if apply_manager_control_signals(&mut local_state, &manager_state) {
                     state.db.set_deployment_state(&local_state).await?;
+                    state.db.request_deployment();
                     state_hydrated = true;
                     info!("Applied deployment control signals from manager");
                 }
@@ -589,12 +689,21 @@ async fn sync_with_manager(
             .as_ref()
             .is_none_or(is_uninitialized_deployment_state)
         {
+            if takes_unverified_target {
+                manager_state.target_release = None;
+            }
             state.db.set_deployment_state(&manager_state).await?;
+            state.db.request_deployment();
             state_hydrated = true;
             info!("Hydrated deployment state from manager");
         } else if let Some(mut local_state) = local_state {
+            // A delete runs with the release the deployment runs instead.
+            if takes_unverified_target {
+                manager_state.target_release = local_state.current_release.clone();
+            }
             if apply_manager_control_state(&mut local_state, &manager_state) {
                 state.db.set_deployment_state(&local_state).await?;
+                state.db.request_deployment();
                 state_hydrated = true;
                 info!("Applied deployment control state from manager");
             } else {
@@ -605,8 +714,43 @@ async fn sync_with_manager(
         }
     }
 
+    if let Err(e) = repair_frozen_cluster_namespace(state).await {
+        warn!(error = %e, "Could not check the recorded cluster namespace; will retry on the next sync");
+    }
+
+    // The bundles of the releases the deployment runs or moves to were checked when each was
+    // accepted; ones missing from the cache are downloaded again. A failure fails the sync once a
+    // new target has had its turn, so a fixed release is still accepted.
+    let local_state = state.db.get_deployment_state().await?;
+    // An unfinished update's stack too: it finishes on that stack after a newer target arrives.
+    let running: Vec<&alien_core::Stack> = local_state
+        .iter()
+        .flat_map(|local| {
+            [
+                local.unfinished_update().map(|(_, stack)| stack),
+                local.target_release.as_ref().map(|release| &release.stack),
+                local.current_release.as_ref().map(|release| &release.stack),
+            ]
+        })
+        .flatten()
+        .collect();
+    let running_bundles = if running.iter().any(|stack| !stack.extensions.is_empty()) {
+        crate::extension_bundles::download(&cache, client, base_url, &running).await
+    } else {
+        Ok(())
+    };
+
+    // A delete needs the configuration its target carries, but not the unverified release.
+    let deletes_without_target = !verified
+        && local_state
+            .as_ref()
+            .is_some_and(local_state_is_delete_or_deleted);
+
+    // Only a target this sync uses is protected: protecting one records the install's trust,
+    // and a target whose bundles are unverified would otherwise keep a newer signed config
+    // from being applied to the running release.
     let durable_target = match durable_target {
-        Some(mut target) => {
+        Some(mut target) if verified || deletes_without_target => {
             // The newest signed config, which may be newer than the one the
             // target was built with (a stored target is processed again).
             if signed_config.is_some() {
@@ -614,14 +758,23 @@ async fn sync_with_manager(
             }
             protect_target(state, &target).await?
         }
-        None => None,
+        other => other,
     };
 
+    if deletes_without_target {
+        if let Some(target) = durable_target.as_ref() {
+            state.db.set_deployment_config(&target.config).await?;
+        }
+    }
+
     // Check if there's a new target
-    let has_update = durable_target.is_some();
+    let has_update = durable_target.is_some() && verified;
 
     if has_update {
         if let Some(target_deployment) = durable_target {
+            if refused_target.is_some() {
+                state.db.set_refused_target(None).await?;
+            }
             // Platform claims maintenance on the operation whose apply this
             // Operator completed last (its applied operation). Any other
             // claim is new work: an update, a corrective target or a retry.
@@ -703,6 +856,8 @@ async fn sync_with_manager(
     let config_update = !has_update && reapply_with_signed_config(state, signed_config).await?;
 
     secret_refresh?;
+    target_download?;
+    running_bundles?;
     Ok(has_update || state_hydrated || config_update)
 }
 
@@ -895,6 +1050,24 @@ async fn record_refusal(
     state.db.set_deployment_state(&deployment_state).await
 }
 
+/// Reports the update to `target` as failed with its refusal, so the manager ends the operation
+/// that sent it instead of waiting for it. Only the report says so: the deployment keeps running
+/// the release it runs.
+fn report_refused_target(
+    report: &mut alien_core::DeploymentState,
+    target: &alien_core::sync::TargetDeployment,
+    refused: &crate::db::RefusedTarget,
+) {
+    report.status = if report.current_release.is_some() {
+        DeploymentStatus::UpdateFailed
+    } else {
+        DeploymentStatus::ProvisioningFailed
+    };
+    report.target_release = Some(target.release_info.clone());
+    report.error = Some(refused.error.clone());
+    report.retry_requested = false;
+}
+
 /// What an enrolled Operator holds for the release it runs or is applying.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InstalledConfig {
@@ -1025,16 +1198,62 @@ pub(crate) async fn accept_target(
         );
     }
 
-    // Save state and config
-    state.db.set_deployment_state(&deployment_state).await?;
-    state
-        .db
-        .set_deployment_config(&target_deployment.config)
-        .await?;
+    // The manager replays a target on every sync. Only a target that changes the
+    // deployment's state or what is applied wakes the loop: a replay must not cut
+    // short the wait a step asked for.
+    let previous_state = state.db.get_deployment_state().await?;
+    let previous_config = state.db.get_deployment_config().await?;
+    let changed = serde_json::to_value(&previous_state).ok()
+        != serde_json::to_value(Some(&deployment_state)).ok()
+        || match (&previous_state, &previous_config) {
+            (Some(previous), Some(config)) => {
+                crate::db::approved_target_hash(previous.target_release.as_ref(), config)?
+                    != crate::db::approved_target_hash(
+                        deployment_state.target_release.as_ref(),
+                        &target_deployment.config,
+                    )?
+            }
+            _ => true,
+        };
 
-    // Handle deployment approval if required. A refresh changes nothing that
-    // was not already approved.
-    if !refresh && state.config.requires_deployment_approval() {
+    // Open the approval before the target is saved: the deployment loop treats a
+    // release with no approval record as approved, so the pending record must
+    // exist by the time the target can be read or the loop is woken. A refresh
+    // changes nothing that was not already approved. A target sent again while
+    // its approval is still pending, or already decided, keeps that record: a
+    // newer one would hide the decision. A changed release or config is a new
+    // target and needs its own approval (compared by the hash the loop uses).
+    // Only the newest record of all counts as a repeat: a target that returns
+    // after another release was proposed (a rollback) is asked about again.
+    // The record must also be for what this Operator has installed or is
+    // targeting: an older approved release that returns after another release
+    // was deployed without a record (approval was off) is a new proposal.
+    let covered = match state.db.get_latest_approval().await? {
+        Some(latest) => {
+            let latest_release_id = latest
+                .release_info
+                .as_ref()
+                .and_then(|release| release.release_id.as_deref());
+            let held_release = |release: Option<&alien_core::ReleaseInfo>| {
+                latest_release_id.is_some()
+                    && release.and_then(|release| release.release_id.as_deref())
+                        == latest_release_id
+            };
+            let is_held = previous_state.as_ref().is_some_and(|previous| {
+                held_release(previous.target_release.as_ref())
+                    || held_release(previous.current_release.as_ref())
+            });
+            is_held
+                && same_target(
+                    latest.release_info.as_ref(),
+                    &latest.deployment_config,
+                    &target_deployment.release_info,
+                    &target_deployment.config,
+                )
+        }
+        None => false,
+    };
+    if !refresh && state.config.requires_deployment_approval() && !covered {
         let apr_id = format!("apr_{}", Uuid::new_v4().simple());
         let approval = Approval {
             id: apr_id.clone(),
@@ -1053,7 +1272,66 @@ pub(crate) async fn accept_target(
             "Created approval for new target release"
         );
     }
+
+    // Save state and config
+    state.db.set_deployment_state(&deployment_state).await?;
+    state
+        .db
+        .set_deployment_config(&target_deployment.config)
+        .await?;
+    if changed {
+        // Written last: the loop reads the config together with the target.
+        state.db.request_deployment();
+    }
+
     Ok(())
+}
+
+/// Whether a target re-sent by the manager is the one a stored approval
+/// record covers: the release and the whole configuration are equal as
+/// serialized values. Only fields the manager regenerates on every sync are
+/// left out:
+/// - `deploymentToken`: the Operator's own bearer token, taken from the sync
+///   request's header;
+/// - `environmentVariables.createdAt`: the snapshot's creation timestamp (its
+///   `hash` and every variable stay compared).
+///
+/// Fields that serde skips (`setup_run`, `deployment_id`, `setup_run_id`,
+/// `release_statements`, `image_registry`, `image_pull_secrets`,
+/// `deletion_policy`) are set by the Operator itself and never arrive in a
+/// target. Any other field counts: a spurious new record only asks again, a
+/// missed change would apply an unapproved one.
+fn same_target(
+    stored_release: Option<&alien_core::ReleaseInfo>,
+    stored_config: &alien_core::DeploymentConfig,
+    release: &alien_core::ReleaseInfo,
+    config: &alien_core::DeploymentConfig,
+) -> bool {
+    fn comparable(
+        release: Option<&alien_core::ReleaseInfo>,
+        config: &alien_core::DeploymentConfig,
+    ) -> Option<serde_json::Value> {
+        let mut config = serde_json::to_value(config).ok()?;
+        let object = config.as_object_mut()?;
+        object.remove("deploymentToken");
+        if let Some(snapshot) = object
+            .get_mut("environmentVariables")
+            .and_then(|value| value.as_object_mut())
+        {
+            snapshot.remove("createdAt");
+        }
+        Some(serde_json::json!([
+            serde_json::to_value(release).ok()?,
+            config
+        ]))
+    }
+    match (
+        comparable(stored_release, stored_config),
+        comparable(Some(release), config),
+    ) {
+        (Some(stored), Some(incoming)) => stored == incoming,
+        _ => false,
+    }
 }
 
 /// Whether a maintenance target can be served by refreshing what is installed:
@@ -1348,6 +1626,108 @@ fn operation_command_address_capability(
     }
 }
 
+/// The namespace a Kubernetes install that was registered before setup recorded
+/// its namespace holds in its frozen cluster.
+const MANAGER_DEFAULT_CLUSTER_NAMESPACE: &str = "default";
+
+/// Repairs the frozen `kubernetes` cluster of an install that was registered
+/// with the manager's default namespace while this Operator runs in its Helm
+/// release namespace. Such a baseline can never pass an update ("Frozen
+/// resource 'kubernetes' was modified"), and the Operator never takes resource
+/// state from its manager once initialized, so the repair is local; the
+/// Operator's state report carries it to the manager.
+async fn repair_frozen_cluster_namespace(state: &OperatorState) -> crate::error::Result<()> {
+    let Some(own_namespace) = state
+        .config
+        .stack_settings
+        .as_ref()
+        .and_then(|settings| settings.kubernetes.as_ref())
+        .and_then(|kubernetes| kubernetes.cluster.as_ref())
+        .and_then(|cluster| cluster.namespace.as_deref())
+        .filter(|namespace| !namespace.is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(mut local_state) = state.db.get_deployment_state().await? else {
+        return Ok(());
+    };
+    if let Some(old) = repaired_cluster_namespace(&mut local_state, own_namespace) {
+        state.db.set_deployment_state(&local_state).await?;
+        info!(
+            old_namespace = %old,
+            new_namespace = %own_namespace,
+            "Recorded the cluster in the namespace this Operator runs in; setup registered it before the namespace was known"
+        );
+    }
+    Ok(())
+}
+
+/// Sets the frozen cluster's namespace to `own_namespace` in the stack state and
+/// the prepared stack, and returns the namespace it replaced. Changes nothing
+/// unless all hold: the platform is Kubernetes; the recorded namespace is the
+/// manager's default and differs from `own_namespace`; and no Live resource was
+/// ever created, so nothing can live in the recorded namespace. A cluster
+/// recorded in another namespace, or an install that already ran, keeps the
+/// Frozen refusal.
+fn repaired_cluster_namespace(
+    local_state: &mut alien_core::DeploymentState,
+    own_namespace: &str,
+) -> Option<String> {
+    use alien_core::{KubernetesCluster, ResourceLifecycle, ResourceStatus};
+
+    if local_state.platform != Platform::Kubernetes
+        || own_namespace == MANAGER_DEFAULT_CLUSTER_NAMESPACE
+    {
+        return None;
+    }
+    let stack_state = local_state.stack_state.as_mut()?;
+    let ran_live = stack_state.resources.values().any(|resource| {
+        resource.lifecycle.unwrap_or(ResourceLifecycle::Live) == ResourceLifecycle::Live
+            && resource.status != ResourceStatus::Pending
+    });
+    if ran_live {
+        // Only an install that still records its cluster in the default namespace logs
+        // this, so a stuck install whose repair does not apply can be told apart.
+        let recorded_in_default = stack_state.resources.values().any(|resource| {
+            resource
+                .config
+                .downcast_ref::<KubernetesCluster>()
+                .is_some_and(|cluster| cluster.namespace == MANAGER_DEFAULT_CLUSTER_NAMESPACE)
+        });
+        if recorded_in_default {
+            info!(
+                own_namespace = %own_namespace,
+                "The cluster is recorded in the default namespace, but a resource already ran there; leaving the record unchanged"
+            );
+        }
+        return None;
+    }
+    let mut replaced = None;
+    for resource in stack_state.resources.values_mut() {
+        if let Some(cluster) = resource.config.downcast_mut::<KubernetesCluster>() {
+            if cluster.namespace == MANAGER_DEFAULT_CLUSTER_NAMESPACE {
+                cluster.namespace = own_namespace.to_string();
+                replaced = Some(MANAGER_DEFAULT_CLUSTER_NAMESPACE.to_string());
+            }
+        }
+    }
+    if let Some(prepared) = local_state
+        .runtime_metadata
+        .as_mut()
+        .and_then(|metadata| metadata.prepared_stack.as_mut())
+    {
+        for entry in prepared.resources.values_mut() {
+            if let Some(cluster) = entry.config.downcast_mut::<KubernetesCluster>() {
+                if cluster.namespace == MANAGER_DEFAULT_CLUSTER_NAMESPACE {
+                    cluster.namespace = own_namespace.to_string();
+                    replaced = Some(MANAGER_DEFAULT_CLUSTER_NAMESPACE.to_string());
+                }
+            }
+        }
+    }
+    replaced
+}
+
 fn is_uninitialized_deployment_state(state: &alien_core::DeploymentState) -> bool {
     state.status == alien_core::DeploymentStatus::Pending
         && state.current_release.is_none()
@@ -1375,8 +1755,11 @@ fn apply_manager_control_state(
             | alien_core::DeploymentStatus::TeardownFailed
             | alien_core::DeploymentStatus::Deleted
     ) {
+        // The manager reports this state on every sync: only a different one is a change.
+        let changed =
+            serde_json::to_value(&*local_state).ok() != serde_json::to_value(manager_state).ok();
         *local_state = manager_state.clone();
-        return true;
+        return changed;
     }
     let protocol_changed = manager_state.protocol_version > local_state.protocol_version
         && alien_core::accepts_deployment_protocol_report(
@@ -1536,6 +1919,293 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 
 #[cfg(test)]
 mod tests {
+
+    // --- recorded cluster namespace repair ---
+
+    fn cluster_in(namespace: &str) -> alien_core::KubernetesCluster {
+        alien_core::KubernetesCluster::new("kubernetes".to_string())
+            .provider(alien_core::KubernetesClusterProvider::Gke)
+            .ownership(alien_core::KubernetesClusterOwnership::Existing)
+            .namespace(namespace.to_string())
+            .heartbeat_mode(alien_core::KubernetesHeartbeatMode::KubernetesApi)
+            .build()
+    }
+
+    fn cluster_namespaces(state: &DeploymentState) -> (String, String) {
+        let in_state = state.stack_state.as_ref().unwrap().resources["kubernetes"]
+            .config
+            .downcast_ref::<alien_core::KubernetesCluster>()
+            .unwrap()
+            .namespace
+            .clone();
+        let in_baseline = state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .as_ref()
+            .unwrap()
+            .resources["kubernetes"]
+            .config
+            .downcast_ref::<alien_core::KubernetesCluster>()
+            .unwrap()
+            .namespace
+            .clone();
+        (in_state, in_baseline)
+    }
+
+    /// An install as an old registration recorded it: the frozen cluster in
+    /// `namespace`, and no Live resource ever created.
+    fn imported_state(namespace: &str) -> DeploymentState {
+        let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
+        stack_state.resources.insert(
+            "kubernetes".to_string(),
+            alien_core::StackResourceState {
+                status: alien_core::ResourceStatus::Running,
+                ..alien_core::StackResourceState::new_pending(
+                    "kubernetes-cluster".to_string(),
+                    alien_core::Resource::new(cluster_in(namespace)),
+                    Some(alien_core::ResourceLifecycle::Frozen),
+                    vec![],
+                )
+            },
+        );
+        let prepared = Stack::new("imported".to_string())
+            .add(cluster_in(namespace), alien_core::ResourceLifecycle::Frozen)
+            .build();
+        DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Pending,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                prepared_stack: Some(prepared),
+                ..Default::default()
+            }),
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn with_live_resource(state: &mut DeploymentState, status: alien_core::ResourceStatus) {
+        let stack_state = state.stack_state.as_mut().unwrap();
+        let mut worker = alien_core::StackResourceState::new_pending(
+            "worker".to_string(),
+            alien_core::Resource::new(
+                alien_core::Worker::new("api".to_string())
+                    .code(alien_core::WorkerCode::Image {
+                        image: "img".to_string(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+            ),
+            Some(alien_core::ResourceLifecycle::Live),
+            vec![],
+        );
+        worker.status = status;
+        stack_state.resources.insert("api".to_string(), worker);
+    }
+
+    #[test]
+    fn a_cluster_recorded_before_the_namespace_was_known_takes_the_operators_namespace() {
+        let mut state = imported_state("default");
+        assert_eq!(
+            super::repaired_cluster_namespace(&mut state, "product").as_deref(),
+            Some("default")
+        );
+        assert_eq!(
+            cluster_namespaces(&state),
+            ("product".to_string(), "product".to_string())
+        );
+        // A second report changes nothing.
+        assert_eq!(
+            super::repaired_cluster_namespace(&mut state, "product"),
+            None
+        );
+    }
+
+    /// The Operator's update is checked against the recorded baseline: refused
+    /// while it holds the cluster in `default`, accepted after the repair, and a
+    /// genuine change to the cluster is still refused.
+    #[tokio::test]
+    async fn the_update_passes_the_compatibility_check_after_the_repair() {
+        let target = || {
+            Stack::new("imported".to_string())
+                .permission(
+                    "execution",
+                    alien_core::PermissionProfile::new().global(["worker/execute"]),
+                )
+                .add(
+                    alien_core::Worker::new("api".to_string())
+                        .code(alien_core::WorkerCode::Image {
+                            image: "img".to_string(),
+                        })
+                        .permissions("execution".to_string())
+                        .build(),
+                    alien_core::ResourceLifecycle::Live,
+                )
+                .build()
+        };
+        let config = |namespace: &str, cluster_name: Option<&str>| {
+            alien_core::DeploymentConfig::builder()
+                .stack_settings(alien_core::StackSettings {
+                    kubernetes: Some(alien_core::KubernetesSettings {
+                        cluster: Some(alien_core::KubernetesClusterSettings {
+                            ownership: alien_core::KubernetesClusterOwnership::Existing,
+                            namespace: Some(namespace.to_string()),
+                            cloud: cluster_name.map(|name| alien_core::KubernetesCloudReference {
+                                cluster_name: Some(name.to_string()),
+                                ..Default::default()
+                            }),
+                        }),
+                        exposure: None,
+                    }),
+                    ..Default::default()
+                })
+                .base_platform(Platform::Gcp)
+                .external_bindings(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .build()
+        };
+        let check = |state: &DeploymentState, config: alien_core::DeploymentConfig| {
+            let prepared = state
+                .runtime_metadata
+                .as_ref()
+                .unwrap()
+                .prepared_stack
+                .clone();
+            let stack_state = state.stack_state.clone().unwrap();
+            async move {
+                alien_preflights::runner::PreflightRunner::new()
+                    .run_deployment_time_preflights(
+                        target(),
+                        &stack_state,
+                        &config,
+                        &alien_core::ClientConfig::Test,
+                        prepared.as_ref(),
+                        None,
+                        None,
+                    )
+                    .await
+            }
+        };
+
+        // The baseline an old registration prepared: the cluster in `default`.
+        let (baseline, _, _) = alien_preflights::runner::PreflightRunner::new()
+            .run_deployment_time_preflights(
+                target(),
+                &alien_core::StackState::new(Platform::Kubernetes),
+                &config("default", None),
+                &alien_core::ClientConfig::Test,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("the baseline prepares");
+        let mut state = imported_state("default");
+        let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
+        for (id, entry) in &baseline.resources {
+            let mut resource = alien_core::StackResourceState::new_pending(
+                entry.config.resource_type().to_string(),
+                entry.config.clone(),
+                Some(entry.lifecycle),
+                entry.dependencies.clone(),
+            );
+            if entry.lifecycle == alien_core::ResourceLifecycle::Frozen {
+                resource.status = alien_core::ResourceStatus::Running;
+                // A controller state: not adopted from an external binding.
+                resource.internal_state = Some(serde_json::json!({}));
+            }
+            stack_state.resources.insert(id.clone(), resource);
+        }
+        state.stack_state = Some(stack_state);
+        state.runtime_metadata.as_mut().unwrap().prepared_stack = Some(baseline);
+        let refused = check(&state, config("product", None))
+            .await
+            .expect_err("the baseline holds the cluster in default");
+        assert!(format!("{refused:?}").contains("'kubernetes' was modified"));
+
+        assert!(super::repaired_cluster_namespace(&mut state, "product").is_some());
+        check(&state, config("product", None))
+            .await
+            .expect("the repaired baseline passes");
+
+        let refused = check(&state, config("product", Some("another-cluster")))
+            .await
+            .expect_err("a changed cluster still needs setup");
+        assert!(format!("{refused:?}").contains("'kubernetes' was modified"));
+    }
+
+    #[test]
+    fn a_pending_live_resource_does_not_block_the_repair() {
+        let mut state = imported_state("default");
+        with_live_resource(&mut state, alien_core::ResourceStatus::Pending);
+        assert!(super::repaired_cluster_namespace(&mut state, "product").is_some());
+    }
+
+    #[test]
+    fn the_cluster_namespace_is_left_alone_when_the_repair_does_not_apply() {
+        // The namespaces already match: a Helm install, or a repaired one.
+        let mut state = imported_state("product");
+        assert_eq!(
+            super::repaired_cluster_namespace(&mut state, "product"),
+            None
+        );
+
+        // The Operator itself runs in the default namespace.
+        let mut state = imported_state("default");
+        assert_eq!(
+            super::repaired_cluster_namespace(&mut state, "default"),
+            None
+        );
+
+        // A cluster recorded in another namespace is a real move: setup decides.
+        let mut state = imported_state("analytics");
+        assert_eq!(
+            super::repaired_cluster_namespace(&mut state, "product"),
+            None
+        );
+        assert_eq!(
+            cluster_namespaces(&state),
+            ("analytics".to_string(), "analytics".to_string())
+        );
+
+        // An install that already ran Live resources may have workloads in the
+        // recorded namespace.
+        for status in [
+            alien_core::ResourceStatus::Running,
+            alien_core::ResourceStatus::Provisioning,
+            alien_core::ResourceStatus::ProvisionFailed,
+        ] {
+            let mut state = imported_state("default");
+            with_live_resource(&mut state, status);
+            assert_eq!(
+                super::repaired_cluster_namespace(&mut state, "product"),
+                None
+            );
+            assert_eq!(
+                cluster_namespaces(&state),
+                ("default".to_string(), "default".to_string())
+            );
+        }
+
+        // Not Kubernetes.
+        let mut state = imported_state("default");
+        state.platform = Platform::Aws;
+        assert_eq!(
+            super::repaired_cluster_namespace(&mut state, "product"),
+            None
+        );
+    }
     /// Turning on protected mode removes the dynamic containers the install ran
     /// before; unprotected installs and installs that never allowed them keep
     /// today's behavior.
@@ -2451,6 +3121,560 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn a_held_deployment_still_reports_its_status_to_the_manager() {
+        for status in [
+            DeploymentStatus::TeardownRequired,
+            DeploymentStatus::RetentionRequired,
+            DeploymentStatus::Retained,
+            DeploymentStatus::TeardownFailed,
+        ] {
+            let data_dir = tempfile::tempdir().unwrap();
+            let db = Arc::new(
+                OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                    .await
+                    .unwrap(),
+            );
+            db.set_deployment_id("dep_held").await.unwrap();
+            let held = DeploymentState {
+                platform: Platform::Local,
+                status,
+                current_release: None,
+                target_release: None,
+                stack_state: None,
+                runtime_metadata: None,
+                error: None,
+                environment_info: None,
+                retry_requested: false,
+                protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            };
+            db.set_deployment_state(&held).await.unwrap();
+            let captured = Arc::new(Mutex::new(None));
+            let request_capture = captured.clone();
+            let held_reply = held.clone();
+            let app = Router::new().route(
+                "/v1/sync",
+                post(move |Json(body): Json<Value>| {
+                    *request_capture.lock().unwrap() = Some(body);
+                    // The manager reports the same state on every sync.
+                    let response = json!({"currentState": held_reply});
+                    async move { Json(response) }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            let state = OperatorState {
+                config: OperatorConfig::builder()
+                    .platform(Platform::Local)
+                    .data_dir(data_dir.path().to_str().unwrap())
+                    .encryption_key(TEST_ENCRYPTION_KEY)
+                    .build(),
+                db,
+                service_provider: None,
+                operations_sync_handler: None,
+                pod_log_collection: false,
+                cancel: CancellationToken::new(),
+            };
+            // The deployment loop holds in this status; the sync loop reports it.
+            super::super::deployment::run_deployment_continuously(&state)
+                .await
+                .unwrap();
+            sync_with_manager(
+                &state,
+                &create_authenticated_client("fake-token").unwrap(),
+                &url,
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+            let request = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("manager was contacted");
+            assert_eq!(
+                request["currentState"]["status"],
+                serde_json::to_value(status).unwrap(),
+                "{status:?}"
+            );
+            server.abort();
+        }
+    }
+
+    /// Whether the deployment loop was woken (consuming the wake).
+    async fn deployment_woken(db: &OperatorDb) -> bool {
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            db.wait_for_deployment(),
+        )
+        .await
+        .is_ok()
+    }
+
+    #[tokio::test]
+    async fn an_accepted_target_wakes_the_deployment_loop() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        assert!(!deployment_woken(&db).await);
+        super::accept_target(&state, &fixtures::target(release, vec![]), false)
+            .await
+            .unwrap();
+        assert!(deployment_woken(&db).await);
+    }
+
+    fn approval_required_state(data_dir: &std::path::Path, db: Arc<OperatorDb>) -> OperatorState {
+        OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .maybe_stack_settings(Some(alien_core::StackSettings {
+                    airgapped: false,
+                    updates: alien_core::UpdatesMode::ApprovalRequired,
+                    telemetry: alien_core::TelemetryMode::Auto,
+                    heartbeats: alien_core::HeartbeatsMode::On,
+                    deployment_model: alien_core::DeploymentModel::Pull,
+                    network: None,
+                    domains: None,
+                    kubernetes: None,
+                    external_bindings: None,
+                    compute: None,
+                    public_endpoints: None,
+                    quota_warning_overrides: Vec::new(),
+                    endpoint_access: alien_core::EndpointAccess::Internet,
+                    setup_management: alien_core::SetupManagement::Manual,
+                    signing: None,
+                }))
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    /// With manual approval, the pending approval exists by the time the new
+    /// target can be read or the deployment loop is woken, so a pass that runs
+    /// at the earliest moment sees Pending and deploys nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_pending_approval_exists_before_the_target_is_readable() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = approval_required_state(data_dir.path(), db.clone());
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let release_id = release.release_id.clone().unwrap();
+
+        // The loop's earliest pass: woken, it reads the approval for the target.
+        let watcher_db = db.clone();
+        let watcher_release = release_id.clone();
+        let watcher = tokio::spawn(async move {
+            watcher_db.wait_for_deployment().await;
+            watcher_db
+                .get_approval_status_for_release(&watcher_release)
+                .await
+                .unwrap()
+        });
+        // A poll that does not wait for a wake sees the target as soon as it is saved.
+        let poller_db = db.clone();
+        let poller_release = release_id.clone();
+        let poller = tokio::spawn(async move {
+            loop {
+                if poller_db
+                    .get_deployment_state()
+                    .await
+                    .unwrap()
+                    .is_some_and(|s| s.target_release.is_some())
+                {
+                    return poller_db
+                        .get_approval_status_for_release(&poller_release)
+                        .await
+                        .unwrap();
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+
+        super::accept_target(&state, &fixtures::target(release, vec![]), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            watcher.await.unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+        assert_eq!(
+            poller.await.unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+    }
+
+    /// A target sent again before a decision keeps the one pending approval: a
+    /// second, newer record would hide the decision on the first.
+    #[tokio::test]
+    async fn a_replayed_target_keeps_one_pending_approval() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = approval_required_state(data_dir.path(), db.clone());
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let target = fixtures::target(release, vec![]);
+        super::accept_target(&state, &target, false).await.unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        assert_eq!(pending.len(), 1);
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let release_id = target.release_info.release_id.clone().unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Approved)
+        );
+    }
+
+    async fn approval_fixture() -> (
+        tempfile::TempDir,
+        Arc<OperatorDb>,
+        OperatorState,
+        alien_core::sync::TargetDeployment,
+        String,
+    ) {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = approval_required_state(data_dir.path(), db.clone());
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let release_id = release.release_id.clone().unwrap();
+        let target = fixtures::target(release, vec![]);
+        (data_dir, db, state, target, release_id)
+    }
+
+    async fn approval_records(db: &OperatorDb, release_id: &str) -> usize {
+        db.count_approvals_for_release(release_id).await.unwrap()
+    }
+
+    /// The manager repeats the target on every sync. A decided approval stays
+    /// the answer: the repeat must not open a newer Pending record over it.
+    #[tokio::test]
+    async fn a_target_repeated_after_approval_stays_approved() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Approved)
+        );
+        assert_eq!(approval_records(&db, &release_id).await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_target_repeated_after_rejection_stays_rejected() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Rejected,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Rejected)
+        );
+        assert_eq!(approval_records(&db, &release_id).await, 1);
+    }
+
+    /// The same release with a changed config is a new thing to approve: the
+    /// decision on the old config does not cover it.
+    #[tokio::test]
+    async fn a_changed_config_for_an_approved_release_needs_a_new_approval() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let mut changed = target.clone();
+        changed
+            .config
+            .input_values
+            .insert("logLevel".to_string(), serde_json::json!("trace"));
+        super::accept_target(&state, &changed, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+        // The changed target repeated keeps its one pending record.
+        super::accept_target(&state, &changed, false).await.unwrap();
+        assert_eq!(db.get_pending_approvals().await.unwrap().len(), 1);
+    }
+
+    /// A release that returns after another one was proposed (a rollback) is
+    /// asked about again, as before: its old decision is not a repeat.
+    #[tokio::test]
+    async fn an_older_approved_release_sent_again_after_another_needs_a_new_approval() {
+        use crate::protected::tests as fixtures;
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let other = fixtures::target(
+            fixtures::signed_release(6, &fixtures::stack(&fixtures::pinned())),
+            vec![],
+        );
+        super::accept_target(&state, &other, false).await.unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+    }
+
+    async fn approve_first_target(
+        db: &OperatorDb,
+        state: &OperatorState,
+        target: &alien_core::sync::TargetDeployment,
+    ) {
+        super::accept_target(state, target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// The manager mints a new token and snapshot timestamp on every sync; a
+    /// target that differs only in those is a repeat.
+    #[tokio::test]
+    async fn a_target_resent_with_fresh_per_sync_values_is_a_repeat() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        approve_first_target(&db, &state, &target).await;
+        let mut resent = target.clone();
+        resent.config.deployment_token = Some("fresh-token".to_string());
+        resent.config.environment_variables.created_at = "2030-01-01T00:00:00Z".to_string();
+        super::accept_target(&state, &resent, false).await.unwrap();
+        assert_eq!(approval_records(&db, &release_id).await, 1);
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Approved)
+        );
+    }
+
+    /// A field the approval hash does not cover still changes what is applied.
+    #[tokio::test]
+    async fn an_approved_target_resent_with_frozen_changes_needs_a_new_approval() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        approve_first_target(&db, &state, &target).await;
+        let mut changed = target.clone();
+        changed.config.allow_frozen_changes = true;
+        super::accept_target(&state, &changed, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+        assert_eq!(approval_records(&db, &release_id).await, 2);
+    }
+
+    #[tokio::test]
+    async fn an_approved_target_resent_with_a_volume_restore_needs_a_new_approval() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        approve_first_target(&db, &state, &target).await;
+        let mut changed = target.clone();
+        changed
+            .config
+            .volume_restores
+            .push(alien_core::VolumeRestoreRequest {
+                request_id: "restore-1".to_string(),
+                resource_id: "data".to_string(),
+                ordinal: 0,
+                snapshot_id: "snap-1".to_string(),
+            });
+        super::accept_target(&state, &changed, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+        assert_eq!(approval_records(&db, &release_id).await, 2);
+    }
+
+    /// Approval turned off, another release deployed with no record, approval
+    /// turned on: the old record is the newest but is not what is installed.
+    #[tokio::test]
+    async fn an_approved_release_resent_after_another_was_installed_needs_a_new_approval() {
+        use crate::protected::tests as fixtures;
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        approve_first_target(&db, &state, &target).await;
+        let other = fixtures::signed_release(6, &fixtures::stack(&fixtures::pinned()));
+        let mut installed = db.get_deployment_state().await.unwrap().unwrap();
+        installed.current_release = Some(other.clone());
+        installed.target_release = Some(other);
+        db.set_deployment_state(&installed).await.unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_retry_request_from_the_manager_wakes_the_deployment_loop() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        db.set_deployment_id("dep_retry").await.unwrap();
+        let failed = DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::ProvisioningFailed,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            runtime_metadata: None,
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&failed).await.unwrap();
+        let retry = DeploymentState {
+            retry_requested: true,
+            ..failed
+        };
+        let app = Router::new().route(
+            "/v1/sync",
+            post(move |Json(_): Json<Value>| {
+                let response = json!({"currentState": retry});
+                async move { Json(response) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Local)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        assert!(!deployment_woken(&db).await);
+        sync_with_manager(
+            &state,
+            &create_authenticated_client("fake-token").unwrap(),
+            &url,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            db.get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .retry_requested
+        );
+        assert!(deployment_woken(&db).await);
+        server.abort();
+    }
+
     struct SyncFixture {
         config: OperatorConfig,
         status: DeploymentStatus,
@@ -2738,8 +3962,8 @@ mod tests {
             stack: Stack::new("app".into())
                 .add(worker(image), alien_core::ResourceLifecycle::Live)
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
         let mut internal = serde_json::to_value(
@@ -2922,8 +4146,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -3062,8 +4286,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let mut config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -3160,8 +4384,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let mut keyless = config.clone();
         keyless.runtime_identity_audience = None;
@@ -3260,8 +4484,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -3750,6 +4974,7 @@ mod tests {
         provider
             .expect_get_kubernetes_metrics_client()
             .returning(move |_| Ok(metrics_client.clone()));
+        provider.expect_without_interceptors().returning(|| None);
         Arc::new(provider)
     }
 
@@ -5153,8 +6378,8 @@ mod tests {
                         alien_core::ResourceLifecycle::Live,
                     )
                     .build(),
-                    signed: None,
-                    signer_lists: Vec::new(),
+                signed: None,
+                signer_lists: Vec::new(),
             };
             let applying = status == DeploymentStatus::UpdatePending;
             DeploymentState {
@@ -5246,5 +6471,1073 @@ mod tests {
                 InstalledConfig::WithoutCommandsKey
             );
         }
+    }
+}
+
+/// A release's extension bundles reach the Operator's cache, checked, before the release does.
+#[cfg(test)]
+mod extension_bundle_tests {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    use alien_core::{
+        DeploymentState, DeploymentStatus, Platform, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+    };
+    use alien_infra::extension_bundle::{host_target, testing::TestBundle};
+    use axum::body::Body;
+    use axum::extract::{Path, State};
+    use axum::http::StatusCode;
+    use axum::response::{IntoResponse, Response};
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
+    use serde_json::{json, Value};
+    use tokio_util::sync::CancellationToken;
+
+    use super::{create_authenticated_client, sync_with_manager};
+    use crate::{db::OperatorDb, OperatorConfig, OperatorState};
+
+    const TEST_ENCRYPTION_KEY: &str =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// How the manager serves one bundle object.
+    #[derive(Clone)]
+    enum Object {
+        Whole(Vec<u8>),
+        /// Half the bytes, then the connection fails.
+        CutShort(Vec<u8>),
+    }
+
+    #[derive(Clone, Default)]
+    struct Manager {
+        sync: Arc<Mutex<Value>>,
+        /// The body of each sync request, in order
+        reports: Arc<Mutex<Vec<Value>>>,
+        objects: Arc<Mutex<HashMap<String, Object>>>,
+        hits: Arc<Mutex<HashMap<String, usize>>>,
+    }
+
+    async fn sync(State(manager): State<Manager>, Json(report): Json<Value>) -> Json<Value> {
+        manager.reports.lock().unwrap().push(report);
+        Json(manager.sync.lock().unwrap().clone())
+    }
+
+    async fn object(
+        State(manager): State<Manager>,
+        Path(name): Path<String>,
+        headers: axum::http::HeaderMap,
+    ) -> Response {
+        // The bundle route is the manager's own: the Operator's token reaches it.
+        if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some("Bearer ax_dep_test")
+        {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        *manager
+            .hits
+            .lock()
+            .unwrap()
+            .entry(name.clone())
+            .or_default() += 1;
+        match manager.objects.lock().unwrap().get(&name).cloned() {
+            Some(Object::Whole(bytes)) => bytes.into_response(),
+            Some(Object::CutShort(bytes)) => {
+                let half = bytes[..bytes.len() / 2].to_vec();
+                let chunks: Vec<Result<Vec<u8>, std::io::Error>> =
+                    vec![Ok(half), Err(std::io::Error::other("connection lost"))];
+                // The failure waits, so the headers and the first half reach the Operator.
+                let stream =
+                    futures::StreamExt::then(futures::stream::iter(chunks), |chunk| async {
+                        if chunk.is_err() {
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        }
+                        chunk
+                    });
+                Body::from_stream(stream).into_response()
+            }
+            None => StatusCode::NOT_FOUND.into_response(),
+        }
+    }
+
+    impl Manager {
+        async fn start(self) -> String {
+            let app = Router::new()
+                .route("/v1/sync", post(sync))
+                .route("/v1/extensions/bundles/{digest}", get(object))
+                .with_state(self);
+            let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await });
+            url
+        }
+
+        fn serve(&self, name: &str, object: Object) {
+            self.objects
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), object);
+        }
+
+        fn hits(&self, name: &str) -> usize {
+            self.hits.lock().unwrap().get(name).copied().unwrap_or(0)
+        }
+
+        /// The manager offers `release`, whose stack lists `bundle`.
+        fn offer(&self, release: &str, bundle: &TestBundle) {
+            *self.sync.lock().unwrap() = json!({
+                "target": {
+                    "releaseInfo": {
+                        "releaseId": release,
+                        "stack": {"id": "app", "resources": {}, "extensions": [bundle.manifest]}
+                    },
+                    "config": {"environmentVariables": {"variables": [], "hash": "", "createdAt": "now"}}
+                }
+            });
+        }
+    }
+
+    /// The digest the manager serves a controller binary under.
+    fn digest_of(bytes: &[u8]) -> String {
+        format!("sha256:{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes))
+    }
+
+    fn host() -> alien_core::BinaryTarget {
+        host_target().expect("tests run on a machine with a controller target")
+    }
+
+    async fn operator(data_dir: &std::path::Path) -> OperatorState {
+        let db = OperatorDb::new(data_dir.to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_ext").await.unwrap();
+        OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Aws)
+                .operator_permission("diagnostics")
+                .data_dir(data_dir.to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    fn folder(data_dir: &std::path::Path, bundle: &TestBundle) -> Vec<String> {
+        let hex = bundle.manifest.digest.strip_prefix("sha256:").unwrap();
+        let dir = data_dir
+            .join("synced-extensions")
+            .join(format!("{}@sha256-{hex}", bundle.manifest.name));
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(error) => panic!("{error}"),
+        };
+        let mut names: Vec<String> = entries
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn target_release(state: &DeploymentState) -> Option<&str> {
+        state
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.as_deref())
+    }
+
+    /// The manager's own state of the deployment, as it sends it with each sync: its target is
+    /// the release it offers.
+    fn manager_state(
+        status: DeploymentStatus,
+        current: Option<&Value>,
+        target: Option<&Value>,
+        error: Option<&Value>,
+    ) -> Value {
+        serde_json::to_value(DeploymentState {
+            platform: Platform::Aws,
+            status,
+            current_release: current.map(|v| serde_json::from_value(v.clone()).unwrap()),
+            target_release: target.map(|v| serde_json::from_value(v.clone()).unwrap()),
+            stack_state: None,
+            error: error.map(|v| serde_json::from_value(v.clone()).unwrap()),
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        })
+        .unwrap()
+    }
+
+    /// Adds the manager's state to its next answers, with the release it offers as the target.
+    fn with_manager_state(
+        manager: &Manager,
+        status: DeploymentStatus,
+        current: Option<&Value>,
+        error: Option<&Value>,
+    ) {
+        let mut response = manager.sync.lock().unwrap().clone();
+        let target = response["target"]["releaseInfo"].clone();
+        response["currentState"] = manager_state(status, current, Some(&target), error);
+        *manager.sync.lock().unwrap() = response;
+    }
+
+    fn last_report(manager: &Manager) -> Value {
+        manager.reports.lock().unwrap().last().unwrap()["currentState"].clone()
+    }
+
+    /// A protected Operator offered a target that lists an extension downloads no bundle and
+    /// doesn't take the target.
+    #[tokio::test]
+    async fn a_protected_operator_downloads_no_bundle_and_refuses_the_target() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let bundle = TestBundle::new("acme", "1.0.0", &[(host(), b"controller")]);
+        let manager = Manager::default();
+        let url = manager.clone().start().await;
+        manager.serve(&bundle.manifest.digest, Object::Whole(bundle.zip.clone()));
+        manager.offer("rel_1", &bundle);
+        let mut state = operator(data_dir.path()).await;
+        state.config.release_signing = Some(crate::protected::test_signing("shop"));
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+
+        // The sync itself succeeds: the target is refused, not the manager.
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+
+        assert_eq!(manager.hits(&bundle.manifest.digest), 0);
+        assert!(folder(data_dir.path(), &bundle).is_empty());
+        let deployment = state.db.get_deployment_state().await.unwrap();
+        assert_eq!(
+            deployment.as_ref().and_then(target_release),
+            None,
+            "{deployment:?}"
+        );
+    }
+
+    /// The Operator runs release `rel_1`, with `v1`'s bundle downloaded, and the manager offers
+    /// `rel_2` with `v2`'s.
+    async fn running_v1_offered_v2(
+        data_dir: &std::path::Path,
+        v2_core: impl FnOnce(&TestBundle) -> Object,
+    ) -> (OperatorState, Manager, String, TestBundle, TestBundle) {
+        let v1 = TestBundle::new("acme", "1.0.0", &[(host(), b"controller v1")]);
+        let v2 = TestBundle::new("acme", "2.0.0", &[(host(), b"controller v2")]);
+        let manager = Manager::default();
+        let url = manager.clone().start().await;
+        manager.serve(&v1.manifest.digest, Object::Whole(v1.zip.clone()));
+        manager.offer("rel_1", &v1);
+        let state = operator(data_dir).await;
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let mut running = state.db.get_deployment_state().await.unwrap().unwrap();
+        running.current_release = running.target_release.take();
+        running.status = DeploymentStatus::Running;
+        state.db.set_deployment_state(&running).await.unwrap();
+
+        manager.serve(&v2.manifest.digest, v2_core(&v2));
+        manager.offer("rel_2", &v2);
+        (state, manager, url, v1, v2)
+    }
+
+    #[tokio::test]
+    async fn downloads_a_new_digest_once_into_its_own_folder_before_accepting_the_release() {
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = TestBundle::new("acme", "1.0.0", &[(host(), b"controller v1")]);
+        let manager = Manager::default();
+        let url = manager.clone().start().await;
+        manager.serve(&bundle.manifest.digest, Object::Whole(bundle.zip.clone()));
+        manager.serve(
+            &digest_of(b"controller v1"),
+            Object::Whole(b"controller v1".to_vec()),
+        );
+        manager.offer("rel_1", &bundle);
+        let state = operator(directory.path()).await;
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+
+        for _ in 0..2 {
+            sync_with_manager(&state, &client, &url, false, None)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(folder(directory.path(), &bundle), ["core.zip"]);
+        assert_eq!(
+            manager.hits(&bundle.manifest.digest),
+            1,
+            "a digest it has is not downloaded again"
+        );
+        assert_eq!(
+            manager.hits(&digest_of(b"controller v1")),
+            0,
+            "the controller binary the bundle pins for this machine is never downloaded"
+        );
+        let deployment = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(target_release(&deployment), Some("rel_1"));
+    }
+
+    #[tokio::test]
+    async fn refuses_a_wrong_sha256_keeps_the_release_it_runs_and_reports_the_refusal() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, manager, url, v1, v2) = running_v1_offered_v2(directory.path(), |_| {
+            Object::Whole(TestBundle::new("acme", "2.0.0", &[]).zip)
+        })
+        .await;
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+
+        let deployment = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(target_release(&deployment), None, "rel_2 is not accepted");
+        assert_eq!(deployment.status, DeploymentStatus::Running);
+        assert_eq!(
+            deployment
+                .current_release
+                .as_ref()
+                .and_then(|release| release.release_id.as_deref()),
+            Some("rel_1")
+        );
+        assert_eq!(folder(directory.path(), &v2), Vec::<String>::new());
+        assert_eq!(folder(directory.path(), &v1), ["core.zip"]);
+        // The deployment loop still runs rel_1 with its extension loaded.
+        let provider = crate::extension_bundles::provider_for(
+            None,
+            &crate::extension_bundles::cache(directory.path().to_str().unwrap()),
+            &deployment,
+            "dep_ext",
+            &alien_core::ClientConfig::Test,
+        )
+        .await
+        .unwrap()
+        .expect("rel_1 lists an extension");
+        assert!(provider.extensions().is_some());
+
+        // A health pass clears the deployment's error; the next sync still reports the refusal,
+        // as the failed update to rel_2, and does not download the refused bundle again.
+        let mut healthy = deployment.clone();
+        healthy.error = None;
+        state.db.set_deployment_state(&healthy).await.unwrap();
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let report = manager.reports.lock().unwrap().last().unwrap()["currentState"].clone();
+        assert_eq!(report["status"], "update-failed", "{report}");
+        assert_eq!(report["targetRelease"]["releaseId"], "rel_2");
+        assert_eq!(report["currentRelease"]["releaseId"], "rel_1");
+        assert_eq!(
+            report["error"]["code"], "EXTENSION_BUNDLE_REFUSED",
+            "{report}"
+        );
+        let message = report["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("Extension 'acme'") && message.contains("sha256"),
+            "{message}"
+        );
+        assert_eq!(manager.hits(&v2.manifest.digest), 1);
+        let deployment = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(deployment.status, DeploymentStatus::Running);
+        assert_eq!(target_release(&deployment), None);
+    }
+
+    /// With no new target, a bundle of the release the deployment runs that fails its check
+    /// fails the sync with the refusal: there is no update to fail instead.
+    #[tokio::test]
+    async fn a_refused_bundle_of_the_running_release_fails_the_sync() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, manager, url, v1, _v2) =
+            running_v1_offered_v2(directory.path(), |v2| Object::Whole(v2.zip.clone())).await;
+        *manager.sync.lock().unwrap() = json!({});
+        let hex = v1.manifest.digest.strip_prefix("sha256:").unwrap();
+        std::fs::remove_dir_all(
+            directory
+                .path()
+                .join("synced-extensions")
+                .join(format!("acme@sha256-{hex}")),
+        )
+        .unwrap();
+        manager.serve(
+            &v1.manifest.digest,
+            Object::Whole(TestBundle::new("acme", "1.0.1", &[]).zip),
+        );
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+
+        let error = sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "EXTENSION_BUNDLE_REFUSED", "{error}");
+        assert!(!error.retryable);
+    }
+
+    /// A refusal holds for the claim that sent the target. A new claim for it is a new attempt,
+    /// which downloads the bundle again, so a manager that now serves the pinned bytes gets the
+    /// update.
+    #[tokio::test]
+    async fn a_new_claim_retries_a_refused_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, manager, url, _v1, v2) = running_v1_offered_v2(directory.path(), |_| {
+            Object::Whole(TestBundle::new("acme", "2.0.0", &[]).zip)
+        })
+        .await;
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        let claimed = |attempt: &str| {
+            let mut response = manager.sync.lock().unwrap().clone();
+            response["executionClaim"] = json!({ "operationId": "op_1", "attemptId": attempt });
+            *manager.sync.lock().unwrap() = response;
+        };
+
+        claimed("att_1");
+        for _ in 0..2 {
+            sync_with_manager(&state, &client, &url, false, None)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            manager.hits(&v2.manifest.digest),
+            1,
+            "one download per claim"
+        );
+
+        manager.serve(&v2.manifest.digest, Object::Whole(v2.zip.clone()));
+        claimed("att_2");
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        assert_eq!(manager.hits(&v2.manifest.digest), 2);
+        let deployment = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(target_release(&deployment), Some("rel_2"));
+    }
+
+    /// A delete the manager asks for after it sent a refused target still names that target in
+    /// its state. The delete takes the configuration and runs with the release the deployment
+    /// runs, whose extension is loaded; the refused release never becomes its target.
+    #[tokio::test]
+    async fn a_deployment_deletes_after_its_update_was_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, manager, url, _v1, _v2) = running_v1_offered_v2(directory.path(), |_| {
+            Object::Whole(TestBundle::new("acme", "2.0.0", &[]).zip)
+        })
+        .await;
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        state.db.clear_deployment_config().await.unwrap();
+
+        let running = state.db.get_deployment_state().await.unwrap().unwrap();
+        let current = serde_json::to_value(running.current_release.as_ref().unwrap()).unwrap();
+        with_manager_state(
+            &manager,
+            DeploymentStatus::DeletePending,
+            Some(&current),
+            None,
+        );
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+
+        let deleting = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(deleting.status, DeploymentStatus::DeletePending);
+        assert_eq!(target_release(&deleting), Some("rel_1"));
+        assert!(state.db.get_deployment_config().await.unwrap().is_some());
+        // The delete reports itself, not the refused update.
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        assert_eq!(last_report(&manager)["status"], "delete-pending");
+        let provider = crate::extension_bundles::provider_for(
+            None,
+            &crate::extension_bundles::cache(directory.path().to_str().unwrap()),
+            &deleting,
+            "dep_ext",
+            &alien_core::ClientConfig::Test,
+        )
+        .await
+        .unwrap()
+        .expect("rel_1 lists an extension");
+        assert!(provider.extensions().is_some());
+    }
+
+    /// A target whose bundle the manager doesn't hold fails the sync with an error a retry won't
+    /// clear, since a release uploads its bundles before it is published, but the manager's
+    /// control state still applies: a delete reaches the deployment and runs with the release it
+    /// runs.
+    #[tokio::test]
+    async fn a_delete_reaches_the_deployment_while_its_target_cannot_download() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, manager, url, _v1, v2) =
+            running_v1_offered_v2(directory.path(), |v2| Object::Whole(v2.zip.clone())).await;
+        manager.objects.lock().unwrap().remove(&v2.manifest.digest);
+        state.db.clear_deployment_config().await.unwrap();
+        let running = state.db.get_deployment_state().await.unwrap().unwrap();
+        let current = serde_json::to_value(running.current_release.as_ref().unwrap()).unwrap();
+        with_manager_state(
+            &manager,
+            DeploymentStatus::DeletePending,
+            Some(&current),
+            None,
+        );
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+
+        let error = sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap_err();
+        assert!(!error.retryable, "{error}");
+        let deleting = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(deleting.status, DeploymentStatus::DeletePending);
+        assert_eq!(target_release(&deleting), Some("rel_1"));
+        assert!(state.db.get_deployment_config().await.unwrap().is_some());
+    }
+
+    /// The manager's state on a first install carries the target it offers. A target whose bundle
+    /// fails its check is refused rather than taken from that state, its failure is reported, and
+    /// a fixed release that follows is accepted.
+    #[tokio::test]
+    async fn a_first_install_refuses_the_target_the_managers_state_carries() {
+        let directory = tempfile::tempdir().unwrap();
+        let bad = TestBundle::new("acme", "1.0.0", &[(host(), b"controller v1")]);
+        let manager = Manager::default();
+        let url = manager.clone().start().await;
+        manager.serve(
+            &bad.manifest.digest,
+            Object::Whole(TestBundle::new("acme", "1.0.0", &[]).zip),
+        );
+        manager.offer("rel_1", &bad);
+        with_manager_state(&manager, DeploymentStatus::Pending, None, None);
+        let state = operator(directory.path()).await;
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let deployment = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(target_release(&deployment), None, "rel_1 is not accepted");
+
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let report = last_report(&manager);
+        assert_eq!(report["status"], "provisioning-failed", "{report}");
+        assert_eq!(report["targetRelease"]["releaseId"], "rel_1");
+        assert_eq!(report["error"]["code"], "EXTENSION_BUNDLE_REFUSED");
+
+        // The manager saves the failure and sends it back; the report still names the refusal.
+        let refusal = report["error"].clone();
+        with_manager_state(
+            &manager,
+            DeploymentStatus::ProvisioningFailed,
+            None,
+            Some(&refusal),
+        );
+        for _ in 0..2 {
+            sync_with_manager(&state, &client, &url, false, None)
+                .await
+                .unwrap();
+        }
+        let report = last_report(&manager);
+        assert_eq!(report["status"], "provisioning-failed", "{report}");
+        assert_eq!(report["error"]["code"], "EXTENSION_BUNDLE_REFUSED");
+        assert_eq!(manager.hits(&bad.manifest.digest), 1);
+
+        let fixed = TestBundle::new("acme", "1.0.1", &[(host(), b"controller v2")]);
+        manager.serve(&fixed.manifest.digest, Object::Whole(fixed.zip.clone()));
+        manager.offer("rel_2", &fixed);
+        with_manager_state(
+            &manager,
+            DeploymentStatus::ProvisioningFailed,
+            None,
+            Some(&refusal),
+        );
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let deployment = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(target_release(&deployment), Some("rel_2"));
+        assert_eq!(deployment.status, DeploymentStatus::Pending);
+    }
+
+    /// A failure of the deployment's own, such as a failed health check, is reported as it is: a
+    /// refused update does not replace it. Retention reports itself the same way.
+    #[tokio::test]
+    async fn a_refused_update_does_not_hide_the_deployments_own_status() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, manager, url, _v1, _v2) = running_v1_offered_v2(directory.path(), |_| {
+            Object::Whole(TestBundle::new("acme", "2.0.0", &[]).zip)
+        })
+        .await;
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+
+        for (status, reported) in [
+            (DeploymentStatus::RefreshFailed, "refresh-failed"),
+            (DeploymentStatus::Retained, "retained"),
+        ] {
+            let mut local = state.db.get_deployment_state().await.unwrap().unwrap();
+            local.status = status;
+            local.error = (status == DeploymentStatus::RefreshFailed).then(|| {
+                alien_error::AlienError::new(alien_error::GenericError {
+                    message: "health check failed".to_string(),
+                })
+            });
+            state.db.set_deployment_state(&local).await.unwrap();
+            sync_with_manager(&state, &client, &url, false, None)
+                .await
+                .unwrap();
+            assert_eq!(last_report(&manager)["status"], reported);
+        }
+    }
+
+    /// A bundle of the running release that fails its check fails the sync, but only after a new
+    /// target has had its turn, so the fixed release is still accepted.
+    #[tokio::test]
+    async fn a_refused_running_bundle_does_not_block_a_fixed_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, manager, url, v1, _v2) =
+            running_v1_offered_v2(directory.path(), |v2| Object::Whole(v2.zip.clone())).await;
+        let hex = v1.manifest.digest.strip_prefix("sha256:").unwrap();
+        std::fs::remove_dir_all(
+            directory
+                .path()
+                .join("synced-extensions")
+                .join(format!("acme@sha256-{hex}")),
+        )
+        .unwrap();
+        manager.serve(
+            &v1.manifest.digest,
+            Object::Whole(TestBundle::new("acme", "1.0.1", &[]).zip),
+        );
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+
+        let error = sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "EXTENSION_BUNDLE_REFUSED", "{error}");
+        let deployment = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(target_release(&deployment), Some("rel_2"));
+    }
+
+    #[tokio::test]
+    async fn a_download_cut_short_leaves_nothing_behind() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, _manager, url, _v1, v2) =
+            running_v1_offered_v2(directory.path(), |v2| Object::CutShort(v2.zip.clone())).await;
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+
+        let error = sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.message.contains("Extension 'acme'"),
+            "{}",
+            error.message
+        );
+        assert!(folder(directory.path(), &v2).is_empty());
+        let deployment = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(target_release(&deployment), None);
+    }
+
+    #[tokio::test]
+    async fn the_deployment_loop_refuses_a_release_whose_bundle_is_not_downloaded() {
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = TestBundle::new("acme", "1.0.0", &[]);
+        let deployment: DeploymentState = serde_json::from_value(json!({
+            "platform": "aws", "status": "pending", "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            "targetRelease": {"releaseId": "rel_1", "stack": {"id": "app", "resources": {}, "extensions": [bundle.manifest]}}
+        }))
+        .unwrap();
+
+        let error = crate::extension_bundles::provider_for(
+            None,
+            &crate::extension_bundles::cache(directory.path().to_str().unwrap()),
+            &deployment,
+            "dep_ext",
+            &alien_core::ClientConfig::Test,
+        )
+        .await
+        .err()
+        .expect("nothing is downloaded");
+
+        assert!(
+            error.message.contains("Extension 'acme'") && error.message.contains("not downloaded"),
+            "{}",
+            error.message
+        );
+    }
+
+    /// Writes `bundle` into the Operator's cache, as a finished download leaves it.
+    fn cached(data_dir: &std::path::Path, bundle: &TestBundle) {
+        let hex = bundle.manifest.digest.strip_prefix("sha256:").unwrap();
+        let dir = data_dir
+            .join("synced-extensions")
+            .join(format!("{}@sha256-{hex}", bundle.manifest.name));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("core.zip"), &bundle.zip).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_update_that_adds_an_extension_also_loads_the_release_it_moves_from() {
+        let directory = tempfile::tempdir().unwrap();
+        let acme = TestBundle::new("acme", "1.0.0", &[]);
+        let beta = TestBundle::new("beta", "1.0.0", &[]);
+        cached(directory.path(), &acme);
+        cached(directory.path(), &beta);
+        let state = |current: Vec<&TestBundle>, target: Vec<&TestBundle>| -> DeploymentState {
+            let stack = |bundles: Vec<&TestBundle>| json!({"id": "app", "resources": {}, "extensions": bundles.iter().map(|b| &b.manifest).collect::<Vec<_>>()});
+            serde_json::from_value(json!({
+                "platform": "aws", "status": "update-pending", "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                "currentRelease": {"releaseId": "rel_1", "stack": stack(current)},
+                "targetRelease": {"releaseId": "rel_2", "stack": stack(target)}
+            }))
+            .unwrap()
+        };
+        let cache = crate::extension_bundles::cache(directory.path().to_str().unwrap());
+
+        let adds = crate::extension_bundles::provider_for(
+            None,
+            &cache,
+            &state(vec![&acme], vec![&acme, &beta]),
+            "dep_ext",
+            &alien_core::ClientConfig::Test,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let same = crate::extension_bundles::provider_for(
+            None,
+            &cache,
+            &state(vec![&acme], vec![&acme]),
+            "dep_ext",
+            &alien_core::ClientConfig::Test,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert!(
+            adds.for_current_release().is_some(),
+            "an add-only update loads the current release"
+        );
+        assert!(same.for_current_release().is_none());
+    }
+
+    /// A manager that issues no claims: the manager's own sync route over its SQLite store. Bundle
+    /// objects come from `bundles`, which counts each download.
+    struct ClaimlessManager {
+        store: Arc<dyn alien_manager::traits::DeploymentStore>,
+        deployment_id: String,
+        /// The ids of `rel_1` and `rel_2`.
+        releases: Vec<String>,
+        url: String,
+        bundles: Manager,
+    }
+
+    impl ClaimlessManager {
+        /// A pull deployment that runs `rel_1`, whose stack lists `v1`, with `rel_2`, whose stack
+        /// lists `v2`, as its update.
+        async fn start(dir: &std::path::Path, v1: &TestBundle, v2: &TestBundle) -> Self {
+            use alien_manager::auth::Subject;
+            use alien_manager::stores::sqlite::{
+                SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
+            };
+            use alien_manager::traits::{
+                CreateDeploymentGroupParams, CreateImportedDeploymentParams, CreateReleaseParams,
+                DeploymentStore, ReleaseStore,
+            };
+
+            let db = Arc::new(
+                SqliteDatabase::new(&dir.join("manager.db").to_string_lossy())
+                    .await
+                    .unwrap(),
+            );
+            let store: Arc<dyn DeploymentStore> = Arc::new(SqliteDeploymentStore::new(db.clone()));
+            let releases: Arc<dyn ReleaseStore> = Arc::new(SqliteReleaseStore::new(db.clone()));
+            let mut release_ids = Vec::new();
+            for bundle in [v1, v2] {
+                let stack: alien_core::Stack = serde_json::from_value(
+                    json!({"id": "app", "resources": {}, "extensions": [bundle.manifest]}),
+                )
+                .unwrap();
+                let release = releases
+                    .create_release(
+                        &Subject::system(),
+                        CreateReleaseParams {
+                            project_id: "default".to_string(),
+                            stacks: HashMap::from([(Platform::Kubernetes, stack)]),
+                            git_commit_sha: None,
+                            git_commit_ref: None,
+                            git_commit_message: None,
+                            signed_stacks: Default::default(),
+                            setup_templates: Default::default(),
+                        },
+                    )
+                    .await
+                    .unwrap();
+                release_ids.push(release.id);
+            }
+            let group = store
+                .create_deployment_group(
+                    &Subject::system(),
+                    CreateDeploymentGroupParams {
+                        name: "group".to_string(),
+                        max_deployments: 1,
+                        setup: Default::default(),
+                    },
+                )
+                .await
+                .unwrap();
+            let deployment = store
+                .create_with_state(
+                    &Subject::system(),
+                    CreateImportedDeploymentParams {
+                        name: "site".to_string(),
+                        deployment_group_id: group.id,
+                        platform: Platform::Kubernetes,
+                        deployment_protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        base_platform: None,
+                        stack_settings: alien_core::StackSettings {
+                            deployment_model: alien_core::DeploymentModel::Pull,
+                            ..Default::default()
+                        },
+                        stack_state: alien_core::StackState::new(Platform::Kubernetes),
+                        environment_info: None,
+                        runtime_metadata: alien_core::RuntimeMetadata::default(),
+                        status: "update-pending".to_string(),
+                        current_release_id: Some(release_ids[0].clone()),
+                        desired_release_id: Some(release_ids[1].clone()),
+                        import_source: None,
+                        setup_metadata: None,
+                        setup_target: "test".to_string(),
+                        setup_fingerprint: "test".to_string(),
+                        setup_fingerprint_version: 1,
+                        deployment_token: None,
+                        management_config: None,
+                        input_values: Default::default(),
+                    },
+                )
+                .await
+                .unwrap();
+
+            let kv: Arc<dyn alien_bindings::traits::Kv> = Arc::new(
+                alien_bindings::providers::kv::local::LocalKv::new(dir.join("kv"))
+                    .await
+                    .unwrap(),
+            );
+            let command_storage: Arc<dyn alien_bindings::traits::Storage> = Arc::new(
+                alien_bindings::providers::storage::local::LocalStorage::new(
+                    dir.join("storage").to_string_lossy().to_string(),
+                )
+                .unwrap(),
+            );
+            let state = alien_manager::routes::AppState {
+                deployment_store: store.clone(),
+                release_store: releases,
+                project_store: Arc::new(alien_manager::providers::SingleWorkspaceProjects),
+                token_store: Arc::new(SqliteTokenStore::new(db)),
+                auth_validator: Arc::new(
+                    alien_manager::providers::permissive_auth::PermissiveAuthValidator::new(),
+                ),
+                authz: Arc::new(alien_manager::providers::OssAuthz),
+                telemetry_backend: Arc::new(alien_manager::providers::NullTelemetryBackend),
+                credential_resolver: Arc::new(
+                    alien_manager::providers::local_credentials::LocalCredentialResolver::new(
+                        dir.to_path_buf(),
+                    ),
+                ),
+                command_server: Arc::new(alien_commands::server::CommandServer::new(
+                    kv.clone(),
+                    command_storage,
+                    Arc::new(alien_commands::dispatchers::NullCommandDispatcher),
+                    Arc::new(alien_commands::InMemoryCommandRegistry::default()),
+                    "http://localhost:0/v1".to_string(),
+                    b"test-signing-key".to_vec(),
+                )),
+                config: Arc::new(alien_manager::ManagerConfig::default()),
+                bindings_provider: None,
+                target_bindings_providers: HashMap::new(),
+                kv,
+                http_client: reqwest::Client::new(),
+                credential_cache: Arc::new(
+                    alien_manager::routes::registry_proxy::CredentialCache::new(),
+                ),
+                pull_validation_cache: Arc::new(
+                    alien_manager::routes::registry_proxy::PullValidationCache::new(),
+                ),
+                registry_routing_table: Arc::new(
+                    alien_manager::routes::registry_proxy::RegistryRoutingTable::new(vec![])
+                        .unwrap(),
+                ),
+                host_registrations: alien_infra::HostRegistrations::NONE,
+                charts: None,
+                runtime_identity: None,
+                release_channels: None,
+                bundle_signing_key: None,
+                bundle_sources: None,
+                extension_bundles: None,
+                log_buffer: Arc::new(alien_manager::LogBuffer::new()),
+                values: None,
+                value_access: None,
+                verify_limiter: Arc::new(alien_manager::values::VerifyLimiter::default()),
+                signing: None,
+            };
+
+            let bundles = Manager::default();
+            let app = alien_manager::routes::sync::router()
+                .with_state(state)
+                .merge(
+                    Router::new()
+                        .route("/v1/extensions/bundles/{digest}", get(object))
+                        .with_state(bundles.clone()),
+                );
+            let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await });
+            Self {
+                store,
+                deployment_id: deployment.id,
+                releases: release_ids,
+                url,
+                bundles,
+            }
+        }
+
+        async fn deployment(&self) -> alien_manager::traits::DeploymentRecord {
+            self.store
+                .get_deployment(&alien_manager::auth::Subject::system(), &self.deployment_id)
+                .await
+                .unwrap()
+                .unwrap()
+        }
+
+        /// What the Retry action does.
+        async fn retry(&self) {
+            self.store
+                .set_retry_requested(&alien_manager::auth::Subject::system(), &self.deployment_id)
+                .await
+                .unwrap();
+        }
+    }
+
+    /// A manager that issues no claims sends the target with every sync, so a refusal holds
+    /// until Retry. Each Retry downloads the refused bundle once more: still wrong, the target is
+    /// refused again and reported; fixed, it is adopted.
+    #[tokio::test]
+    async fn each_retry_downloads_a_refused_target_once_from_a_manager_that_issues_no_claims() {
+        let directory = tempfile::tempdir().unwrap();
+        let v1 = TestBundle::new("acme", "1.0.0", &[(host(), b"controller v1")]);
+        let v2 = TestBundle::new("acme", "2.0.0", &[(host(), b"controller v2")]);
+        let manager = ClaimlessManager::start(directory.path(), &v1, &v2).await;
+        manager
+            .bundles
+            .serve(&v1.manifest.digest, Object::Whole(v1.zip.clone()));
+        manager.bundles.serve(
+            &v2.manifest.digest,
+            Object::Whole(TestBundle::new("acme", "2.0.0", &[]).zip),
+        );
+        let state = operator(&directory.path().join("operator")).await;
+        state
+            .db
+            .set_deployment_id(&manager.deployment_id)
+            .await
+            .unwrap();
+        state
+            .db
+            .set_deployment_state(
+                &serde_json::from_value(json!({
+                    "platform": "kubernetes", "status": "running",
+                    "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    "currentRelease": {
+                        "releaseId": manager.releases[0],
+                        "stack": {"id": "app", "resources": {}, "extensions": [v1.manifest]}
+                    }
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        let syncs = |count: usize| {
+            let (state, client, url) = (&state, &client, manager.url.clone());
+            async move {
+                for _ in 0..count {
+                    sync_with_manager(state, client, &url, false, None)
+                        .await
+                        .unwrap();
+                }
+            }
+        };
+        let refused = |record: &alien_manager::traits::DeploymentRecord| {
+            record.status == "update-failed"
+                && !record.retry_requested
+                && record
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.to_string().contains("EXTENSION_BUNDLE_REFUSED"))
+        };
+
+        syncs(4).await;
+        assert_eq!(manager.bundles.hits(&v2.manifest.digest), 1);
+        let record = manager.deployment().await;
+        assert!(refused(&record), "{record:?}");
+
+        for attempt in 2..=3 {
+            manager.retry().await;
+            syncs(4).await;
+            assert_eq!(
+                manager.bundles.hits(&v2.manifest.digest),
+                attempt,
+                "one download per Retry, not one per sync"
+            );
+            let record = manager.deployment().await;
+            assert!(refused(&record), "{record:?}");
+        }
+
+        manager
+            .bundles
+            .serve(&v2.manifest.digest, Object::Whole(v2.zip.clone()));
+        manager.retry().await;
+        syncs(4).await;
+        assert_eq!(manager.bundles.hits(&v2.manifest.digest), 4);
+        let deployment = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(
+            target_release(&deployment),
+            Some(manager.releases[1].as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deployment_whose_releases_list_no_extensions_keeps_the_operators_provider() {
+        let directory = tempfile::tempdir().unwrap();
+        let deployment: DeploymentState = serde_json::from_value(json!({
+            "platform": "aws", "status": "pending", "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            "targetRelease": {"releaseId": "rel_1", "stack": {"id": "app", "resources": {}}}
+        }))
+        .unwrap();
+        let operators: Arc<dyn alien_infra::PlatformServiceProvider> =
+            Arc::new(alien_infra::DefaultPlatformServiceProvider::default());
+
+        let provider = crate::extension_bundles::provider_for(
+            Some(operators.clone()),
+            &crate::extension_bundles::cache(directory.path().to_str().unwrap()),
+            &deployment,
+            "dep_ext",
+            &alien_core::ClientConfig::Test,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert!(Arc::ptr_eq(&provider, &operators));
+        assert!(!directory.path().join("synced-extensions").exists());
     }
 }

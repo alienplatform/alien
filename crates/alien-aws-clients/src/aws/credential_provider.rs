@@ -1,6 +1,7 @@
 use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use alien_client_core::interceptor::InterceptorChain;
 use alien_client_core::{ErrorData, Result};
 #[cfg(any(test, feature = "test-utils"))]
 use alien_core::AwsServiceOverrides;
@@ -23,6 +24,9 @@ const REFRESH_BUFFER_SECS: u64 = 300; // 5 minutes
 #[derive(Debug, Clone)]
 pub struct AwsCredentialProvider {
     inner: std::sync::Arc<CredentialProviderInner>,
+    /// The deployment's interceptors, run on every request a client built from this provider
+    /// signs.
+    interceptors: InterceptorChain,
 }
 
 struct CredentialProviderInner {
@@ -103,6 +107,7 @@ impl AwsCredentialProvider {
                 cached: RwLock::new(cached),
                 refresh_lock: tokio::sync::Mutex::new(()),
             }),
+            interceptors: InterceptorChain::default(),
         })
     }
 
@@ -145,6 +150,7 @@ impl AwsCredentialProvider {
                 cached: RwLock::new(cached),
                 refresh_lock: tokio::sync::Mutex::new(()),
             }),
+            interceptors: InterceptorChain::default(),
         }
     }
 
@@ -258,7 +264,19 @@ impl AwsCredentialProvider {
     pub async fn with_region(&self, region: &str) -> Result<Self> {
         let mut config = self.inner.original_config.clone();
         config.region = region.to_string();
-        Self::from_config(config).await
+        Ok(Self::from_config(config)
+            .await?
+            .with_interceptors(self.interceptors.clone()))
+    }
+
+    /// The same credentials, with the deployment's interceptors.
+    pub fn with_interceptors(mut self, interceptors: InterceptorChain) -> Self {
+        self.interceptors = interceptors;
+        self
+    }
+
+    pub fn interceptors(&self) -> &InterceptorChain {
+        &self.interceptors
     }
 
     /// Create a provider with service endpoint overrides for testing.
@@ -273,6 +291,7 @@ impl AwsCredentialProvider {
                 cached: RwLock::new(cached),
                 refresh_lock: tokio::sync::Mutex::new(()),
             }),
+            interceptors: self.interceptors,
         }
     }
 }

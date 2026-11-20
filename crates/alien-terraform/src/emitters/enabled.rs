@@ -30,12 +30,9 @@ pub const ADVANCED_NETWORK_LOCAL: &str = "deployment_requests_network";
 const KUBERNETES_NETWORK_GATE_PREFIX: &str = "@kubernetes-network:";
 
 /// The gate for a network the manager expects for a created cluster, a network the settings
-/// request, or a cloud database whose own gate is on.
-pub fn kubernetes_network_gate(database_gate_inputs: &[&str]) -> String {
-    format!(
-        "{KUBERNETES_NETWORK_GATE_PREFIX}{}",
-        database_gate_inputs.join(",")
-    )
+/// request, or a cloud database or network-requiring extension type whose own gate is on.
+pub fn kubernetes_network_gate(gate_inputs: &[&str]) -> String {
+    format!("{KUBERNETES_NETWORK_GATE_PREFIX}{}", gate_inputs.join(","))
 }
 
 /// Whether the gate is the Kubernetes network gate (see [`kubernetes_network_gate`]).

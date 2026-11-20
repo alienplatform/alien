@@ -159,7 +159,7 @@ for n in 1 2; do
     --set management.name=customer-$n \
     --set-string management.token="$token" \
     --values local/customer-$n.yaml \
-    --wait --timeout 5m
+    --wait --timeout 15m
 done
 ```
 

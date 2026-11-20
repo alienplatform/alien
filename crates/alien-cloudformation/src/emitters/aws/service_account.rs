@@ -8,8 +8,8 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        cf_from_json, required_logical_id, resource_config, service_trust_policy, stack_name, tags,
-        uniquify_iam_statement_sids, INLINE_POLICY_NAME,
+        cf_from_json, managing_role_trust_statement, required_logical_id, resource_config,
+        service_trust_policy, stack_name, tags, uniquify_iam_statement_sids, INLINE_POLICY_NAME,
     },
     template::{CfExpression, CfResource},
 };
@@ -19,6 +19,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
+    aws_resource_policies::aws_resource_policy_name,
     generators::AwsCloudFormationPermissionsGenerator, BindingTarget, PermissionContext,
 };
 use std::collections::BTreeSet;
@@ -30,7 +31,9 @@ impl CfEmitter for AwsServiceAccountEmitter {
     fn emit_resources(&self, ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         let service_account =
             resource_config::<ServiceAccount>(ctx, ServiceAccount::RESOURCE_TYPE)?;
-        if ctx.targets_kubernetes {
+        // An extension's identity is assumed by the Operator's own Kubernetes service account,
+        // not one named after the identity.
+        if ctx.targets_kubernetes && service_account.extension.is_none() {
             let profile = service_account
                 .id
                 .strip_suffix("-sa")
@@ -55,7 +58,7 @@ impl CfEmitter for AwsServiceAccountEmitter {
             .insert("RoleName".to_string(), stack_name(&service_account.id));
         role.properties.insert(
             "AssumeRolePolicyDocument".to_string(),
-            service_account_trust_policy(ctx, service_account),
+            service_account_trust_policy(ctx, service_account)?,
         );
         // Note: we intentionally do NOT attach the legacy
         // `AWSLambdaBasicExecutionRole` / `AWSLambdaVPCAccessExecutionRole`
@@ -108,17 +111,45 @@ impl CfEmitter for AwsServiceAccountEmitter {
 fn service_account_trust_policy(
     ctx: &EmitContext<'_>,
     service_account: &ServiceAccount,
-) -> CfExpression {
+) -> Result<CfExpression> {
+    if service_account.extension.is_some() {
+        // On Kubernetes the Operator mints the extension's credentials from its pod's identity,
+        // and no deployment there is pushed by the manager, so the managing role is never
+        // trusted there.
+        if let Some(statement) = super::kubernetes_cluster::eks_pod_trust_statement(ctx, "manager")
+        {
+            return Ok(CfExpression::sub_with(
+                r#"{"Version":"2012-10-17","Statement":[${PodTrust}]}"#,
+                [("PodTrust", statement)],
+            ));
+        }
+        if ctx.targets_kubernetes {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate an extension's identity for Kubernetes".to_string(),
+                reason: format!(
+                    "service account '{}' is an extension's identity, which the Operator assumes through the cluster this stack creates, and the stack creates none",
+                    service_account.id
+                ),
+            }));
+        }
+        return Ok(CfExpression::object([
+            ("Version", CfExpression::from("2012-10-17")),
+            (
+                "Statement",
+                CfExpression::list([managing_role_trust_statement()]),
+            ),
+        ]));
+    }
     let profile_name = service_account.id.strip_suffix("-sa");
     if let Some(statement) = super::kubernetes_cluster::eks_pod_trust_statement(
         ctx,
         profile_name.unwrap_or(&service_account.id),
     ) {
         // Fn::Sub builds JSON so dynamic OIDC issuer names can be condition keys.
-        return CfExpression::sub_with(
+        return Ok(CfExpression::sub_with(
             r#"{"Version":"2012-10-17","Statement":[${PodTrust}]}"#,
             [("PodTrust", statement)],
-        );
+        ));
     }
     let mut services = BTreeSet::new();
     let mut role_arns = Vec::new();
@@ -164,7 +195,7 @@ fn service_account_trust_policy(
     }
 
     if role_arns.is_empty() {
-        return service_trust_policy(services);
+        return Ok(service_trust_policy(services));
     }
 
     let mut statements = Vec::new();
@@ -202,10 +233,10 @@ fn service_account_trust_policy(
         ),
     ]));
 
-    CfExpression::object([
+    Ok(CfExpression::object([
         ("Version", CfExpression::from("2012-10-17")),
         ("Statement", CfExpression::list(statements)),
-    ])
+    ]))
 }
 
 fn service_account_policy_document(
@@ -285,6 +316,110 @@ pub(crate) fn permission_context() -> PermissionContext {
         .with_managing_role_arn("${ManagingRoleArn}")
 }
 
+/// One policy for each set a service account holds on this custom resource: a workload that
+/// links the resource gets the sets its type links.
+///
+/// A built-in resource's emitter writes these for its own type. A custom type's emitter comes
+/// from an extension, so the generator writes them after it.
+pub(crate) fn custom_resource_grants(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
+    let generator = AwsCloudFormationPermissionsGenerator::new();
+    let context = stack_permission_context(ctx)
+        .with_resource_name(format!("${{AWS::StackName}}-{}", ctx.resource_id));
+    let mut policies = Vec::new();
+    for (account_id, entry) in ctx.stack.resources() {
+        let Some(sets) = entry
+            .config
+            .downcast_ref::<ServiceAccount>()
+            .and_then(|account| account.resource_permission_sets.get(ctx.resource_id))
+        else {
+            continue;
+        };
+        // Under automatic setup the runtime creates the role, and nothing after setup grants a
+        // custom resource's sets, so the grant has no role to go on.
+        if !alien_core::emits_package_scaffolding(
+            entry,
+            ctx.stack_settings.setup_management,
+            alien_core::SetupTarget::from_cloud(alien_core::Platform::Aws, ctx.targets_kubernetes),
+        ) {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("cloudformation emit the grants on '{}'", ctx.resource_id),
+                reason: format!(
+                    "service account '{account_id}' holds permission sets on the custom resource '{}', which automatic setup management can't grant; use manual setup management",
+                    ctx.resource_id
+                ),
+            }));
+        }
+        let role_id = ctx
+            .name_for(account_id)
+            .map(|logical_id| format!("{logical_id}Role"))
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: format!("cloudformation emit the grants on '{}'", ctx.resource_id),
+                    reason: format!(
+                        "service account '{account_id}' has no logical id in this template"
+                    ),
+                })
+            })?;
+        for set in sets {
+            if set.platforms.aws.is_none() {
+                continue;
+            }
+            let document = generator
+                .generate_policy(set, BindingTarget::Resource, &context)
+                .context(ErrorData::GenericError {
+                    message: format!(
+                        "Failed to generate the policy of permission set '{}' on '{}'",
+                        set.id, ctx.resource_id
+                    ),
+                })?;
+            let statements = document
+                .statement
+                .into_iter()
+                .map(|statement| {
+                    let value = serde_json::to_value(statement).into_alien_error().context(
+                        ErrorData::GenericError {
+                            message: format!("Failed to serialize the policy of '{}'", set.id),
+                        },
+                    )?;
+                    cf_from_json(value)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let suffix: String = set.id.chars().filter(char::is_ascii_alphanumeric).collect();
+            // A resource the runtime creates has no entry in the template, and so no logical id.
+            let target: String = match ctx.name_for(ctx.resource_id) {
+                Some(logical_id) => logical_id.to_string(),
+                None => ctx
+                    .resource_id
+                    .chars()
+                    .filter(char::is_ascii_alphanumeric)
+                    .collect(),
+            };
+            let mut policy = CfResource::new(
+                format!("{role_id}{target}{suffix}"),
+                "AWS::IAM::Policy".to_string(),
+            );
+            policy.properties.insert(
+                "PolicyName".to_string(),
+                CfExpression::from(aws_resource_policy_name(ctx.resource_id, &set.id).as_str()),
+            );
+            policy.properties.insert(
+                "Roles".to_string(),
+                CfExpression::list([CfExpression::ref_(&role_id)]),
+            );
+            policy.properties.insert(
+                "PolicyDocument".to_string(),
+                CfExpression::object([
+                    ("Version", CfExpression::from("2012-10-17")),
+                    ("Statement", CfExpression::list(statements)),
+                ]),
+            );
+            policy.depends_on = vec![role_id.clone()];
+            policies.push(policy);
+        }
+    }
+    Ok(policies)
+}
+
 /// Compile setup grants with the ceiling installed by this package's management emitter.
 pub(crate) fn stack_permission_context(ctx: &EmitContext<'_>) -> PermissionContext {
     let mut context = permission_context();
@@ -299,4 +434,46 @@ pub(crate) fn stack_permission_context(ctx: &EmitContext<'_>) -> PermissionConte
         );
     }
     context
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{Platform, ResourceLifecycle, Stack, StackSettings};
+    use indexmap::IndexMap;
+
+    /// On Kubernetes the Operator assumes an extension's identity through the cluster the stack
+    /// creates; with no cluster there, the identity is refused rather than given to the managing
+    /// role, which pushes no deployment there.
+    #[test]
+    fn an_extension_identity_on_kubernetes_with_no_cluster_is_refused() {
+        let account = ServiceAccount::new("acme-ext".to_string())
+            .extension("acme".to_string())
+            .build();
+        let stack = Stack::new("app".to_string())
+            .add(account, ResourceLifecycle::Frozen)
+            .build();
+        let (_, entry) = stack.resources().next().unwrap();
+        let names = IndexMap::from([("acme-ext".to_string(), "AcmeExt".to_string())]);
+        let settings = StackSettings::default();
+        let pins = alien_core::SetupPins::default();
+        let ctx = |targets_kubernetes| EmitContext {
+            stack: &stack,
+            resource: entry,
+            resource_id: "acme-ext",
+            platform: Platform::Aws,
+            targets_kubernetes,
+            stack_settings: &settings,
+            names: &names,
+            pins: &pins,
+        };
+
+        let error = AwsServiceAccountEmitter
+            .emit_resources(&ctx(true))
+            .unwrap_err();
+        assert!(error.message.contains("the stack creates none"), "{error}");
+        AwsServiceAccountEmitter
+            .emit_resources(&ctx(false))
+            .expect("on AWS the managing role assumes it");
+    }
 }

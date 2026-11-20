@@ -118,6 +118,8 @@ fn merge_platform(
         let mut reads_capability_file = true;
         // The same rule for the Worker runtime's identity exchange.
         let mut exchanges_identity = true;
+        // Every architecture any partial built for the resource.
+        let mut built = Vec::new();
 
         for partial in partials {
             let Some(image) = compute_image(&partial.stack, &resource_id) else {
@@ -142,6 +144,11 @@ fn merge_platform(
                 .stack
                 .command_receiver_reads_capability_file(&resource_id);
             exchanges_identity &= worker_exchanges_identity(&partial.stack, &resource_id);
+            for architecture in crate::built_architectures::recorded(&partial.stack, &resource_id) {
+                if !built.contains(&architecture) {
+                    built.push(architecture);
+                }
+            }
             for tar in read_oci_tarballs(&artifact_dir)? {
                 let name = tar
                     .file_name()
@@ -195,6 +202,8 @@ fn merge_platform(
         );
         set_commands_capability_file(&mut merged_stack, &resource_id, reads_capability_file);
         set_worker_identity_exchange(&mut merged_stack, &resource_id, exchanges_identity);
+        built.sort_by_key(|architecture| *architecture as u8);
+        crate::built_architectures::set(&mut merged_stack, &resource_id, built);
         for (source_platform, basename) in source_locations {
             artifact_rewrites.insert(
                 (source_platform, resource_id.clone(), basename),
@@ -293,6 +302,8 @@ fn blank_images(stack: &Stack) -> Stack {
         set_commands_capability_file(&mut blanked, &id, false);
         set_worker_identity_exchange(&mut blanked, &id, false);
         set_compute_image(&mut blanked, &id, String::new());
+        // Each partial records only the architectures it built.
+        crate::built_architectures::set(&mut blanked, &id, Vec::new());
     }
     blanked
 }
@@ -935,6 +946,51 @@ mod tests {
         );
         assert!(merged_dir.join("linux-aarch64.oci.tar").exists());
         assert!(merged_dir.join("linux-x64.oci.tar").exists());
+    }
+
+    #[test]
+    fn merges_partials_that_record_different_built_architectures() {
+        let root = tempdir().unwrap();
+        let out = tempdir().unwrap();
+        write_partial(
+            root.path(),
+            "arm",
+            "kubernetes",
+            "web",
+            "web-aaaa1111",
+            &[("linux-aarch64.oci.tar", b"arm")],
+        );
+        write_partial(
+            root.path(),
+            "x64",
+            "kubernetes",
+            "web",
+            "web-bbbb2222",
+            &[("linux-x64.oci.tar", b"x64")],
+        );
+        for (partial, architecture) in [
+            ("arm", alien_core::instance_catalog::Architecture::Arm64),
+            ("x64", alien_core::instance_catalog::Architecture::X86_64),
+        ] {
+            let path = root
+                .path()
+                .join(partial)
+                .join("build/kubernetes/stack.json");
+            let mut stack = read_stack(&path).unwrap();
+            crate::built_architectures::set(&mut stack, "web", vec![architecture]);
+            write_stack(&path, &stack).unwrap();
+        }
+
+        merge_build_outputs(root.path(), out.path()).unwrap();
+
+        let merged = read_stack(&out.path().join("build/kubernetes/stack.json")).unwrap();
+        assert_eq!(
+            crate::built_architectures::recorded(&merged, "web"),
+            vec![
+                alien_core::instance_catalog::Architecture::Arm64,
+                alien_core::instance_catalog::Architecture::X86_64
+            ]
+        );
     }
 
     #[test]

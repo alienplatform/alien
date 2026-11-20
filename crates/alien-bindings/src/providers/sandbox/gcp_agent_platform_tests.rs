@@ -657,13 +657,30 @@ impl AgentPlatformApi for WedgedAgent {
         unreachable!("the probe budget should fire before a wedged execute returns")
     }
 
-    async fn create_engine(&self, _display_name: &str) -> ClientResult<Operation> {
+    async fn create_engine(
+        &self,
+        _display_name: &str,
+        _description: Option<String>,
+    ) -> ClientResult<Operation> {
         unimplemented!()
     }
     async fn delete_engine(&self, _engine: &str) -> ClientResult<()> {
         unimplemented!()
     }
     async fn list_engines(&self) -> ClientResult<Vec<ReasoningEngine>> {
+        unimplemented!()
+    }
+    async fn get_engine_iam_policy(
+        &self,
+        _engine: &str,
+    ) -> ClientResult<alien_gcp_clients::iam::IamPolicy> {
+        unimplemented!()
+    }
+    async fn set_engine_iam_policy(
+        &self,
+        _engine: &str,
+        _policy: alien_gcp_clients::iam::IamPolicy,
+    ) -> ClientResult<alien_gcp_clients::iam::IamPolicy> {
         unimplemented!()
     }
     async fn create_template(
@@ -3290,7 +3307,24 @@ impl AgentPlatformApi for FakeEngine {
         }
         Ok(health_reply())
     }
-    async fn create_engine(&self, _display_name: &str) -> ClientResult<Operation> {
+    async fn get_engine_iam_policy(
+        &self,
+        _engine: &str,
+    ) -> ClientResult<alien_gcp_clients::iam::IamPolicy> {
+        unimplemented!()
+    }
+    async fn set_engine_iam_policy(
+        &self,
+        _engine: &str,
+        _policy: alien_gcp_clients::iam::IamPolicy,
+    ) -> ClientResult<alien_gcp_clients::iam::IamPolicy> {
+        unimplemented!()
+    }
+    async fn create_engine(
+        &self,
+        _display_name: &str,
+        _description: Option<String>,
+    ) -> ClientResult<Operation> {
         unimplemented!()
     }
     async fn delete_engine(&self, _engine: &str) -> ClientResult<()> {

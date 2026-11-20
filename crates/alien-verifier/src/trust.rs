@@ -162,7 +162,6 @@ pub fn accept(
         install.id.clone(),
         signer_lists,
         &install.ledger,
-        now,
     )
     .context(ErrorData::Refused {
         reason: "the signer lists were refused".to_string(),
@@ -187,9 +186,11 @@ pub fn accept(
         )?),
         None => None,
     };
-    trust.record(&mut ledger).context(ErrorData::Refused {
-        reason: "the ledger refused this trust".to_string(),
-    })?;
+    trust
+        .record(&mut ledger)
+        .context(ErrorData::Refused {
+            reason: "the ledger refused this trust".to_string(),
+        })?;
     Ok(Accepted {
         trust,
         release,
@@ -448,12 +449,15 @@ pub(crate) mod tests {
 
     /// Signer list version 1 with a laptop (admin, release) and CI
     /// (release), and version 2 without CI.
-    fn lists_removing_ci() -> (SignedStatement, SignedStatement, SigningSettings) {
+    fn lists_removing_ci(
+        keep: Vec<alien_signing::Keep>,
+    ) -> (SignedStatement, SignedStatement, SigningSettings) {
         let laptop = key(2);
         let signer = |id: &str, key: &SecretKey, kind: SignerKind, roles: Vec<Role>| Signer {
             id: id.to_string(),
             key: key.public_key().as_str().to_string(),
             kind,
+            backend: None,
             roles,
             label: None,
         };
@@ -468,6 +472,7 @@ pub(crate) mod tests {
             admin_threshold: 1,
             signers,
             deny: Vec::new(),
+            keep: Vec::new(),
             recovered: false,
         };
         let v1 = statement(
@@ -475,7 +480,7 @@ pub(crate) mod tests {
             Kind::SignerList,
             None,
             1,
-            Some(Utc::now() + chrono::Duration::days(60)),
+            None,
             body(
                 None,
                 vec![
@@ -486,15 +491,11 @@ pub(crate) mod tests {
         )
         .sign_with("laptop", &laptop)
         .unwrap();
-        let v2 = statement_under(
-            PROJECT,
-            Kind::SignerList,
-            None,
-            2,
-            Some(Utc::now() + chrono::Duration::days(60)),
-            1,
-            body(Some(v1.open().unwrap().digest), vec![laptop_signer]),
-        )
+        let v2 = statement_under(PROJECT, Kind::SignerList, None, 2, None, 1, {
+            let mut v2 = body(Some(v1.open().unwrap().digest), vec![laptop_signer]);
+            v2.keep = keep;
+            v2
+        })
         .sign_with("laptop", &laptop)
         .unwrap();
         let settings = settings_for(&v1, PREFIX, CHANNEL);
@@ -502,32 +503,67 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn removing_the_ci_key_refuses_what_it_signed_until_a_current_signer_signs_it() {
-        let (v1, v2, settings) = lists_removing_ci();
-        let store = MemoryStore::protected(&settings);
-        let install = found(&store).await.unwrap();
+    async fn removing_the_ci_key_keeps_what_the_list_keeps_and_refuses_what_is_new() {
         let body = release_body(vec![function_workload()]);
         let by_ci = statement_under(PROJECT, Kind::Release, None, 10, None, 1, &body)
             .sign_with("ci", &ci())
             .unwrap();
-        let accepted = accept(&install, &[v1.clone()], &by_ci, None, "aws", Utc::now()).unwrap();
+        let opened = by_ci.open().unwrap();
+        let keep = alien_signing::Keep {
+            digest: opened.digest,
+            kind: alien_signing::KeptKind::Release,
+            release_id: None,
+            sequence: opened.sequence,
+        };
+        let (v1, v2, settings) = lists_removing_ci(vec![keep]);
+        let store = MemoryStore::protected(&settings);
+        let install = found(&store).await.unwrap();
+        let accepted = accept(&install, std::slice::from_ref(&v1), &by_ci, None, "aws", Utc::now()).unwrap();
         store_ledger(&store, PREFIX, &accepted.ledger)
             .await
             .unwrap();
 
-        // CI leaves the list: what it signed is no longer vouched for, even the release the
-        // install already runs.
+        // CI leaves the list, which keeps the release: it keeps running.
         let install = found(&store).await.unwrap();
-        let both = [v1, v2];
-        let error = reason(accept(&install, &both, &by_ci, None, "aws", Utc::now()).unwrap_err());
+        let both = [v1.clone(), v2.clone()];
+        let kept = accept(&install, &both, &by_ci, None, "aws", Utc::now()).unwrap();
+        assert!(kept.release.kept);
+
+        // A verifier whose ledger never saw the release accepts it from the list alone.
+        let fresh_store = MemoryStore::protected(&settings);
+        let fresh_install = found(&fresh_store).await.unwrap();
+        accept(&fresh_install, &both, &by_ci, None, "aws", Utc::now())
+            .expect("a new instance needs nothing from the ledger");
+
+        // A list that keeps nothing refuses it, though the ledger holds its digest.
+        let (_, v2_without_keep, _) = lists_removing_ci(Vec::new());
+        let error = reason(
+            accept(
+                &install,
+                &[v1, v2_without_keep],
+                &by_ci,
+                None,
+                "aws",
+                Utc::now(),
+            )
+            .unwrap_err(),
+        );
+        assert!(error.contains("not on signer list version 2"), "{error}");
+
+        // A release CI signs now is new, and refused.
+        let new_by_ci = statement_under(PROJECT, Kind::Release, None, 11, None, 1, &body)
+            .sign_with("ci", &ci())
+            .unwrap();
+        let error =
+            reason(accept(&install, &both, &new_by_ci, None, "aws", Utc::now()).unwrap_err());
         assert!(error.contains("not on signer list version 2"), "{error}");
 
         // The same release signed by a current signer passes.
-        let by_laptop = statement_under(PROJECT, Kind::Release, None, 10, None, 2, &body)
+        let by_laptop = statement_under(PROJECT, Kind::Release, None, 11, None, 2, &body)
             .sign_with("laptop", &key(2))
             .unwrap();
         let next = accept(&install, &both, &by_laptop, None, "aws", Utc::now()).unwrap();
-        assert_eq!(next.release.sequence, 10);
+        assert_eq!(next.release.sequence, 11);
     }
 
     #[tokio::test]

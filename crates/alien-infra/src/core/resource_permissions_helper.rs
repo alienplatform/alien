@@ -449,6 +449,120 @@ impl ResourcePermissionsHelper {
         Ok(())
     }
 
+    /// GUIDs of the role definitions the role assignments this resource's permissions place depend
+    /// on. Read them before the resource is deleted: Azure drops the assignments with it, and
+    /// with them the only record of which roles they used. Roles are named by GUID because Azure
+    /// reports a custom role's id at the subscription even when it sits in a resource group.
+    pub async fn azure_role_definitions_in_use(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_name: &str,
+        resource_scope: Scope,
+        permission_type: &str,
+    ) -> Result<Vec<String>> {
+        let permission_context = Self::build_azure_permission_context(ctx, resource_name)?;
+        let assignment_ids = AzurePermissionsHelper::plan_resource_scoped_role_assignment_ids(
+            ctx,
+            resource_id,
+            permission_type,
+            resource_scope,
+            &permission_context,
+        )
+        .await?;
+        let client = ctx
+            .service_provider
+            .get_azure_authorization_client(ctx.get_azure_config()?)?;
+        let mut guids: Vec<String> = Vec::new();
+        for assignment_id in assignment_ids {
+            match client
+                .get_role_assignment_by_id(assignment_id.clone())
+                .await
+            {
+                Ok(assignment) => {
+                    let Some(properties) = assignment.properties else {
+                        continue;
+                    };
+                    let guid = properties
+                        .role_definition_id
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    if !guid.is_empty() && !guids.contains(&guid) {
+                        guids.push(guid);
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to read Azure role assignment '{assignment_id}'"),
+                        resource_id: Some(resource_id.to_string()),
+                    }))
+                }
+            }
+        }
+        Ok(guids)
+    }
+
+    /// Deletes the custom roles this deployment made in its resource group among `guids`: only a
+    /// role found in the group whose name starts with the deployment's prefix, and only when no
+    /// assignment still uses it (Azure refuses that delete, which leaves the role to its other
+    /// users). Safe to repeat and to call with built-in role GUIDs, which are not in the group.
+    pub async fn delete_azure_custom_role_definitions(
+        ctx: &ResourceControllerContext<'_>,
+        resource_group_name: &str,
+        guids: &[String],
+    ) -> Result<()> {
+        let client = ctx
+            .service_provider
+            .get_azure_authorization_client(ctx.get_azure_config()?)?;
+        let scope = Scope::ResourceGroup {
+            resource_group_name: resource_group_name.to_string(),
+        };
+        let ours = format!("{}-", ctx.resource_prefix).to_ascii_lowercase();
+        for guid in guids {
+            let role = match client.get_role_definition(&scope, guid.clone()).await {
+                Ok(role) => role,
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    continue
+                }
+                Err(error) => {
+                    warn!(role = %guid, error = %error, "could not read a custom role definition, leaving it");
+                    continue;
+                }
+            };
+            let named_by_us = role
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.role_name.as_deref())
+                .is_some_and(|name| name.to_ascii_lowercase().starts_with(&ours));
+            if !named_by_us {
+                continue;
+            }
+            match client.delete_role_definition(&scope, guid.clone()).await {
+                Ok(_) => info!(role = %guid, "Deleted a custom role definition"),
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    warn!(role = %guid, error = %error, "a custom role definition is still in use or could not be deleted, leaving it")
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Setup-only: idempotently create or update GCP custom roles from a permission set.
     ///
     /// Live resource reconciliation must bind principals to roles created by
@@ -1054,7 +1168,9 @@ impl ResourcePermissionsHelper {
         // Process each permission set for this resource
         for permission_set_ref in permission_set_refs {
             let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .resolve(|name| {
+                    alien_permissions::get_stack_permission_set(ctx.desired_stack, name).cloned()
+                })
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::ResourceConfigInvalid {
                         message: format!("Permission set '{}' not found", permission_set_ref.id()),
@@ -1246,17 +1362,11 @@ impl ResourcePermissionsHelper {
             .with_signing(&ctx.deployment_config.stack_settings);
 
         for permission_set_ref in &combined_refs {
-            let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "Management permission set '{}' not found",
-                            permission_set_ref.id()
-                        ),
-                        resource_id: Some(resource_id.to_string()),
-                    })
-                })?;
+            let permission_set = crate::remote_stack_management::resolve_management_permission_set(
+                ctx.desired_stack,
+                permission_set_ref,
+                resource_id,
+            )?;
 
             let grant_plan = generator
                 .generate_grant_plan(
@@ -1909,6 +2019,7 @@ impl ResourcePermissionsHelper {
         let service_account_role_name = Self::get_aws_service_account_role_name(ctx, profile_name)?;
 
         let policies = Self::prepare_aws_profile_policies(
+            ctx.desired_stack,
             resource_id,
             profile_name,
             permission_set_refs,
@@ -1963,6 +2074,7 @@ impl ResourcePermissionsHelper {
     /// Render the final workload policy batch and reject certain aggregate overflow
     /// before any IAM writes. Selection has already resolved setup ownership.
     fn prepare_aws_profile_policies(
+        stack: &alien_core::Stack,
         resource_id: &str,
         profile_name: &str,
         permission_set_refs: &[PermissionSetReference],
@@ -1972,7 +2084,7 @@ impl ResourcePermissionsHelper {
         let mut policies = IndexMap::new();
         for permission_set_ref in permission_set_refs {
             let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .resolve(|name| alien_permissions::get_stack_permission_set(stack, name).cloned())
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::ResourceConfigInvalid {
                         message: format!("Permission set '{}' not found", permission_set_ref.id()),
@@ -2076,17 +2188,11 @@ impl ResourcePermissionsHelper {
         .await?;
 
         for permission_set_ref in &combined_refs {
-            let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "Management permission set '{}' not found",
-                            permission_set_ref.id()
-                        ),
-                        resource_id: Some(resource_id.to_string()),
-                    })
-                })?;
+            let permission_set = crate::remote_stack_management::resolve_management_permission_set(
+                ctx.desired_stack,
+                permission_set_ref,
+                resource_id,
+            )?;
 
             // Skip provision permission sets — they are handled by RemoteStackManagement
             // at project level, not by resource controllers.
@@ -2287,17 +2393,11 @@ impl ResourcePermissionsHelper {
             .with_signing(&ctx.deployment_config.stack_settings);
 
         for permission_set_ref in management_refs {
-            let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "Management permission set '{}' not found",
-                            permission_set_ref.id()
-                        ),
-                        resource_id: Some(resource_id.to_string()),
-                    })
-                })?;
+            let permission_set = crate::remote_stack_management::resolve_management_permission_set(
+                ctx.desired_stack,
+                permission_set_ref,
+                resource_id,
+            )?;
 
             let grant_plan = generator
                 .generate_grant_plan(
@@ -2466,6 +2566,7 @@ mod tests {
 
     #[test]
     fn aws_workload_batch_rejects_combined_documents_before_cloud_writes() {
+        let stack = alien_core::Stack::new("app".to_string()).build();
         let generator = AwsRuntimePermissionsGenerator::new();
         let context = PermissionContext::new();
         let grants = [
@@ -2475,6 +2576,7 @@ mod tests {
         let mut combined_size = 0;
         for grant in &grants {
             let control = ResourcePermissionsHelper::prepare_aws_profile_policies(
+                &stack,
                 "objects",
                 "reader",
                 std::slice::from_ref(grant),
@@ -2495,7 +2597,7 @@ mod tests {
         }
         assert!(combined_size > 10_240);
         let error = ResourcePermissionsHelper::prepare_aws_profile_policies(
-            "objects", "reader", &grants, &generator, &context,
+            &stack, "objects", "reader", &grants, &generator, &context,
         )
         .unwrap_err();
         assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
@@ -2510,7 +2612,7 @@ mod tests {
             literal_aws_resource_grant("second", 10),
         ];
         let control = ResourcePermissionsHelper::prepare_aws_profile_policies(
-            "objects", "reader", &small, &generator, &context,
+            &stack, "objects", "reader", &small, &generator, &context,
         )
         .unwrap();
         assert_eq!(control.len(), 2);
@@ -2526,6 +2628,36 @@ mod tests {
         }
     }
 
+    /// A resource-scoped grant of an extension's set resolves from the stack.
+    #[test]
+    fn a_resource_grant_of_an_extension_set_resolves_from_the_stack() {
+        let (extension, _) = crate::service_account::extension_with_a_stack_wide_set();
+        let mut stack = alien_core::Stack::new("app".to_string()).build();
+        stack.extensions = vec![extension];
+        let grants = [PermissionSetReference::from_name(
+            "acme/dns-zone/records-write".to_string(),
+        )];
+        let policies = ResourcePermissionsHelper::prepare_aws_profile_policies(
+            &stack,
+            "zone",
+            "app",
+            &grants,
+            &AwsRuntimePermissionsGenerator::new(),
+            &PermissionContext::new()
+                .with_aws_account_id("123456789012")
+                .with_aws_region("us-east-1")
+                .with_stack_prefix("test")
+                .with_resource_name("test-zone"),
+        )
+        .unwrap_or_else(|error| panic!("the extension's set did not resolve: {error}"));
+        assert!(
+            policies
+                .values()
+                .any(|policy| policy.contains("route53:ChangeResourceRecordSets")),
+            "{policies:?}"
+        );
+    }
+
     #[test]
     fn aws_workload_batch_counts_final_same_name_replacement() {
         let generator = AwsRuntimePermissionsGenerator::new();
@@ -2537,7 +2669,12 @@ mod tests {
             literal_aws_resource_grant("same", 99),
         ];
         let policies = ResourcePermissionsHelper::prepare_aws_profile_policies(
-            "objects", "reader", &grants, &generator, &context,
+            &alien_core::Stack::new("app".to_string()).build(),
+            "objects",
+            "reader",
+            &grants,
+            &generator,
+            &context,
         )
         .unwrap();
         assert_eq!(policies.len(), 1);
@@ -2553,6 +2690,7 @@ mod tests {
             PermissionSetReference::from_name("storage/data-read".to_string()),
         ];
         let error = ResourcePermissionsHelper::prepare_aws_profile_policies(
+            &alien_core::Stack::new("app".to_string()).build(),
             "objects",
             "reader",
             &grants,

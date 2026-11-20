@@ -311,3 +311,10 @@ impl From<u32> for CfExpression {
         Self::Integer(i64::from(value))
     }
 }
+
+/// An integer literal with no type is an `i32`, so `30` converts without a suffix.
+impl From<i32> for CfExpression {
+    fn from(value: i32) -> Self {
+        Self::Integer(i64::from(value))
+    }
+}

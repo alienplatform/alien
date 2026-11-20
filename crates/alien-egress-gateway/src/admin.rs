@@ -49,6 +49,7 @@ struct Identity {
 pub fn router(admin: Arc<LiveGateway>) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/v1/protocol", get(protocol))
         .route("/metrics", get(metrics))
         .route("/v1/policies", put(update).delete(remove).get(version))
         .route("/v1/ca", post(issue_ca))
@@ -84,6 +85,7 @@ async fn remove(
     mutate(live, headers, mutation, "DELETE").await
 }
 fn failure(error: alien_error::AlienError<crate::error::ErrorData>) -> Response {
+    tracing::warn!(code = %error.code, message = %error.message, "admin request refused");
     let status = match error.code.as_str() {
         "SANDBOX_EGRESS_POLICY_STORE_FULL" | "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE" => {
             StatusCode::SERVICE_UNAVAILABLE
@@ -148,6 +150,7 @@ async fn publish(gateway: &Gateway, record: Record) -> Response {
         return StatusCode::NO_CONTENT.into_response();
     }
     if let Err(error) = gateway.policies.apply(record.clone(), false) {
+        tracing::warn!(code = %error.code, "policy record not applied");
         return failure(error);
     }
     match gateway.replication.fanout(&record).await {
@@ -209,6 +212,7 @@ async fn exchange(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     match operation.as_str() {
+        "identity" => gateway.replication.instance().to_string().into_response(),
         "summary" => match gateway.policies.summary() {
             Ok(summary) => Json(summary).into_response(),
             Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -368,6 +372,12 @@ async fn metrics(State(live): State<Arc<LiveGateway>>, headers: HeaderMap) -> Re
         .connect_latency
         .render("alien_egress_connect_duration_seconds", &mut metrics);
     metrics.into_response()
+}
+
+/// Nonsecret: lets a binding refuse a gateway it cannot serve ("re-run setup to update").
+/// Must equal `alien_core::bindings::EGRESS_GATEWAY_ADMIN_PROTOCOL`.
+async fn protocol() -> Response {
+    Json(serde_json::json!({ "protocol": 1 })).into_response()
 }
 
 async fn health(State(live): State<Arc<LiveGateway>>) -> Response {

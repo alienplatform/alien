@@ -78,6 +78,13 @@ struct NoCredentials;
 
 #[async_trait]
 impl CredentialResolver for NoCredentials {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(
         &self,
         _deployment: &DeploymentRecord,
@@ -411,7 +418,8 @@ async fn fixture_with(sqlite_registry: bool) -> Fixture {
         credential_cache: Arc::new(CredentialCache::new()),
         pull_validation_cache: Arc::new(PullValidationCache::new()),
         registry_routing_table: Arc::new(RegistryRoutingTable::new(vec![]).unwrap()),
-        import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+        host_registrations: alien_infra::HostRegistrations::NONE,
+        extension_bundles: None,
         charts: None,
         runtime_identity: None,
         release_channels: None,

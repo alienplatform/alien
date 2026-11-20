@@ -26,6 +26,16 @@ pub trait ResourcesApi: Send + Sync + std::fmt::Debug {
         resource_group: &ResourceGroup,
     ) -> Result<ResourceGroup>;
 
+    /// Creates a resource group only when none exists under that name. Resource groups have no
+    /// conditional create (`If-None-Match: *` is ignored), so an existing group is told apart
+    /// by the status: 201 created it, 200 means it was already there, and that is reported as
+    /// `RemoteResourceConflict` instead of adopting it.
+    async fn create_resource_group_if_absent(
+        &self,
+        resource_group_name: &str,
+        resource_group: &ResourceGroup,
+    ) -> Result<ResourceGroup>;
+
     async fn delete_resource_group(
         &self,
         resource_group_name: &str,
@@ -72,21 +82,14 @@ impl AzureResourcesClient {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-impl ResourcesApi for AzureResourcesClient {
-    /// Create or update a resource group.
-    ///
-    /// # Arguments
-    /// * `resource_group_name` - The name of the resource group
-    /// * `resource_group` - The resource group object to create or update
-    ///
-    /// # Returns
-    /// The created or updated resource group
-    async fn create_or_update_resource_group(
+impl AzureResourcesClient {
+    /// PUTs the group. With `create_only` the request asks for a conditional create and a
+    /// response that says the group already existed (200, not 201) is a conflict.
+    async fn put_resource_group(
         &self,
         resource_group_name: &str,
         resource_group: &ResourceGroup,
+        create_only: bool,
     ) -> Result<ResourceGroup> {
         let path = format!(
             "/subscriptions/{}/resourcegroups/{}",
@@ -103,11 +106,14 @@ impl ResourcesApi for AzureResourcesClient {
                 message: format!("Failed to serialize ResourceGroup: {}", resource_group_name),
             })?;
 
-        let req = AzureRequestBuilder::new(Method::PUT, url.clone())
+        let mut req = AzureRequestBuilder::new(Method::PUT, url.clone())
             .content_type_json()
             .content_length(&body)
-            .body(body.clone())
-            .build()?;
+            .body(body.clone());
+        if create_only {
+            req = req.header("If-None-Match", "*");
+        }
+        let req = req.build()?;
 
         let bearer_token = self
             .token_cache
@@ -126,6 +132,15 @@ impl ResourcesApi for AzureResourcesClient {
             .await?;
 
         let status = response.status().as_u16();
+        if create_only && status == 200 {
+            return Err(alien_error::AlienError::new(
+                ErrorData::RemoteResourceConflict {
+                    resource_type: "Azure resource group".to_string(),
+                    resource_name: resource_group_name.to_string(),
+                    message: "the resource group already exists".to_string(),
+                },
+            ));
+        }
 
         let response_text =
             response
@@ -159,6 +174,36 @@ impl ResourcesApi for AzureResourcesClient {
             })?;
 
         Ok(resource_group)
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl ResourcesApi for AzureResourcesClient {
+    /// Create or update a resource group.
+    ///
+    /// # Arguments
+    /// * `resource_group_name` - The name of the resource group
+    /// * `resource_group` - The resource group object to create or update
+    ///
+    /// # Returns
+    /// The created or updated resource group
+    async fn create_or_update_resource_group(
+        &self,
+        resource_group_name: &str,
+        resource_group: &ResourceGroup,
+    ) -> Result<ResourceGroup> {
+        self.put_resource_group(resource_group_name, resource_group, false)
+            .await
+    }
+
+    async fn create_resource_group_if_absent(
+        &self,
+        resource_group_name: &str,
+        resource_group: &ResourceGroup,
+    ) -> Result<ResourceGroup> {
+        self.put_resource_group(resource_group_name, resource_group, true)
+            .await
     }
 
     /// Delete a resource group (long running operation).

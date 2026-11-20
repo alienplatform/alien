@@ -1,0 +1,14 @@
+{
+  "name": "acme",
+  "version": "0.1.0",
+  "description": "An Alien extension that adds a DNS zone, a custom resource with its own controllers.",
+  "type": "module",
+  "exports": "./generated/index.ts",
+  "files": [
+    "generated/",
+    "target/alien-extension/"
+  ],
+  "peerDependencies": {
+    "@alienplatform/core": "^3.3.57"
+  }
+}

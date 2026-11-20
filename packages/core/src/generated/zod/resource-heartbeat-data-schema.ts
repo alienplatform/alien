@@ -13,6 +13,8 @@ import { AzureStorageAccountHeartbeatDataSchema } from "./azure-storage-account-
 import { BuildHeartbeatDataSchema } from "./build-heartbeat-data-schema.js";
 import { ComputeClusterHeartbeatDataSchema } from "./compute-cluster-heartbeat-data-schema.js";
 import { ContainerHeartbeatDataSchema } from "./container-heartbeat-data-schema.js";
+import { CustomHeartbeatDataSchema } from "./custom-heartbeat-data-schema.js";
+import { CustomResourceTypeSchema } from "./custom-resource-type-schema.js";
 import { DaemonHeartbeatDataSchema } from "./daemon-heartbeat-data-schema.js";
 import { KeyHeartbeatDataSchema } from "./key-heartbeat-data-schema.js";
 import { KubernetesClusterHeartbeatDataSchema } from "./kubernetes-cluster-heartbeat-data-schema.js";
@@ -149,6 +151,13 @@ export const ResourceHeartbeatDataSchema = z.union([z.object({
                 return SandboxHeartbeatDataSchema.describe("Content-free telemetry about what a sandbox resource is running.\n\nNever anything from inside a sandbox. A controller reaches only the cloud's management APIs,\nand the whole point of the resource is that the control plane cannot see what runs in it.")
               },
 "resourceType": z.enum(["sandbox"])
+    }), z.object({
+    get "data"(){
+                return CustomHeartbeatDataSchema
+              },
+get "resourceType"(){
+                return CustomResourceTypeSchema.describe("The type of a resource an extension defines, such as `acme/dns-zone`.")
+              }
     })])
 
 export type ResourceHeartbeatData = z.infer<typeof ResourceHeartbeatDataSchema>

@@ -1,14 +1,18 @@
 use crate::error::Result;
-use crate::{CheckResult, CompileTimeCheck};
+use crate::mutations::sandbox_setup_owned::{
+    takes_setup_lifecycle, SETUP_OWNED_SANDBOX_NOTICE,
+};
+use crate::{CheckResult, ClusterCloud, CompileTimeCheck};
 use alien_core::{
-    ownership_policy_for_resource_type, Container, Daemon, Key, Platform, Postgres,
+    ownership_policy_for_resource_type, Container, CustomResource, Daemon, Key, Platform, Postgres,
     ResourceLifecycle, Sandbox, SandboxCode, Stack, Storage, Worker,
 };
 
 /// Ensures each resource uses a lifecycle allowed by the ownership policy.
 ///
 /// The policy is intentionally centralized in `alien-core` so preflights,
-/// template emitters, importers, and permissions agree on ownership.
+/// template emitters, importers, and permissions agree on ownership. A custom resource's
+/// lifecycles come from its type's descriptor instead.
 pub struct FrozenResourceLifecycleCheck;
 
 #[async_trait::async_trait]
@@ -22,7 +26,17 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
     }
 
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
+        self.check_on(stack, platform, ClusterCloud::Unknown).await
+    }
+
+    async fn check_on(
+        &self,
+        stack: &Stack,
+        platform: Platform,
+        cloud: ClusterCloud,
+    ) -> Result<CheckResult> {
         let mut errors = Vec::new();
+        let mut warnings = Vec::new();
         let encrypted_azure_storage_count = stack
             .resources()
             .filter_map(|(_, entry)| entry.config.downcast_ref::<Storage>())
@@ -67,25 +81,51 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                 }
             }
 
+            if resource_entry
+                .config
+                .downcast_ref::<CustomResource>()
+                .is_some()
+            {
+                errors.extend(custom_lifecycle_errors(
+                    stack,
+                    resource_id,
+                    resource_entry,
+                    platform,
+                    cloud,
+                ));
+            }
+
             // A remote grant on Azure or GCP names a parent that must exist when the package
-            // applies, which only the package that creates it can do, so a Live sandbox stays
-            // AWS-only even where a runtime sandbox controller exists, as on Azure.
+            // applies, which only the package that creates it can do. A sandbox declared live
+            // for AWS runs unchanged there, so it takes the Frozen lifecycle on those clouds
+            // (`SandboxSetupOwnedMutation`) and the build says so.
             if resource_entry.config.downcast_ref::<Sandbox>().is_some()
                 && resource_entry.lifecycle == ResourceLifecycle::Live
-                && !matches!(platform, Platform::Aws | Platform::Kubernetes)
             {
-                errors.push(format!(
-                    "Sandbox '{}' uses the Live lifecycle, which platform '{}' does not \
-                     support; only AWS and Kubernetes provision a sandbox at runtime",
-                    resource_id,
-                    platform.as_str()
-                ));
+                if takes_setup_lifecycle(platform) {
+                    warnings.push(format!(
+                        "Sandbox '{}': {}",
+                        resource_id, SETUP_OWNED_SANDBOX_NOTICE
+                    ));
+                } else if !matches!(platform, Platform::Aws | Platform::Kubernetes) {
+                    errors.push(format!(
+                        "Sandbox '{}' uses the Live lifecycle, which platform '{}' does not \
+                         support; only AWS, Azure, Google Cloud and Kubernetes accept it",
+                        resource_id,
+                        platform.as_str()
+                    ));
+                }
             }
 
             // Setup builds a Frozen image before the deployment registers, and only registration
             // tells the registry which customer account to open the base image's repository to.
             if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
-                if resource_entry.lifecycle == ResourceLifecycle::Frozen {
+                // A Live sandbox on Azure or Google Cloud is built by setup, so it is held to
+                // the Frozen rules.
+                if resource_entry.lifecycle == ResourceLifecycle::Frozen
+                    || (resource_entry.lifecycle == ResourceLifecycle::Live
+                        && takes_setup_lifecycle(platform))
+                {
                     if sandbox.private_base_image.is_some() {
                         errors.push(format!(
                             "Sandbox '{}' declares a private base image, which requires the Live \
@@ -204,11 +244,122 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
         }
 
         if errors.is_empty() {
-            Ok(CheckResult::success())
+            Ok(CheckResult::with_warnings(warnings))
         } else {
-            Ok(CheckResult::failed(errors))
+            Ok(CheckResult::failed_with_warnings(errors, warnings))
         }
     }
+}
+
+/// The clusters one Kubernetes chart serves: one in no cloud, and eks, gke and aks.
+const CHART_CLUSTERS: [(ClusterCloud, &str); 4] = [
+    (ClusterCloud::NoCloud, "a cluster in no cloud"),
+    (ClusterCloud::Cloud(Platform::Aws), "eks"),
+    (ClusterCloud::Cloud(Platform::Gcp), "gke"),
+    (ClusterCloud::Cloud(Platform::Azure), "aks"),
+];
+
+/// A custom resource may use only the lifecycles its type declares, and must be able to run where
+/// it is deployed (see [`target_refusals`]). Where the cluster is unknown, as for a release or the
+/// one chart every Kubernetes target installs, it must run on at least one cluster that chart
+/// serves; the deployment's own preflights apply the rule for its cluster. Alien's own types
+/// follow the same split: the executor picks a built-in resource's controller by the deployment's
+/// base platform.
+fn custom_lifecycle_errors(
+    stack: &Stack,
+    resource_id: &str,
+    resource_entry: &alien_core::ResourceEntry,
+    platform: Platform,
+    cloud: ClusterCloud,
+) -> Vec<String> {
+    let resource_type = resource_entry.config.resource_type();
+    // AllowedUserResourcesCheck refuses a type no extension declares.
+    let Some(descriptor) = stack.descriptor(&resource_type) else {
+        return Vec::new();
+    };
+    let resource = format!("Resource '{resource_id}' of type '{resource_type}'");
+    if !descriptor.lifecycles.contains(&resource_entry.lifecycle) {
+        return vec![format!(
+            "{resource} has lifecycle {:?}, but its extension allows only {:?}",
+            resource_entry.lifecycle, descriptor.lifecycles
+        )];
+    }
+    let lifecycle = resource_entry.lifecycle;
+    if platform != Platform::Kubernetes || cloud != ClusterCloud::Unknown {
+        return target_refusals(descriptor, lifecycle, platform, cloud)
+            .into_iter()
+            .map(|refusal| format!("{resource} {refusal}"))
+            .collect();
+    }
+    let mut refusals = Vec::new();
+    for (cluster, name) in CHART_CLUSTERS {
+        let refused = target_refusals(descriptor, lifecycle, platform, cluster);
+        if refused.is_empty() {
+            return Vec::new();
+        }
+        refusals.push(format!("on {name} it {}", refused.join(", and ")));
+    }
+    vec![format!(
+        "{resource} can run on none of the Kubernetes clusters its chart serves: {}",
+        refusals.join("; ")
+    )]
+}
+
+/// Why a resource of a type described by `descriptor` can't run on `platform` in `cloud`, which is
+/// known. Without a controller for the platform it runs on it can only be Frozen, and a type that
+/// can only be Frozen there needs the platform's setup path:
+///
+/// - On a cloud, and on a Kubernetes cluster in one, setup's template creates the resource in the
+///   cloud and only the cloud's importer reads it back. A custom resource on such a cluster also
+///   runs on the cloud's controller, since that is the API it calls.
+/// - On a cluster in no cloud, setup creates nothing: the chart asks the customer for an existing
+///   resource through the type's Helm emitter, and the Operator binds the resource to it.
+/// - `alien dev` builds no setup template, so Local needs neither.
+fn target_refusals(
+    descriptor: &alien_core::ResourceTypeDescriptor,
+    lifecycle: ResourceLifecycle,
+    platform: Platform,
+    cloud: ClusterCloud,
+) -> Vec<String> {
+    let (runs_on, target) = match (platform, cloud) {
+        (Platform::Kubernetes, ClusterCloud::Cloud(cloud)) => (
+            cloud,
+            format!(
+                "platform '{}', the cloud its Kubernetes cluster runs in",
+                cloud.as_str()
+            ),
+        ),
+        _ => (platform, format!("platform '{}'", platform.as_str())),
+    };
+    let mut refusals = Vec::new();
+    if lifecycle == ResourceLifecycle::Live && !descriptor.controller_platforms.contains(&runs_on) {
+        refusals.push(format!(
+            "has lifecycle Live, but its extension has no controller for {target}; without one the resource can only be Frozen"
+        ));
+    }
+    let frozen_only = !descriptor.lifecycles.contains(&ResourceLifecycle::Live)
+        || !descriptor.controller_platforms.contains(&runs_on);
+    if !frozen_only {
+        return refusals;
+    }
+    match (platform, cloud) {
+        (Platform::Local, _) => {}
+        (Platform::Kubernetes, ClusterCloud::NoCloud) => {
+            if !descriptor.setup.helm.contains(&Platform::Kubernetes) {
+                refusals.push(
+                    "can only be Frozen on platform 'kubernetes', but its extension has no Helm emitter, so the chart cannot ask for an existing one to bind".to_string(),
+                );
+            }
+        }
+        _ => {
+            if !descriptor.setup.importers.contains(&runs_on) {
+                refusals.push(format!(
+                    "can only be Frozen on {target}, but its extension has no importer for it, so Alien cannot read the resource setup creates"
+                ));
+            }
+        }
+    }
+    refusals
 }
 
 #[cfg(test)]
@@ -257,7 +408,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -293,7 +446,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -333,7 +488,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -382,7 +539,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -428,7 +587,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -463,7 +624,9 @@ mod tests {
             let stack = Stack {
                 dynamic_container_repositories: Vec::new(),
                 dynamic_container_image_resources: Vec::new(),
+                extensions: Vec::new(),
                 operations: None,
+                built_architectures: Default::default(),
                 id: "test-stack".to_string(),
                 resources,
                 permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -505,7 +668,9 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -514,59 +679,67 @@ mod tests {
         }
     }
 
-    /// On Azure or GCP a remote grant names a parent that must exist when the package applies,
-    /// which only the package that creates the sandbox can do, so only AWS may declare one Live.
-    /// Kubernetes has no remote grant: the Operator builds the pods itself, so it may as well.
+    /// A sandbox declared live for AWS runs unchanged on Azure and Google Cloud: the build accepts
+    /// it and says it is created by setup there. Kubernetes has no remote grant: the Operator
+    /// builds the pods itself, so it may as well.
     #[tokio::test]
-    async fn a_live_sandbox_is_accepted_on_kubernetes() {
-        let result = FrozenResourceLifecycleCheck
-            .check(
-                &sandbox_stack(ResourceLifecycle::Live),
-                Platform::Kubernetes,
-            )
-            .await
-            .expect("the check runs");
-        assert!(
-            !result.errors.iter().any(|e| e.contains("Live lifecycle")),
-            "{:?}",
-            result.errors
-        );
-    }
-
-    #[tokio::test]
-    async fn a_live_sandbox_is_refused_where_a_remote_grant_needs_a_parent() {
-        for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
+    async fn a_live_sandbox_is_accepted_on_kubernetes_azure_and_gcp() {
+        for platform in [Platform::Kubernetes, Platform::Azure, Platform::Gcp] {
             let result = FrozenResourceLifecycleCheck
                 .check(&sandbox_stack(ResourceLifecycle::Live), platform)
                 .await
                 .expect("the check runs");
-
-            assert!(
-                !result.success,
-                "a Live sandbox must be refused on {platform:?}"
-            );
-            let message = result
-                .errors
+            assert!(result.success, "{platform:?}: {:?}", result.errors);
+            let notice = result
+                .warnings
                 .iter()
-                .find(|error| {
-                    error.contains("only AWS and Kubernetes provision a sandbox at runtime")
-                })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "the refusal must name why, on {platform:?}: {:?}",
-                        result.errors
-                    )
-                });
-            assert!(
-                message.contains(platform.as_str()),
-                "the refusal must name the platform it applies to: {message}"
+                .find(|warning| warning.contains("created by setup"));
+            assert_eq!(
+                notice.is_some(),
+                platform != Platform::Kubernetes,
+                "{platform:?}: {:?}",
+                result.warnings
             );
-            // The message reaches a user, and a Rust line continuation that loses its backslash
-            // silently pads it with the source file's indentation.
-            assert!(
-                !message.contains("  "),
-                "the refusal must not carry collapsed indentation: {message}"
-            );
+            if let Some(notice) = notice {
+                assert!(
+                    notice.contains(
+                        "on Azure and Google Cloud a live sandbox is created by setup, like \
+                         frozen; changes to it go through setup"
+                    ),
+                    "{notice}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_live_sandbox_is_still_refused_where_no_sandbox_controller_exists() {
+        let result = FrozenResourceLifecycleCheck
+            .check(&sandbox_stack(ResourceLifecycle::Live), Platform::Local)
+            .await
+            .expect("the check runs");
+        assert!(!result.success);
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("only AWS, Azure, Google Cloud and Kubernetes accept it")));
+    }
+
+    /// Setup builds a live sandbox on Azure and Google Cloud, so the Frozen rules for a private
+    /// base image apply to it at build, not at deploy.
+    #[tokio::test]
+    async fn a_live_private_base_image_is_refused_on_azure_and_gcp_at_build() {
+        let mut stack = sandbox_stack(ResourceLifecycle::Live);
+        let entry = stack.resources.get_mut("agents").expect("sandbox entry");
+        let mut sandbox = entry.config.downcast_ref::<Sandbox>().unwrap().clone();
+        sandbox.private_base_image = Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1".to_string());
+        entry.config = alien_core::Resource::new(sandbox);
+        for platform in [Platform::Azure, Platform::Gcp] {
+            let result = FrozenResourceLifecycleCheck
+                .check(&stack, platform)
+                .await
+                .expect("the check runs");
+            assert!(!result.success, "{platform:?}");
         }
     }
 
@@ -907,7 +1080,9 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),

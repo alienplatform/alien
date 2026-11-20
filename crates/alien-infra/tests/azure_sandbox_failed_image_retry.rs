@@ -101,13 +101,14 @@ async fn a_failed_build_is_rebuilt_on_retry() {
     }))
     .unwrap();
     let mut executor = SingleControllerExecutor::builder()
+        // Not `Internet`: that adds the gateway container and waits for the egress key first.
         .resource(
             Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
                     image: PYTHON.to_string(),
                     bundled_from: None,
                 })
-                .egress(SandboxEgress::Internet)
+                .egress(SandboxEgress::Allow)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -117,6 +118,8 @@ async fn a_failed_build_is_rebuilt_on_retry() {
         .controller(controller)
         .platform(Platform::Azure)
         .resource_lifecycle(ResourceLifecycle::Frozen)
+        // Images are built by the provisioning run; a setup run builds none.
+        .setup_run(false)
         .service_provider(Arc::new(provider))
         .build()
         .await

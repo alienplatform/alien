@@ -18,7 +18,7 @@ use alien_signing::{
     Envelope, Kind, PublicKey, Role, SecretKey, Signature, SignedStatement, Signer, SignerChain,
     SignerKind, SignerListBody, TrustedList,
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -33,10 +33,6 @@ pub const SIGNING_HOME_ENV: &str = "ALIEN_SIGNING_HOME";
 /// The file, relative to the repository, that pins the project's signing
 /// fingerprint. The CLI writes it on the first release and never rewrites it.
 pub const REPO_SIGNING_FILE: &str = ".alien/signing.json";
-/// How long a signer list version stays valid.
-pub const LIST_LIFETIME_DAYS: i64 = 90;
-/// Under this many days left, CI warns that an admin must refresh the list.
-pub const LIST_WARNING_DAYS: i64 = 30;
 
 /// What a repository pins: the fingerprint of its project's signer list
 /// version 1. Committed with the code, owned by the CLI.
@@ -185,22 +181,26 @@ impl SigningHome {
     }
 
     /// This machine's device key, created on the first hardware backend it
-    /// has. `None` when it has no secure hardware.
-    pub fn device_or_create(&self) -> Result<Option<(DeviceRecord, DeviceKey)>> {
+    /// has, or as a software key when it has none.
+    pub fn device_or_create(&self) -> Result<(DeviceRecord, DeviceKey)> {
         if let Some(device) = self.device()? {
-            return Ok(Some(device));
+            return Ok(device);
         }
-        let Some(backend) = Backend::detect() else {
-            return Ok(None);
-        };
+        let backend = Backend::detect().unwrap_or(Backend::Software);
         let key = DeviceKey::create(backend, &self.device_dir())?;
+        if backend == Backend::Software {
+            eprintln!(
+                "Warning: This key is stored in a file, not in hardware: anyone who can read {} can sign as an admin.",
+                self.device_dir().join(device::software::KEY_FILE).display()
+            );
+        }
         let record = DeviceRecord {
             backend,
             signer_id: default_device_id(),
             label: device_label(),
         };
         write_json(&self.device_record_path(), &record)?;
-        Ok(Some((record, key)))
+        Ok((record, key))
     }
 }
 
@@ -241,7 +241,7 @@ impl StatementSigner {
     /// What the person does to sign, for prompts; `None` for keys in memory.
     pub fn gesture(&self) -> Option<&'static str> {
         match self {
-            Self::Device { key, .. } => Some(key.backend.gesture()),
+            Self::Device { key, .. } => key.backend.gesture(),
             Self::Key { .. } => None,
         }
     }
@@ -287,7 +287,7 @@ pub fn signer_with_key<'a>(list: &'a TrustedList, key: &PublicKey) -> Option<&'a
 /// that shows another chain, or one for another project, is refused.
 pub async fn verified_chain(api: &api::SigningApi, repo: &RepoSigning) -> Result<SignerChain> {
     let statements = api.signer_lists(&repo.project).await?;
-    let chain = SignerChain::from_statements(&repo.fingerprint, &statements, Utc::now()).context(
+    let chain = SignerChain::from_statements(&repo.fingerprint, &statements).context(
         ErrorData::SigningFailed {
             message: format!(
                 "The device lists the server returned for '{}' do not verify from {} in {REPO_SIGNING_FILE}",
@@ -307,7 +307,7 @@ pub async fn verified_chain(api: &api::SigningApi, repo: &RepoSigning) -> Result
     Ok(chain)
 }
 
-/// The key that signs config (`Role::Release`) or sessions (`Role::Operate`)
+/// The key that signs config or sessions (`Role::Release`)
 /// here, verified on the project's list from `.alien/signing.json`: the CI
 /// key when one is set, otherwise this machine's device key.
 pub async fn project_signer(
@@ -440,7 +440,7 @@ pub fn envelope<B>(
 }
 
 /// The next signer list version after `chain`'s current one, with `body`
-/// linked to it and a fresh expiry.
+/// linked to it.
 pub fn next_list(chain: &SignerChain, mut body: SignerListBody) -> Envelope<SignerListBody> {
     let current = chain.current();
     body.previous = Some(current.digest.clone());
@@ -449,15 +449,10 @@ pub fn next_list(chain: &SignerChain, mut body: SignerListBody) -> Envelope<Sign
         project: chain.project().to_string(),
         install: None,
         sequence: current.version + 1,
-        not_after: Some(list_expiry(Utc::now())),
+        not_after: None,
         signer_list_version: current.version,
         body,
     }
-}
-
-/// When a list signed at `now` expires.
-pub fn list_expiry(now: DateTime<Utc>) -> DateTime<Utc> {
-    now + Duration::days(LIST_LIFETIME_DAYS)
 }
 
 /// The 16-character code a teammate sends an admin, which the admin types
@@ -474,6 +469,7 @@ pub fn pairing_code(signer: &Signer, change_id: &str) -> String {
         &roles.join(","),
         kind_name(signer.kind),
         signer.label.as_deref().unwrap_or(""),
+        signer.backend.map(|backend| backend.as_str()).unwrap_or(""),
         signer.id.as_str(),
         change_id,
     ] {
@@ -610,7 +606,6 @@ pub fn check_statement(
     opened: &alien_signing::Opened,
     kind: Kind,
     install: Option<&alien_signing::InstallId>,
-    now: DateTime<Utc>,
 ) -> std::result::Result<(), String> {
     if opened.kind != kind || opened.project != chain.project() {
         return Err(format!(
@@ -627,7 +622,7 @@ pub fn check_statement(
             ));
         }
     }
-    if chain.current().denies(&opened.digest) {
+    if chain.current().refuses(opened) {
         return Err("it is deny-listed".to_string());
     }
     let version = opened.signer_list_version;
@@ -640,7 +635,6 @@ pub fn check_statement(
     let named = SignerChain::from_statements(
         &alien_signing::fingerprint(first),
         &chain.statements()[..version as usize],
-        now,
     )
     .map_err(|error| format!("signer list v{version} doesn't verify ({error})"))?;
     named
@@ -665,7 +659,6 @@ pub fn latest_config(
     chain: &SignerChain,
     install: &alien_signing::InstallId,
     statements: &[SignedStatement],
-    now: DateTime<Utc>,
 ) -> Result<Option<alien_signing::ConfigBody>> {
     let refused = |reason: String| {
         AlienError::new(ErrorData::SigningFailed {
@@ -684,7 +677,7 @@ pub fn latest_config(
     let Some(newest) = newest else {
         return Ok(None);
     };
-    check_statement(chain, &newest, Kind::Config, Some(install), now).map_err(refused)?;
+    check_statement(chain, &newest, Kind::Config, Some(install)).map_err(refused)?;
     let body: alien_signing::ConfigBody = newest
         .body()
         .map_err(|error| refused(format!("its body doesn't parse ({error})")))?;
@@ -702,13 +695,12 @@ pub fn check_config_for_release(
     release_id: &str,
     statement: &SignedStatement,
     config: &alien_signing::ConfigBody,
-    now: DateTime<Utc>,
 ) -> Result<()> {
     let release: alien_signing::ReleaseBody = statement
         .open()
         .map_err(|error| format!("it doesn't open ({error})"))
         .and_then(|opened| {
-            check_statement(chain, &opened, Kind::Release, None, now)?;
+            check_statement(chain, &opened, Kind::Release, None)?;
             opened
                 .body()
                 .map_err(|error| format!("its body doesn't parse ({error})"))
@@ -744,7 +736,7 @@ pub fn check_config_for_release(
 mod tests {
     use super::*;
 
-    fn list_v1(now: DateTime<Utc>) -> SignedStatement {
+    fn list_v1() -> SignedStatement {
         let alice = SecretKey::from_secret_bytes(&[1; 32]).unwrap();
         SignedStatement::new(
             &Envelope {
@@ -752,7 +744,7 @@ mod tests {
                 project: "prj".to_string(),
                 install: None,
                 sequence: 1,
-                not_after: Some(now + Duration::days(30)),
+                not_after: None,
                 signer_list_version: 1,
                 body: SignerListBody {
                     previous: None,
@@ -761,10 +753,12 @@ mod tests {
                         id: "alice".to_string(),
                         key: alice.public_key().as_str().to_string(),
                         kind: SignerKind::Device,
+                        backend: None,
                         roles: vec![Role::Admin, Role::Release],
                         label: None,
                     }],
                     deny: Vec::new(),
+                    keep: Vec::new(),
                     recovered: false,
                 },
             }
@@ -791,12 +785,11 @@ mod tests {
 
     #[test]
     fn a_config_change_keeps_what_the_last_signed_config_set() {
-        let now = Utc::now();
-        let v1 = list_v1(now);
+        let v1 = list_v1();
         let fingerprint = alien_signing::fingerprint(&v1.open().unwrap().digest);
-        let chain = SignerChain::from_statements(&fingerprint, &[v1], now).unwrap();
+        let chain = SignerChain::from_statements(&fingerprint, &[v1]).unwrap();
         let install = alien_signing::InstallId::parse("aws:111122223333:us-east-1:acme").unwrap();
-        assert_eq!(latest_config(&chain, &install, &[], now).unwrap(), None);
+        assert_eq!(latest_config(&chain, &install, &[]).unwrap(), None);
 
         // set-env, then set-inputs built on it: both halves are kept.
         let env = alien_signing::ConfigBody {
@@ -804,14 +797,14 @@ mod tests {
             ..Default::default()
         };
         let first = config(&chain, &install, 10, env.clone(), 1);
-        let mut next = latest_config(&chain, &install, &[first.clone()], now)
+        let mut next = latest_config(&chain, &install, &[first.clone()])
             .unwrap()
             .unwrap();
         assert_eq!(next, env);
         next.inputs
             .insert("region".to_string(), serde_json::json!("eu"));
         let second = config(&chain, &install, 11, next, 1);
-        let latest = latest_config(&chain, &install, &[second.clone(), first.clone()], now)
+        let latest = latest_config(&chain, &install, &[second.clone(), first.clone()])
             .unwrap()
             .unwrap();
         assert_eq!(latest.env["LOG_LEVEL"], "debug");
@@ -820,7 +813,7 @@ mod tests {
         // A newer statement the server made up, or one for another install,
         // is refused rather than built on.
         let forged = config(&chain, &install, 12, Default::default(), 9);
-        let error = latest_config(&chain, &install, &[first.clone(), forged], now).unwrap_err();
+        let error = latest_config(&chain, &install, &[first.clone(), forged]).unwrap_err();
         assert!(
             error.message.contains("isn't signed by a release key"),
             "{}",
@@ -828,7 +821,7 @@ mod tests {
         );
         let other = alien_signing::InstallId::parse("aws:111122223333:us-east-1:other").unwrap();
         let elsewhere = config(&chain, &other, 13, Default::default(), 1);
-        let error = latest_config(&chain, &install, &[first, elsewhere], now).unwrap_err();
+        let error = latest_config(&chain, &install, &[first, elsewhere]).unwrap_err();
         assert!(
             error
                 .message
@@ -840,10 +833,9 @@ mod tests {
 
     #[test]
     fn a_config_the_release_would_refuse_is_never_signed() {
-        let now = Utc::now();
-        let v1 = list_v1(now);
+        let v1 = list_v1();
         let fingerprint = alien_signing::fingerprint(&v1.open().unwrap().digest);
-        let chain = SignerChain::from_statements(&fingerprint, &[v1], now).unwrap();
+        let chain = SignerChain::from_statements(&fingerprint, &[v1]).unwrap();
         let release_body = alien_signing::ReleaseBody {
             platform: "gcp".to_string(),
             channel: "production".to_string(),
@@ -870,14 +862,13 @@ mod tests {
             ..Default::default()
         };
 
-        check_config_for_release(&chain, "rel_1", &release(1), &config("LOG_LEVEL"), now)
+        check_config_for_release(&chain, "rel_1", &release(1), &config("LOG_LEVEL"))
             .expect("a configurable name is signed");
 
         // A name the release doesn't declare: the install would refuse every
         // update until a new config replaced it.
-        let error =
-            check_config_for_release(&chain, "rel_1", &release(1), &config("V8_PROBE"), now)
-                .unwrap_err();
+        let error = check_config_for_release(&chain, "rel_1", &release(1), &config("V8_PROBE"))
+            .unwrap_err();
         assert_eq!(error.code, "VALIDATION_ERROR");
         assert_eq!(
             error.message,
@@ -887,9 +878,8 @@ mod tests {
         );
 
         // The release's word is checked before it is trusted.
-        let forged =
-            check_config_for_release(&chain, "rel_1", &release(9), &config("LOG_LEVEL"), now)
-                .unwrap_err();
+        let forged = check_config_for_release(&chain, "rel_1", &release(9), &config("LOG_LEVEL"))
+            .unwrap_err();
         assert!(
             forged
                 .message
@@ -908,6 +898,7 @@ mod tests {
                 .as_str()
                 .to_string(),
             kind: SignerKind::Device,
+            backend: None,
             roles,
             label: label.map(str::to_string),
         }

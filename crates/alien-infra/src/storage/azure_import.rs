@@ -69,6 +69,7 @@ impl ResourceImporter for AzureResourceGroupImporter {
             resource_group_name: Some(data.resource_group),
             resource_id: Some(resource_id),
             location: Some(data.location),
+            create_intent: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

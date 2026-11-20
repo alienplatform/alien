@@ -42,13 +42,13 @@ use crate::commands::{
     approve_task, build_and_post_release_simple, build_command, build_dev_status, commands_task,
     commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task,
     destroy_local_deployment, destroy_task, devices_task, ensure_server_running_for_dev_session,
-    fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
-    onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
-    render_task, stack_task, status_task, upgrade_task, validate_deploy_config, vault_remote_task,
-    vault_task, whoami_task, write_dev_status, ApproveArgs, BuildArgs, BuildSubcommand, CliEnvVar,
-    CommandsArgs, DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs, DevicesArgs, InitArgs,
-    LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs, ReleasesArgs, RenderArgs, StackArgs,
-    StatusArgs, UpgradeArgs, WhoamiArgs,
+    extensions_task, fetch_all_dev_deployment_live_states, init_task, local_operations_task,
+    logs_task, onboard_task, operations_task, prepare_dev_session_deployment, release_command,
+    releases_task, render_task, stack_task, status_task, upgrade_task, validate_deploy_config,
+    vault_remote_task, vault_task, whoami_task, write_dev_status, ApproveArgs, BuildArgs,
+    BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs,
+    DevicesArgs, ExtensionsArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs,
+    ReleasesArgs, RenderArgs, StackArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -178,6 +178,7 @@ impl Cli {
             Some(Commands::Usage(args)) => args.wants_json_output(),
             None
             | Some(Commands::Init(_))
+            | Some(Commands::Extensions(_))
             | Some(Commands::Deploy(_))
             | Some(Commands::Destroy(_))
             | Some(Commands::Vault(_))
@@ -205,6 +206,9 @@ pub enum Commands {
     Devices(DevicesArgs),
     /// Render setup artifacts for review
     Render(RenderArgs),
+    // No doc comment: it would replace the long help defined on `ExtensionsArgs`.
+    #[command(alias = "extension")]
+    Extensions(ExtensionsArgs),
     /// Inspect an alien.toml stack
     Stack(StackArgs),
     /// Create a deployment group and generate a deployment link
@@ -1248,10 +1252,13 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     // Build the server
     let server = AlienManager::builder(config.clone())
         .token_store(token_store)
-        .charts(alien_manager::routes::charts::ChartSettings::new(
-            toml_config.operator.image.clone(),
-            toml_config.operator.insecure_registry,
-        ).with_update_older_operators(toml_config.operator.update_older_operators))
+        .charts(
+            alien_manager::routes::charts::ChartSettings::new(
+                toml_config.operator.image.clone(),
+                toml_config.operator.insecure_registry,
+            )
+            .with_update_older_operators(toml_config.operator.update_older_operators),
+        )
         .bundle_signing_key(bundle_signing_key)
         .with_standalone_defaults(&toml_config)
         .await
@@ -2114,6 +2121,10 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         return render_task(args).await;
     }
 
+    // Extensions build and test locally, with no manager or account.
+    if let Some(Commands::Extensions(args)) = cli.command {
+        return extensions_task(args).await;
+    }
     // Expanding an alien.toml only reads local files.
     if let Some(Commands::Stack(args)) = cli.command {
         return stack_task(args);
@@ -2235,6 +2246,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Init(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Serve(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Render(_)) => unreachable!("handled before ctx resolution"),
+            Some(Commands::Extensions(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Stack(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Upgrade(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Devices(args)) => devices_task(args, ctx).await?,

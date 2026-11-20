@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
@@ -260,9 +260,9 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
     );
 
     // Parse handlers and collect state information
-    let mut handlers = HashMap::new();
+    let mut handlers = BTreeMap::new();
     let mut terminal_states = Vec::new();
-    let mut flow_entries = HashMap::new();
+    let mut flow_entries = BTreeMap::new();
     let mut default_state = None;
     let mut all_states = Vec::new();
     let mut get_binding_params_method = None;
@@ -311,6 +311,8 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
                 // Forwarded to the trait as written, signature included.
                 if method.sig.ident == "dependents_may_update"
                     || method.sig.ident == "updates_during_dependency_change"
+                    || method.sig.ident == "sync_membership"
+                    || method.sig.ident == "needs_update_holds_dependent_creation"
                 {
                     dependency_change_methods.push(method.clone());
                     continue;
@@ -466,8 +468,8 @@ fn parse_terminal_state(tokens: &TokenStream2) -> Result<(Ident, ExprPath)> {
 }
 
 fn validate_failure_states_not_in_flow_entries(
-    handlers: &HashMap<String, (&ImplItemFn, HandlerAttr)>,
-    flow_entries: &HashMap<String, (Ident, FlowEntryAttr)>,
+    handlers: &BTreeMap<String, (&ImplItemFn, HandlerAttr)>,
+    flow_entries: &BTreeMap<String, (Ident, FlowEntryAttr)>,
 ) -> Result<()> {
     // Check each flow entry for violations
     for (flow_type, (start_state, flow_entry)) in flow_entries {
@@ -555,9 +557,9 @@ fn generate_controller_impl(
     struct_name: &Ident,
     state_enum_name: &Ident,
     handler_action_name: &Ident,
-    handlers: &HashMap<String, (&ImplItemFn, HandlerAttr)>,
+    handlers: &BTreeMap<String, (&ImplItemFn, HandlerAttr)>,
     terminal_states: &[(Ident, ExprPath)],
-    flow_entries: &HashMap<String, (Ident, FlowEntryAttr)>,
+    flow_entries: &BTreeMap<String, (Ident, FlowEntryAttr)>,
     get_binding_params_method: Option<&ImplItemFn>,
     needs_update_method: Option<&ImplItemFn>,
     requires_convergence_reconciliation_method: Option<&ImplItemFn>,
@@ -773,7 +775,7 @@ fn generate_controller_impl(
 fn generate_step_match_arms(
     _state_enum_name: &Ident,
     handler_action_name: &Ident,
-    handlers: &HashMap<String, (&ImplItemFn, HandlerAttr)>,
+    handlers: &BTreeMap<String, (&ImplItemFn, HandlerAttr)>,
 ) -> TokenStream2 {
     let arms = handlers.iter().map(|(_state_name, (method, attr))| {
         let state_ident = &attr.state;
@@ -814,7 +816,7 @@ fn generate_step_match_arms(
 
 fn generate_get_status_match_arms(
     _state_enum_name: &Ident,
-    handlers: &HashMap<String, (&ImplItemFn, HandlerAttr)>,
+    handlers: &BTreeMap<String, (&ImplItemFn, HandlerAttr)>,
     terminal_states: &[(Ident, ExprPath)],
 ) -> TokenStream2 {
     let handler_arms = handlers.iter().map(|(_, (_, attr))| {
@@ -835,7 +837,7 @@ fn generate_get_status_match_arms(
 
 fn generate_transition_to_failure(
     _state_enum_name: &Ident,
-    handlers: &HashMap<String, (&ImplItemFn, HandlerAttr)>,
+    handlers: &BTreeMap<String, (&ImplItemFn, HandlerAttr)>,
 ) -> TokenStream2 {
     let match_arms = handlers.values().map(|(_, attr)| {
         let state = &attr.state;
@@ -854,7 +856,7 @@ fn generate_transition_to_failure(
 
 fn generate_transition_to_delete(
     state_enum_name: &Ident,
-    flow_entries: &HashMap<String, (Ident, FlowEntryAttr)>,
+    flow_entries: &BTreeMap<String, (Ident, FlowEntryAttr)>,
 ) -> TokenStream2 {
     if let Some((delete_start_state, _delete_flow)) = flow_entries.get("Delete") {
         // Unconditional -- the executor's plan() decides *when* to delete.
@@ -876,8 +878,8 @@ fn generate_transition_to_delete(
 
 fn generate_transition_to_update(
     state_enum_name: &Ident,
-    handlers: &HashMap<String, (&ImplItemFn, HandlerAttr)>,
-    flow_entries: &HashMap<String, (Ident, FlowEntryAttr)>,
+    handlers: &BTreeMap<String, (&ImplItemFn, HandlerAttr)>,
+    flow_entries: &BTreeMap<String, (Ident, FlowEntryAttr)>,
 ) -> TokenStream2 {
     if let Some((update_start_state, update_flow)) = flow_entries.get("Update") {
         let mut allowed_states = update_flow.from_states.clone();
@@ -924,7 +926,7 @@ fn generate_transition_to_update(
 
 fn generate_transition_to_teardown(
     state_enum_name: &Ident,
-    flow_entries: &HashMap<String, (Ident, FlowEntryAttr)>,
+    flow_entries: &BTreeMap<String, (Ident, FlowEntryAttr)>,
 ) -> TokenStream2 {
     if let Some((teardown_start_state, teardown_flow)) = flow_entries.get("Teardown") {
         let allowed_states = &teardown_flow.from_states;

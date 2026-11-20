@@ -5,11 +5,11 @@ use alien_core::permissions::{
 };
 use alien_core::{
     ownership_policy_for_resource_type,
-    storage_notifications::queue_receives_storage_notifications, Container, DeploymentConfig,
-    KubernetesCertificateMode, KubernetesCluster, KubernetesExposureSettings,
+    storage_notifications::queue_receives_storage_notifications, Container, CustomResource,
+    DeploymentConfig, KubernetesCertificateMode, KubernetesCluster, KubernetesExposureSettings,
     KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
-    KubernetesRouteProviderOptions, Platform, Postgres, ResourceLifecycle, Sandbox, Stack,
-    StackState, Storage, Worker, WorkerTrigger,
+    KubernetesRouteProviderOptions, Platform, Postgres, ResourceLifecycle, ResourceType, Sandbox,
+    Stack, StackState, Storage, Worker, WorkerTrigger,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -245,7 +245,7 @@ fn validate_deployer_secret_management(stack: &Stack) -> Result<()> {
             if forbidden {
                 return Err(AlienError::new(ErrorData::StackMutationFailed {
                     mutation_name: "ManagementPermissionProfileMutation".to_string(),
-                    message: format!("Management permission '{}' on '{}' can reach deployer secrets. Grant data access only to a concrete shared vault; deployer-secrets permits metadata access only.", permission.id(), scope),
+                    message: format!("Management permission '{}' on '{}' can reach deployer secrets. Grant data access only to a concrete shared vault; deployer-secrets permits metadata access only.", crate::escape_control_characters(permission.id()), crate::escape_control_characters(scope)),
                     resource_id: Some(alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string()),
                 }));
             }
@@ -724,7 +724,8 @@ pub(crate) fn generate_auto_management_profile(
             return Err(AlienError::new(ErrorData::StackMutationFailed {
                 mutation_name: "management permission profile".to_string(),
                 message: format!(
-                    "Automatic infrastructure management cannot grant {permission_set_ids:?} on '{resource_id}': the management role cannot change its own policies after setup; use manual setup"
+                    "Automatic infrastructure management cannot grant {} on '{resource_id}': the management role cannot change its own policies after setup; use manual setup",
+                    crate::escape_control_characters(&format!("{permission_set_ids:?}"))
                 ),
                 resource_id: Some(resource_id.clone()),
             }));
@@ -735,26 +736,46 @@ pub(crate) fn generate_auto_management_profile(
         return Ok(None);
     }
 
+    /// Alien's sets among `permission_set_ids`. An extension's, such as
+    /// `acme/dns-zone/provision`, belong to the extension's own identity and are left out, as is
+    /// a gate's set a built-in type has none of, such as any type's `telemetry`.
     fn resolve_permission_refs(
+        stack: &Stack,
         permission_set_ids: BTreeSet<String>,
-    ) -> Vec<PermissionSetReference> {
+    ) -> Result<Vec<PermissionSetReference>> {
         let mut valid_permission_refs = Vec::new();
         for permission_set_id in permission_set_ids {
             if get_permission_set(&permission_set_id).is_some() {
                 valid_permission_refs.push(PermissionSetReference::from_name(permission_set_id));
-            } else {
-                // Log warning but continue - allows system to work even if some permission sets are missing
-                tracing::debug!(
-                    permission_set_id = %permission_set_id,
-                    "Management permission set not found in registry, skipping"
-                );
+                continue;
             }
+            let (resource_type, operation) = permission_set_id
+                .rsplit_once('/')
+                .unwrap_or((permission_set_id.as_str(), ""));
+            let resource_type = ResourceType::from(resource_type);
+            if stack.descriptor(&resource_type).is_some() {
+                continue;
+            }
+            let custom = stack.resources().any(|(_, entry)| {
+                entry.config.resource_type() == resource_type
+                    && entry.config.downcast_ref::<CustomResource>().is_some()
+            });
+            if !custom && GATE_DERIVED_GLOBAL_SUFFIXES.contains(&operation) {
+                continue;
+            }
+            return Err(AlienError::new(ErrorData::StackMutationFailed {
+                mutation_name: "management permission profile".to_string(),
+                message: format!(
+                    "Management needs the permission set '{}', which neither Alien nor an extension in the stack defines",
+                    crate::escape_control_characters(&permission_set_id)
+                ),
+                resource_id: None,
+            }));
         }
-        valid_permission_refs
+        Ok(valid_permission_refs)
     }
 
-    // Validate permission sets exist in registry and filter out missing ones
-    let valid_permission_refs = resolve_permission_refs(permission_set_ids);
+    let valid_permission_refs = resolve_permission_refs(stack, permission_set_ids)?;
 
     // Create the management permission profile. Auto lifecycle permissions are
     // wildcard-scoped. Permissions that address imported/existing physical
@@ -766,7 +787,7 @@ pub(crate) fn generate_auto_management_profile(
     }
 
     for (resource_id, permission_set_ids) in resource_permission_set_ids {
-        let valid_resource_refs = resolve_permission_refs(permission_set_ids);
+        let valid_resource_refs = resolve_permission_refs(stack, permission_set_ids)?;
         if !valid_resource_refs.is_empty() {
             management_permissions.insert(resource_id, valid_resource_refs);
         }
@@ -1692,6 +1713,71 @@ mod tests {
         }
     }
 
+    /// A Live `acme/dns-zone`, whose `provision` set belongs to the acme extension's identity
+    /// when the stack lists the extension.
+    fn stack_with_a_custom_zone(listing_its_extension: bool) -> Stack {
+        let zone =
+            CustomResource::from_untagged("acme/dns-zone", serde_json::json!({ "id": "zone" }))
+                .unwrap();
+        let mut stack = Stack::new("test-stack".to_string())
+            .add(zone, ResourceLifecycle::Live)
+            .build();
+        if listing_its_extension {
+            stack.extensions = vec![serde_json::from_value(serde_json::json!({
+                "name": "acme", "version": "0.1.0", "digest": "sha256:4ff931a2",
+                "resourceTypes": { "acme/dns-zone": {
+                    "lifecycles": ["live"], "holdsData": false,
+                    "setup": { "cloudformation": [], "terraform": [], "helm": [], "importers": [] },
+                    "controllerPlatforms": ["aws"],
+                    "permissionSets": [],
+                    "link": { "permissionSets": [] },
+                    "schemas": { "config": { "type": "object" }, "outputs": { "type": "object" } }
+                } }
+            }))
+            .unwrap()];
+        }
+        stack
+    }
+
+    #[tokio::test]
+    async fn management_leaves_an_extensions_sets_to_its_identity() {
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(
+                stack_with_a_custom_zone(true),
+                &StackState::new(Platform::Aws),
+                &deployment_config_for_management_permission_test(),
+            )
+            .await
+            .expect("an extension's sets are left to its identity");
+        assert!(!result_stack
+            .management()
+            .profile()
+            .is_some_and(|profile| profile
+                .0
+                .values()
+                .flatten()
+                .any(|permission| permission.id().starts_with("acme/"))));
+    }
+
+    #[tokio::test]
+    async fn a_permission_set_no_one_defines_fails_the_mutation() {
+        let error = ManagementPermissionProfileMutation
+            .mutate(
+                stack_with_a_custom_zone(false),
+                &StackState::new(Platform::Aws),
+                &deployment_config_for_management_permission_test(),
+            )
+            .await
+            .expect_err("no extension in the stack defines acme/dns-zone");
+        assert!(
+            error.message.contains("'acme/dns-zone/")
+                && error
+                    .message
+                    .contains("neither Alien nor an extension in the stack defines"),
+            "{error:?}"
+        );
+    }
+
     #[tokio::test]
     async fn remote_storage_never_adds_data_access_to_management() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
@@ -1809,7 +1895,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2259,7 +2347,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2328,7 +2418,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2435,7 +2527,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2547,7 +2641,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2609,7 +2705,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2674,7 +2772,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2747,7 +2847,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2803,7 +2905,9 @@ mod tests {
         let stack_gcp = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack-gcp".to_string(),
             resources: {
                 let mut resources = IndexMap::new();
@@ -2891,7 +2995,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2962,7 +3068,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -3034,7 +3142,9 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {

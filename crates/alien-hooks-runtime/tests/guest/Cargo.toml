@@ -1,0 +1,18 @@
+# A hooks module for the runtime's tests: hooks that behave and hooks that try what the sandbox
+# must stop. The tests build it for wasm32-wasip1. It has no dependencies, so it builds offline.
+[package]
+name = "hooks-test-guest"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# A WASI command, for the runtime's command runs.
+[[bin]]
+name = "command"
+path = "src/bin/command.rs"
+
+# Its own workspace, so the repository's workspace does not build it for the host.
+[workspace]

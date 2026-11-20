@@ -235,6 +235,36 @@ pub async fn route_from_remote_ai_lease(
     })
 }
 
+fn env_is_set(env: &HashMap<String, String>, key: &str) -> bool {
+    env.get(key).is_some_and(|v| !v.is_empty())
+}
+
+/// A Bedrock binding in a Kubernetes workload must sign with the pod's own identity: IRSA
+/// (`AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN`) or EKS Pod Identity
+/// (`AWS_CONTAINER_CREDENTIALS_FULL_URI` + `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`). Without
+/// either, the AWS default chain falls through to the node's instance role, which every pod on
+/// the node shares, so refuse rather than sign with it. Other deployment types are unchanged.
+fn require_pod_identity(binding: &str, env: &HashMap<String, String>) -> Result<()> {
+    if env.get(ENV_ALIEN_DEPLOYMENT_TYPE).map(String::as_str) != Some("kubernetes") {
+        return Ok(());
+    }
+    let irsa = env_is_set(env, "AWS_WEB_IDENTITY_TOKEN_FILE") && env_is_set(env, "AWS_ROLE_ARN");
+    let pod_identity = env_is_set(env, "AWS_CONTAINER_CREDENTIALS_FULL_URI")
+        && env_is_set(env, "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE");
+    if irsa || pod_identity {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::AmbientCredentialUnavailable {
+        message: format!(
+            "the Bedrock binding '{binding}' needs the pod's own AWS identity, and this pod has \
+             none: annotate the service account with eks.amazonaws.com/role-arn (IRSA: sets \
+             AWS_WEB_IDENTITY_TOKEN_FILE and AWS_ROLE_ARN) or create an EKS Pod Identity \
+             association (sets AWS_CONTAINER_CREDENTIALS_FULL_URI and \
+             AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE). The node's role is never used"
+        ),
+    }))
+}
+
 /// Attach the binding's cloud ambient credential, producing a route the proxy serves.
 pub async fn resolve_route(
     binding: GatewayBinding,
@@ -252,12 +282,18 @@ pub async fn resolve_route(
             })?;
             match managed {
                 Some(p) => AmbientCred::Aws(AwsSigV4Cred::managed(region, p.clone())),
-                None => match workload_client_config().await? {
-                    Some(config) if config.aws_config().is_some() => {
-                        AmbientCred::Aws(AwsSigV4Cred::from_client_config(region, &config).await?)
+                None => {
+                    // On Kubernetes both resolution paths below can end at the node's role
+                    // (instance metadata) when the pod has no identity of its own. Refuse.
+                    let env: HashMap<String, String> = std::env::vars().collect();
+                    require_pod_identity(&binding.name, &env)?;
+                    match workload_client_config().await? {
+                        Some(config) if config.aws_config().is_some() => AmbientCred::Aws(
+                            AwsSigV4Cred::from_client_config(region, &config).await?,
+                        ),
+                        _ => AmbientCred::Aws(AwsSigV4Cred::new(region).await?),
                     }
-                    _ => AmbientCred::Aws(AwsSigV4Cred::new(region).await?),
-                },
+                }
             }
         }
         Platform::Gcp => match managed {
@@ -326,6 +362,24 @@ mod tests {
     #[test]
     fn skips_external_byo_key_binding() {
         assert!(gateway_binding("llm", AiBinding::external("openai", "sk-x")).is_none());
+    }
+
+    /// An external AI binding that uses the pod's own AWS identity reaches the workload as a
+    /// plain Bedrock binding, and the gateway builds an AWS route from it (signed with the SDK
+    /// default chain, which reads IRSA's web identity token).
+    #[test]
+    fn an_external_ambient_bedrock_binding_becomes_an_aws_route() {
+        let external: alien_core::ExternalBinding = serde_json::from_value(serde_json::json!({
+            "type": "ai", "service": "bedrock", "region": "us-east-1"
+        }))
+        .unwrap();
+        let env_value = external.to_env_binding_value().unwrap().to_string();
+        let env = HashMap::from([("ALIEN_LLM_BINDING".to_string(), env_value)]);
+        let bindings = bindings_from_env_map(&env).unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].name, "llm");
+        assert_eq!(bindings[0].cloud, Platform::Aws);
+        assert_eq!(bindings[0].region.as_deref(), Some("us-east-1"));
     }
 
     /// An external Postgres binding shares the `ALIEN_*_BINDING` namespace but
@@ -452,5 +506,71 @@ mod tests {
             declared.as_slice(),
             "AI_SERVICE_TAGS drifted from AiBinding's variants; update the array"
         );
+    }
+
+    fn kube_env(extra: &[(&str, &str)]) -> HashMap<String, String> {
+        let mut env = HashMap::from([(
+            ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+            "kubernetes".to_string(),
+        )]);
+        env.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        env
+    }
+
+    #[test]
+    fn a_kubernetes_pod_without_an_identity_is_refused() {
+        let err = require_pod_identity("llm", &kube_env(&[]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("eks.amazonaws.com/role-arn") && err.contains("Pod Identity"),
+            "{err}"
+        );
+        assert!(err.contains("node's role is never used"), "{err}");
+        // Half of either pair is not an identity.
+        assert!(require_pod_identity("llm", &kube_env(&[("AWS_ROLE_ARN", "arn:x")])).is_err());
+        assert!(require_pod_identity(
+            "llm",
+            &kube_env(&[("AWS_WEB_IDENTITY_TOKEN_FILE", "/t"), ("AWS_ROLE_ARN", "")])
+        )
+        .is_err());
+        assert!(require_pod_identity(
+            "llm",
+            &kube_env(&[(
+                "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+                "http://169.254.170.23/v1/credentials"
+            )])
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn a_kubernetes_pod_with_irsa_or_pod_identity_proceeds() {
+        assert!(require_pod_identity(
+            "llm",
+            &kube_env(&[
+                ("AWS_WEB_IDENTITY_TOKEN_FILE", "/t"),
+                ("AWS_ROLE_ARN", "arn:x")
+            ])
+        )
+        .is_ok());
+        assert!(require_pod_identity(
+            "llm",
+            &kube_env(&[
+                (
+                    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+                    "http://169.254.170.23/v1/credentials"
+                ),
+                ("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", "/t"),
+            ])
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn other_deployment_types_are_unchanged() {
+        assert!(require_pod_identity("llm", &HashMap::new()).is_ok());
+        let aws = HashMap::from([(ENV_ALIEN_DEPLOYMENT_TYPE.to_string(), "aws".to_string())]);
+        assert!(require_pod_identity("llm", &aws).is_ok());
     }
 }

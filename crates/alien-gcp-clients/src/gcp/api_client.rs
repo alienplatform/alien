@@ -1,6 +1,7 @@
 use crate::gcp::gcp_request_utils::{auth_send_json, auth_send_no_response, GcpAuthConfig};
 use crate::gcp::GcpClientConfig;
 use crate::gcp::GcpClientConfigExt;
+use alien_client_core::interceptor::InterceptorChain;
 use alien_client_core::{ErrorData, Result};
 use alien_error::AlienError;
 use reqwest::{Client, Method};
@@ -24,6 +25,24 @@ pub trait GcpServiceConfig: Send + Sync + std::fmt::Debug {
     fn service_key(&self) -> &'static str;
 }
 
+/// Gives a client that keeps its `GcpClientBase` in a `base` field a `with_interceptors`, the
+/// one way a deployment's chain reaches it.
+macro_rules! impl_with_interceptors {
+    ($client:ty) => {
+        impl $client {
+            /// The same client, with the deployment's interceptors.
+            pub fn with_interceptors(
+                mut self,
+                interceptors: alien_client_core::interceptor::InterceptorChain,
+            ) -> Self {
+                self.base = self.base.with_interceptors(interceptors);
+                self
+            }
+        }
+    };
+}
+pub(crate) use impl_with_interceptors;
+
 /// Lightweight client that relies on the cloud-agnostic helpers defined in
 /// `gcp_request_utils.rs` and `request_utils.rs`.
 pub struct GcpClientBase {
@@ -31,6 +50,7 @@ pub struct GcpClientBase {
     cfg: GcpClientConfig,
     svc_cfg: Box<dyn GcpServiceConfig>,
     token_cache: tokio::sync::Mutex<Option<CachedToken>>,
+    interceptors: InterceptorChain,
 }
 
 impl std::fmt::Debug for GcpClientBase {
@@ -50,7 +70,14 @@ impl GcpClientBase {
             cfg,
             svc_cfg,
             token_cache: tokio::sync::Mutex::new(None),
+            interceptors: InterceptorChain::default(),
         }
+    }
+
+    /// The same client, with the deployment's interceptors.
+    pub fn with_interceptors(mut self, interceptors: InterceptorChain) -> Self {
+        self.interceptors = interceptors;
+        self
     }
 
     pub fn http_client(&self) -> &Client {
@@ -78,6 +105,8 @@ impl GcpClientBase {
                 .await?;
             return Ok(GcpAuthConfig {
                 bearer_token: token,
+                service: self.svc_cfg.service_key().to_string(),
+                interceptors: self.interceptors.clone(),
             });
         }
 
@@ -88,6 +117,8 @@ impl GcpClientBase {
                 if Instant::now() < cached.expires_at {
                     return Ok(GcpAuthConfig {
                         bearer_token: cached.token.clone(),
+                        service: self.svc_cfg.service_key().to_string(),
+                        interceptors: self.interceptors.clone(),
                     });
                 }
             }
@@ -128,6 +159,8 @@ impl GcpClientBase {
 
         Ok(GcpAuthConfig {
             bearer_token: token,
+            service: self.svc_cfg.service_key().to_string(),
+            interceptors: self.interceptors.clone(),
         })
     }
 

@@ -519,7 +519,8 @@ fn params_too_large() -> PluginResult {
     )
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl Plugin for TypedOperations {
     async fn handle(&self, invocation: &PluginInvocation) -> PluginResult {
         self.execute(invocation).await

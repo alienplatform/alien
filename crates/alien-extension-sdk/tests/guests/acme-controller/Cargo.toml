@@ -1,0 +1,31 @@
+# The controller crate of the docs' full example (Build a full extension). Its library holds
+# the DNS zone's controllers for AWS, Google Cloud and Azure, and builds for wasm32-wasip1 into
+# the extension's controller module; its binary runs the local one for `alien dev`. The library
+# also holds a probe the example lacks, for what the SDK's tests step and the zone never uses.
+[package]
+name = "acme-controller"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+acme-types = { path = "../acme-types" }
+alien-extension-sdk = { workspace = true, features = ["controller"] }
+# The docs' AWS controller calls Route53, which Alien has no client for. Alien sends each
+# request for the module, so the client needs no HTTP stack and no runtime.
+aws-sdk-route53 = { version = "=1.121.0", default-features = false }
+# The probe's resource type and its heartbeat.
+bon = { workspace = true }
+chrono = { workspace = true }
+# `#[controller]` derives serde's traits, whose expansion names the `serde` crate.
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+utoipa = { workspace = true }
+
+[dev-dependencies]
+alien-infra = { workspace = true, features = ["test-utils"] }
+tokio = { workspace = true, features = ["macros", "rt", "net"] }
+
+# `route53_env` sends a native Route53 client's requests to a server on this machine.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+aws-sdk-route53 = { version = "=1.121.0", default-features = false, features = ["default-https-client", "rt-tokio"] }

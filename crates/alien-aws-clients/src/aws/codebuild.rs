@@ -61,6 +61,7 @@ impl CodeBuildClient {
             region: self.credentials.region().to_string(),
             credentials: self.credentials.get_credentials(),
             signing_region: None,
+            interceptors: self.credentials.interceptors().clone(),
         }
     }
 

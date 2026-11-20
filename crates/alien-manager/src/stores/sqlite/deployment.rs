@@ -3,17 +3,21 @@
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use sea_query::{Cond, Expr, IntoCondition, Order, Query, SqliteQueryBuilder};
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tracing::warn;
 use turso::transaction::TransactionBehavior;
 
 use alien_core::{
     import::ImportSourceKind, DeploymentModel, DeploymentStatus, EnvironmentVariable, Platform,
+    Stack,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
 use super::database::{db_error, RowParser, SqliteDatabase};
-use super::migrations::{DeploymentGroups, Deployments};
+use super::migrations::{DeploymentGroups, Deployments, Releases};
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::deployment_store::*;
@@ -51,6 +55,7 @@ pub struct SqliteDeploymentStore {
 /// `source` chain, as `$.code`, `$.source.code`, `$.source.source.code`, and so on.
 const ERROR_WAITS_FOR_SETUP: &str = "EXISTS (SELECT 1 FROM json_tree(COALESCE(error, '{}')) WHERE key = 'code' AND value = 'DEPLOYMENT_SETUP_REQUIRED' AND replace(fullkey, '.source', '') = '$.code')";
 const UNREGISTERED_SETUP_RESERVATION: &str = "status = 'pending' AND current_release_id IS NULL AND json_extract(COALESCE(setup_metadata, '{}'), '$.setupReservation.releaseId') IS NOT NULL";
+const UPDATE_FAILED_STATUS: &str = "update-failed";
 
 impl SqliteDeploymentStore {
     pub(crate) const WORK_STATUSES: [&'static str; 9] = [
@@ -395,7 +400,8 @@ impl SqliteDeploymentStore {
                 .map(String::as_str)
                 .filter(|status| {
                     Self::WORK_STATUSES.contains(status)
-                        || Self::SETUP_TEARDOWN_STATUSES.contains(status)
+                        || (Self::SETUP_TEARDOWN_STATUSES.contains(status)
+                            && Self::runtime_may_claim_handoff(mode))
                         || *status == Self::RUNNING_STATUS
                         // The heartbeat loop requests Running alongside RefreshFailed.
                         // Work-only acquisition must still require an explicit retry.
@@ -403,14 +409,26 @@ impl SqliteDeploymentStore {
                             && statuses.iter().any(|status| status == Self::RUNNING_STATUS))
                 })
                 .collect();
+            let membership_only = Self::membership_only_request(statuses, mode);
             let requested_failed: Vec<&str> = statuses
                 .iter()
                 .map(String::as_str)
                 .filter(|status| Self::FAILED_STATUSES.contains(status))
+                // A failed update asked for next to Running is only for the machine-list
+                // refresh: it never takes the deployment's retry, delete or update.
+                .filter(|status| !(membership_only && *status == UPDATE_FAILED_STATUS))
                 .collect();
 
             let mut condition = Cond::any();
             let mut has_status = false;
+            if membership_only {
+                has_status = true;
+                condition = condition.add(
+                    Cond::all()
+                        .add(Expr::col(Deployments::Status).eq(UPDATE_FAILED_STATUS))
+                        .add(Expr::col(Deployments::RetryRequested).eq(0)),
+                );
+            }
             if !requested_active.is_empty() {
                 has_status = true;
                 condition = condition.add(Expr::col(Deployments::Status).is_in(requested_active));
@@ -436,10 +454,30 @@ impl SqliteDeploymentStore {
         }
     }
 
+    /// The heartbeat shape: a failed update requested together with Running. It matches only a
+    /// failed update with no retry waiting.
+    /// Only an acquire with no mode asks for it: a setup run or teardown asks for the same
+    /// statuses and must keep its own rules.
+    fn membership_only_request(statuses: &[String], mode: Option<DeploymentAcquireMode>) -> bool {
+        mode.is_none()
+            && statuses.iter().any(|status| status == UPDATE_FAILED_STATUS)
+            && statuses.iter().any(|status| status == Self::RUNNING_STATUS)
+    }
+
+    /// The statuses that wait on the setup owner (`SETUP_TEARDOWN_STATUSES`) are not the
+    /// runtime's to claim: its cleanup is over. A runtime request that names one anyway (an
+    /// Operator asks for its deployment by the status it last reported) would otherwise take
+    /// the lock and make the setup owner's acquire answer "contended" for as long as the
+    /// Operator keeps syncing.
+    fn runtime_may_claim_handoff(mode: Option<DeploymentAcquireMode>) -> bool {
+        mode != Some(DeploymentAcquireMode::Runtime)
+    }
+
     fn acquire_status_matches(
         status: &str,
         failed_claimable: bool,
         statuses: Option<&Vec<String>>,
+        mode: Option<DeploymentAcquireMode>,
     ) -> bool {
         let failed_is_retryable = Self::FAILED_STATUSES.contains(&status) && failed_claimable;
 
@@ -447,10 +485,15 @@ impl SqliteDeploymentStore {
             return Self::WORK_STATUSES.contains(&status) || failed_is_retryable;
         };
 
+        if status == UPDATE_FAILED_STATUS && Self::membership_only_request(statuses, mode) {
+            return !failed_claimable;
+        }
+
         let explicitly_active = statuses.iter().any(|requested| {
             requested == status
                 && (Self::WORK_STATUSES.contains(&status)
-                    || Self::SETUP_TEARDOWN_STATUSES.contains(&status)
+                    || (Self::SETUP_TEARDOWN_STATUSES.contains(&status)
+                        && Self::runtime_may_claim_handoff(mode))
                     || status == Self::RUNNING_STATUS
                     || (status == "refresh-failed"
                         && statuses
@@ -1232,10 +1275,14 @@ impl DeploymentStore for SqliteDeploymentStore {
             .context(GenericError {
                 message: "Failed to inspect deployment recovery inventory".to_string(),
             })?;
-        if let Some(row) = rows.next().await.into_alien_error().context(GenericError {
+        let deployment = match rows.next().await.into_alien_error().context(GenericError {
             message: "Failed to read deployment recovery inventory".to_string(),
         })? {
-            let deployment = Self::parse_deployment(&row)?;
+            Some(row) => Some(Self::parse_deployment(&row)?),
+            None => None,
+        };
+        drop(rows);
+        if let Some(deployment) = deployment {
             if deployment.locked_by.is_some() && deployment.status != "deleted" {
                 return Err(AlienError::new(ErrorData::DeploymentLocked {
                     deployment_id: id.to_string(),
@@ -1243,18 +1290,47 @@ impl DeploymentStore for SqliteDeploymentStore {
                 })
                 .into_generic());
             }
+            // The releases' stacks carry the descriptors that say whether an extension's
+            // resource holds data.
+            let mut release_stacks = Vec::new();
+            for release_id in [
+                &deployment.current_release_id,
+                &deployment.desired_release_id,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let query = Query::select()
+                    .column(Releases::Stack)
+                    .from(Releases::Table)
+                    .and_where(Expr::col(Releases::Id).eq(release_id.as_str()))
+                    .to_string(SqliteQueryBuilder);
+                let mut rows =
+                    conn.query(&query, ())
+                        .await
+                        .into_alien_error()
+                        .context(GenericError {
+                            message: "Failed to inspect the deployment's release".to_string(),
+                        })?;
+                if let Some(row) = rows.next().await.into_alien_error().context(GenericError {
+                    message: "Failed to read the deployment's release".to_string(),
+                })? {
+                    let stacks: HashMap<Platform, Stack> = RowParser::new(&row).json(0, "stack")?;
+                    release_stacks.extend(stacks.into_values());
+                }
+            }
+            let stacks: Vec<&Stack> = release_stacks.iter().collect();
             if matches!(
                 deployment.status.as_str(),
                 "retention-required" | "retained"
             ) || deployment.stack_state.as_ref().is_some_and(|stack| {
-                !alien_deployment::installed_durable_resource_ids(stack).is_empty()
+                !alien_deployment::installed_durable_resource_ids(stack, &stacks).is_empty()
             }) {
                 return Err(ErrorData::bad_request(
                     "Recovery metadata is required by retained durable data; complete explicit erase before forgetting this deployment",
                 ).into_generic());
             }
         }
-        drop(rows);
         let sql = Query::delete()
             .from_table(Deployments::Table)
             .and_where(Expr::col(Deployments::Id).eq(id))
@@ -1936,6 +2012,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                     &status,
                     failed_claimable,
                     explicit_status_filter,
+                    filter.acquire_mode,
                 ) {
                     DeploymentAcquireUnavailableReason::StatusMismatch
                 } else if filter.excluded_deployment_ids.contains(&deployment_id)

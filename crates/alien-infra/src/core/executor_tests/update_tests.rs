@@ -88,6 +88,32 @@ async fn test_refresh_does_not_plan_config_changes() -> Result<()> {
     Ok(())
 }
 
+/// The membership refresh for a failed deployment takes the state by reference and returns
+/// nothing from it: no resource is stepped, retried or marked, so a failed resource and its
+/// retry bookkeeping stay exactly as they were, whatever the other resources do.
+#[tokio::test]
+async fn test_membership_sync_leaves_a_failed_deployment_untouched() -> Result<()> {
+    let stack = Stack::new("membership-test".to_owned())
+        .add(test_function("func1"), ResourceLifecycle::Live)
+        .add(test_storage("data"), ResourceLifecycle::Frozen)
+        .build();
+    let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    let failed = state.resources.get_mut("func1").unwrap();
+    failed.status = ResourceStatus::UpdateFailed;
+    failed.retry_attempt = 3;
+    let before = serde_json::to_value(&state).unwrap();
+
+    new_executor(&stack)?.sync_membership(&state).await?;
+
+    assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    assert_eq!(
+        get_status(&state, "func1"),
+        Some(ResourceStatus::UpdateFailed)
+    );
+    assert_eq!(state.resources["func1"].retry_attempt, 3);
+    Ok(())
+}
+
 #[tokio::test]
 async fn imported_continuation_preserves_complete_truthful_state() -> Result<()> {
     let dependency = test_storage("dependency");

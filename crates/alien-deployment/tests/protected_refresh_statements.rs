@@ -151,6 +151,8 @@ fn stack() -> Stack {
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
         operations: None,
+        built_architectures: Default::default(),
+        extensions: Vec::new(),
     }
 }
 
@@ -178,6 +180,7 @@ fn config(stack_settings: StackSettings) -> DeploymentConfig {
         allow_frozen_changes: false,
         setup_run: false,
         setup_run_id: None,
+        deployment_id: None,
         domain_metadata: None,
         public_endpoints: None,
         monitoring: None,
@@ -190,6 +193,7 @@ fn config(stack_settings: StackSettings) -> DeploymentConfig {
         image_registry: None,
         image_pull_secrets: Vec::new(),
         signed_config: None,
+        management_external_id: None,
     }
 }
 

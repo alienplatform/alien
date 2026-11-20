@@ -1008,6 +1008,81 @@ mod rollout_order {
         Ok(())
     }
 
+    /// A dependency that asks for an update holds the creation of a dependent too, not only its
+    /// update: a dependent created while the sandbox's binding is still unpublished would be
+    /// built without it and never see it.
+    #[tokio::test]
+    async fn a_dependency_with_a_requested_update_holds_back_a_dependent_still_to_be_created(
+    ) -> Result<()> {
+        let (dep, app) = ("dep-create-held", "app-create-held");
+        let only_dep = Stack::new("create-held".to_owned())
+            .add(worker(dep, "r1", false), ResourceLifecycle::Live)
+            .build();
+        let mut state = run_to_synced(&new_executor(&only_dep)?, new_test_state()).await?;
+        assert_all_running(&state, &[dep]);
+
+        crate::worker::request_test_worker_update(dep, true);
+        crate::worker::hold_dependent_creation_of_test_worker(dep, true);
+        let executor = new_executor(&requested_stack(dep, app, "r1", false))?;
+        state = executor.step(state).await?.next_state;
+        assert!(
+            matches!(
+                get_status(&state, app),
+                None | Some(ResourceStatus::Pending)
+            ),
+            "the dependent started while its dependency still owed an update: {:?}",
+            get_status(&state, app)
+        );
+        crate::worker::request_test_worker_update(dep, false);
+        crate::worker::hold_dependent_creation_of_test_worker(dep, false);
+        for _ in 0..40 {
+            state = executor.step(state).await?.next_state;
+        }
+        assert_all_running(&state, &[dep, app]);
+        Ok(())
+    }
+
+    /// An update that is pending on a setup-owned (Frozen) resource cannot run from here: only
+    /// setup changes it. It must not stop a newly added resource that depends on it from being
+    /// created, unless that resource says its update publishes what dependents read. This is the
+    /// stack of an existing install whose update waits for setup, adding one more resource.
+    #[tokio::test]
+    async fn a_pending_setup_owned_update_does_not_hold_back_a_new_dependent() -> Result<()> {
+        let (dep, app) = ("dep-pending-ordinary", "app-added-ordinary");
+        let before = Stack::new("pending-ordinary".to_owned())
+            .add(worker(dep, "r1", false), ResourceLifecycle::Frozen)
+            .build();
+        let mut state = run_to_synced(&new_executor(&before)?, new_test_state()).await?;
+        assert_all_running(&state, &[dep]);
+
+        // The dependency asks for an update for the whole test; being setup-owned, nothing here
+        // runs it.
+        crate::worker::request_test_worker_update(dep, true);
+        let after = Stack::new("pending-ordinary".to_owned())
+            .add(worker(dep, "r1", false), ResourceLifecycle::Frozen)
+            .add_with_dependencies(
+                worker(app, "r1", false),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, dep)],
+            )
+            .build();
+        let executor = new_executor(&after)?;
+        let mut app_started = false;
+        for _ in 0..40 {
+            state = executor.step(state).await?.next_state;
+            app_started |= matches!(
+                get_status(&state, app),
+                Some(ResourceStatus::Provisioning | ResourceStatus::Running)
+            );
+        }
+        crate::worker::request_test_worker_update(dep, false);
+        assert!(
+            app_started,
+            "the new dependent was never started while its dependency had an update pending"
+        );
+        Ok(())
+    }
+
     /// `dep` <- `app`: `dep` is Running on release one, `app` is asked to move to release two.
     fn requested_stack(dep: &str, app: &str, release: &str, fail_dep_update: bool) -> Stack {
         Stack::new("rollout-fail-open".to_owned())

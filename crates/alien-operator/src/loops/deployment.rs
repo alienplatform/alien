@@ -208,6 +208,15 @@ fn bind_setup_authorization(
 /// 4. OperatorTransport persists state and re-reads config after each step
 /// 5. Sync loop will pick up changes and report to manager
 pub async fn run_deployment_loop(state: Arc<OperatorState>) {
+    run_deployment_loop_observed(state, |_| {}).await
+}
+
+/// [`run_deployment_loop`], calling `after_pass` with the wait it chose after
+/// every pass.
+async fn run_deployment_loop_observed(
+    state: Arc<OperatorState>,
+    mut after_pass: impl FnMut(Duration),
+) {
     let interval = Duration::from_secs(state.config.deployment_interval_seconds);
 
     info!(
@@ -215,16 +224,60 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
         "Starting deployment loop"
     );
 
+    let mut hold = HoldBackoff::default();
     loop {
-        let delay = run_deployment_pass(&state, interval).await;
+        let delay = run_deployment_pass(&state, interval, &mut hold).await;
+        after_pass(delay);
 
         tokio::select! {
             _ = tokio::time::sleep(delay) => {},
+            // A target, an approval decision or a retry request is a reason to
+            // act now, whatever the hold interval.
+            _ = state.db.wait_for_deployment() => hold.reset(),
             _ = state.cancel.cancelled() => {
                 info!("Deployment loop shutting down");
                 return;
             }
         }
+    }
+}
+
+/// First wait of a deployment that holds in a status with nothing to do.
+const HOLD_FLOOR: Duration = Duration::from_secs(5);
+/// Longest wait of a held deployment.
+const HOLD_CAP: Duration = Duration::from_secs(60);
+
+/// Statuses where the Operator has nothing left to do: the deployment waits for
+/// something outside this loop (the manager's setup teardown, a retry request, a
+/// new target), or is gone. The Delete operation ends the pass in each at once,
+/// without a step (`classify_status`), or with the status's no-op handler.
+fn is_hold_status(status: DeploymentStatus) -> bool {
+    matches!(
+        status,
+        DeploymentStatus::Deleted
+            | DeploymentStatus::TeardownRequired
+            | DeploymentStatus::RetentionRequired
+            | DeploymentStatus::Retained
+            | DeploymentStatus::TeardownFailed
+    )
+}
+
+/// How long the loop waits between passes while the deployment holds: 5 s,
+/// doubling to 60 s, back to 5 s after a wake.
+#[derive(Debug, Default)]
+pub(crate) struct HoldBackoff {
+    next: Option<Duration>,
+}
+
+impl HoldBackoff {
+    fn next_delay(&mut self) -> Duration {
+        let delay = self.next.unwrap_or(HOLD_FLOOR);
+        self.next = Some((delay * 2).min(HOLD_CAP));
+        delay
+    }
+
+    fn reset(&mut self) {
+        self.next = None;
     }
 }
 
@@ -246,8 +299,12 @@ fn outcome_changed(outcome: &str) -> bool {
 
 /// One pass of the deployment loop. Returns how long the loop waits before the
 /// next pass: the step's requested delay, never less than `interval`.
-async fn run_deployment_pass(state: &OperatorState, interval: Duration) -> Duration {
-    match run_deployment_continuously(state).await {
+async fn run_deployment_pass(
+    state: &OperatorState,
+    interval: Duration,
+    hold: &mut HoldBackoff,
+) -> Duration {
+    let delay = match run_deployment_continuously(state).await {
         Ok((steps, suggested_delay)) => {
             if steps > 0 {
                 // A running deployment takes a health step every pass; the
@@ -259,6 +316,13 @@ async fn run_deployment_pass(state: &OperatorState, interval: Duration) -> Durat
         Err(e) => {
             error!(error = %e, "Deployment failed");
             interval
+        }
+    };
+    match state.db.get_deployment_state().await {
+        Ok(Some(current)) if is_hold_status(current.status) => delay.max(hold.next_delay()),
+        _ => {
+            hold.reset();
+            delay
         }
     }
 }
@@ -280,10 +344,12 @@ pub(crate) async fn run_deployment_continuously(
     let target_release = match &current.target_release {
         Some(r) => r,
         None => {
-            if crate::daily_identity::has_runtime_identity(&state.db).await? {
-                refresh_installed_deployment(state).await?;
-            }
-            return Ok((0, Duration::ZERO));
+            let delay = if crate::daily_identity::has_runtime_identity(&state.db).await? {
+                refresh_installed(state).await?
+            } else {
+                Duration::ZERO
+            };
+            return Ok((0, delay));
         }
     };
     // A pushed target always carries an Alien release id (observe deployments never
@@ -322,12 +388,16 @@ pub(crate) async fn run_deployment_continuously(
         "Found target release to deploy"
     );
 
+    // The delete-side statuses run the Delete operation, which ends the pass at
+    // once in the four hold statuses (see `is_hold_status`): as Deploy they are
+    // not terminal and the step loop would spin on them.
     let operation = if matches!(
         current.status,
         alien_core::DeploymentStatus::DeletePending
             | alien_core::DeploymentStatus::Deleting
             | alien_core::DeploymentStatus::DeleteFailed
-    ) {
+    ) || is_hold_status(current.status)
+    {
         LoopOperation::Delete
     } else {
         LoopOperation::Deploy
@@ -445,6 +515,15 @@ pub(crate) async fn run_deployment_continuously(
             .and_then(|release| release.release_id.as_deref())
             == Some(target_release_id);
 
+    let service_provider = crate::extension_bundles::provider_for(
+        state.service_provider.clone(),
+        &crate::extension_bundles::cache(&state.config.data_dir),
+        &current,
+        &deployment_id,
+        &client_config,
+    )
+    .await?;
+
     let transport = OperatorTransport {
         db: Arc::clone(&state.db),
         operator_config: state.config.clone(),
@@ -463,7 +542,7 @@ pub(crate) async fn run_deployment_continuously(
             .await?
             .is_some_and(|execution| execution.claim.is_some());
         let steps = match run_maintenance_refresh(
-            state,
+            service_provider,
             &mut current,
             &mut enriched_config,
             &client_config,
@@ -481,7 +560,7 @@ pub(crate) async fn run_deployment_continuously(
             Err(error) => return Err(error),
         };
         finish_maintenance_refresh(state, &current, answers_claim).await?;
-        return Ok((steps, Duration::ZERO));
+        return Ok((steps, running_check_delay(&transport)));
     }
 
     // The claim whose target this loop applies. Captured before stepping: the
@@ -507,7 +586,7 @@ pub(crate) async fn run_deployment_continuously(
         &deployment_id,
         &policy,
         &transport,
-        state.service_provider.clone(),
+        service_provider,
         None,
     )
     .await
@@ -542,9 +621,14 @@ pub(crate) async fn run_deployment_continuously(
                     .await?;
             }
             // A disconnected Operator needs the installed config for health refreshes.
-            if (state.config.airgap_target_secret.is_none()
-                && enriched_config.runtime_identity_audience.is_none())
-                || loop_result.final_status != DeploymentStatus::Running
+            // A pass that held without a step finished nothing: the sync loop
+            // keeps sending the target, so clearing its config would only be
+            // undone by the next sync.
+            let held_without_step = steps_executed == 0 && is_hold_status(loop_result.final_status);
+            if !held_without_step
+                && ((state.config.airgap_target_secret.is_none()
+                    && enriched_config.runtime_identity_audience.is_none())
+                    || loop_result.final_status != DeploymentStatus::Running)
             {
                 debug!("Deployment synced, clearing deployment config");
                 state.db.clear_deployment_config().await?;
@@ -596,8 +680,31 @@ pub(crate) async fn run_deployment_continuously(
 
 /// Refresh an installed deployment for health reporting and bounded credential renewal.
 pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Result<()> {
+    refresh_installed(state).await.map(|_| ())
+}
+
+/// How long the loop waits before the next Running check: the controllers' own
+/// delay (30 s for a ready cluster or container, 5 s while one needs a closer
+/// look), never under [`RUNNING_CHECK_FLOOR`] nor over [`RUNNING_CHECK_CAP`].
+fn running_check_delay(transport: &OperatorTransport) -> Duration {
+    clamp_running_check_delay(Duration::from_millis(
+        transport.suggested_delay_ms.load(Ordering::Relaxed),
+    ))
+}
+
+fn clamp_running_check_delay(requested: Duration) -> Duration {
+    requested.clamp(RUNNING_CHECK_FLOOR, RUNNING_CHECK_CAP)
+}
+
+/// No Running check starts sooner than this after the last one.
+const RUNNING_CHECK_FLOOR: Duration = Duration::from_secs(5);
+/// A Running check never waits longer than this, whatever a controller asks.
+const RUNNING_CHECK_CAP: Duration = Duration::from_secs(60);
+
+/// [`refresh_installed_deployment`], returning how long to wait before the next check.
+async fn refresh_installed(state: &OperatorState) -> Result<Duration> {
     let Some(mut current) = state.db.get_deployment_state().await? else {
-        return Ok(());
+        return Ok(Duration::ZERO);
     };
     if current.target_release.is_some()
         || !matches!(
@@ -605,10 +712,12 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
             DeploymentStatus::Running | DeploymentStatus::RefreshFailed
         )
     {
-        return renew_installed_credentials(state).await;
+        return renew_installed_credentials(state)
+            .await
+            .map(|()| Duration::ZERO);
     }
     let Some(release) = current.current_release.as_ref() else {
-        return Ok(());
+        return Ok(Duration::ZERO);
     };
     let Some(config) = state.db.get_deployment_config().await? else {
         if state.db.get_airgap_receipt().await?.is_none()
@@ -616,7 +725,7 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
         {
             // Completed older installations discarded config. Preserve their status
             // until a newer verified target provides enough context to refresh.
-            return Ok(());
+            return Ok(Duration::ZERO);
         }
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: "The installed deployment config is unavailable for health refresh"
@@ -644,6 +753,15 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
             message: "The deployment identity is unavailable for health refresh".to_string(),
         })
     })?;
+    // An air-gapped Operator gets no downloads, so this is the bundle it already holds.
+    let service_provider = crate::extension_bundles::provider_for(
+        state.service_provider.clone(),
+        &crate::extension_bundles::cache(&state.config.data_dir),
+        &current,
+        &deployment_id,
+        &client_config,
+    )
+    .await?;
     let transport = OperatorTransport {
         db: Arc::clone(&state.db),
         operator_config: state.config.clone(),
@@ -657,8 +775,8 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
         operation: LoopOperation::Deploy,
         delay_strategy: alien_deployment::runner::DelayStrategy::Yield,
     };
-    match run_maintenance_refresh(
-        state,
+    let result = run_maintenance_refresh(
+        service_provider,
         &mut current,
         &mut config,
         &client_config,
@@ -666,10 +784,10 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
         &policy,
         &transport,
     )
-    .await
-    {
-        Err(_) if transport.superseded.load(Ordering::Relaxed) => Ok(()),
-        result => result.map(|_| ()),
+    .await;
+    match result {
+        Err(_) if transport.superseded.load(Ordering::Relaxed) => Ok(Duration::ZERO),
+        result => result.map(|_| running_check_delay(&transport)),
     }
 }
 
@@ -739,7 +857,7 @@ async fn renew_installed_credentials_or_warn(state: &OperatorState) {
 
 /// One Running refresh pass over the installed release.
 async fn run_maintenance_refresh(
-    state: &OperatorState,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     current: &mut DeploymentState,
     config: &mut DeploymentConfig,
     client_config: &ClientConfig,
@@ -754,7 +872,7 @@ async fn run_maintenance_refresh(
         deployment_id,
         policy,
         transport,
-        state.service_provider.clone(),
+        service_provider,
         None,
     )
     .await
@@ -1166,8 +1284,129 @@ mod tests {
     };
     use std::collections::HashMap;
 
+    fn held_state(status: DeploymentStatus) -> DeploymentState {
+        let release = alien_core::ReleaseInfo {
+            release_id: Some("rel_held".into()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("held".into()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
+        };
+        DeploymentState {
+            platform: Platform::Local,
+            status,
+            current_release: Some(release.clone()),
+            target_release: Some(release),
+            stack_state: None,
+            runtime_metadata: None,
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    async fn held_operator(status: DeploymentStatus) -> (tempfile::TempDir, Arc<OperatorState>) {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(
+                directory.path().to_str().unwrap(),
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .await
+            .unwrap(),
+        );
+        db.set_deployment_id("dep_held").await.unwrap();
+        db.set_deployment_state(&held_state(status)).await.unwrap();
+        db.set_deployment_config(&test_deployment_config())
+            .await
+            .unwrap();
+        let state = Arc::new(OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Local)
+                .data_dir(directory.path().to_str().unwrap())
+                .encryption_key("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        });
+        (directory, state)
+    }
+
+    const HOLD_STATUSES: [DeploymentStatus; 5] = [
+        DeploymentStatus::Deleted,
+        DeploymentStatus::TeardownRequired,
+        DeploymentStatus::RetentionRequired,
+        DeploymentStatus::Retained,
+        DeploymentStatus::TeardownFailed,
+    ];
+
+    #[tokio::test]
+    async fn a_hold_status_pass_runs_no_step_and_changes_nothing() {
+        for status in HOLD_STATUSES {
+            let (_directory, state) = held_operator(status).await;
+            let before = state.db.get_deployment_state().await.unwrap().unwrap();
+            let config_before = state.db.get_deployment_config().await.unwrap();
+            let (steps, _) = run_deployment_continuously(&state).await.unwrap();
+            assert_eq!(steps, 0, "{status:?} must not step");
+            let after = state.db.get_deployment_state().await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::to_value(&before).unwrap(),
+                serde_json::to_value(&after).unwrap(),
+                "{status:?} must not change"
+            );
+            // The sync loop keeps sending the target, so a hold pass must not clear its config.
+            assert_eq!(
+                serde_json::to_value(state.db.get_deployment_config().await.unwrap()).unwrap(),
+                serde_json::to_value(config_before).unwrap(),
+                "{status:?} must keep the stored config"
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_deployment_backs_off_for_ten_minutes_and_a_wake_ends_the_wait() {
+        for status in HOLD_STATUSES {
+            let (_directory, state) = held_operator(status).await;
+            let waits = Arc::new(std::sync::Mutex::new(Vec::<Duration>::new()));
+            let observed = Arc::clone(&waits);
+            let task = tokio::spawn(run_deployment_loop_observed(
+                Arc::clone(&state),
+                move |delay| observed.lock().unwrap().push(delay),
+            ));
+
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            let passes = waits.lock().unwrap().len();
+            // 5, 10, 20, 40 s then 60 s: about 13 passes in ten minutes (a 1 s
+            // interval ran 600, each with up to 100 steps).
+            assert!(
+                (10..=15).contains(&passes),
+                "{status:?}: {passes} passes in ten simulated minutes"
+            );
+            assert_eq!(
+                waits.lock().unwrap()[..5],
+                [5, 10, 20, 40, 60].map(Duration::from_secs),
+                "{status:?}"
+            );
+
+            // A wake is handled at once, and the wait starts again at 5 s.
+            state.db.request_deployment();
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            let waits = waits.lock().unwrap();
+            assert_eq!(waits.len(), passes + 1, "{status:?}: wake runs a pass");
+            assert_eq!(*waits.last().unwrap(), Duration::from_secs(5), "{status:?}");
+            state.cancel.cancel();
+            task.await.unwrap();
+        }
+    }
+
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             image_registry: None,
             image_pull_secrets: Vec::new(),
             gcp_federation_scope: None,
@@ -1184,6 +1423,7 @@ mod tests {
             allow_frozen_changes: false,
             setup_run: false,
             setup_run_id: None,
+            deployment_id: None,
             compute_backend: None,
             external_bindings: ExternalBindings::default(),
             base_platform: None,
@@ -1558,6 +1798,223 @@ mod tests {
         .unwrap();
 
         assert_eq!(enriched.external_bindings, bindings);
+    }
+
+    /// The deployment config the Operator runs with when the chart's `external-bindings.json`,
+    /// the `toJson` of its `infrastructure` values, is `chart_json`: read at startup, then merged
+    /// into the deployment's config.
+    async fn config_from_chart(chart_json: &str) -> DeploymentConfig {
+        let bindings = crate::cli::parse_json_opt::<ExternalBindings>(
+            Some(chart_json.to_string()),
+            "external bindings",
+        )
+        .unwrap();
+        let settings = crate::cli::stack_settings_with_bindings(StackSettings::default(), bindings);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        let operator_config = OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .stack_settings(settings)
+            .encryption_key(encryption_key)
+            .build();
+        enrich_config(
+            test_deployment_config(),
+            &operator_config,
+            Platform::Kubernetes,
+            &db,
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// The full example's stack on a cluster in no cloud: its Frozen zone, whose type the `acme`
+    /// extension declares as the example's build does, and the service provider that loaded the
+    /// extension's hooks module.
+    fn zone_stack() -> (
+        alien_core::Stack,
+        Arc<dyn alien_infra::PlatformServiceProvider>,
+    ) {
+        use alien_infra::extension_bundle::{testing::TestBundle, ExtensionBundle, Runtime};
+
+        // Its link sets the zone's id, as the example's link does.
+        let bundle = TestBundle::with_hooks_answering(
+            "acme",
+            "1.0.0",
+            r#"[{"name":"link-zone","kind":"link","resourceType":"acme/dns-zone"}]"#,
+            r#"{"env":{"ACME_ZONE_ID":"Z0123"},"permissionSets":[]}"#,
+            &[],
+        );
+        let mut manifest = bundle.manifest.clone();
+        manifest.resource_types.insert(
+            "acme/dns-zone".into(),
+            serde_json::from_value(serde_json::json!({
+                "lifecycles": ["frozen", "live"],
+                "holdsData": false,
+                "setup": {
+                    "cloudformation": ["aws"],
+                    "terraform": ["aws", "gcp", "azure"],
+                    "helm": ["kubernetes"],
+                    "importers": ["aws", "gcp", "azure"]
+                },
+                "controllerPlatforms": ["aws", "gcp", "azure", "local"],
+                "permissionSets": [],
+                "link": { "permissionSets": [], "env": ["ACME_ZONE_ID"] },
+                "schemas": {
+                    "config": {},
+                    "outputs": {
+                        "type": "object",
+                        "required": ["zoneId"],
+                        "properties": { "zoneId": { "type": "string" } }
+                    }
+                }
+            }))
+            .unwrap(),
+        );
+        let stack: alien_core::Stack = serde_json::from_value(serde_json::json!({
+            "id": "my-app",
+            "resources": {
+                "zone": {
+                    "config": { "type": "acme/dns-zone", "id": "zone", "domain": "internal.acme.dev" },
+                    "lifecycle": "frozen",
+                    "dependencies": []
+                }
+            },
+            "permissions": { "profiles": {}, "management": "auto" },
+            "extensions": [manifest]
+        }))
+        .unwrap();
+        let hooks = ExtensionBundle::open(&bundle.manifest, &bundle.zip)
+            .unwrap()
+            .load_hooks(&Runtime::new().unwrap())
+            .unwrap();
+        let provider: Arc<dyn alien_infra::PlatformServiceProvider> = Arc::new(
+            alien_infra::DefaultPlatformServiceProvider::default()
+                .with_extensions(
+                    &stack,
+                    Arc::new(alien_infra::LoadedExtensions::default().with_hooks("acme", hooks)),
+                )
+                .unwrap(),
+        );
+        (stack, provider)
+    }
+
+    fn kubernetes() -> alien_core::ClientConfig {
+        alien_core::ClientConfig::Kubernetes(Box::new(alien_core::KubernetesClientConfig::Manual {
+            server_url: "https://kubernetes.test".to_string(),
+            certificate_authority_data: None,
+            insecure_skip_tls_verify: Some(true),
+            client_certificate_data: None,
+            client_key_data: None,
+            token: None,
+            username: None,
+            password: None,
+            namespace: Some("app".to_string()),
+            additional_headers: Default::default(),
+        }))
+    }
+
+    /// The chart's binding for the full example's zone: the Operator reads it at startup, the
+    /// zone binds with no controller on Kubernetes, and a workload that links it gets its outputs.
+    #[tokio::test]
+    async fn a_custom_frozen_resource_binds_from_the_chart_s_values() {
+        use alien_core::{ResourceRef, ResourceStatus};
+
+        let config = config_from_chart(
+            r#"{"zone":{"type":"acme/dns-zone","service":"route53","zoneId":"Z0123"}}"#,
+        )
+        .await;
+        let (stack, provider) = zone_stack();
+        let executor = alien_infra::StackExecutor::builder(&stack, kubernetes())
+            .deployment_config(&config)
+            .service_provider(provider.clone())
+            .build()
+            .unwrap_or_else(|error| panic!("the executor refused the bound zone: {error:?}"));
+        let stepped = executor
+            .step(alien_core::StackState::new(Platform::Kubernetes))
+            .await
+            .unwrap()
+            .next_state;
+        let zone = &stepped.resources["zone"];
+        assert_eq!(zone.status, ResourceStatus::Running);
+        assert!(zone.external_binding);
+        assert!(zone.internal_state.is_none(), "no controller ran");
+        assert_eq!(
+            serde_json::to_value(zone.outputs.as_ref().unwrap()).unwrap(),
+            serde_json::json!({ "type": "acme/dns-zone", "zoneId": "Z0123" })
+        );
+
+        // A workload that links the zone, as a Kubernetes controller renders its environment.
+        let registry = Arc::new(alien_infra::ResourceRegistry::with_built_ins());
+        let worker = alien_core::Resource::new(
+            alien_core::Worker::new("api".to_string())
+                .code(alien_core::WorkerCode::Image {
+                    image: "registry.example.com/api:1".to_string(),
+                })
+                .permissions("default".to_string())
+                .build(),
+        );
+        let ctx = alien_infra::ResourceControllerContext {
+            desired_config: &worker,
+            platform: Platform::Kubernetes,
+            client_config: kubernetes(),
+            state: &stepped,
+            resource_prefix: "app",
+            registry: &registry,
+            desired_stack: &stack,
+            service_provider: &provider,
+            deployment_config: &config,
+            initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+            heartbeat_collector: Default::default(),
+        };
+        let env = HashMap::new();
+        let (env_vars, _) = alien_infra::EnvironmentVariableBuilder::new(&env)
+            .add_linked_resources(
+                &[ResourceRef::new(
+                    alien_core::ResourceType::from("acme/dns-zone"),
+                    "zone".to_string(),
+                )],
+                &ctx,
+                "api",
+            )
+            .await
+            .unwrap()
+            .build_with_bindings();
+        let binding: serde_json::Value =
+            serde_json::from_str(&env_vars["ALIEN_ZONE_BINDING"]).unwrap();
+        assert_eq!(
+            binding,
+            serde_json::json!({ "service": "route53", "zoneId": "Z0123" })
+        );
+        assert_eq!(env_vars["ACME_ZONE_ID"], "Z0123", "the link's variable");
+    }
+
+    /// A value the type's outputs don't describe, such as a misspelled field, stops the
+    /// deployment before anything runs.
+    #[tokio::test]
+    async fn a_chart_binding_the_zone_s_outputs_do_not_describe_is_refused() {
+        let config = config_from_chart(
+            r#"{"zone":{"type":"acme/dns-zone","service":"route53","zoneID":"Z0123"}}"#,
+        )
+        .await;
+        let (stack, provider) = zone_stack();
+        let Err(error) = alien_infra::StackExecutor::builder(&stack, kubernetes())
+            .deployment_config(&config)
+            .service_provider(provider)
+            .build()
+        else {
+            panic!("the executor accepted a binding with no zoneId");
+        };
+        assert!(
+            error.message.contains("the binding has no 'zoneId'")
+                && error
+                    .message
+                    .contains("'zoneID' is not one of the outputs its schema names"),
+            "{error:?}"
+        );
     }
 
     #[tokio::test]
@@ -2187,8 +2644,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
             status: DeploymentStatus::UpdatePending,
@@ -2352,6 +2809,14 @@ mod tests {
 
     /// An installed Test deployment whose `worker` fails its first health refresh.
     async fn installed_refresh_fixture() -> (OperatorState, tempfile::TempDir) {
+        installed_refresh_fixture_with_ready_delay(None).await
+    }
+
+    /// `ready_delay_secs`: the heartbeat delay every worker's Ready handler returns
+    /// (real Kubernetes handlers return 30 s); `None` returns no delay.
+    async fn installed_refresh_fixture_with_ready_delay(
+        ready_delay_secs: Option<u64>,
+    ) -> (OperatorState, tempfile::TempDir) {
         alien_deployment::set_ephemeral_secrets_digest_key();
         let directory = tempfile::tempdir().unwrap();
         let key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -2369,6 +2834,12 @@ mod tests {
                 ("SIMULATE_OBSERVED_REFRESH_FAIL_ONCE".into(), "true".into()),
             ]))
             .build();
+        let ready_delay_env: HashMap<String, String> = ready_delay_secs
+            .map(|secs| ("SIMULATE_READY_DELAY_SECS".to_string(), secs.to_string()))
+            .into_iter()
+            .collect();
+        let mut worker = worker;
+        worker.environment.extend(ready_delay_env.clone());
         let mut stack =
             alien_core::Stack::new("site".into()).add(worker, alien_core::ResourceLifecycle::Live);
         for index in 0..8 {
@@ -2377,6 +2848,7 @@ mod tests {
                     image: "test:1".into(),
                 })
                 .permissions("default".into())
+                .environment(ready_delay_env.clone())
                 .build();
             stack = stack.add(worker, alien_core::ResourceLifecycle::Live);
         }
@@ -2440,6 +2912,190 @@ mod tests {
         let installed = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(installed.status, DeploymentStatus::Running);
         (state, directory)
+    }
+
+    #[test]
+    fn the_running_check_follows_the_controller_delay_within_the_floor_and_cap() {
+        let delay = |ms: u64| clamp_running_check_delay(Duration::from_millis(ms));
+        assert_eq!(delay(0), Duration::from_secs(5));
+        assert_eq!(delay(2_000), Duration::from_secs(5));
+        assert_eq!(delay(30_000), Duration::from_secs(30));
+        assert_eq!(delay(300_000), Duration::from_secs(60));
+    }
+
+    /// Controllers that ask for 30 s (the Kubernetes Ready handlers do) give a check
+    /// every 30 s: about 20 in ten minutes, not 120.
+    #[tokio::test(start_paused = true)]
+    async fn controllers_asking_for_thirty_seconds_give_about_twenty_checks_in_ten_minutes() {
+        let (state, _directory) = installed_refresh_fixture_with_ready_delay(Some(30)).await;
+        state
+            .db
+            .write_daily_identity(&crate::daily_identity::DailyIdentityState {
+                manager_url: "https://manager.example".into(),
+                audience: "https://manager.example".into(),
+                deployment_id: "dep_site".into(),
+                current: "ax_day_v1_fixture".into(),
+                pending: None,
+                pending_started_at: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+                enrolled_code_hash: None,
+                pending_enrollment: None,
+                previous: None,
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state);
+        let waits = Arc::new(std::sync::Mutex::new(Vec::<Duration>::new()));
+        let observed = Arc::clone(&waits);
+        let task = tokio::spawn(run_deployment_loop_observed(
+            Arc::clone(&state),
+            move |delay| observed.lock().unwrap().push(delay),
+        ));
+        tokio::time::sleep(Duration::from_secs(602)).await;
+        let waits_now = waits.lock().unwrap().clone();
+        state.cancel.cancel();
+        task.await.unwrap();
+        assert!(
+            (19..=22).contains(&waits_now.len()),
+            "{} checks in ten simulated minutes: {waits_now:?}",
+            waits_now.len()
+        );
+        assert!(
+            // The fixture's first worker dips into RefreshFailed once: two closer checks.
+            waits_now
+                .iter()
+                .skip(2)
+                .all(|wait| *wait == Duration::from_secs(30)),
+            "{waits_now:?}"
+        );
+    }
+
+    /// A healthy installed deployment: the loop checks it at the controllers'
+    /// pace, not every interval (a 1 s interval ran a check every second).
+    #[tokio::test(start_paused = true)]
+    async fn a_healthy_running_deployment_is_checked_at_most_every_five_seconds() {
+        let (state, _directory) = installed_refresh_fixture().await;
+        state
+            .db
+            .write_daily_identity(&crate::daily_identity::DailyIdentityState {
+                manager_url: "https://manager.example".into(),
+                audience: "https://manager.example".into(),
+                deployment_id: "dep_site".into(),
+                current: "ax_day_v1_fixture".into(),
+                pending: None,
+                pending_started_at: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+                enrolled_code_hash: None,
+                pending_enrollment: None,
+                previous: None,
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state);
+        let waits = Arc::new(std::sync::Mutex::new(Vec::<Duration>::new()));
+        let observed = Arc::clone(&waits);
+        let task = tokio::spawn(run_deployment_loop_observed(
+            Arc::clone(&state),
+            move |delay| observed.lock().unwrap().push(delay),
+        ));
+        tokio::time::sleep(Duration::from_secs(602)).await;
+        let waits_now = waits.lock().unwrap().clone();
+        assert!(
+            waits_now.len() <= 600 / 5 + 2,
+            "{} checks in ten simulated minutes",
+            waits_now.len()
+        );
+        assert!(waits_now.iter().all(|wait| *wait >= RUNNING_CHECK_FLOOR));
+
+        // A wake (a new target) is handled at once, mid-wait.
+        let before = waits_now.len();
+        state.db.request_deployment();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        assert_eq!(waits.lock().unwrap().len(), before + 1);
+        state.cancel.cancel();
+        task.await.unwrap();
+    }
+
+    /// The manager replays the same target on every sync. That must not cut a wait
+    /// short (a hold's backoff, a step's requested delay); a changed target does.
+    #[tokio::test(start_paused = true)]
+    async fn replayed_targets_do_not_wake_the_loop_and_a_changed_one_does() {
+        let (_directory, state) = held_operator(DeploymentStatus::TeardownRequired).await;
+        let stored = state.db.get_deployment_state().await.unwrap().unwrap();
+        let target = alien_core::sync::TargetDeployment {
+            release_info: stored.target_release.clone().unwrap(),
+            config: test_deployment_config(),
+            signed_config: None,
+        };
+        let waits = Arc::new(std::sync::Mutex::new(Vec::<Duration>::new()));
+        let observed = Arc::clone(&waits);
+        let task = tokio::spawn(run_deployment_loop_observed(
+            Arc::clone(&state),
+            move |delay| observed.lock().unwrap().push(delay),
+        ));
+        // The first sync stores the target the Operator did not hold yet.
+        crate::loops::sync::accept_target(&state, &target, false)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        let after_first = waits.lock().unwrap().len();
+
+        // Ten minutes of syncs, one every 30 s, each replaying the same target.
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            crate::loops::sync::accept_target(&state, &target, false)
+                .await
+                .unwrap();
+        }
+        let passes = waits.lock().unwrap().len() - after_first;
+        assert!(
+            passes <= 14,
+            "{passes} passes in ten minutes of replayed targets: a replay woke the loop"
+        );
+        assert!(
+            waits.lock().unwrap().contains(&HOLD_CAP),
+            "the backoff reached its cap"
+        );
+
+        // A different release is a real change: the loop runs a pass at once.
+        let before = waits.lock().unwrap().len();
+        let mut changed = target.clone();
+        changed.release_info.release_id = Some("rel_changed".into());
+        crate::loops::sync::accept_target(&state, &changed, false)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        assert_eq!(waits.lock().unwrap().len(), before + 1);
+        state.cancel.cancel();
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_approval_decision_wakes_the_deployment_loop() {
+        let (_directory, state) = held_operator(DeploymentStatus::Running).await;
+        let approval = crate::db::Approval {
+            id: "apr_1".into(),
+            release_info: None,
+            deployment_config: test_deployment_config(),
+            status: crate::db::ApprovalStatus::Pending,
+            reason: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            decided_at: None,
+            decided_by: None,
+        };
+        state.db.create_approval(&approval).await.unwrap();
+        let woken = |db: Arc<OperatorDb>| async move {
+            tokio::time::timeout(Duration::from_millis(50), db.wait_for_deployment())
+                .await
+                .is_ok()
+        };
+        assert!(!woken(Arc::clone(&state.db)).await);
+        state
+            .db
+            .decide_approval("apr_1", crate::db::ApprovalStatus::Approved, None, None)
+            .await
+            .unwrap();
+        assert!(woken(Arc::clone(&state.db)).await);
     }
 
     #[tokio::test]
@@ -2608,6 +3264,7 @@ mod tests {
             "the loop interval must be shorter than the poll delay for this test to mean anything"
         );
 
+        let mut hold = HoldBackoff::default();
         let mut waited = Duration::ZERO;
         let mut passes = 0;
         let failed = loop {
@@ -2620,7 +3277,7 @@ mod tests {
                 "deployment never failed; status {:?} after {passes} passes",
                 current.status
             );
-            waited += run_deployment_pass(&state, interval).await;
+            waited += run_deployment_pass(&state, interval, &mut hold).await;
             passes += 1;
         };
 

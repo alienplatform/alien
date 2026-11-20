@@ -14,9 +14,11 @@ use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::embedded_config::DeployCliConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::{
-    display_fingerprint, settings::names, InstallId, Kind, Ledger, ReleaseBody, Role,
-    SignedStatement, SignerChain, SignerKind, SigningSettings, Trust,
+    display_fingerprint, settings::names, InstallId, Ledger, ReleaseBody,
+    SignedStatement, SignerKind, SigningSettings, Trust,
 };
+#[cfg(test)]
+use alien_signing::Kind;
 use aws_credential_types::provider::ProvideCredentials;
 use chrono::{DateTime, Utc};
 use clap::Args;
@@ -470,7 +472,6 @@ pub fn check_signed(
         signed.install.clone(),
         &signed.signer_lists,
         &ledger,
-        now,
     )
     .context(ErrorData::VerifyFailed {
         message: format!(
@@ -480,7 +481,8 @@ pub fn check_signed(
     })?;
 
     // Only statements that verify here count; the rest are the control
-    // plane's word.
+    // plane's word. A release the install accepted keeps verifying after its
+    // signer left the list, unless the list denies it.
     let verified: Vec<(&str, alien_signing::Verified<ReleaseBody>)> = signed
         .releases
         .iter()
@@ -508,43 +510,33 @@ pub fn check_signed(
     // belongs to no signed release.
     let allowed: Option<Vec<String>> = match matching {
         Some((id, verified)) => {
+            let left = verified.kept;
             lines.push(line(
                 "Template",
                 format!(
-                    "matches release {id} · {} · {digest}",
-                    verified.body.channel
+                    "matches release {id} · {} · {digest}{}",
+                    verified.body.channel,
+                    if left {
+                        " · signed by a key no longer on the list; the device list keeps it"
+                    } else {
+                        ""
+                    }
                 ),
-                Mark::Pass,
+                if left { Mark::Info } else { Mark::Pass },
             ));
             Some(verified.body.setup[installed.template].allowed.clone())
         }
-        // A release whose signer has since left the list still verifies against
-        // the list it names and keeps running until the next release (only the
-        // deny-list stops it), and so does the template it came with.
-        None => match from_removed_signer(&trust, &settings, &signed, installed, now) {
-            Some((id, signed_by, body)) => {
-                lines.push(line(
-                    "Template",
-                    format!(
-                        "matches release {id} · {} · {digest} · signed by {signed_by}, no longer on the list",
-                        body.channel
-                    ),
-                    Mark::Info,
-                ));
-                Some(body.setup[installed.template].allowed.clone())
-            }
-            None => {
-                lines.push(line(
-                    "Template",
-                    format!(
-                        "{digest} is not the {} template of any release signed for {}",
-                        installed.template, settings.channel
-                    ),
-                    Mark::Fail,
-                ));
-                None
-            }
-        },
+        None => {
+            lines.push(line(
+                "Template",
+                format!(
+                    "{digest} is not the {} template of any release signed for {}",
+                    installed.template, settings.channel
+                ),
+                Mark::Fail,
+            ));
+            None
+        }
     };
     lines.push(choices_line(
         &installed.choices,
@@ -563,12 +555,16 @@ pub fn check_signed(
                 SignerKind::Recovery => "recovery".to_string(),
                 _ => signer.label.clone().unwrap_or_else(|| signer.id.clone()),
             })
+            .map(|name| match backend_of(list, id) {
+                Some(backend) => format!("{name} ({backend})"),
+                None => name,
+            })
             .unwrap_or_else(|| id.to_string())
     };
     lines.push(line(
         "Trusted keys",
         format!(
-            "{}  (list v{}, expires {}{})",
+            "{}  (list v{}{})",
             list.body
                 .signers
                 .iter()
@@ -576,7 +572,6 @@ pub fn check_signed(
                 .collect::<Vec<_>>()
                 .join(", "),
             list.version,
-            list.not_after.format("%Y-%m-%d"),
             if list.body.recovered {
                 ", restored with the recovery code"
             } else {
@@ -710,103 +705,14 @@ fn schema_violations(
         .collect()
 }
 
-/// The release the ledger says runs, checked from the statement the control
-/// plane returned for its digest: not deny-listed, a release of this project
-/// for this install's channel, signed with the release role by the list
-/// version it names. Returns its id (the control plane's name for it), its
-/// signers and whether they all still hold the release role now.
-/// The newest release whose `installed` template this is and whose signer has
-/// left the list since, checked the way [`running_release`] checks one: against
-/// the list version it names, not deny-listed, for this channel and platform.
-fn from_removed_signer<'a>(
-    trust: &Trust,
-    settings: &SigningSettings,
-    signed: &'a Signed,
-    installed: &Installed,
-    now: DateTime<Utc>,
-) -> Option<(&'a str, String, ReleaseBody)> {
-    signed
-        .releases
+/// Where signer `id`'s key lives, if its adder said.
+fn backend_of(list: &alien_signing::TrustedList, id: &str) -> Option<&'static str> {
+    list.body
+        .signers
         .iter()
-        .filter_map(|(_, statement)| {
-            let opened = statement.open().ok()?;
-            let body: ReleaseBody = opened.body().ok()?;
-            let template = body.setup.get(installed.template)?;
-            (body.platform == signed.platform && template.sha256 == installed.digest)
-                .then_some((opened, body))
-        })
-        .filter_map(|(opened, body)| {
-            let (id, signers, _) =
-                running_release(trust, settings, &signed.releases, &opened.digest, now).ok()?;
-            Some((opened.sequence, id, signers.join(", "), body))
-        })
-        .max_by_key(|(sequence, ..)| *sequence)
-        .map(|(_, id, signed_by, body)| (id, signed_by, body))
-}
-
-fn running_release<'a>(
-    trust: &Trust,
-    settings: &SigningSettings,
-    releases: &'a [(String, SignedStatement)],
-    digest: &str,
-    now: DateTime<Utc>,
-) -> std::result::Result<(&'a str, Vec<String>, bool), String> {
-    trust
-        .keeps(digest)
-        .map_err(|_| "it is deny-listed on the current signer list".to_string())?;
-    let (id, opened) = releases
-        .iter()
-        .find_map(|(id, statement)| {
-            statement
-                .open()
-                .ok()
-                .filter(|opened| opened.digest == digest)
-                .map(|opened| (id.as_str(), opened))
-        })
-        .ok_or_else(|| "the control plane didn't return it, so it can't be checked".to_string())?;
-    if opened.kind != Kind::Release || opened.project != trust.project() {
-        return Err(format!(
-            "it is a {} statement of project {}, not a release of {}",
-            opened.kind.as_str(),
-            opened.project,
-            trust.project()
-        ));
-    }
-    let body: ReleaseBody = opened
-        .body()
-        .map_err(|error| format!("its body doesn't parse: {error}"))?;
-    if body.channel != settings.channel {
-        return Err(format!(
-            "it is signed for channel {}, but this install follows {}",
-            body.channel, settings.channel
-        ));
-    }
-    let chain = trust.chain();
-    let version = opened.signer_list_version;
-    if version == 0 || version > chain.current().version {
-        return Err(format!(
-            "it names signer list v{version}, which the chain doesn't hold"
-        ));
-    }
-    let named = SignerChain::from_statements(
-        &settings.fingerprint,
-        &chain.statements()[..version as usize],
-        now,
-    )
-    .map_err(|error| format!("signer list v{version} doesn't verify: {error}"))?;
-    let signers = named
-        .current()
-        .check_signatures(&opened, Role::Release)
-        .map_err(|error| {
-            format!("it isn't signed by release keys of signer list v{version}: {error}")
-        })?;
-    let still_trusted = signers.iter().all(|id| {
-        chain
-            .current()
-            .signer(id)
-            .is_some_and(|(_, roles)| roles.contains(&Role::Release))
-    });
-    Ok((id, signers.into_iter().collect(), still_trusted))
+        .find(|signer| signer.id == id)
+        .and_then(|signer| signer.backend)
+        .map(alien_signing::signer_list::KeyBackend::as_str)
 }
 
 /// The screen for `lines`.

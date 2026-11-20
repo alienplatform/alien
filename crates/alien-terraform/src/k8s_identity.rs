@@ -45,6 +45,7 @@ pub(crate) fn overlay_per_resource(
 
     let cluster_label = kubernetes_cluster_label(stack, resource_labels);
     let mut service_accounts: Vec<(String, String, String)> = Vec::new();
+    let mut extension_identities: Vec<(String, String)> = Vec::new();
     for (resource_id, entry) in stack.resources() {
         let Some(service_account) = entry.config.downcast_ref::<ServiceAccount>() else {
             continue;
@@ -52,6 +53,10 @@ pub(crate) fn overlay_per_resource(
         let Some(label) = resource_labels.get(resource_id) else {
             continue;
         };
+        if service_account.extension.is_some() {
+            extension_identities.push((resource_id.clone(), label.clone()));
+            continue;
+        }
         service_accounts.push((
             resource_id.clone(),
             label.clone(),
@@ -110,6 +115,52 @@ pub(crate) fn overlay_per_resource(
         "helm_manager_service_account".to_string(),
         helm_manager_service_account.unwrap_or_else(|| service_account_values([], [])),
     );
+    // The Operator mints an extension's credentials from its own pod, so an extension's identity
+    // trusts the Operator's service account, and no pod or Helm value runs as the identity. The
+    // identity waits for the management identity, so the cluster's data goes with that one.
+    // The Google account of the Operator's management identity, when it has one here.
+    let gke_manager_account = stack
+        .resources()
+        .find(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<RemoteStackManagement>()
+                .is_some()
+        })
+        .filter(|(resource_id, _)| {
+            per_resource
+                .get(*resource_id)
+                .is_some_and(|fragment| has_block(fragment, "google_service_account"))
+        })
+        .and_then(|(resource_id, _)| resource_labels.get(resource_id))
+        .cloned();
+    for (resource_id, label) in &extension_identities {
+        let Some(fragment) = per_resource.get_mut(resource_id) else {
+            continue;
+        };
+        if !target_cluster_data_added {
+            add_target_cluster_data(fragment, target, cluster_label.as_deref());
+            target_cluster_data_added = true;
+        }
+        let operator = terraform_service_account_name_expr("manager");
+        match target {
+            TerraformTarget::Eks => {
+                apply_eks(fragment, label, &operator);
+            }
+            TerraformTarget::Gke => {
+                apply_gke(fragment, label, &operator);
+                // The Operator calls Google as its own account, not as its Kubernetes service
+                // account, so that account may mint this identity's tokens too.
+                if let Some(manager) = &gke_manager_account {
+                    grant_gke_token_minting(fragment, label, manager);
+                }
+            }
+            TerraformTarget::Aks => {
+                apply_aks(fragment, label, &operator);
+            }
+            _ => {}
+        }
+    }
     if target == TerraformTarget::Eks && target_cluster_data_added {
         shared_locals.insert(
             "eks_oidc_issuer_host_path".to_string(),
@@ -473,6 +524,33 @@ fn apply_gke(fragment: &mut TfFragment, label: &str, service_account_name: &str)
         )],
         [],
     )
+}
+
+/// Adds the Operator's Google account (`manager`'s) to the members of `label`'s Workload
+/// Identity binding, whose role carries only `getAccessToken` and `getOpenIdToken`.
+fn grant_gke_token_minting(fragment: &mut TfFragment, label: &str, manager: &str) {
+    let name = format!("{label}_workload_identity");
+    let Some(binding) = fragment.resource_blocks.iter_mut().find(|block| {
+        block.identifier.as_str() == "resource"
+            && block.labels.first().map(|label| label.as_str())
+                == Some("google_service_account_iam_binding")
+            && block.labels.get(1).map(|label| label.as_str()) == Some(name.as_str())
+    }) else {
+        return;
+    };
+    for structure in &mut binding.body.0 {
+        let hcl::structure::Structure::Attribute(attribute) = structure else {
+            continue;
+        };
+        if attribute.key.as_str() == "members" {
+            if let Expression::Array(members) = &mut attribute.expr {
+                members.push(expr::template(format!(
+                    "serviceAccount:${{google_service_account.{manager}.email}}"
+                )));
+            }
+            return;
+        }
+    }
 }
 
 fn apply_aks(fragment: &mut TfFragment, label: &str, service_account_name: &str) -> Expression {

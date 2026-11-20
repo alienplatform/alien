@@ -176,6 +176,9 @@ pub struct StackExecutor {
     client_config: ClientConfig,
     resource_registry: Arc<ResourceRegistry>,
     service_provider: Arc<dyn PlatformServiceProvider>,
+    /// The provider for resources the desired stack no longer has, which are deleted with the
+    /// interceptors of the release that created them.
+    removed_resources_service_provider: Arc<dyn PlatformServiceProvider>,
     deployment_config: alien_core::DeploymentConfig,
     initial_setup_authority: InitialSetupAuthority,
     /// The rollout this executor works for (the release being applied); none when unknown.
@@ -239,11 +242,43 @@ fn controller_platform_for_entry(
         return Platform::Kubernetes;
     }
 
-    if stack_platform == Platform::Kubernetes && lifecycle == ResourceLifecycle::Frozen {
+    // An extension's controller drives its resource through the cloud's APIs, so on a managed
+    // cluster a custom resource runs on the cloud's controller whatever its lifecycle.
+    if stack_platform == Platform::Kubernetes
+        && (lifecycle == ResourceLifecycle::Frozen
+            || resource.is_some_and(|resource| {
+                resource
+                    .downcast_ref::<alien_core::CustomResource>()
+                    .is_some()
+            }))
+    {
         base_platform.unwrap_or(stack_platform)
     } else {
         stack_platform
     }
+}
+
+/// Checks a custom binding against the outputs its type's descriptor declares.
+fn validate_custom_binding(
+    stack: &Stack,
+    resource_id: &str,
+    binding: &alien_core::CustomExternalBinding,
+) -> Result<()> {
+    let invalid = |message: String| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message,
+            resource_id: Some(resource_id.to_string()),
+        })
+    };
+    let descriptor = stack.descriptor(&binding.resource_type).ok_or_else(|| {
+        invalid(format!(
+            "External binding for resource '{resource_id}' names type '{}', which no extension in the stack declares",
+            binding.resource_type
+        ))
+    })?;
+    binding
+        .validate(descriptor)
+        .map_err(|problem| invalid(format!("Resource '{resource_id}': {problem}")))
 }
 
 fn controller_platform_for_state(stack_platform: Platform, state: &StackResourceState) -> Platform {
@@ -311,6 +346,49 @@ mod controller_platform_tests {
                 }
             }
         }
+    }
+
+    /// A custom resource on a managed cluster steps on the cloud's controller, Live or Frozen;
+    /// on a cluster with no cloud under it, on the Kubernetes one.
+    #[test]
+    fn a_custom_resource_on_a_managed_cluster_uses_the_cloud_s_controller() {
+        let zone = Resource::new(
+            alien_core::CustomResource::from_untagged(
+                "acme/dns-zone",
+                serde_json::json!({ "id": "zone", "domain": "a.example" }),
+            )
+            .unwrap(),
+        );
+        for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+            for (base_platform, expected) in [
+                (Some(Platform::Aws), Platform::Aws),
+                (Some(Platform::Gcp), Platform::Gcp),
+                (Some(Platform::Azure), Platform::Azure),
+                (None, Platform::Kubernetes),
+            ] {
+                assert_eq!(
+                    controller_platform_for_entry(
+                        Platform::Kubernetes,
+                        base_platform,
+                        lifecycle,
+                        Some(&zone),
+                    ),
+                    expected,
+                    "base={base_platform:?}, lifecycle={lifecycle:?}"
+                );
+            }
+        }
+        let storage = Resource::new(Storage::new("bucket".to_string()).build());
+        assert_eq!(
+            controller_platform_for_entry(
+                Platform::Kubernetes,
+                Some(Platform::Aws),
+                ResourceLifecycle::Live,
+                Some(&storage),
+            ),
+            Platform::Kubernetes,
+            "a built-in Live resource keeps the Kubernetes controller"
+        );
     }
 
     #[test]
@@ -430,6 +508,26 @@ fn error_chain_text(err: &AlienError<ErrorData>) -> String {
     parts.join(": ")
 }
 
+/// Whether a step that failed with `err` may run again. An extension's interceptor failure in the
+/// chain decides by its own flag, whatever a controller wrapped it in, even a wrapper marked not
+/// retryable: a hook stopped at its deadline before the call was sent may finish on another try,
+/// and any other interceptor failure gives the same answer to the same call. Without one, `err`'s
+/// own flag decides.
+pub fn step_error_is_retryable(err: &AlienError<ErrorData>) -> bool {
+    const CODES: [&str; 2] = ["INTERCEPTOR_FAILED", "DESTINATION_REFUSED"];
+    if CODES.contains(&err.code.as_str()) {
+        return err.retryable;
+    }
+    let mut source = err.source.as_deref();
+    while let Some(inner) = source {
+        if CODES.contains(&inner.code.as_str()) {
+            return inner.retryable;
+        }
+        source = inner.source.as_deref();
+    }
+    err.retryable
+}
+
 fn is_dependency_not_ready_error(err: &AlienError<ErrorData>) -> bool {
     err.code == DEPENDENCY_NOT_READY_CODE
 }
@@ -497,13 +595,18 @@ pub struct StackExecutorConfig<'a> {
     #[builder(default = false)]
     resume_unchanged_failed_resources: bool,
 
-    /// Custom resource registry (defaults to built-in registry)
-    #[builder(default = Arc::new(ResourceRegistry::with_built_ins()))]
-    resource_registry: Arc<ResourceRegistry>,
+    /// Custom resource registry. Defaults to the built-in registry with the controllers of the
+    /// stack's extensions that the service provider has endpoints for.
+    resource_registry: Option<Arc<ResourceRegistry>>,
 
-    /// Custom service provider for testing (defaults to real cloud clients)
+    /// Custom service provider for testing (defaults to real cloud clients). A stack with
+    /// extensions needs one that loaded them.
     #[builder(default = Arc::new(DefaultPlatformServiceProvider::default()))]
     service_provider: Arc<dyn PlatformServiceProvider>,
+
+    /// The provider for deleting resources the stack no longer has: during an update, the one
+    /// carrying the current release's extensions. Defaults to `service_provider`.
+    removed_resources_service_provider: Option<Arc<dyn PlatformServiceProvider>>,
 
     /// Authority available for setup-owned structural and permission changes.
     #[builder(default = InitialSetupAuthority::ImportedHandoff)]
@@ -531,6 +634,31 @@ impl<S: stack_executor_config_builder::IsComplete> StackExecutorConfigBuilder<'_
     pub fn build(self) -> Result<StackExecutor> {
         let config = self.__build();
         StackExecutor::from_config(config)
+    }
+}
+
+/// The executor's registry: `explicit`, or Alien's built-ins and the stack's extensions. Fails
+/// for a stack whose extensions `service_provider` has not loaded, given a registry or not, so
+/// its controllers never run without their interceptors.
+fn executor_registry(
+    stack: &Stack,
+    service_provider: &dyn PlatformServiceProvider,
+    explicit: Option<Arc<ResourceRegistry>>,
+) -> Result<Arc<ResourceRegistry>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let extensions = crate::LoadedExtensions::from_provider(stack, service_provider)?;
+        Ok(explicit.unwrap_or_else(|| {
+            Arc::new(ResourceRegistry::with_built_ins_and_extensions(
+                stack,
+                &extensions,
+            ))
+        }))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (stack, service_provider);
+        Ok(explicit.unwrap_or_else(|| Arc::new(ResourceRegistry::with_built_ins())))
     }
 }
 
@@ -592,8 +720,12 @@ impl StackExecutor {
     fn from_config(config: StackExecutorConfig<'_>) -> Result<Self> {
         let stack = config.stack;
         let client_config = config.client_config;
-        let resource_registry = config.resource_registry;
         let service_provider = config.service_provider;
+        let removed_resources_service_provider = config
+            .removed_resources_service_provider
+            .unwrap_or_else(|| service_provider.clone());
+        let resource_registry =
+            executor_registry(stack, service_provider.as_ref(), config.resource_registry)?;
         let deployment_config = config.deployment_config.clone();
         let lifecycle_filter = config.lifecycle_filter;
         let runtime_cleanup_filter = config.runtime_cleanup_filter;
@@ -668,6 +800,9 @@ impl StackExecutor {
                         resource_id: Some(id.clone()),
                     },
                 )?;
+                if let alien_core::ExternalBinding::Custom(custom) = binding {
+                    validate_custom_binding(stack, &id, custom)?;
+                }
                 continue;
             }
 
@@ -751,6 +886,7 @@ impl StackExecutor {
             client_config,
             resource_registry,
             service_provider,
+            removed_resources_service_provider,
             deployment_config,
             initial_setup_authority,
             rollout_id,
@@ -814,6 +950,13 @@ impl StackExecutor {
             .build()
     }
 
+    /// Steps resources with the controllers in `registry`. A deletion executor's own stack is
+    /// empty, so the controllers of the deployment's extensions come from the stack it deployed.
+    pub fn with_resource_registry(mut self, registry: Arc<ResourceRegistry>) -> Self {
+        self.resource_registry = registry;
+        self
+    }
+
     /// Keep exact resource checkpoints and their dependencies during deletion.
     ///
     /// This is a deletion-only scope, not a policy decision: callers must supply
@@ -875,7 +1018,7 @@ impl StackExecutor {
 
     /// Whether an edge from a resource of this type to that dependency carries permission
     /// grants: the resource's controller applies its resource-scoped grants to that identity.
-    fn grant_edge(resource_type: &str, dependency_type: &str) -> bool {
+    pub fn grant_edge(resource_type: &str, dependency_type: &str) -> bool {
         matches!(
             resource_type,
             "storage"
@@ -2235,6 +2378,65 @@ impl StackExecutor {
         })
     }
 
+    /// Lets every resource that keeps a list of the machines it admits bring that list up to
+    /// date, and does nothing else (see [`ResourceController::sync_membership`]).
+    ///
+    /// It is for a deployment whose update or refresh failed, where no step runs. The state is
+    /// taken by reference and nothing is returned from it: no resource is planned, stepped or
+    /// marked, so the failed resource, its retry bookkeeping and the deployment status stay as
+    /// they were. A resource whose sync fails does not stop the others; the first error is
+    /// returned after all have run.
+    pub async fn sync_membership(&self, state: &StackState) -> Result<()> {
+        let heartbeat_collector = HeartbeatCollector::default();
+        let mut first_error = None;
+        for (resource_id, resource) in &state.resources {
+            if self.preserved_resources.contains(resource_id)
+                || !matches!(
+                    resource.status,
+                    ResourceStatus::Running
+                        | ResourceStatus::RefreshFailed
+                        | ResourceStatus::UpdateFailed
+                )
+            {
+                continue;
+            }
+            let Some(controller) = resource.get_internal_controller()? else {
+                continue;
+            };
+            let controller_platform = controller_platform_for_state(state.platform, resource);
+            let client_config = self
+                .client_config
+                .config_for_platform(controller_platform)
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigMismatch {
+                        required_platform: controller_platform,
+                        found_platform: self.client_config.platform(),
+                    })
+                })?;
+            let context = ResourceControllerContext {
+                desired_config: &resource.config,
+                platform: controller_platform,
+                client_config,
+                state,
+                resource_prefix: &state.resource_prefix,
+                registry: &self.resource_registry,
+                desired_stack: &self.desired_stack,
+                service_provider: &self.service_provider,
+                deployment_config: &self.deployment_config,
+                initial_setup_authority: self.initial_setup_authority,
+                heartbeat_collector: heartbeat_collector.clone(),
+            };
+            if let Err(error) = controller.sync_membership(&context).await {
+                warn!(%resource_id, %error, "Could not update the machines a cluster admits");
+                first_error.get_or_insert(error);
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     /// Continues controller states registered by an external setup engine
     /// without planning structural changes. Logical Kubernetes compute pools are
     /// initialized here because cloud setup engines do not provision them.
@@ -3230,6 +3432,11 @@ impl StackExecutor {
                     })
                 })?;
 
+            let service_provider = if self.desired_stack.resources.contains_key(&resource_id) {
+                &self.service_provider
+            } else {
+                &self.removed_resources_service_provider
+            };
             let context = ResourceControllerContext {
                 desired_config: &context_resource,
                 platform: controller_platform,
@@ -3238,7 +3445,7 @@ impl StackExecutor {
                 resource_prefix: &step_state.resource_prefix,
                 registry: &self.resource_registry,
                 desired_stack: &self.desired_stack,
-                service_provider: &self.service_provider,
+                service_provider,
                 deployment_config: &self.deployment_config,
                 initial_setup_authority: self.initial_setup_authority,
                 heartbeat_collector: heartbeat_collector.clone(),
@@ -3338,7 +3545,7 @@ impl StackExecutor {
                             "Dependency is not ready; waiting without consuming retry budget"
                         );
                         (0, None, Some(delay), false, false)
-                    } else if !err.retryable {
+                    } else if !step_error_is_retryable(&err) {
                         let error = Some(err.clone().into_generic());
                         error!(
                             "Non-retryable error for '{}', transitioning to failure immediately",
@@ -3737,10 +3944,27 @@ impl StackExecutor {
             None => return false, // Defensive.
         };
 
-        resource_cfg
-            .dependencies
-            .iter()
-            .all(|dep_ref| self.dependency_settled(dep_ref.id(), state))
+        // A dependency that is Running but asks for an update to publish what its dependents
+        // read (a sandbox that has not built its image yet has no binding) holds their creation
+        // too: a dependent created now would be built without it, and nothing updates it later.
+        // Only a controller that says so does (`needs_update_holds_dependent_creation`): for any
+        // other dependency an update that is blocked (for instance on setup) must not stop a
+        // new, unrelated dependent from being created.
+        resource_cfg.dependencies.iter().all(|dep_ref| {
+            let id = dep_ref.id();
+            self.dependency_settled(id, state)
+                && match (self.resources.get(id), state.resources.get(id)) {
+                    (Some(desired), Some(current))
+                        if matches!(
+                            current.get_internal_controller(),
+                            Ok(Some(controller)) if controller.needs_update_holds_dependent_creation(id)
+                        ) =>
+                    {
+                        !self.needs_update_requested(id, desired, current, state)
+                    }
+                    _ => true,
+                }
+        })
     }
 
     /// Checks if a resource is ready for deletion by verifying all its dependents are deleted.

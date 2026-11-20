@@ -1095,6 +1095,240 @@ async fn heartbeat_acquires_refresh_failure_without_turning_it_into_a_work_retry
 }
 
 #[tokio::test]
+async fn heartbeat_acquires_a_failed_update_only_when_it_asks_for_running_too() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "failed-update", Platform::Aws).await;
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET status = 'update-failed', retry_requested = 0 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+
+    for (statuses, expected_count) in [
+        (vec!["update-failed".to_string()], 0),
+        (
+            vec![
+                "running".to_string(),
+                "refresh-failed".to_string(),
+                "update-failed".to_string(),
+            ],
+            1,
+        ),
+    ] {
+        let acquired = store
+            .acquire(
+                &test_subject(),
+                "health-session",
+                &DeploymentFilter {
+                    statuses: Some(statuses),
+                    deployment_ids: Some(vec![dep.id.clone()]),
+                    ..Default::default()
+                },
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(acquired.len(), expected_count);
+        if let Some(item) = acquired.first() {
+            assert_eq!(item.deployment.status, "update-failed");
+            assert!(!item.deployment.retry_requested);
+            store
+                .release(&test_subject(), &dep.id, "health-session", None)
+                .await
+                .unwrap();
+        }
+    }
+}
+
+/// The standalone deployment loop asks for its active statuses plus every retryable failed
+/// status (no Running). A failed update with a retry waiting is acquired by it with the retry
+/// still requested; one with no retry waiting is not acquired by it.
+#[tokio::test]
+async fn deployment_loop_acquires_a_failed_update_only_for_its_retry() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "loop-retry", Platform::Aws).await;
+    let loop_filter = DeploymentFilter {
+        statuses: Some(
+            [
+                "pending",
+                "initial-setup",
+                "provisioning",
+                "waiting-for-machines",
+                "waiting-for-secrets",
+                "update-pending",
+                "updating",
+                "delete-pending",
+                "deleting",
+                "preflights-failed",
+                "initial-setup-failed",
+                "provisioning-failed",
+                "refresh-failed",
+                "update-failed",
+                "delete-failed",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        ),
+        deployment_ids: Some(vec![dep.id.clone()]),
+        ..Default::default()
+    };
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET status = 'update-failed', retry_requested = 0 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+    assert!(store
+        .acquire(&test_subject(), "loop-session", &loop_filter, 1)
+        .await
+        .unwrap()
+        .is_empty());
+
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET retry_requested = 1 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+    let acquired = store
+        .acquire(&test_subject(), "loop-session", &loop_filter, 1)
+        .await
+        .unwrap();
+    assert_eq!(acquired.len(), 1, "the loop must take a waiting retry");
+    assert!(acquired[0].deployment.retry_requested);
+}
+
+/// The heartbeat takes a failed update only for the machine-list refresh. A deployment with a
+/// retry waiting is left alone (the heartbeat never runs a step of the retry), the retry stays
+/// requested, and the work loop's own failed-update acquisition still takes it.
+#[tokio::test]
+async fn heartbeat_never_acquires_a_failed_update_with_a_retry_waiting() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "retry", Platform::Aws).await;
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET status = 'update-failed', retry_requested = 1 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+    let heartbeat_filter = DeploymentFilter {
+        statuses: Some(vec![
+            "running".to_string(),
+            "refresh-failed".to_string(),
+            "update-failed".to_string(),
+        ]),
+        deployment_ids: Some(vec![dep.id.clone()]),
+        ..Default::default()
+    };
+
+    let acquired = store
+        .acquire(&test_subject(), "health-session", &heartbeat_filter, 1)
+        .await
+        .unwrap();
+    assert!(
+        acquired.is_empty(),
+        "the heartbeat must not take a waiting retry"
+    );
+    let fetched = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(fetched.retry_requested);
+    assert!(fetched.locked_by.is_none());
+
+    // The same request without a retry waiting is a membership claim.
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET retry_requested = 0 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+    let acquired = store
+        .acquire(&test_subject(), "health-session", &heartbeat_filter, 1)
+        .await
+        .unwrap();
+    assert_eq!(acquired.len(), 1);
+    assert!(!acquired[0].deployment.retry_requested);
+    store
+        .release(&test_subject(), &dep.id, "health-session", None)
+        .await
+        .unwrap();
+
+    // A setup run or teardown asking for the same statuses never gets a membership claim.
+    for mode in [
+        DeploymentAcquireMode::SetupRun,
+        DeploymentAcquireMode::SetupTeardown,
+        DeploymentAcquireMode::Runtime,
+    ] {
+        let acquired = store
+            .acquire_with_reasons(
+                &test_subject(),
+                "other-session",
+                &DeploymentFilter {
+                    statuses: Some(vec!["running".to_string(), "update-failed".to_string()]),
+                    deployment_ids: Some(vec![dep.id.clone()]),
+                    acquire_mode: Some(mode),
+                    ..Default::default()
+                },
+                1,
+            )
+            .await
+            .unwrap();
+        assert!(acquired.deployments.is_empty(), "{mode:?}");
+    }
+
+    // The work loop's own acquisition (no Running) still takes a retry.
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET retry_requested = 1 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+    let work = store
+        .acquire(
+            &test_subject(),
+            "work-session",
+            &DeploymentFilter {
+                statuses: Some(vec!["update-failed".to_string()]),
+                deployment_ids: Some(vec![dep.id.clone()]),
+                ..Default::default()
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    assert_eq!(work.len(), 1);
+    assert!(work[0].deployment.retry_requested);
+}
+
+#[tokio::test]
 async fn acquire_does_not_pick_failed_status_without_retry_request() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db.clone());
@@ -3149,6 +3383,95 @@ async fn forgetting_keeps_installed_data_recovery_until_erased() {
         .is_none());
 }
 
+/// An installed resource of an extension's type keeps the record when its release's descriptor
+/// says it holds data, or when no release describes its type; it doesn't when the descriptor says
+/// it holds none.
+#[tokio::test]
+async fn forgetting_follows_the_release_descriptor_of_an_extension_resource() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let releases = SqliteReleaseStore::new(db.clone());
+    let group = create_test_group(&store).await;
+    let mut stack_state = StackState::new(Platform::Aws);
+    let zone = alien_core::CustomResource::from_untagged(
+        "acme/dns-zone",
+        serde_json::json!({ "id": "zone", "domain": "internal.acme.dev" }),
+    )
+    .unwrap();
+    let mut resource = alien_core::StackResourceState::new_pending(
+        "acme/dns-zone".to_string(),
+        alien_core::Resource::new(zone),
+        Some(ResourceLifecycle::Frozen),
+        Vec::new(),
+    );
+    resource.status = alien_core::ResourceStatus::Running;
+    stack_state.resources.insert("zone".into(), resource);
+
+    for (name, holds_data, forgotten) in [
+        ("holds-data", Some(true), false),
+        ("no-data", Some(false), true),
+        ("undescribed", None, false),
+    ] {
+        let mut stack = Stack::new(name.to_string()).build();
+        if let Some(holds_data) = holds_data {
+            stack.extensions = vec![serde_json::from_value(serde_json::json!({
+                "name": "acme",
+                "version": "0.1.0",
+                "digest": "sha256:4ff931a2",
+                "resourceTypes": { "acme/dns-zone": {
+                    "lifecycles": ["frozen"],
+                    "holdsData": holds_data,
+                    "setup": {
+                        "cloudformation": ["aws"], "terraform": [], "helm": [], "importers": ["aws"]
+                    },
+                    "controllerPlatforms": [],
+                    "permissionSets": [],
+                    "link": { "permissionSets": [] },
+                    "schemas": { "config": {}, "outputs": {} }
+                }}
+            }))
+            .unwrap()];
+        }
+        let release = releases
+            .create_release(
+                &test_subject(),
+                CreateReleaseParams {
+                    project_id: "default".to_string(),
+                    stacks: HashMap::from([(Platform::Aws, stack)]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                    signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let dep = create_test_deployment(&store, &group, name, Platform::Aws).await;
+        db.conn()
+            .lock()
+            .await
+            .execute(
+                "UPDATE deployments SET stack_state = ?, current_release_id = ? WHERE id = ?",
+                (
+                    serde_json::to_string(&stack_state).unwrap(),
+                    release.id,
+                    dep.id.clone(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let result = store.delete_deployment(&test_subject(), &dep.id).await;
+        assert_eq!(result.is_ok(), forgotten, "{name}: {result:?}");
+        let remaining = store
+            .get_deployment(&test_subject(), &dep.id)
+            .await
+            .unwrap();
+        assert_eq!(remaining.is_none(), forgotten, "{name}");
+    }
+}
+
 #[tokio::test]
 async fn legacy_teardown_retain_request_fences_old_actors() {
     let db = fresh_db().await;
@@ -3311,6 +3634,68 @@ async fn retention_handoff_is_skipped_by_discovery_and_acquirable_for_setup() {
         .unwrap();
     assert_eq!(acquired.len(), 1);
     assert_eq!(acquired[0].deployment.id, dep.id);
+}
+
+/// An Operator asks for its deployment by the status it last reported. For a status that
+/// waits on the setup owner that request must not take the lock: a lock held by a running
+/// Operator makes the CLI's setup-teardown acquire answer "contended" until it goes stale.
+#[tokio::test]
+async fn runtime_acquire_naming_a_setup_handoff_status_does_not_lock_it() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group = create_test_group(&store).await;
+    let subject = test_subject();
+    for status in ["retention-required", "teardown-required", "teardown-failed"] {
+        let dep = create_test_deployment_with_settings(
+            &store,
+            &group,
+            status,
+            Platform::Kubernetes,
+            StackSettings {
+                deployment_model: DeploymentModel::Pull,
+                ..StackSettings::default()
+            },
+        )
+        .await;
+        store.set_delete_pending(&subject, &dep.id).await.unwrap();
+        db.conn()
+            .lock()
+            .await
+            .execute(
+                &format!(
+                    "UPDATE deployments SET status = '{status}', retry_requested = 1 WHERE id = ?"
+                ),
+                [dep.id.as_str()],
+            )
+            .await
+            .unwrap();
+        let operator = DeploymentFilter {
+            deployment_ids: Some(vec![dep.id.clone()]),
+            statuses: Some(vec![status.into()]),
+            acquire_mode: Some(DeploymentAcquireMode::Runtime),
+            deployment_model: Some(DeploymentModel::Pull),
+            max_deployment_protocol_version: Some(alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION),
+            ..Default::default()
+        };
+        assert!(
+            store
+                .acquire(&subject, "operator", &operator, 1)
+                .await
+                .unwrap()
+                .is_empty(),
+            "{status}: the runtime owner has nothing left to run"
+        );
+        let cli = DeploymentFilter {
+            acquire_mode: Some(DeploymentAcquireMode::SetupTeardown),
+            setup_method: Some("helm".into()),
+            ..operator
+        };
+        assert_eq!(
+            store.acquire(&subject, "cli", &cli, 1).await.unwrap().len(),
+            1,
+            "{status}: the setup owner acquires at once"
+        );
+    }
 }
 
 #[tokio::test]
@@ -3754,7 +4139,7 @@ mod retention_handoff_tests {
             "type": "AwsStorageController", "state": "createFailed", "_controllerStateVersion": 1
         }));
         stack.resources.insert("data".into(), bucket);
-        assert!(installed_durable_resource_ids(&stack).is_empty());
+        assert!(installed_durable_resource_ids(&stack, &[]).is_empty());
         // An interrupted request is cleaned up by the controller's ownership-checked
         // delete path; it is not evidence that an installed bucket holds user data.
         stack
@@ -3764,7 +4149,7 @@ mod retention_handoff_tests {
             .internal_state
             .as_mut()
             .unwrap()["requestedBucketName"] = serde_json::json!("test-data");
-        assert!(installed_durable_resource_ids(&stack).is_empty());
+        assert!(installed_durable_resource_ids(&stack, &[]).is_empty());
         stack
             .resources
             .get_mut("data")
@@ -3772,7 +4157,7 @@ mod retention_handoff_tests {
             .internal_state
             .as_mut()
             .unwrap()["bucketName"] = serde_json::json!("test-data");
-        assert_eq!(installed_durable_resource_ids(&stack), vec!["data"]);
+        assert_eq!(installed_durable_resource_ids(&stack, &[]), vec!["data"]);
     }
 
     #[tokio::test]

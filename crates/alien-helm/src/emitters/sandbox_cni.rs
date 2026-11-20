@@ -1,8 +1,9 @@
 //! Setup-owned, short-lived NetworkPolicy enforcement gate.
 //!
-//! This samples pod-to-pod traffic on the nodes selected by the scheduler, with the
-//! subject pods in the sandbox runtime class. It does not certify every node, address
-//! family, or CNI exception for traffic to the host.
+//! This samples pod-to-pod traffic on the nodes sessions run on (`sandbox.nodeSelector`,
+//! `sandbox.tolerations`), with every probe pod, the listener included, in the sandbox runtime
+//! class. After the first control ran, every later pod is pinned to that control's node. It does
+//! not certify every node, address family, or CNI exception for traffic to the host.
 //!
 //! The probe must create pods and NetworkPolicies, which Kubernetes RBAC cannot restrict
 //! by content. Two ValidatingAdmissionPolicies, created before the probe's account and
@@ -320,7 +321,7 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 300
+  activeDeadlineSeconds: {job_deadline}
   ttlSecondsAfterFinished: 600
   template:
     metadata:
@@ -384,5 +385,15 @@ spec:
 {script}"#,
         repository = PROBE_REPOSITORY,
         digest = PROBE_DIGEST,
+        job_deadline = job_deadline_seconds(),
     )
+}
+
+/// The Job's deadline, read from the probe script's budget (one place states it).
+fn job_deadline_seconds() -> u32 {
+    include_str!("sandbox_cni_probe.py")
+        .lines()
+        .find_map(|line| line.strip_prefix("JOB_DEADLINE_SECONDS = "))
+        .and_then(|value| value.trim().parse().ok())
+        .expect("the probe script states JOB_DEADLINE_SECONDS as a number")
 }

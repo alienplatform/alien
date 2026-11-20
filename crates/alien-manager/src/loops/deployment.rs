@@ -236,6 +236,12 @@ pub struct DeploymentLoop {
     /// Acquisition backoff shared by deployment and heartbeat ticks. The retry
     /// deadline itself comes from persisted retry state, never from this cache.
     deferred: Mutex<HashMap<String, DeferredDeployment>>,
+    /// Deployments whose last machine-list refresh failed, so a failure that repeats every
+    /// minute is logged once and its recovery once.
+    membership_failing: Mutex<std::collections::HashSet<String>>,
+    /// The bundles of the extensions deployments' releases list. `None` for a manager that
+    /// stores none, which can't run a stack with extensions.
+    extension_bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
     /// Holds the values of deployments whose config carries `valueSlots`.
     values: Option<Arc<crate::values::ValueStore>>,
     /// Where the commands key of command receivers built before capability
@@ -337,10 +343,21 @@ impl DeploymentLoop {
             local_bindings_cache: Mutex::new(HashMap::new()),
             settled_stack_cache: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
+            membership_failing: Mutex::new(std::collections::HashSet::new()),
+            extension_bundles: None,
             values: None,
             commands_keys: None,
             release_channels: None,
         }
+    }
+
+    /// Load the extensions of deployments' releases from `bundles`.
+    pub fn with_extension_bundles(
+        mut self,
+        bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
+    ) -> Self {
+        self.extension_bundles = bundles;
+        self
     }
 
     /// Use `signing` for the signer lists and signed configs of protected deployments.
@@ -770,6 +787,35 @@ impl DeploymentLoop {
         .await;
     }
 
+    /// Reports a failed machine-list refresh once per streak (the next attempt is a minute
+    /// away, and repeating the same line would bury everything else), and its recovery.
+    fn note_membership_result<T, E: std::fmt::Display>(
+        &self,
+        deployment_id: &str,
+        result: &Result<T, E>,
+    ) {
+        let mut failing = self
+            .membership_failing
+            .lock()
+            .expect("membership_failing poisoned");
+        match result {
+            Err(error) => {
+                if failing.insert(deployment_id.to_string()) {
+                    error!(
+                        %deployment_id,
+                        %error,
+                        "Could not update the machines the deployment's cluster admits; keeping the list as it is (further failures are not logged until it recovers)"
+                    );
+                }
+            }
+            Ok(_) => {
+                if failing.remove(deployment_id) {
+                    info!(%deployment_id, "Updating the machines the deployment's cluster admits works again");
+                }
+            }
+        }
+    }
+
     /// Process a single deployment: step until stable, reconcile, release.
     ///
     /// Returns `true` when acquisition should wait before trying this deployment again.
@@ -971,6 +1017,11 @@ impl DeploymentLoop {
             target_release_id,
         );
         recorded_state.current_release = current_release.clone();
+        // A failed update that only refreshes the machines its cluster admits. Whatever goes
+        // wrong before that refresh is logged and the lease released: nothing here may replace
+        // the update's own error or write a checkpoint.
+        let membership_only = status == DeploymentStatus::UpdateFailed
+            && alien_deployment::membership_tick_wanted(&recorded_state);
         if let Some(next_status) = alien_deployment::destroy_without_runtime(&recorded_state) {
             info!(
                 deployment_id = %deployment_id,
@@ -1036,6 +1087,15 @@ impl DeploymentLoop {
             Ok(resolved) => resolved,
             Err(e) => {
                 let e = crate::providers::credential_errors::classify_credential_error(e);
+                if membership_only {
+                    warn!(
+                        deployment_id = %deployment_id,
+                        error_code = %e.code,
+                        error = %e,
+                        "Credentials unavailable; not updating the machines the failed deployment's cluster admits"
+                    );
+                    return Ok(None);
+                }
                 let now = chrono::Utc::now();
                 let retry_remaining = credential_error_retry_remaining(&deployment, &e, now);
                 let waiting_for_driver = should_wait_for_credential_handoff(status, &deployment);
@@ -1212,6 +1272,9 @@ impl DeploymentLoop {
                     error = %error,
                     "Management identity unavailable for a setup render"
                 );
+                if membership_only {
+                    return Ok(None);
+                }
                 return self
                     .checkpoint_phase_failure(PhaseFailure {
                         deployment: &deployment,
@@ -1258,6 +1321,9 @@ impl DeploymentLoop {
                     error = %error,
                     "Held values could not be loaded for the deployment"
                 );
+                if membership_only {
+                    return Ok(None);
+                }
                 return self
                     .checkpoint_phase_failure(PhaseFailure {
                         deployment: &deployment,
@@ -1289,7 +1355,12 @@ impl DeploymentLoop {
                     },
                 ),
         }
-        .deployment_config(&held, deployment_stack.as_ref(), management_config)
+        .deployment_config(
+            &held,
+            deployment_stack.as_ref(),
+            management_config,
+            !alien_infra::extension_bundle::release_extensions(&state).is_empty(),
+        )
         .await?;
         drop(held);
         self.add_signed_statements(&deployment, &mut state, &mut config)
@@ -1374,8 +1445,32 @@ impl DeploymentLoop {
                 ),
             ));
         }
-        let service_provider: Arc<dyn alien_infra::PlatformServiceProvider> =
-            Arc::new(service_provider);
+        let service_provider: Arc<dyn alien_infra::PlatformServiceProvider> = match self
+            .with_extensions(service_provider, &deployment, &state)
+            .await
+        {
+            Ok(provider) => Arc::new(provider),
+            Err(error) => {
+                warn!(
+                    deployment_id = %deployment_id,
+                    error = %error,
+                    "Extension bundles could not be loaded"
+                );
+                return self
+                    .checkpoint_phase_failure(PhaseFailure {
+                        deployment: &deployment,
+                        status,
+                        deployment_stack: deployment_stack.as_ref(),
+                        target_release_id,
+                        current_release,
+                        had_credential_retry,
+                        error,
+                        session,
+                        execution_claim,
+                    })
+                    .await;
+            }
+        };
 
         // 7. Step loop — use the shared runner with ManagerTransport for
         //    per-step reconciliation (state persistence + registry access).
@@ -1413,6 +1508,29 @@ impl DeploymentLoop {
         }));
 
         let mut config = config;
+
+        // A failed update takes no step, and a failed cluster takes a step that does
+        // nothing, so neither would refresh the machines the cluster admits. That is
+        // all this tick does: it writes nothing to the deployment, and a request to
+        // retry is never read here (such a deployment takes the normal step below).
+        if alien_deployment::membership_tick_wanted(&state) {
+            let tick = alien_deployment::run_membership_tick(
+                &state,
+                &config,
+                &client_config,
+                &deployment_id,
+                &transport,
+                service_provider.clone(),
+            )
+            .await;
+            self.note_membership_result(&deployment_id, &tick);
+            if state.status == DeploymentStatus::UpdateFailed {
+                // Nothing is checkpointed, not even a cleared credential-retry window. A
+                // failed refresh was reported above and changes nothing, so it is no error here.
+                return Ok(None);
+            }
+        }
+
         let runner_result = if options.require_heartbeats_enabled {
             alien_deployment::runner::run_running_refresh_step_loop(
                 &mut state,
@@ -1505,6 +1623,39 @@ impl DeploymentLoop {
 
         // Propagate step loop errors to the caller (which logs and releases the lock).
         runner_result.map(|_| None).map_err(|e| e.into_generic())
+    }
+
+    /// `provider` with the extensions of the releases `state` names, from this manager's bundles,
+    /// each stepping its controller for `deployment`.
+    async fn with_extensions(
+        &self,
+        provider: DefaultPlatformServiceProvider,
+        deployment: &DeploymentRecord,
+        state: &DeploymentState,
+    ) -> Result<DefaultPlatformServiceProvider, AlienError> {
+        if alien_infra::extension_bundle::release_extensions(state).is_empty() {
+            return Ok(provider);
+        }
+        let bundles = self.extension_bundles.as_ref().ok_or_else(|| {
+            AlienError::new(GenericError {
+                message: "The deployment's releases use extensions, and this manager stores no extension bundles".to_string(),
+            })
+        })?;
+        bundles
+            .provider_for(
+                provider,
+                &deployment.project_id,
+                &deployment.id,
+                state,
+                |extension| {
+                    Some(crate::extension_controllers::identity_credentials(
+                        self.credential_resolver.clone(),
+                        deployment,
+                        extension,
+                    ))
+                },
+            )
+            .await
     }
 
     /// Saves `failure` as the deployment's error in its phase's failed status and backs off
@@ -1846,12 +1997,15 @@ impl RunnerConfigSources<'_> {
     /// `deployment_stack` is the target release's stack; `None` when the
     /// deployment has none yet, so no resource receives command variables.
     /// `management_config` comes from [`resolve_deployment_management_config`] for
-    /// [`ManagementRenderer::Runner`].
+    /// [`ManagementRenderer::Runner`]. `releases_list_extensions` says whether the
+    /// deployment's current or target release lists an extension, whose identity's trust
+    /// needs the management ExternalId.
     pub(crate) async fn deployment_config(
         &self,
         deployment: &DeploymentRecord,
         deployment_stack: Option<&Stack>,
         management_config: Option<ManagementConfig>,
+        releases_list_extensions: bool,
     ) -> Result<DeploymentConfig, AlienError> {
         // A command receiver built before capability files cannot read the
         // capability file, so it starts only with `ALIEN_COMMANDS_TOKEN`. It
@@ -1889,7 +2043,23 @@ impl RunnerConfigSources<'_> {
         let gcp_federation_scope = (deployment.base_platform.unwrap_or(deployment.platform)
             == alien_core::Platform::Gcp)
             .then(|| deployment.gcp_federation_scope());
+        // Never stored or serialized; a lookup failure fails the step rather than create an
+        // extension identity whose trust lacks the ExternalId.
+        let management_external_id = if releases_list_extensions {
+            self.credential_resolver
+                .management_external_id(deployment)
+                .await
+                .context(GenericError {
+                    message: format!(
+                        "Failed to look up the management ExternalId of deployment {}, which its extensions' identities trust",
+                        deployment.id
+                    ),
+                })?
+        } else {
+            None
+        };
         let config = if let Some(mut config) = deployment.deployment_config.clone() {
+            config.management_external_id = management_external_id;
             // Stored installer configuration cannot choose the broker's authorization namespace.
             config.gcp_federation_scope = gcp_federation_scope;
             config.environment_variables = environment_variables;
@@ -1927,6 +2097,7 @@ impl RunnerConfigSources<'_> {
             })?;
 
             DeploymentConfig {
+                management_external_id,
                 image_registry: None,
                 image_pull_secrets: Vec::new(),
                 gcp_federation_scope,
@@ -1940,6 +2111,7 @@ impl RunnerConfigSources<'_> {
                 allow_frozen_changes: false,
                 setup_run: false,
                 setup_run_id: None,
+                deployment_id: None,
                 compute_backend: None,
                 base_platform: deployment.base_platform,
                 label_domain: None,
@@ -2590,6 +2762,13 @@ mod tests {
 
     #[async_trait]
     impl CredentialResolver for RuntimeOnlyCredentials {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -2619,6 +2798,201 @@ mod tests {
                 has_provision_capability: false,
             })
         }
+    }
+
+    /// Credentials that can run every phase, for a test platform deployment.
+    struct TestCredentials;
+
+    #[async_trait]
+    impl CredentialResolver for TestCredentials {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn resolve_with_capability(
+            &self,
+            deployment: &DeploymentRecord,
+        ) -> Result<ResolvedCredentials, AlienError> {
+            Ok(ResolvedCredentials {
+                client_config: self.resolve(deployment).await?,
+                has_provision_capability: true,
+            })
+        }
+    }
+
+    /// The status and error a push deployment of a release listing `extension` saves after one
+    /// tick of a manager whose bundles are `bundles`.
+    #[cfg(feature = "sqlite")]
+    async fn tick_with_extension(
+        extension: alien_core::ExtensionManifest,
+        bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
+    ) -> (String, String) {
+        // A manager's builder sets the key; this loop runs without one.
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            SqliteDatabase::new(temp.path().join("manager.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let store = Arc::new(SqliteDeploymentStore::new(db.clone()));
+        let caller = Subject::system();
+        let deployment = store
+            .create_deployment(
+                &caller,
+                CreateDeploymentParams {
+                    name: "extended".to_string(),
+                    deployment_group_id: "dg_test".to_string(),
+                    platform: Platform::Test,
+                    deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: StackSettings {
+                        deployment_model: alien_core::DeploymentModel::Push,
+                        ..Default::default()
+                    },
+                    stack_state: None,
+                    environment_variables: None,
+                    public_subdomain: None,
+                    input_values: Default::default(),
+                    setup_item: None,
+                    deployment_token: None,
+                },
+            )
+            .await
+            .unwrap();
+        let filter = DeploymentFilter {
+            deployment_ids: Some(vec![deployment.id.clone()]),
+            ..Default::default()
+        };
+        let mut item = store
+            .acquire(&caller, "manager-session", &filter, 1)
+            .await
+            .unwrap()
+            .remove(0);
+        item.deployment.desired_release_id = Some("rel_ext".to_string());
+        let mut stack = Stack::new("extended".to_string()).build();
+        stack.extensions = vec![extension];
+        item.deployment.supplied_stacks = Some(SuppliedStacks {
+            desired: Some(stack),
+            current: None,
+        });
+        let bindings = Arc::new(ServerBindings {
+            local_queues: Arc::new(alien_local::LocalQueueService::default()),
+            kv: Arc::new(LocalKv::new(temp.path().join("kv")).await.unwrap()),
+            command_storage: Arc::new(
+                LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())
+                    .unwrap(),
+            ),
+            command_dispatcher: Arc::new(NullCommandDispatcher),
+            command_registry: Arc::new(InMemoryCommandRegistry::default()),
+            artifact_registry: None,
+            bindings_provider: None,
+            target_bindings_providers: Default::default(),
+            registry_routing_table: Arc::new(
+                crate::routes::registry_proxy::RegistryRoutingTable::new(vec![]).unwrap(),
+            ),
+        });
+        DeploymentLoop::new(
+            Arc::new(crate::config::ManagerConfig::default()),
+            store.clone(),
+            Arc::new(SqliteReleaseStore::new(db.clone())),
+            Arc::new(TestCredentials),
+            bindings,
+            None,
+        )
+        .with_extension_bundles(bundles)
+        .process_deployment(
+            item.deployment,
+            item.execution_claim,
+            "manager-session",
+            ProcessOptions::deployment_tick(),
+        )
+        .await;
+        let stored = store
+            .get_deployment(&caller, &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        (
+            stored.status,
+            stored
+                .error
+                .map(|error| error.to_string())
+                .unwrap_or_default(),
+        )
+    }
+
+    /// The manager loads a release's extensions before the release's first step: a bundle it
+    /// can't load fails the deployment naming the extension, and one it loads runs.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_push_deployment_runs_only_with_its_extensions_loaded() {
+        use crate::traits::ExtensionBundleStore;
+        use alien_infra::extension_bundle::testing::TestBundle;
+        let bundle = TestBundle::new("acme", "1.0.0", &[]);
+        let objects = tempfile::tempdir().unwrap();
+        let store = Arc::new(crate::providers::StateDirExtensionBundles::new(
+            objects.path(),
+        ));
+        let bundles = Some(Arc::new(crate::extension_bundles::ExtensionBundles::new(
+            store.clone(),
+        )));
+        let message = |(_, error): (String, String)| error;
+
+        let unstored = message(tick_with_extension(bundle.manifest.clone(), None).await);
+        let missing = message(tick_with_extension(bundle.manifest.clone(), bundles.clone()).await);
+        let mut tampered = bundle.zip.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        let hex = bundle.manifest.digest.strip_prefix("sha256:").unwrap();
+        store
+            .put(&Subject::system(), "default", hex, tampered)
+            .await
+            .unwrap();
+        let refused = message(
+            tick_with_extension(
+                bundle.manifest.clone(),
+                Some(Arc::new(crate::extension_bundles::ExtensionBundles::new(
+                    store.clone(),
+                ))),
+            )
+            .await,
+        );
+        store
+            .put(&Subject::system(), "default", hex, bundle.zip.clone())
+            .await
+            .unwrap();
+        let (loaded_status, loaded) = tick_with_extension(
+            bundle.manifest.clone(),
+            Some(Arc::new(crate::extension_bundles::ExtensionBundles::new(
+                store.clone(),
+            ))),
+        )
+        .await;
+
+        assert!(
+            unstored.contains("stores no extension bundles"),
+            "{unstored}"
+        );
+        assert!(
+            missing.contains("Extension 'acme'") && missing.contains("no such bundle"),
+            "{missing}"
+        );
+        assert!(
+            refused.contains("Extension 'acme'") && refused.contains("sha256"),
+            "{refused}"
+        );
+        assert_eq!(loaded_status, "provisioning", "{loaded}");
+        assert!(loaded.is_empty(), "{loaded}");
     }
 
     /// A protected deployment's step gets what its enforcers verify: the target release's
@@ -3484,6 +3858,13 @@ mod tests {
 
         #[async_trait]
         impl CredentialResolver for Credentials {
+            async fn management_external_id(
+                &self,
+                _: &DeploymentRecord,
+            ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+                Ok(None)
+            }
+
             async fn resolve(
                 &self,
                 _: &DeploymentRecord,
@@ -3670,6 +4051,15 @@ mod tests {
                 runner: &DeploymentLoop,
                 change: impl FnOnce(&mut DeploymentRecord),
             ) {
+                self.process_with_options(runner, change, None).await;
+            }
+
+            async fn process_with_options(
+                &self,
+                runner: &DeploymentLoop,
+                change: impl FnOnce(&mut DeploymentRecord),
+                options: Option<ProcessOptions>,
+            ) {
                 let acquired = self
                     .manager
                     .deployment_store
@@ -3697,12 +4087,15 @@ mod tests {
                         item.deployment,
                         item.execution_claim,
                         "test-session",
-                        ProcessOptions {
-                            max_steps: 1,
-                            require_heartbeats_enabled: matches!(
-                                self.record().await.status.as_str(),
-                                "running" | "refresh-failed"
-                            ),
+                        match options {
+                            Some(options) => options,
+                            None => ProcessOptions {
+                                max_steps: 1,
+                                require_heartbeats_enabled: matches!(
+                                    self.record().await.status.as_str(),
+                                    "running" | "refresh-failed" | "update-failed"
+                                ),
+                            },
                         },
                     )
                     .await;
@@ -3805,6 +4198,105 @@ mod tests {
             assert_eq!(saved.source.expect("resolver error").message, cause.message);
         }
 
+        /// A failed update whose machine list is refreshed on the heartbeat must keep the
+        /// update's own error when something goes wrong before the refresh can start: no
+        /// credentials, no management identity. Nothing is checkpointed, not even a credential
+        /// retry window.
+        #[tokio::test]
+        async fn a_failed_update_keeps_its_error_when_the_membership_refresh_cannot_start() {
+            for platform in [Platform::Local, Platform::Azure] {
+                let fixture = Fixture::new_for_platform(
+                    DeploymentStatus::UpdateFailed,
+                    transient_error(),
+                    platform,
+                )
+                .await;
+                if platform == Platform::Azure {
+                    without_azure_management(&fixture);
+                }
+                let original = serde_json::to_value(AlienError::new(GenericError {
+                    message: "the update failed".to_string(),
+                }))
+                .unwrap();
+                fixture
+                    .db
+                    .execute(&format!(
+                        "UPDATE deployments SET error = '{}'",
+                        original.to_string().replace('\'', "''")
+                    ))
+                    .await
+                    .unwrap();
+                let before = fixture.record().await;
+                let writes = fixture.writes().await;
+                let runner = fixture.runner();
+
+                // The record the loop receives carries an open credential retry window, which a
+                // checkpoint would write back.
+                fixture
+                    .process_with(&runner, |record| {
+                        record.runtime_metadata.as_mut().unwrap().credential_retry =
+                            Some(alien_core::CredentialRetry {
+                                started_at: Utc::now(),
+                                status: DeploymentStatus::UpdateFailed,
+                            });
+                    })
+                    .await;
+
+                let after = fixture.record().await;
+                assert_eq!(after.status, "update-failed", "{platform:?}");
+                assert_eq!(after.error, Some(original), "{platform:?}");
+                assert!(
+                    after.runtime_metadata.unwrap().credential_retry.is_none(),
+                    "{platform:?}: no retry window may be written"
+                );
+                assert_eq!(after.updated_at, before.updated_at, "{platform:?}");
+                assert!(
+                    fixture.writes().await - writes <= 2,
+                    "{platform:?}: only acquire and release may write"
+                );
+            }
+        }
+
+        /// The deployment loop can be handed a failed update with no retry waiting (a control
+        /// plane gives any runtime acquire that claim). It does the same machine-list refresh
+        /// as the heartbeat: credentials missing means nothing is written, and the update's
+        /// own error stays.
+        #[tokio::test]
+        async fn the_deployment_loop_refreshes_a_failed_update_and_writes_nothing() {
+            let fixture = Fixture::new(DeploymentStatus::UpdateFailed, transient_error()).await;
+            let original = serde_json::to_value(AlienError::new(GenericError {
+                message: "the update failed".to_string(),
+            }))
+            .unwrap();
+            fixture
+                .db
+                .execute(&format!(
+                    "UPDATE deployments SET error = '{}'",
+                    original.to_string().replace('\'', "''")
+                ))
+                .await
+                .unwrap();
+            let before = fixture.record().await;
+            let writes = fixture.writes().await;
+
+            fixture
+                .process_with_options(
+                    &fixture.runner(),
+                    |_| {},
+                    Some(ProcessOptions::deployment_tick()),
+                )
+                .await;
+
+            let after = fixture.record().await;
+            assert_eq!(after.status, "update-failed");
+            assert_eq!(after.error, Some(original));
+            assert_eq!(after.updated_at, before.updated_at);
+            assert!(
+                fixture.writes().await - writes <= 2,
+                "only acquire and release may write"
+            );
+        }
+
         fn config_naming_slots(
             slots: Vec<alien_core::ValueSlotRef>,
         ) -> alien_core::DeploymentConfig {
@@ -3881,6 +4373,74 @@ mod tests {
             assert!(saved.message.contains("env:API_TOKEN"), "{}", saved.message);
             let saved_text = serde_json::to_string(&saved).unwrap();
             assert!(!saved_text.contains("s3cret"), "{saved_text}");
+        }
+
+        /// A failed update whose machine list is refreshed keeps the update's own error when a
+        /// held value changed after planning: the refresh does not start, and nothing is saved.
+        #[tokio::test]
+        async fn a_failed_update_keeps_its_error_when_a_held_value_cannot_be_loaded() {
+            alien_deployment::set_ephemeral_secrets_digest_key();
+            let fixture = Fixture::new(DeploymentStatus::UpdateFailed, transient_error()).await;
+            fixture
+                .credentials
+                .unavailable
+                .store(false, Ordering::SeqCst);
+            let original = serde_json::to_value(AlienError::new(GenericError {
+                message: "the update failed".to_string(),
+            }))
+            .unwrap();
+            fixture
+                .db
+                .execute(&format!(
+                    "UPDATE deployments SET error = '{}'",
+                    original.to_string().replace('\'', "''")
+                ))
+                .await
+                .unwrap();
+            let store = fixture
+                .manager
+                .values
+                .clone()
+                .expect("standalone value store");
+            let scope = crate::values::ValueScope::deployment(&fixture.id).unwrap();
+            let slot: crate::values::ValueSlot = "env:API_TOKEN".parse().unwrap();
+            let planned = store
+                .put(
+                    &scope,
+                    &slot,
+                    crate::values::ValueKind::Secret,
+                    "first".into(),
+                )
+                .await
+                .unwrap();
+            store
+                .put(
+                    &scope,
+                    &slot,
+                    crate::values::ValueKind::Secret,
+                    "second".into(),
+                )
+                .await
+                .unwrap();
+            let config = config_naming_slots(vec![alien_core::ValueSlotRef {
+                slot: "env:API_TOKEN".to_string(),
+                kind: alien_core::EnvironmentVariableType::Secret,
+                digest: planned.digest,
+                env_name: None,
+                targets: None,
+            }]);
+            let before = fixture.record().await;
+
+            fixture
+                .process_with(&fixture.runner(), |record| {
+                    record.deployment_config = Some(config)
+                })
+                .await;
+
+            let after = fixture.record().await;
+            assert_eq!(after.status, "update-failed");
+            assert_eq!(after.error, Some(original));
+            assert_eq!(after.updated_at, before.updated_at);
         }
 
         /// A held value that still matches its digest does not stop the step.
@@ -4941,6 +5501,102 @@ mod tests {
             }
         }
 
+        /// The metadata proxy not knowing a freshly started manager yet (HTTP 404 on the IMDSv2
+        /// token request) must keep an in-progress update in Updating, not fail it. The error is
+        /// produced by the real AWS loader against a mock metadata server.
+        async fn metadata_token_error() -> AlienError {
+            use alien_error::ContextError;
+            use alien_infra::ClientConfigExt;
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let mut buffer = [0u8; 2048];
+                    let _ = stream.read(&mut buffer).await;
+                    let _ = stream
+                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+                        .await;
+                }
+            });
+            let env = std::collections::HashMap::from([
+                ("AWS_REGION".to_string(), "us-east-1".to_string()),
+                ("AWS_EC2_METADATA_SERVICE_ENDPOINT".to_string(), endpoint),
+                (
+                    "AWS_SHARED_CREDENTIALS_FILE".to_string(),
+                    "/nonexistent/credentials".to_string(),
+                ),
+                (
+                    "AWS_CONFIG_FILE".to_string(),
+                    "/nonexistent/config".to_string(),
+                ),
+            ]);
+            // The same call the environment credential provider makes, including the
+            // INVALID_CLIENT_CONFIG wrapper it adds around the loader's error.
+            let error = alien_core::ClientConfig::from_env(Platform::Aws, &env)
+                .await
+                .unwrap_err()
+                .into_generic();
+            error
+                .context(crate::error::ErrorData::CredentialMaterializationFailed {
+                    platform: Platform::Aws,
+                    purpose: "test metadata token failure".to_string(),
+                })
+                .into_generic()
+        }
+
+        #[tokio::test]
+        async fn metadata_token_failure_keeps_updating_then_fails_after_grace_period() {
+            let fixture =
+                Fixture::new(DeploymentStatus::Updating, metadata_token_error().await).await;
+            fixture.process(&fixture.runner()).await;
+            let waiting = fixture.record().await;
+            assert_eq!(waiting.status, "updating");
+            assert!(waiting.error.is_none());
+            let retry = waiting
+                .runtime_metadata
+                .as_ref()
+                .unwrap()
+                .credential_retry
+                .as_ref()
+                .expect("a retry window starts");
+            assert_eq!(retry.status, DeploymentStatus::Updating);
+
+            // Another tick inside the window retries without failing or restarting the window.
+            fixture.process(&fixture.runner()).await;
+            let still_waiting = fixture.record().await;
+            assert_eq!(still_waiting.status, "updating");
+            assert!(still_waiting.error.is_none());
+            assert_eq!(still_waiting.runtime_metadata, waiting.runtime_metadata);
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 2);
+        }
+
+        #[tokio::test]
+        async fn metadata_token_failure_past_grace_period_fails_the_update() {
+            let fixture =
+                Fixture::new(DeploymentStatus::Updating, metadata_token_error().await).await;
+            fixture.process(&fixture.runner()).await;
+            assert_eq!(fixture.record().await.status, "updating");
+            let mut metadata = fixture.record().await.runtime_metadata.unwrap();
+            metadata.credential_retry.as_mut().unwrap().started_at =
+                Utc::now() - chrono::Duration::minutes(11);
+            let serialized = serde_json::to_string(&metadata)
+                .unwrap()
+                .replace('\'', "''");
+            fixture
+                .db
+                .execute(&format!(
+                    "UPDATE deployments SET runtime_metadata = '{serialized}'"
+                ))
+                .await
+                .unwrap();
+            fixture.process(&fixture.runner()).await;
+            let record = fixture.record().await;
+            assert_eq!(record.status, "update-failed");
+            assert!(record.error.is_some());
+        }
+
         #[tokio::test]
         async fn expired_transient_error_fails_with_real_error_after_restart() {
             let error = transient_error();
@@ -5728,6 +6384,13 @@ mod tests {
     #[cfg(feature = "sqlite")]
     #[async_trait::async_trait]
     impl crate::traits::CredentialResolver for NoRuntimeCredentials {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -6242,6 +6905,13 @@ mod tests {
 
     #[async_trait]
     impl CredentialResolver for UnresolvableManagementIdentity {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -6259,10 +6929,145 @@ mod tests {
         }
     }
 
+    struct IssuesExternalId;
+
+    #[async_trait]
+    impl CredentialResolver for IssuesExternalId {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(Some(
+                alien_core::ManagementExternalId::new("0123456789abcdef0123456789ABCDEF").unwrap(),
+            ))
+        }
+    }
+
+    /// A setup the manager runs, as in automatic setup, creates the extension identities, so it
+    /// writes the ExternalId the control plane issued into their trust, as a setup the installer
+    /// runs does. The value stays off the config any other runner gets.
+    #[tokio::test]
+    async fn the_runner_config_carries_the_issued_external_id_and_never_serializes_it() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let manager_config = crate::config::ManagerConfig {
+            base_url: Some("https://manager.example.test".to_string()),
+            ..Default::default()
+        };
+        let mut deployment = deployment_record(DeploymentStatus::Pending, None);
+        deployment.stack_settings = Some(StackSettings::default());
+        for supplied in [false, true] {
+            if supplied {
+                deployment.deployment_config = Some(
+                    DeploymentConfig::builder()
+                        .stack_settings(StackSettings::default())
+                        .environment_variables(EnvironmentVariablesSnapshot {
+                            variables: vec![],
+                            hash: "h".to_string(),
+                            created_at: "2026-01-01T00:00:00Z".to_string(),
+                        })
+                        .allow_frozen_changes(false)
+                        .external_bindings(Default::default())
+                        .build(),
+                );
+            }
+            let config = RunnerConfigSources {
+                config: &manager_config,
+                credential_resolver: &IssuesExternalId,
+                bindings_provider: &None,
+                target_bindings_providers: &HashMap::new(),
+                commands_keys: None,
+            }
+            .deployment_config(&deployment, None, None, true)
+            .await
+            .expect("runner config");
+            assert_eq!(
+                config.management_external_id.as_ref().map(|id| id.expose()),
+                Some("0123456789abcdef0123456789ABCDEF"),
+                "supplied config: {supplied}"
+            );
+            assert!(!serde_json::to_string(&config)
+                .unwrap()
+                .contains("0123456789abcdef0123456789ABCDEF"));
+        }
+    }
+
+    struct ExternalIdLookupFails;
+
+    #[async_trait]
+    impl CredentialResolver for ExternalIdLookupFails {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Err(AlienError::new(GenericError {
+                message: "the control plane did not answer".to_string(),
+            }))
+        }
+    }
+
+    /// Only a deployment whose releases list an extension looks up the ExternalId: a plain
+    /// stack's config still builds when the lookup would fail, and an extension's fails
+    /// naming the lookup.
+    #[tokio::test]
+    async fn only_a_deployment_with_extensions_looks_up_the_external_id() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let manager_config = crate::config::ManagerConfig {
+            base_url: Some("https://manager.example.test".to_string()),
+            ..Default::default()
+        };
+        let mut deployment = deployment_record(DeploymentStatus::Pending, None);
+        deployment.stack_settings = Some(StackSettings::default());
+        let sources = RunnerConfigSources {
+            config: &manager_config,
+            credential_resolver: &ExternalIdLookupFails,
+            bindings_provider: &None,
+            target_bindings_providers: &HashMap::new(),
+            commands_keys: None,
+        };
+        let stack = Stack::new("plain".to_string()).build();
+
+        let plain = sources
+            .deployment_config(&deployment, Some(&stack), None, false)
+            .await
+            .expect("a plain stack's config");
+        assert!(plain.management_external_id.is_none());
+
+        let error = sources
+            .deployment_config(&deployment, Some(&stack), None, true)
+            .await
+            .expect_err("the lookup fails");
+        assert!(error.message.contains("ExternalId"), "{}", error.message);
+        assert_eq!(
+            error.source.as_ref().map(|cause| cause.message.as_str()),
+            Some("the control plane did not answer")
+        );
+    }
+
     struct ResolvedManagementIdentity;
 
     #[async_trait]
     impl CredentialResolver for ResolvedManagementIdentity {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -6495,7 +7300,7 @@ mod tests {
         .await
         .expect("the supplied identity needs no resolver");
         let config = sources
-            .deployment_config(&deployment, None, management_config)
+            .deployment_config(&deployment, None, management_config, false)
             .await
             .expect("runner config");
         assert_eq!(
@@ -6546,7 +7351,7 @@ mod tests {
         .await
         .expect("no resolver call");
         let config = sources
-            .deployment_config(&deployment, None, management_config)
+            .deployment_config(&deployment, None, management_config, false)
             .await
             .expect("runner config");
         assert_eq!(
@@ -6801,7 +7606,7 @@ mod tests {
                 log_buffer: &log_buffer,
             }),
         }
-        .deployment_config(&deployment, Some(&stack), None)
+        .deployment_config(&deployment, Some(&stack), None, false)
         .await
         .expect("runner config");
         // The daemon was built before capability files: it gets the commands
@@ -6969,7 +7774,7 @@ mod tests {
         };
 
         let config = sources
-            .deployment_config(&deployment, Some(&stack), None)
+            .deployment_config(&deployment, Some(&stack), None, false)
             .await
             .expect("runner config");
         let api = environment_of(&config, "api");
@@ -7017,7 +7822,7 @@ mod tests {
         // files. Its Container gets the commands key or commands stop for it.
         deployment.platform = Platform::Azure;
         let azure = sources
-            .deployment_config(&deployment, Some(&stack), None)
+            .deployment_config(&deployment, Some(&stack), None, false)
             .await
             .expect("azure runner config");
         let azure_api = environment_of(&azure, "api");
@@ -7029,7 +7834,7 @@ mod tests {
         // `alien dev` follows the same rule: a commands key, never the token.
         deployment.platform = Platform::Local;
         let local = sources
-            .deployment_config(&deployment, Some(&stack), None)
+            .deployment_config(&deployment, Some(&stack), None, false)
             .await
             .expect("local runner config");
         assert!(environment_of(&local, "api")
@@ -7123,7 +7928,7 @@ mod tests {
                 log_buffer: &log_buffer,
             }),
         }
-        .deployment_config(&deployment, Some(&stack), None)
+        .deployment_config(&deployment, Some(&stack), None, false)
         .await;
         (config, token_store, dir)
     }
@@ -7356,3 +8161,11 @@ fn parse_status(status: &str) -> DeploymentStatus {
         }
     }
 }
+
+#[cfg(all(test, feature = "sqlite"))]
+#[path = "deployment_extension_tests.rs"]
+mod extension_controller_tests;
+
+#[cfg(all(test, feature = "sqlite"))]
+#[path = "deployment_parity_tests.rs"]
+mod parity_tests;

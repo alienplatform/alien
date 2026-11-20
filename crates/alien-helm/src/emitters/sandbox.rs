@@ -150,6 +150,46 @@ roleRef:
   name: {{ $name }}
 "#;
 
+/// The Operator reads the cluster DNS Service address (`kube-system/kube-dns`) so the sandbox
+/// gateway can resolve names through it. One named object, read only. Without this grant (or
+/// when `sandbox.readClusterDNS` turns it off) the gateway keeps the cluster's default resolver.
+const KUBE_DNS_DISCOVERY_RBAC_TEMPLATE: &str = "sandbox-kube-dns-discovery-rbac.yaml";
+const KUBE_DNS_DISCOVERY_RBAC: &str = r#"{{- /* The Role lives in `kube-system`, shared by every install on the cluster, so the name carries a hash of the full release namespace and name. `sandbox.readClusterDNS` is `auto` (the default: rendered, except on Google Kubernetes Engine, where a managed `kube-system` can refuse the grant and the gateway keeps the cluster resolver), `true` or `false`. */ -}}
+{{- $read := toString (dig "readClusterDNS" "auto" (default dict .Values.sandbox)) -}}
+{{- if or (eq $read "true") (and (eq $read "auto") (not (contains "-gke" .Capabilities.KubeVersion.GitVersion))) }}
+{{- $suffix := printf "kube-dns-%s" (printf "%s/%s/%s" .Release.Namespace .Release.Name (include "deployment.fullname" .) | sha256sum | trunc 8) -}}
+{{- $name := printf "%s-%s" (include "deployment.fullname" . | trunc (int (sub 62 (len $suffix))) | trimSuffix "-") $suffix -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: kube-system
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["kube-dns"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: kube-system
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.managerServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+{{- end }}
+"#;
+
 #[derive(Debug, Default)]
 pub struct SandboxEmitter;
 
@@ -189,12 +229,25 @@ impl HelmEmitter for SandboxEmitter {
             KUBE_API_DISCOVERY_RBAC_TEMPLATE.to_string(),
             KUBE_API_DISCOVERY_RBAC.to_string(),
         );
-        if network_policy_is_the_only_bound(&sandbox.egress) {
-            fragment.extra_templates.insert(
-                "sandbox-cni-probe.yaml".to_string(),
-                super::sandbox_cni::template(true),
-            );
-        }
+        // Every egress mode needs the proof, because the session NetworkPolicy is what bounds a
+        // session's reach in each of them. Under `internet` it confines a session to the gateway.
+        // Under `allow` there is no gateway and the policy bounds the session's egress. Under
+        // `none` it is the only thing keeping a session off the network: `Egress` is listed with
+        // no rules. The check only tests pod-to-pod traffic on the sandbox nodes; node metadata
+        // is out of its scope. The gateway and metadata checks the Operator runs cover one path
+        // each, not this policy.
+        //
+        // The proof is the `sandbox-cni-probe.yaml` pre-install and pre-upgrade hook: when it
+        // fails, Helm stops before applying any other manifest, so no Operator runs and no
+        // session is created. On a CNI that ignores NetworkPolicy the policy is not in force.
+        fragment.extra_templates.insert(
+            "sandbox-cni-probe.yaml".to_string(),
+            super::sandbox_cni::template(true),
+        );
+        fragment.extra_templates.insert(
+            KUBE_DNS_DISCOVERY_RBAC_TEMPLATE.to_string(),
+            KUBE_DNS_DISCOVERY_RBAC.to_string(),
+        );
         // Only a root-boot image needs a namespace that admits Pod Security `baseline`, and only
         // then does the install check for one. A non-root sandbox renders exactly what it did.
         if sandbox.image_user == Some(0) {
@@ -205,18 +258,6 @@ impl HelmEmitter for SandboxEmitter {
         }
         Ok(fragment)
     }
-}
-
-/// Whether this egress mode's reach is bounded by the session NetworkPolicy and nothing else, so
-/// the chart must prove the cluster enforces NetworkPolicy before it installs or upgrades.
-///
-/// The proof is the `sandbox-cni-probe.yaml` pre-install and pre-upgrade hook: when it fails, Helm
-/// stops before applying any other manifest, so no Operator runs and no session is created. Under
-/// `internet` the policy is what confines a session to the gateway. Under `allow` there is no
-/// gateway, and the policy's address exclusions are all that keep a session off node metadata,
-/// node credentials and private ranges; on a CNI that ignores NetworkPolicy they are not in force.
-fn network_policy_is_the_only_bound(egress: &SandboxEgress) -> bool {
-    matches!(egress, SandboxEgress::Internet | SandboxEgress::Allow)
 }
 
 /// The policy that makes a sandbox's declared egress real.

@@ -33,6 +33,13 @@ pub struct DeploymentConfig {
     #[cfg_attr(feature = "openapi", schema(ignore))]
     #[builder(default)]
     pub setup_run: bool,
+    /// The deployment this configuration runs for. The runner sets it from the deployment it
+    /// holds on every step; a stored or supplied configuration cannot choose it. Controllers
+    /// put it in the ownership marker of what they create, so a second deployment that reuses
+    /// a resource prefix is never mistaken for the owner.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub deployment_id: Option<String>,
     /// Identifies this setup run, set together with `setup_run`. Every setup run gets a new
     /// one, so a controller can tell a result recorded earlier in this run from one recorded in
     /// an earlier run.
@@ -78,6 +85,15 @@ pub struct DeploymentConfig {
     /// Derived from Manager's ServiceAccount, not user-specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub management_config: Option<ManagementConfig>,
+    /// The `sts:ExternalId` the control plane issued for this deployment, which a setup Alien
+    /// runs writes into the trust of the extension identities it creates on AWS. The setup CLI
+    /// sets it from its install context, and the manager from its control plane when it runs
+    /// the setup. Not serialized, so it never travels with a stored configuration or to an
+    /// extension's controller; the applied trust is kept in the identity's controller state with
+    /// the value's SHA-256 in its place.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub management_external_id: Option<crate::ManagementExternalId>,
     /// Registered installation identity for target federation setup.
     /// Callers derive this from registration, separately from display metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]

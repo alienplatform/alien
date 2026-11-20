@@ -78,6 +78,8 @@ fn install(context: &str, chart: &str, release_namespace: &str, sandbox_namespac
             "--namespace",
             release_namespace,
             "--create-namespace",
+            "--timeout",
+            "15m",
             "--set",
             "logCollector.enabled=false",
             "--set",

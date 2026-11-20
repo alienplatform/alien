@@ -1,0 +1,1 @@
+{"type":"string","description":"The type of a resource an extension defines, such as `acme/dns-zone`.","pattern":"^(?!(?:alien|experimental)/)[^/]+/.+$","x-readme-ref-name":"CustomResourceType"}

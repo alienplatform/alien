@@ -361,10 +361,7 @@ mod tests {
             .expect_err("a stale etag must be refused");
 
         assert!(
-            matches!(
-                error.error,
-                Some(ErrorData::RemoteResourceConflict { .. })
-            ),
+            matches!(error.error, Some(ErrorData::RemoteResourceConflict { .. })),
             "got {error:?}"
         );
         // The same etag would be refused again, so the client must not resend it.

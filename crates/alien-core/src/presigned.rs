@@ -21,6 +21,21 @@ use crate::error::{ErrorData, Result};
 pub const PRESIGNED_RESPONSE_TOO_LARGE_MESSAGE: &str =
     "presigned response exceeded the caller's maximum size";
 
+/// The client HTTP presigned requests run on. WebAssembly builds of alien-core carry no HTTP
+/// client, so an HTTP presigned request fails there.
+#[cfg(not(target_arch = "wasm32"))]
+type HttpClient = reqwest::Client;
+
+#[cfg(target_arch = "wasm32")]
+struct HttpClient;
+
+#[cfg(target_arch = "wasm32")]
+impl HttpClient {
+    fn new() -> Self {
+        HttpClient
+    }
+}
+
 /// A presigned request that can be serialized, stored, and executed later.
 /// Hides implementation details for different storage backends.
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
@@ -168,8 +183,8 @@ impl PresignedRequest {
     /// For PUT operations, body should contain the data to upload.
     /// For GET/DELETE operations, body is typically None.
     pub async fn execute(&self, body: Option<Bytes>) -> Result<PresignedResponse> {
-        let client = reqwest::Client::new();
-        self.execute_with_client(&client, body).await
+        self.execute_with_client_inner(&HttpClient::new(), body, None)
+            .await
     }
 
     /// Execute this request while bounding a GET response body before it is
@@ -179,8 +194,7 @@ impl PresignedRequest {
         body: Option<Bytes>,
         max_response_bytes: usize,
     ) -> Result<PresignedResponse> {
-        let client = reqwest::Client::new();
-        self.execute_with_client_inner(&client, body, Some(max_response_bytes))
+        self.execute_with_client_inner(&HttpClient::new(), body, Some(max_response_bytes))
             .await
     }
 
@@ -188,6 +202,7 @@ impl PresignedRequest {
     ///
     /// Multi-step protocols should use this form so retries and adjacent HTTP
     /// operations share one connection pool. Local requests ignore the client.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn execute_with_client(
         &self,
         client: &reqwest::Client,
@@ -198,7 +213,7 @@ impl PresignedRequest {
 
     async fn execute_with_client_inner(
         &self,
-        client: &reqwest::Client,
+        client: &HttpClient,
         body: Option<Bytes>,
         max_response_bytes: Option<usize>,
     ) -> Result<PresignedResponse> {
@@ -208,8 +223,19 @@ impl PresignedRequest {
                 method,
                 headers,
             } => {
-                self.execute_http(client, url, method, headers, body, max_response_bytes)
-                    .await
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.execute_http(client, url, method, headers, body, max_response_bytes)
+                        .await
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = (client, url, headers, body, max_response_bytes);
+                    Err(AlienError::new(ErrorData::OperationNotSupported {
+                        operation: format!("HTTP {method} of a presigned request"),
+                        reason: "WebAssembly builds of Alien have no HTTP client".to_string(),
+                    }))
+                }
             }
             PresignedRequestBackend::Local {
                 file_path,
@@ -268,6 +294,7 @@ impl PresignedRequest {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     async fn execute_http(
         &self,
         client: &reqwest::Client,

@@ -29,6 +29,7 @@ pub mod key;
 pub mod ledger;
 pub mod recovery;
 pub mod release;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod session;
 pub mod settings;
 pub mod signer_list;
@@ -50,7 +51,8 @@ pub use release::{
 };
 pub use settings::{candidate_prefixes, discover, InstallId, Lookup, SigningSettings};
 pub use signer_list::{
-    display_fingerprint, fingerprint, Signer, SignerChain, SignerKind, SignerListBody, TrustedList,
+    display_fingerprint, fingerprint, release_deny_entry, Keep, KeptKind, Signer, SignerChain,
+    SignerKind, SignerListBody, TrustedList, MAX_KEEP,
 };
 pub use verify::{Trust, Verified};
 

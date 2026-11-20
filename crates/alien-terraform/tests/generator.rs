@@ -13,6 +13,7 @@ mod generator {
     pub mod protected_registration_tests;
     pub mod remote_kv_tests;
     pub mod remote_queue_tests;
+    pub mod sandbox_live_declaration_tests;
 
     pub mod aws_boundary_size_tests;
     pub mod aws_bucket_lifecycle_parity_tests;
@@ -28,6 +29,8 @@ mod generator {
     pub mod azure_compute_tests;
     pub mod azure_data_layer_tests;
     pub mod azure_full_stack_tests;
+    pub mod azure_internet_gateway_tests;
+    pub mod azure_internet_live_render;
     pub mod azure_identity_tests;
     pub mod azure_kv_upgrade_tests;
     pub mod azure_profile_grant_tests;
@@ -40,6 +43,7 @@ mod generator {
     pub mod enabled_queue_tests;
     pub mod enabled_storage_tests;
     pub mod enabled_tests;
+    pub mod extension_identity_tests;
     pub mod gating_matrix_tests;
     pub mod gcp_compute_tests;
     pub mod gcp_data_layer_tests;

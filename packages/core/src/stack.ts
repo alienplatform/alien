@@ -1,4 +1,5 @@
 import {
+  type ExtensionManifest,
   type PermissionsConfig,
   type Platform,
   type ResourceEntry,
@@ -37,10 +38,12 @@ export interface AddResourceOptions {
 }
 
 export type {
+  ExtensionManifest,
   ManagementPermissions,
   PermissionSet,
   PermissionsConfig,
   ResourceStatus,
+  ResourceTypeDescriptor,
   Stack as StackConfig,
   StackInputDefaultValue,
   StackInputDefinition,
@@ -110,6 +113,17 @@ export class Stack {
    */
   public platforms(platforms: Platform[]): this {
     this._config.supportedPlatforms = platforms
+    return this
+  }
+
+  /**
+   * Turns on extensions for this stack: the resource types they define, and their
+   * template modifiers and interceptors, which run in the order listed here.
+   * @param extensions Each extension's generated module's default export.
+   * @returns The Stack builder instance.
+   */
+  public extensions(extensions: ExtensionManifest[]): this {
+    this._config.extensions = extensions
     return this
   }
 

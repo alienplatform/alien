@@ -62,10 +62,12 @@ impl TestServiceAccountController {
         status = ResourceStatus::Running,
     )]
     async fn ready(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        // The system will automatically know if config changed and transition to update
+        // The system will automatically know if config changed and transition to update.
+        // Like the real controllers, a Ready handler returns an explicit heartbeat delay:
+        // None would count as zero and collapse every other resource's delay.
         Ok(HandlerAction::Continue {
             state: Ready,
-            suggested_delay: None,
+            suggested_delay: Some(std::time::Duration::from_secs(30)),
         })
     }
 

@@ -61,6 +61,13 @@ struct NoCredentials;
 
 #[async_trait]
 impl CredentialResolver for NoCredentials {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         unreachable!("chart routes resolve no credentials")
     }
@@ -127,7 +134,8 @@ async fn manager(stores: &Stores, operator_image: &str) -> AppState {
         registry_routing_table: Arc::new(
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
-        import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+        host_registrations: alien_infra::HostRegistrations::NONE,
+        extension_bundles: None,
         charts: Some(Arc::new(ChartSettings::new(
             Some(operator_image.to_string()),
             false,
@@ -501,5 +509,37 @@ async fn a_stack_the_preparation_refuses_is_a_client_error_with_its_message() {
     assert!(
         message.to_lowercase().contains("egress"),
         "the preparation's reason must reach the caller: {message}"
+    );
+}
+
+/// A refusal that quotes an extension's name carries its control characters escaped, so the
+/// Helm or CLI output that prints it shows the text the manifest holds.
+#[tokio::test]
+async fn a_refusal_quoting_an_extension_carries_its_control_characters_escaped() {
+    let mut stack = Stack::new(CHART.to_string()).build();
+    stack.extensions = vec![serde_json::from_value(serde_json::json!({
+        "name": "acme\u{1b}[2J",
+        "version": "1.0.0",
+        "digest": "sha256:0",
+        "resourceTypes": {}
+    }))
+    .unwrap()];
+    let stores = stores().await;
+    create_release_of(&stores, stack).await;
+    let state = manager(&stores, OLD_OPERATOR).await;
+    let version = tags(&state).await.remove(0);
+    let pulled = pull(&state, &format!("charts/{CHART}/manifests/{version}")).await;
+    assert_eq!(
+        pulled.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        pulled.text()
+    );
+    let body: Value = serde_json::from_slice(&pulled.body).unwrap();
+    let message = body["errors"][0]["message"].as_str().unwrap();
+    assert!(!message.contains('\u{1b}'), "{message:?}");
+    assert!(
+        message.contains("Extension name 'acme\\u{1b}[2J'"),
+        "{message}"
     );
 }

@@ -25,6 +25,7 @@ pub mod collector_logs;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod extension_bundles;
 pub mod lock;
 pub mod loops;
 pub mod otlp_server;

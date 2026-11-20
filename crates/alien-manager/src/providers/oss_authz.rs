@@ -73,6 +73,11 @@ impl OssAuthz {
         ) && !crate::auth::runtime_capability::is_runtime_capability(&s.bearer_token)
     }
 
+    /// A token bound to a project acts on that project alone; a workspace token on any.
+    fn scope_covers(s: &Subject, project_id: &str) -> bool {
+        s.scope.project_id().is_none_or(|bound| bound == project_id)
+    }
+
     /// True if the subject has *any* read authority on the project. Used for
     /// "any authenticated token can read its own project's resources" calls.
     fn can_act_on_project(s: &Subject, _project_id: &str) -> bool {
@@ -86,6 +91,25 @@ impl OssAuthz {
 }
 
 impl Authz for OssAuthz {
+    // -- Extension bundles -------------------------------------------------
+
+    /// Whoever creates releases in the project uploads the bundles they pin.
+    fn can_upload_extension_bundle(&self, s: &Subject, project_id: &str) -> bool {
+        Self::scope_covers(s, project_id) && self.can_create_release(s, project_id)
+    }
+
+    /// Whoever reads the project's releases reads the bundles they pin: the Operator and the
+    /// setup CLI with their deployment's token included.
+    fn can_read_extension_bundle(&self, s: &Subject, project_id: &str) -> bool {
+        Self::scope_covers(s, project_id)
+            && !matches!(
+                s.scope,
+                Scope::Commands { .. } | Scope::RemoteBindings { .. } | Scope::Telemetry { .. }
+            )
+            && !matches!(s.role, Role::CommandCapability | Role::TelemetryCapability)
+            && Self::project_reader(s)
+    }
+
     // -- Releases ----------------------------------------------------------
 
     fn can_create_release(&self, s: &Subject, _project_id: &str) -> bool {

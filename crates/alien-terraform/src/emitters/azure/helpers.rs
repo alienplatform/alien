@@ -462,9 +462,9 @@ pub fn emit_setup_resource_role_definitions(
             for permission_set_ref in
                 resource_scoped_permission_refs(profile, resource_id, &resource_type)
             {
-                let Some(permission_set) = permission_set_ref
-                    .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                else {
+                let Some(permission_set) = permission_set_ref.resolve(|name| {
+                    alien_permissions::get_stack_permission_set(stack, name).cloned()
+                }) else {
                     continue;
                 };
                 if !supports_azure_resource_binding(&permission_set) {
@@ -1153,7 +1153,9 @@ pub fn emit_profile_grants(
         };
         for permission_set_ref in refs {
             let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .resolve(|name| {
+                    alien_permissions::get_stack_permission_set(ctx.stack, name).cloned()
+                })
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::GenericError {
                         message: format!(

@@ -108,8 +108,7 @@ class Run:
         self.registry = f"{self.account}.dkr.ecr.{REGION}.amazonaws.com"
         self.repo = f"{self.registry}/{self.prefix}"
         # Lambda takes a signer list only within 90 days; both driver runs must sign the same one.
-        self.not_after = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)) \
-            .replace(microsecond=0).isoformat()
+        self.list_label = "setup"
         self.results = []
         self.created = []
 
@@ -121,7 +120,7 @@ class Run:
         log(f"{name}: {'PASS' if ok else 'FAIL'} — {detail}")
 
     def driver(self, command, install, env=None, check=True):
-        variables = {**os.environ, "PREFIX": install, "NOT_AFTER": self.not_after,
+        variables = {**os.environ, "PREFIX": install, "LIST_LABEL": self.list_label,
                      "ACCOUNT": self.account, "REGION": REGION, "AWS_REGION": REGION, **(env or {})}
         result = subprocess.run([self.args.driver, command], capture_output=True, text=True, env=variables)
         (self.evidence / f"driver-{install}-{command}-{uuid.uuid4().hex[:4]}.log").write_text(
@@ -277,8 +276,7 @@ class Run:
                     direct.stderr.strip()[:300])
 
         foreign = {**update, "FROM_IMAGE": self.images["b"], "TO_IMAGE": self.images["a"], "SEQUENCE": "3",
-                   "NOT_AFTER": (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=20))
-                   .replace(microsecond=0).isoformat()}
+                   "LIST_LABEL": "foreign"}
         result = self.driver("update", install, foreign, check=False)
         outcome = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
         image = self.image(install)

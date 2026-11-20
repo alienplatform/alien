@@ -246,10 +246,20 @@ pub(crate) async fn proxy_bedrock_anthropic(
         "invoke"
     };
     let model_id = bedrock_inference_profile_id(region, upstream_id);
-    let base = route
-        .upstream_base_override
-        .clone()
-        .unwrap_or_else(|| format!("https://bedrock-runtime.{region}.amazonaws.com"));
+    let base = match route.upstream_base_override.clone() {
+        Some(base) => base,
+        None => {
+            // The region becomes part of the host. Bindings are checked when parsed; this keeps
+            // any other way of building a route from reaching a different host.
+            alien_core::bindings::validate_aws_region(region).map_err(|message| {
+                AlienError::new(ErrorData::BindingConfigInvalid {
+                    binding: route.name.clone(),
+                    message,
+                })
+            })?;
+            format!("https://bedrock-runtime.{region}.amazonaws.com")
+        }
+    };
     let url = format!(
         "{}/model/{}/{}",
         base.trim_end_matches('/'),

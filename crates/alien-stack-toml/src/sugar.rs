@@ -102,6 +102,7 @@ pub fn vocabulary(kind: &str) -> Vocabulary {
             extra.push("host-access");
         }
         "sandbox" => extra.push("session"),
+        "service-account" => hidden.push("extension"),
         _ => {}
     }
     Vocabulary { hidden, extra }
@@ -185,6 +186,12 @@ fn reject_canonical(ctx: &Context<'_>, table: &Table, kind: &str) -> Result<()> 
         rules.push((
             "cluster",
             "the cluster is the [cluster] table, and containers and daemons join it",
+        ));
+    }
+    if kind == "service-account" {
+        rules.push((
+            "extension",
+            "only the identity Alien creates for an extension has it",
         ));
     }
     for (key, hint) in rules {

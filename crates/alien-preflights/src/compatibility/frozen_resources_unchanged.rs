@@ -67,11 +67,45 @@ fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resou
                 old_group.profile = new_group.profile.clone();
             }
         }
+        if recorded_profile_is_stale(platform, old_group, new_group) {
+            old_group.profile = new_group.profile.clone();
+        }
         if runtime_disk_change(platform, old_group, new_group) {
             old_group.profile = new_group.profile.clone();
         }
     }
     normalized == *new_cluster
+}
+
+/// Whether the old group recorded a profile that does not belong to its own machine, and
+/// the new group carries the machine's profile. First setup of an imported Azure install
+/// used to record the machine it chose with the profile of the registration default, so
+/// those installs hold a profile their machine does not have. The machine is unchanged;
+/// only the profile is brought in line with it. Azure only: elsewhere no install holds such
+/// a record, and the excuse would quietly adopt a later correction of the catalog.
+fn recorded_profile_is_stale(platform: Platform, old: &CapacityGroup, new: &CapacityGroup) -> bool {
+    platform == Platform::Azure
+        && old.instance_type.is_some()
+        && old.instance_type == new.instance_type
+        && old.profile.is_some()
+        && old.profile != new.profile
+        && profile_is_the_machines(platform, new)
+}
+
+/// Whether the group's profile is what the planner derives for its machine: the catalog
+/// profile, with the disk the workloads asked for (the larger of the catalog's and the
+/// request, which the group's own ephemeral storage records) and the group's data disk.
+fn profile_is_the_machines(platform: Platform, group: &CapacityGroup) -> bool {
+    let (Some(machine), Some(profile)) = (group.instance_type.as_deref(), group.profile.as_ref())
+    else {
+        return false;
+    };
+    let Some(spec) = alien_core::instance_catalog::find_instance_type(platform, machine) else {
+        return false;
+    };
+    let mut derived = spec.to_machine_profile_for_storage(profile.ephemeral_storage_bytes);
+    derived.data_disk = profile.data_disk.clone();
+    derived == *profile
 }
 
 /// Whether the profiles differ only in disk sizes that the platform applies
@@ -496,6 +530,7 @@ impl FrozenResourcesUnchangedCheck {
         config: Option<&DeploymentConfig>,
     ) -> Result<CheckResult> {
         let mut errors = Vec::new();
+        let mut warnings = Vec::new();
 
         // Collect frozen resources from old stack
         let old_frozen: HashMap<_, _> = old_stack
@@ -607,8 +642,23 @@ impl FrozenResourcesUnchangedCheck {
                             *old_config == *on_platform(self.platform, &resolved)
                         })
                 });
+                // A service account that only lost permission sets keeps its installed role
+                // until the next setup, which is broader than this release needs. Anything it
+                // gains, or a set whose definition changed under the same id, is not narrowing.
+                let only_narrowed = old_config != new_config
+                    && crate::compatibility::narrowing::service_account_narrowed(
+                        new_stack,
+                        &old_config,
+                        &new_config,
+                    );
+                if only_narrowed {
+                    warnings.push(format!(
+                        "Service account '{id}' grants less than the installed setup. The installed grants stay until the next setup update removes them."
+                    ));
+                }
                 if old_config != new_config
                     && !no_value_reference
+                    && !only_narrowed
                     && !runtime_managed_frozen_change(self.platform, &old_config, &new_config)
                     && !runtime_managed_sandbox_image(self.platform, &old_config, &new_config)
                     && !unchanged_legacy_service_account_grants(
@@ -661,9 +711,13 @@ impl FrozenResourcesUnchangedCheck {
         }
 
         if errors.is_empty() {
-            Ok(CheckResult::success())
+            if warnings.is_empty() {
+                Ok(CheckResult::success())
+            } else {
+                Ok(CheckResult::with_warnings(warnings))
+            }
         } else {
-            Ok(CheckResult::failed(errors))
+            Ok(CheckResult::failed_with_warnings(errors, warnings))
         }
     }
 }
@@ -758,10 +812,10 @@ mod tests {
         );
     }
 
-    /// Dropping an account's last resource-scoped grant changes its installed role, so it needs
-    /// setup, as does dropping only the capture of grants its profile still holds.
+    /// Dropping an account's last resource-scoped grant only narrows it. Dropping only the
+    /// capture of grants its profile still holds hides what the account grants, so it needs setup.
     #[tokio::test]
-    async fn losing_the_last_resource_grant_needs_setup() {
+    async fn losing_the_last_resource_grant_narrows_but_losing_only_the_capture_needs_setup() {
         let with_grant = PermissionProfile::new().resource("objects", ["storage/data-read"]);
         let check = FrozenResourcesUnchangedCheck {
             platform: Platform::Aws,
@@ -773,12 +827,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(!removed.success);
-        assert!(
-            removed.errors[0].contains("'reader-sa' was modified"),
-            "{:?}",
-            removed.errors
-        );
+        assert!(removed.success, "{:?}", removed.errors);
         let uncaptured = check
             .check(
                 &account_stack(with_grant.clone(), true),
@@ -907,7 +956,9 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -918,7 +969,9 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -982,7 +1035,9 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -993,7 +1048,9 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -1051,7 +1108,9 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -1062,7 +1121,9 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -1115,7 +1176,9 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -1126,7 +1189,9 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -1167,7 +1232,9 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -1178,7 +1245,9 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -1217,7 +1286,9 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig::new(),
@@ -1304,10 +1375,10 @@ mod tests {
         assert!(!result.errors.is_empty());
     }
 
-    /// Setup owns a frozen service account's role: losing permission sets needs setup just as
-    /// gaining them does.
+    /// Setup owns a frozen service account's role. Gaining permission sets needs setup; losing
+    /// them does not, the installed role simply stays broader until the next setup.
     #[tokio::test]
-    async fn a_service_account_change_in_either_direction_needs_setup() {
+    async fn a_service_account_that_only_loses_permission_sets_needs_no_setup() {
         let account = |sets: &[&str]| {
             let profile = alien_core::PermissionProfile::new().global(sets.iter().copied());
             alien_core::ServiceAccount::from_permission_profile(
@@ -1333,7 +1404,8 @@ mod tests {
             )
             .await
             .expect("check should run");
-        assert!(!narrowed.success);
+        assert!(narrowed.success, "{:?}", narrowed.errors);
+        assert_eq!(narrowed.warnings.len(), 1);
 
         let widened = check
             .check(
@@ -1458,6 +1530,139 @@ mod tests {
                 .unwrap()
                 .success
         );
+    }
+
+    /// First setup used to record the chosen machine with the registration default's profile.
+    /// The next release brings the profile in line with the recorded machine, without setup.
+    #[tokio::test]
+    async fn recorded_profile_of_another_machine_is_adopted_for_the_same_machine() {
+        let platform = Platform::Azure;
+        let profile_of = |machine: &str| {
+            alien_core::instance_catalog::find_instance_type(platform, machine)
+                .map(|spec| spec.to_machine_profile())
+        };
+        let mut old = compute_cluster(2);
+        old.capacity_groups[0].nested_virtualization = None;
+        old.capacity_groups[0].instance_type = Some("Standard_D2s_v5".into());
+        old.capacity_groups[0].profile = profile_of("Standard_B2s");
+        let mut new = old.clone();
+        new.capacity_groups[0].profile = profile_of("Standard_D2s_v5");
+        assert_ne!(
+            old.capacity_groups[0].profile,
+            new.capacity_groups[0].profile
+        );
+        let check = FrozenResourcesUnchangedCheck { platform };
+        let result = check
+            .check(&compute_stack(old.clone()), &compute_stack(new.clone()))
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.errors);
+
+        // A profile that is not the machine's own is still a modification.
+        new.capacity_groups[0].profile = profile_of("Standard_B4ms");
+        let result = check
+            .check(&compute_stack(old), &compute_stack(new))
+            .await
+            .unwrap();
+        assert!(!result.success);
+    }
+
+    fn stale_pair(platform: Platform, machine: &str) -> (ComputeCluster, ComputeCluster) {
+        let profile_of = |machine: &str| {
+            find_instance_type(platform, machine).map(|spec| spec.to_machine_profile())
+        };
+        let mut old = compute_cluster(2);
+        old.capacity_groups[0].nested_virtualization = None;
+        old.capacity_groups[0].instance_type = Some(machine.into());
+        old.capacity_groups[0].profile = profile_of("Standard_B2s");
+        let mut new = old.clone();
+        new.capacity_groups[0].profile = profile_of(machine);
+        (old, new)
+    }
+
+    async fn frozen_ok(platform: Platform, old: ComputeCluster, new: ComputeCluster) -> bool {
+        FrozenResourcesUnchangedCheck { platform }
+            .check(&compute_stack(old), &compute_stack(new))
+            .await
+            .unwrap()
+            .success
+    }
+
+    #[tokio::test]
+    async fn stale_profile_excuse_keeps_the_workloads_larger_disk() {
+        let (mut old, mut new) = stale_pair(Platform::Azure, "Standard_D2s_v5");
+        // The planner records the larger of the catalog's disk and the workload's request.
+        old.capacity_groups[0]
+            .profile
+            .as_mut()
+            .unwrap()
+            .ephemeral_storage_bytes = 50 * GIB;
+        new.capacity_groups[0]
+            .profile
+            .as_mut()
+            .unwrap()
+            .ephemeral_storage_bytes = 50 * GIB;
+        assert!(frozen_ok(Platform::Azure, old.clone(), new.clone()).await);
+        // A disk smaller than the catalog's is not something the planner records.
+        new.capacity_groups[0]
+            .profile
+            .as_mut()
+            .unwrap()
+            .ephemeral_storage_bytes = GIB;
+        assert!(!frozen_ok(Platform::Azure, old, new).await);
+    }
+
+    #[tokio::test]
+    async fn stale_profile_excuse_refuses_a_machine_not_in_the_catalog() {
+        let (mut old, mut new) = stale_pair(Platform::Azure, "Standard_D2s_v5");
+        old.capacity_groups[0].instance_type = Some("Standard_Nope".into());
+        new.capacity_groups[0].instance_type = Some("Standard_Nope".into());
+        assert!(!frozen_ok(Platform::Azure, old, new).await);
+    }
+
+    #[tokio::test]
+    async fn stale_profile_excuse_refuses_a_profile_of_a_different_machine() {
+        // The new group names D2s_v5 but carries the profile of D4s_v5.
+        let (old, mut new) = stale_pair(Platform::Azure, "Standard_D2s_v5");
+        new.capacity_groups[0].profile =
+            find_instance_type(Platform::Azure, "Standard_D4s_v5").map(|s| s.to_machine_profile());
+        assert!(!frozen_ok(Platform::Azure, old, new).await);
+    }
+
+    #[tokio::test]
+    async fn stale_profile_excuse_with_a_fixed_scale_policy() {
+        let (mut old, mut new) = stale_pair(Platform::Azure, "Standard_D2s_v5");
+        for cluster in [&mut old, &mut new] {
+            cluster.capacity_groups[0].scale_policy =
+                Some(CapacityGroupScalePolicy::from_selected_bounds(2, 2));
+        }
+        assert!(frozen_ok(Platform::Azure, old.clone(), new.clone()).await);
+        // Fixed or not, a profile that is not the machine's stays a modification.
+        new.capacity_groups[0]
+            .profile
+            .as_mut()
+            .unwrap()
+            .memory_bytes += 1;
+        assert!(!frozen_ok(Platform::Azure, old, new).await);
+    }
+
+    #[tokio::test]
+    async fn stale_profile_excuse_is_azure_only() {
+        let profile_of = |platform, machine: &str| {
+            find_instance_type(platform, machine).map(|spec| spec.to_machine_profile())
+        };
+        for (platform, other, machine) in [
+            (Platform::Aws, "m7i.large", "m7i.xlarge"),
+            (Platform::Gcp, "e2-medium", "n2-standard-4"),
+        ] {
+            let mut old = compute_cluster(2);
+            old.capacity_groups[0].nested_virtualization = None;
+            old.capacity_groups[0].instance_type = Some(machine.into());
+            old.capacity_groups[0].profile = profile_of(platform, other);
+            let mut new = old.clone();
+            new.capacity_groups[0].profile = profile_of(platform, machine);
+            assert!(!frozen_ok(platform, old, new).await, "{platform}");
+        }
     }
 
     #[tokio::test]

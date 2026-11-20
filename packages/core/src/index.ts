@@ -1,11 +1,13 @@
-// ResourceBuilder is internal glue shared by the builders, not an extension
-// point. Exporting it would commit us to its shape at the next publish.
+// The builders `alien extensions build` generates validate with zod, and a stack project need not
+// depend on zod itself.
+export { z } from "zod"
 export * from "./ai.js"
 export * from "./artifact-registry.js"
 export * from "./build.js"
 export * from "./common-errors.js"
 export * from "./compute-cluster.js"
 export * from "./container.js"
+export * from "./custom-resource.js"
 export * from "./daemon.js"
 export * from "./email.js"
 export * from "./error.js"
@@ -17,6 +19,8 @@ export * from "./operations.js"
 export * from "./postgres.js"
 export * from "./queue.js"
 export * from "./redis.js"
+// ResourceBuilder is not exported by name. Extension builders extend CustomResourceType, so what it
+// inherits from ResourceBuilder is published through it.
 export type { ResourceType } from "./resource.js"
 export { Resource, ResourceTypeSchema } from "./resource.js"
 export * from "./sandbox.js"

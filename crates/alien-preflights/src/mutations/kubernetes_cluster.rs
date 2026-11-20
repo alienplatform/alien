@@ -193,6 +193,7 @@ mod tests {
         stack_settings: StackSettings,
     ) -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             image_registry: None,
             image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
@@ -212,6 +213,7 @@ mod tests {
             allow_frozen_changes: false,
             setup_run: false,
             setup_run_id: None,
+            deployment_id: None,
             compute_backend: None,
             external_bindings: ExternalBindings::default(),
             base_platform,

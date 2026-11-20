@@ -149,7 +149,7 @@ async fn source_reaches_azure_and_gcp_frozen_through_the_runner() {
 
 #[tokio::test]
 async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() {
-    for platform in [Platform::Azure, Platform::Local] {
+    for platform in [Platform::Local] {
         let mut declared = sandbox(None);
         declared.egress = SandboxEgress::Internet;
         let result = PreflightRunner::new()
@@ -178,6 +178,44 @@ async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() 
             "released Allow stays available on {platform}: {result:?}"
         );
     }
+}
+
+/// Azure hosts the egress gateway in the deployment's VNet, so a catalog image (no agent) is
+/// refused for `internet`. An image that carries the agent passes that check, and while the
+/// pinned gateway image predates its admin protocol it is refused only for that reason.
+#[tokio::test]
+async fn azure_internet_needs_an_agent_image_not_a_catalog_entry() {
+    let mut catalog = sandbox(None);
+    catalog.egress = SandboxEgress::Internet;
+    let refused = PreflightRunner::new()
+        .run_compile_time_checks(&stack_with(catalog), Platform::Azure)
+        .await
+        .expect("preflight runs");
+    assert!(!refused.success, "{refused:?}");
+    let rendered = format!("{refused:?}");
+    assert!(
+        rendered.contains("SANDBOX_EGRESS_GATEWAY_UNAVAILABLE"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("Alien sandbox agent"), "{rendered}");
+
+    let mut registry = sandbox(None);
+    registry.code = SandboxCode::Image {
+        image: "example.azurecr.io/box:1".to_string(),
+        bundled_from: None,
+    };
+    registry.egress = SandboxEgress::Internet;
+    let agent_image = PreflightRunner::new()
+        .run_compile_time_checks(&stack_with(registry), Platform::Azure)
+        .await
+        .expect("preflight runs");
+    assert_eq!(agent_image.failed_checks, 1, "{agent_image:?}");
+    let rendered = format!("{agent_image:?}");
+    assert!(
+        rendered.contains(alien_core::sandbox_egress::AZURE_INTERNET_SANDBOX_UNAVAILABLE),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("Alien sandbox agent"), "{rendered}");
 }
 
 /// Google Cloud's `internet` is native open outbound: it plans with no gateway, and an

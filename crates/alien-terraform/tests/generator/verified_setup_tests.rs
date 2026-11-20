@@ -67,7 +67,7 @@ fn module(target: TerraformTarget) -> ModuleFiles {
 
 /// The generated module with the registration provider replaced by
 /// `terraform_data`. Outputs read provider-computed attributes, so they are left out.
-fn stand_in_files(module: &ModuleFiles) -> IndexMap<String, String> {
+pub(super) fn stand_in_files(module: &ModuleFiles) -> IndexMap<String, String> {
     let mut files = linter_files(module);
     files.shift_remove("outputs.tf");
     let versions: Body = hcl::from_str(&files["versions.tf"]).expect("versions.tf parses");
