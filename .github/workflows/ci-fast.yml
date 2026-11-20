@@ -576,7 +576,7 @@ jobs:
           ./scripts/smoke-sandbox-agent.test.sh
 
   cli-extensions:
-    name: CLI extensions
+    name: CLI extensions (${{ matrix.partition }}/3)
     needs: [pr-conventions, changes]
     # The `alien-cli::extensions` tests, which the Rust crates job skips. They run whenever Rust
     # crates would test alien-cli.
@@ -586,6 +586,12 @@ jobs:
       (needs.changes.outputs.rust_mode == 'full' ||
       (needs.changes.outputs.rust_mode == 'affected' &&
       contains(format(' {0} ', needs.changes.outputs.rust_packages), ' -p alien-cli '))))
+    # The 19 tests add up to about 95 minutes (2-17 min each) and run two at a time on a
+    # runner, so one runner takes about 50 min. Three runners take about 20.
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3]
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 60
     env:
@@ -708,7 +714,7 @@ jobs:
         run: pnpm exec turbo run build --filter=@alienplatform/sdk --filter=@alienplatform/commands
 
       - name: CLI extension tests
-        run: cargo nextest run --locked -p alien-cli --test extensions --no-fail-fast
+        run: cargo nextest run --locked -p alien-cli --test extensions --no-fail-fast --partition count:${{ matrix.partition }}/3
 
   typescript:
     name: TypeScript packages and CLIs
