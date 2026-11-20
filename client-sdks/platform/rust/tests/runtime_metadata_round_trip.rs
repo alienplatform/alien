@@ -119,6 +119,12 @@ fn deployment_keeps_the_helm_setup_update_fields() {
 }
 
 #[test]
+fn deployment_keeps_every_runtime_metadata_field() {
+    let source = fully_populated_metadata();
+    assert_eq!(deployment_round_trip(source.clone()), source);
+}
+
+#[test]
 fn deployment_keeps_every_deployer_secret_report_field() {
     let source = RuntimeMetadata {
         deployer_secrets: vec![fully_populated_deployer_secret()],
@@ -159,17 +165,14 @@ fn deployment_round_trip(source: RuntimeMetadata) -> RuntimeMetadata {
     .expect("runtime metadata decodes")
 }
 
-// A manager writes `DeploymentState` through the generated `DeploymentState` type on every
-// checkpoint and refuses the write when the conversion would drop anything. This builds a
-// state with every optional field set and every list non-empty, so a field added to
-// `alien_core` and not to the vendored `openapi.json` fails here instead of in a running
-// manager. Struct literals on purpose: a new field stops this compiling until it is set.
-#[cfg(feature = "full-api")]
-fn fully_populated_state() -> alien_core::DeploymentState {
+// Every `RuntimeMetadata` field set to a non-default value, with every list and map non-empty.
+// Struct literal with no `..Default::default()`: a field added to `alien_core` stops this
+// compiling until it is set here, and the round trip then checks the spec carries it.
+fn fully_populated_metadata() -> RuntimeMetadata {
     use alien_core::{
         AiAccessCheck, AiAccessCheckResult, AirgappedReportMetadata, AwsSandboxEgressScaffolding,
-        CredentialRetry, DeletionPolicy, DeploymentState, DeploymentStatus, InitialSetupAuthority,
-        Platform, RegistryAccess, ReleaseInfo, SetupScaffolding,
+        CredentialRetry, DeletionPolicy, DeploymentStatus, GcpSandboxScaffolding,
+        InitialSetupAuthority, RegistryAccess, SetupScaffolding,
     };
     let at: chrono::DateTime<chrono::Utc> = "2026-11-10T00:00:00Z".parse().unwrap();
     let stack: alien_core::Stack = serde_json::from_value(json!({
@@ -179,7 +182,7 @@ fn fully_populated_state() -> alien_core::DeploymentState {
         "dynamicContainerRepositories": ["repo"],
     }))
     .expect("stack decodes");
-    let metadata = RuntimeMetadata {
+    RuntimeMetadata {
         first_setup_machines_unselected: true,
         setup_update_authorization: Some(SetupUpdateAuthorization {
             nonce: "nonce-1".to_string(),
@@ -214,7 +217,7 @@ fn fully_populated_state() -> alien_core::DeploymentState {
             started_at: at,
             status: DeploymentStatus::Provisioning,
         }),
-        initial_setup_authority: InitialSetupAuthority::default(),
+        initial_setup_authority: InitialSetupAuthority::DirectSetup,
         automatic_setup: true,
         last_synced_env_vars_hash: Some("hash".to_string()),
         last_synced_secret_names: vec!["DB_PASSWORD".to_string()],
@@ -248,7 +251,16 @@ fn fully_populated_state() -> alien_core::DeploymentState {
         )]
         .into_iter()
         .collect(),
-        gcp_sandbox_scaffolding: Default::default(),
+        gcp_sandbox_scaffolding: [(
+            "agents".to_string(),
+            GcpSandboxScaffolding {
+                image_repository: "my-app-agents-img".to_string(),
+                write_role: "my_app_agents_image_write".to_string(),
+                writer_granted: true,
+            },
+        )]
+        .into_iter()
+        .collect(),
         deployer_secrets: vec![fully_populated_deployer_secret()],
         ai_access_checks: vec![AiAccessCheck {
             resource_id: "ai".to_string(),
@@ -259,15 +271,38 @@ fn fully_populated_state() -> alien_core::DeploymentState {
         }],
         deployer_secrets_checked_at: Some(at),
         resources_waiting_for_secrets: vec!["reader".to_string()],
-    };
+    }
+}
 
+// A manager writes `DeploymentState` through the generated `DeploymentState` type on every
+// checkpoint and refuses the write when the conversion would drop anything. This builds a
+// state with every optional field set and every list non-empty, so a field added to
+// `alien_core` and not to the vendored `openapi.json` fails here instead of in a running
+// manager. Struct literals on purpose: a new field stops this compiling until it is set.
+#[cfg(feature = "full-api")]
+fn fully_populated_state() -> alien_core::DeploymentState {
+    use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
+    let stack: alien_core::Stack = serde_json::from_value(json!({
+        "id": "demo",
+        "resources": {},
+        "supportedPlatforms": ["aws"],
+        "dynamicContainerRepositories": ["repo"],
+    }))
+    .expect("stack decodes");
+    let metadata = fully_populated_metadata();
+
+    let statement: alien_core::SignedStatement = serde_json::from_value(json!({
+        "payload": "e30=",
+        "signatures": [{"signer": "signer-1", "sig": "c2ln"}],
+    }))
+    .expect("statement decodes");
     let release = ReleaseInfo {
         release_id: Some("rel_eeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string()),
         version: Some("1.0.0".to_string()),
         description: Some("release".to_string()),
         stack,
-        signed: None,
-        signer_lists: Vec::new(),
+        signed: Some(statement.clone()),
+        signer_lists: vec![statement],
     };
     DeploymentState {
         status: DeploymentStatus::Updating,
