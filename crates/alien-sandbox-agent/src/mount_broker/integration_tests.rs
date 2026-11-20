@@ -141,6 +141,27 @@ fn broker_allows_declared_mounts_and_refuses_everything_else() {
         "seal",
         "step usermodehelper bset: writing it needs CAP_SETPCAP and CAP_SYS_MODULE, and the agent was started without CAP_SYS_MODULE",
     );
+    // Without the immutable attribute on the image's `/` and `/usr` the image could replace the
+    // `/sbin` link or move `/usr` aside: the seal fails closed, on a filesystem without the
+    // attribute (ramfs) and for a broker without CAP_LINUX_IMMUTABLE.
+    for (capability, fs, expect) in [
+        (None, "ramfs", "no immutable attribute"),
+        (Some(9), "tmpfs", "the broker needs CAP_LINUX_IMMUTABLE"),
+    ] {
+        let root = format!("/tmp/refused-root-{fs}");
+        stand_in_root(&root, fs);
+        std::fs::create_dir_all(format!("{root}/usr/sbin")).unwrap();
+        symlink("usr/sbin", format!("{root}/sbin")).unwrap();
+        seal_or_start_refused(
+            capability,
+            Some(&root),
+            "seal",
+            &[
+                "step read-only system paths: immutable: cannot set it on / (",
+                expect,
+            ],
+        );
+    }
     // The broker must be forked by a single-threaded process, as the agent does at boot; libtest
     // runs this test on a thread of its own, so the scenario runs in a forked child.
     // SAFETY: the child only runs the scenario and leaves with _exit.
@@ -313,37 +334,61 @@ fn system_path_variants() {
     ops::protect_system_paths(root, paths).expect("a file at /sbin");
     all_read_only(root);
 
-    // The immutable attribute where the filesystem has it, and skipped by name where it has
-    // not (ramfs: no attributes at all).
+    // The immutable attribute where the filesystem has it, and an error naming the directory
+    // where it has not (ramfs: no attributes at all).
     let lines = ops::make_immutable("/tmp/variants/present", &["/", "/usr"]);
     assert_eq!(
         lines,
-        ["immutable: / set", "immutable: /usr set"],
+        Ok(vec![
+            "immutable: / set".to_string(),
+            "immutable: /usr set".to_string()
+        ]),
         "{lines:?}"
     );
     assert!(immutable("/tmp/variants/present"));
     let root = "/tmp/variants/ramfs";
     stand_in_root(root, "ramfs");
     std::fs::create_dir_all(format!("{root}/usr")).unwrap();
-    let lines = ops::make_immutable(root, &["/", "/usr"]);
+    let error = ops::make_immutable(root, &["/", "/usr"]).expect_err("ramfs has no attribute");
     assert!(
-        lines.iter().all(|line| line.contains("skipped")),
-        "{lines:?}"
+        error.contains("cannot set it on /") && error.contains("no immutable attribute"),
+        "{error}"
     );
-    println!("system path variants: {lines:?}");
+    println!("system path variants: {error}");
 }
 
 /// In a forked child (single-threaded, as the agent at boot) that drops `capability` first: the
 /// broker's start or its seal fails with `expect` in the error, before anything is mounted.
 fn missing_capability_is_named(capability: u32, at: &str, expect: &str) {
+    seal_or_start_refused(Some(capability), None, at, &[expect])
+}
+
+/// As [`missing_capability_is_named`], optionally with the image's `/` at `system_root` (a
+/// stand-in; the seal's read-only binds there are the only mounts it may leave).
+fn seal_or_start_refused(
+    capability: Option<u32>,
+    system_root: Option<&str>,
+    at: &str,
+    expect: &[&str],
+) {
     // SAFETY: the child only runs the check and leaves with _exit.
     let pid = unsafe { libc::fork() };
     assert!(pid >= 0, "fork");
     if pid == 0 {
         let passed = std::panic::catch_unwind(|| {
-            privilege::restrict_capabilities(!(1 << capability)).expect("drop");
+            if let Some(capability) = capability {
+                privilege::restrict_capabilities(!(1 << capability)).expect("drop");
+            }
             let declared = image_permissions::parse(DECLARATION).expect("declaration");
-            let mounts_before = std::fs::read_to_string("/proc/self/mountinfo").unwrap();
+            let mounts = || {
+                std::fs::read_to_string("/proc/thread-self/mountinfo")
+                    .unwrap()
+                    .lines()
+                    .filter(|line| system_root.is_none_or(|root| !line.contains(root)))
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            };
+            let mounts_before = mounts();
             let started = mount_broker::start(
                 &declared,
                 mount_broker::Config {
@@ -352,6 +397,7 @@ fn missing_capability_is_named(capability: u32, at: &str, expect: &str) {
                         inheritable: "/tmp/caps-helpers/inheritable".into(),
                         modprobe: "/tmp/caps-helpers/modprobe".into(),
                     },
+                    system_root: system_root.map_or_else(|| "/".into(), Into::into),
                     ..Default::default()
                 },
             );
@@ -365,13 +411,9 @@ fn missing_capability_is_named(capability: u32, at: &str, expect: &str) {
                     .expect_err("seal without the capability")
                     .to_string()
             };
-            println!("missing capability {capability} ({at}): {error}");
-            assert!(error.contains(expect), "{error}");
-            assert_eq!(
-                std::fs::read_to_string("/proc/self/mountinfo").unwrap(),
-                mounts_before,
-                "nothing mounted"
-            );
+            println!("missing capability {capability:?}, root {system_root:?} ({at}): {error}");
+            assert!(expect.iter().all(|part| error.contains(part)), "{error}");
+            assert_eq!(mounts(), mounts_before, "nothing mounted");
         })
         .is_ok();
         let _ = std::io::stdout().flush();
@@ -383,7 +425,7 @@ fn missing_capability_is_named(capability: u32, at: &str, expect: &str) {
     unsafe { libc::waitpid(pid, &mut status, 0) };
     assert!(
         libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
-        "missing capability {capability} at {at}"
+        "refused at {at}: capability {capability:?}, root {system_root:?}"
     );
 }
 
@@ -391,9 +433,9 @@ fn scenario() {
     system_path_variants();
     let declared = image_permissions::parse(DECLARATION).expect("declaration");
     // The image's `/` for the seal: as on AL2023 (`/sbin -> usr/sbin`), without the request-key
-    // configuration. On ramfs in the second run: a filesystem without the immutable attribute.
-    let ramfs = std::env::var_os("ALIEN_BROKER_ROOT_RAMFS").is_some();
-    stand_in_root("/tmp/sysroot", if ramfs { "ramfs" } else { "tmpfs" });
+    // configuration. (A filesystem without the immutable attribute fails the seal: see
+    // `seal_or_start_refused` above.)
+    stand_in_root("/tmp/sysroot", "tmpfs");
     std::fs::create_dir_all("/tmp/sysroot/usr/sbin").unwrap();
     std::fs::create_dir_all("/tmp/sysroot/etc").unwrap();
     std::fs::write("/tmp/sysroot/usr/sbin/nologin", "").unwrap();
@@ -516,8 +558,8 @@ fn scenario() {
     assert!(!Path::new("/tmp/request-key-ran").exists());
     assert_eq!(
         (immutable("/tmp/sysroot"), immutable("/tmp/sysroot/usr")),
-        (!ramfs, !ramfs),
-        "the immutable attribute where the filesystem has it"
+        (true, true),
+        "the immutable attribute on / and /usr"
     );
     // A declared path whose parent is immutable, as `/` is after the seal: the broker still
     // mounts there (a disposable tmpfs parent, not the container's own filesystem).
@@ -532,7 +574,7 @@ fn scenario() {
     }
     assert_eq!(
         super::ops::make_immutable("/var/lib/app", &["/"]),
-        ["immutable: / set"]
+        Ok(vec!["immutable: / set".to_string()])
     );
     std::fs::write("/tmp/forward.py", FORWARD).unwrap();
 
@@ -605,30 +647,15 @@ attempt("rename-usr", lambda: os.rename(r + "/usr", r + "/usr-moved"))
         "write-link EROFS",
         "replace EROFS",
         "move-in EXDEV",
-        // The immutable `/usr` refuses first; without it the mount point does.
-        if ramfs {
-            "rename EBUSY"
-        } else {
-            "rename EPERM"
-        },
+        // The immutable `/usr` refuses before the mount point does.
+        "rename EPERM",
         "remove EROFS",
+        // The `/sbin` link cannot be replaced, nor `/usr` moved aside.
+        "link-replace EPERM",
+        "mkdir-top EPERM",
+        "rename-etc EPERM",
+        "rename-usr EPERM",
     ];
-    if ramfs {
-        // Without the attribute: the documented residual (an ancestor can move).
-        expected.extend([
-            "link-replace OK",
-            "mkdir-top OK",
-            "rename-etc OK",
-            "rename-usr OK",
-        ]);
-    } else {
-        expected.extend([
-            "link-replace EPERM",
-            "mkdir-top EPERM",
-            "rename-etc EPERM",
-            "rename-usr EPERM",
-        ]);
-    }
     for expected in expected {
         // Here the image shares the namespace the program is blocked in, so it finds /dev/null
         // on a read-only mount: opening that for writing is EACCES rather than EROFS.

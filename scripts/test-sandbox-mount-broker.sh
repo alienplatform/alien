@@ -18,8 +18,7 @@ name=mount_broker::integration_tests::broker_allows_declared_mounts_and_refuses_
 for variant in modules no-modules; do
 rounds=${ALIEN_BROKER_RACE_ROUNDS:-40}
 extra=()
-# The second run also puts the image's / on ramfs: no immutable attribute there.
-if [ "$variant" = no-modules ]; then rounds=5; extra=(-e ALIEN_BROKER_NO_MODPROBE=1 -e ALIEN_BROKER_ROOT_RAMFS=1); fi
+if [ "$variant" = no-modules ]; then rounds=5; extra=(-e ALIEN_BROKER_NO_MODPROBE=1); fi
 echo "mount broker integration: $variant"
 docker run --rm --privileged --cgroupns=private \
   -e "ALIEN_BROKER_RACE_ROUNDS=$rounds" "${extra[@]}" \

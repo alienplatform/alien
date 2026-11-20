@@ -697,26 +697,35 @@ pub fn create_declared_paths(root: &str, paths: &[&str]) -> Vec<String> {
 
 /// Sets the immutable attribute on each directory (resolved under `root` as above), so no entry in
 /// it can be created, removed or renamed by anyone without `CAP_LINUX_IMMUTABLE` (the image never
-/// holds it). Best effort: a filesystem without the attribute, or a process without the
-/// capability, is reported and skipped. Returns one line per directory.
-pub fn make_immutable(root: &str, directories: &[&str]) -> Vec<String> {
-    let root_fd = match CString::new(root).ok().map(|name| {
-        // SAFETY: a valid path.
-        unsafe {
-            libc::open(
-                name.as_ptr(),
-                libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
-            )
-        }
-    }) {
+/// holds it). Without it the image could replace the `/sbin` link or move `/usr` aside and put its
+/// own `sbin` where the kernel looks for its helpers, outside every bind. So a directory that
+/// cannot take the attribute (a filesystem without it, or a broker without the capability) is an
+/// error naming it. Returns one line per directory.
+pub fn make_immutable(root: &str, directories: &[&str]) -> Result<Vec<String>, String> {
+    let root_fd = CString::new(root)
+        .ok()
+        .map(|name| {
+            // SAFETY: a valid path.
+            unsafe {
+                libc::open(
+                    name.as_ptr(),
+                    libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
+                )
+            }
+        })
+        .filter(|fd| *fd >= 0)
         // SAFETY: a descriptor the kernel just returned that nothing else owns.
-        Some(fd) if fd >= 0 => unsafe { OwnedFd::from_raw_fd(fd) },
-        _ => return vec![format!("immutable: skipped, cannot open {root}")],
-    };
+        .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
+        .ok_or_else(|| {
+            format!(
+                "immutable: cannot open {root}: {}",
+                io::Error::last_os_error()
+            )
+        })?;
     directories
         .iter()
         .map(|directory| {
-            let set = open_in_root(&root_fd, directory, libc::O_RDONLY | libc::O_DIRECTORY)
+            open_in_root(&root_fd, directory, libc::O_RDONLY | libc::O_DIRECTORY)
                 .and_then(|fd| {
                     let mut flags: libc::c_int = 0;
                     // SAFETY: valid descriptor and an int for the flags.
@@ -730,11 +739,20 @@ pub fn make_immutable(root: &str, directories: &[&str]) -> Vec<String> {
                         return Err(io::Error::last_os_error());
                     }
                     Ok(())
-                });
-            match set {
-                Ok(()) => format!("immutable: {directory} set"),
-                Err(error) => format!("immutable: {directory} skipped ({error})"),
-            }
+                })
+                .map(|()| format!("immutable: {directory} set"))
+                .map_err(|error| {
+                    let hint = match error.raw_os_error() {
+                        Some(libc::EPERM) => ", the broker needs CAP_LINUX_IMMUTABLE",
+                        Some(libc::ENOTTY | libc::EOPNOTSUPP | libc::EINVAL) => {
+                            ", the filesystem has no immutable attribute"
+                        }
+                        _ => "",
+                    };
+                    format!(
+                        "immutable: cannot set it on {directory} ({error}{hint}); without it the image could replace the path the kernel runs its helpers from"
+                    )
+                })
         })
         .collect()
 }

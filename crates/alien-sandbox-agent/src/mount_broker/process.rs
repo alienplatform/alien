@@ -1022,7 +1022,7 @@ impl Loop<'_> {
 
     /// Before the image first starts: loads the filesystems the broker mounts, makes what the
     /// kernel reads to run a helper ([`SYSTEM_PATHS`]) read-only in the image's mount namespace,
-    /// sets the immutable attribute on [`IMMUTABLE_DIRECTORIES`] (best effort, reported), empties
+    /// sets the immutable attribute on [`IMMUTABLE_DIRECTORIES`] (required), empties
     /// the capability sets of every program the kernel runs on its own and stops module loading
     /// by program, then drops the capabilities that took. Any other failure keeps the image from
     /// starting.
@@ -1086,19 +1086,24 @@ impl Loop<'_> {
                             report.push_str("; ");
                             report.push_str(&line);
                         }
-                        for line in ops::make_immutable(&root, IMMUTABLE_DIRECTORIES) {
-                            report.push_str("; ");
-                            report.push_str(&line);
+                        match ops::make_immutable(&root, IMMUTABLE_DIRECTORIES) {
+                            Ok(lines) => {
+                                for line in lines {
+                                    report.push_str("; ");
+                                    report.push_str(&line);
+                                }
+                                // SAFETY: writing from a buffer we own to our pipe.
+                                unsafe {
+                                    libc::write(
+                                        write_end.as_raw_fd(),
+                                        report.as_ptr().cast(),
+                                        report.len().min(1000),
+                                    )
+                                };
+                                None
+                            }
+                            Err(reason) => Some(reason),
                         }
-                        // SAFETY: writing from a buffer we own to our pipe.
-                        unsafe {
-                            libc::write(
-                                write_end.as_raw_fd(),
-                                report.as_ptr().cast(),
-                                report.len().min(1000),
-                            )
-                        };
-                        None
                     }
                     Err(reason) => Some(reason),
                 }
