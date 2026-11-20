@@ -172,6 +172,42 @@ fn is_service_account(stack: &Stack, id: &str) -> bool {
     })
 }
 
+/// Id of the identity that a container's HTTPS public endpoint runs as, on a platform that
+/// attaches a user-assigned identity to the endpoint's load balancer (Azure).
+///
+/// The identity is a setup-owned [`ServiceAccount`] with no permission sets. Setup also lets
+/// the cluster's machines attach it, so the load balancer can be created and updated at
+/// runtime without any role-assignment rights.
+pub fn public_endpoint_identity_id(container_id: &str) -> String {
+    format!("{container_id}-appgw-id")
+}
+
+/// The only role the runtime may assign to a [`public_endpoint_identity_id`] identity (Azure's
+/// built-in Key Vault Secrets User: the load balancer reads its certificate).
+pub const PUBLIC_ENDPOINT_IDENTITY_ROLE_ID: &str = "4633458b-17de-408a-b874-0445c86b69e6";
+
+/// Ids of the [`public_endpoint_identity_id`] identities a stack's containers use. They are
+/// not application identities: they hold no permission profile.
+pub fn public_endpoint_identity_ids(stack: &Stack) -> std::collections::BTreeSet<String> {
+    stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<crate::Container>())
+        .filter(|container| public_endpoint_identity_cluster(container).is_some())
+        .map(|container| public_endpoint_identity_id(container.id()))
+        .collect()
+}
+
+/// The cluster whose machines serve `container`'s HTTPS public endpoint, when the endpoint
+/// needs a [`public_endpoint_identity_id`] identity.
+pub fn public_endpoint_identity_cluster(container: &crate::Container) -> Option<&str> {
+    let cluster = container.cluster.as_deref()?;
+    container
+        .public_endpoints
+        .iter()
+        .any(|endpoint| endpoint.protocol == crate::ExposeProtocol::Http)
+        .then_some(cluster)
+}
+
 impl ServiceAccountBuilder {
     /// Adds a stack-level permission set to the service account.
     /// Stack-level permissions apply to all resources in the stack.

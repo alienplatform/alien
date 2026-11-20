@@ -2584,6 +2584,7 @@ fn role_assignment_conditions(
 /// steps that need them wait for them instead ([`principals_ready`]).
 fn workload_principal_ids(ctx: &ResourceControllerContext<'_>) -> Result<AzureWorkloadPrincipals> {
     let mut principals = AzureWorkloadPrincipals::default();
+    let endpoint_identities = alien_core::public_endpoint_identity_ids(ctx.desired_stack);
     for (resource_id, entry) in &ctx.desired_stack.resources {
         let resource_type = entry.config.resource_type();
         let is_remote_bindings = resource_type == alien_core::RemoteBindings::RESOURCE_TYPE;
@@ -2609,6 +2610,11 @@ fn workload_principal_ids(ctx: &ResourceControllerContext<'_>) -> Result<AzureWo
         let principal = principal.to_ascii_lowercase();
         if is_remote_bindings {
             principals.remote_bindings.insert(principal);
+        } else if endpoint_identities.contains(resource_id.as_str()) {
+            principals.extra_assignments.insert((
+                principal,
+                alien_core::PUBLIC_ENDPOINT_IDENTITY_ROLE_ID.to_string(),
+            ));
         } else {
             principals.service.insert(principal);
         }

@@ -208,6 +208,9 @@ pub struct AzureWorkloadPrincipals {
     pub service: BTreeSet<String>,
     /// The remote-bindings identity: it holds only the remote-bindings roles.
     pub remote_bindings: BTreeSet<String>,
+    /// Role assignments the runtime may make beyond the groups above, each as a
+    /// `(principal id, role id)` pair. The principal may hold exactly that role and no other.
+    pub extra_assignments: BTreeSet<(String, String)>,
 }
 
 impl AzureRuntimeRoles {
@@ -544,6 +547,11 @@ pub fn azure_role_assignment_allowlist_conditions(
         }
     }
 
+    // Exact (principal, role) pairs: one clause each, so no pair widens to a cross product.
+    for (principal, role) in &principals.extra_assignments {
+        clauses.push(clause(&[role.as_str()], &[principal.as_str()]));
+    }
+
     // Pack clauses greedily, management first, so a short allowlist stays in one condition.
     let mut conditions = Vec::new();
     let mut current: Vec<String> = Vec::new();
@@ -738,6 +746,7 @@ mod tests {
         let principals = AzureWorkloadPrincipals {
             service: BTreeSet::from(["e1".to_string(), "e2".to_string()]),
             remote_bindings: BTreeSet::new(),
+            ..Default::default()
         };
         let conditions = azure_role_assignment_allowlist_conditions(
             "mp",
@@ -757,6 +766,40 @@ mod tests {
                     .to_string()
             ]
         );
+    }
+
+    /// An extra pair admits that one role for that one principal, in its own clause, and no more.
+    #[test]
+    fn an_extra_assignment_admits_exactly_its_pair() {
+        let none = BTreeSet::new();
+        let principals = AzureWorkloadPrincipals {
+            extra_assignments: BTreeSet::from([("p1".to_string(), "r1".to_string())]),
+            ..Default::default()
+        };
+        let conditions =
+            azure_role_assignment_allowlist_conditions("mp", &principals, &none, &none, &none);
+        assert_eq!(
+            conditions,
+            vec![
+                "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR \
+                 (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {r1} \
+                 AND @Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals {p1}))"
+                    .to_string()
+            ]
+        );
+        // Two pairs stay two clauses: p1 does not gain p2's role.
+        let two = AzureWorkloadPrincipals {
+            extra_assignments: BTreeSet::from([
+                ("p1".to_string(), "r1".to_string()),
+                ("p2".to_string(), "r2".to_string()),
+            ]),
+            ..Default::default()
+        };
+        let joined = azure_role_assignment_allowlist_conditions("mp", &two, &none, &none, &none)
+            .join("");
+        assert!(joined.contains("{r1} AND @Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals {p1}"));
+        assert!(joined.contains("{r2} AND @Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals {p2}"));
+        assert!(!joined.contains("{r1, r2}") && !joined.contains("{p1, p2}"));
     }
 
     /// No roles admit no write, and application roles with no application identity admit none.
@@ -791,6 +834,7 @@ mod tests {
             &AzureWorkloadPrincipals {
                 service: principals.clone(),
                 remote_bindings: BTreeSet::new(),
+                ..Default::default()
             },
             &management,
             &workload,
@@ -849,6 +893,7 @@ mod tests {
             &AzureWorkloadPrincipals {
                 service: principals.clone(),
                 remote_bindings: BTreeSet::new(),
+                ..Default::default()
             },
             &management,
             &workload,
@@ -895,6 +940,7 @@ mod tests {
         let principals = AzureWorkloadPrincipals {
             service: BTreeSet::from(["svc".to_string()]),
             remote_bindings: BTreeSet::from(["rb".to_string()]),
+            ..Default::default()
         };
         let conditions = azure_role_assignment_allowlist_conditions(
             "mp",

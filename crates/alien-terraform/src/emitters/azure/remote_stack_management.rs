@@ -1021,6 +1021,7 @@ fn runtime_role_conditions(
     // each an `azurerm_user_assigned_identity` under its resource's label. The condition names
     // their principals, so setup must create every one of them.
     let mut workload_principals = AzureWorkloadPrincipals::default();
+    let endpoint_identities = alien_core::public_endpoint_identity_ids(ctx.stack);
     for (resource_id, entry) in ctx.stack.resources() {
         let kind = entry.config.resource_type();
         if kind != alien_core::ServiceAccount::RESOURCE_TYPE
@@ -1052,6 +1053,12 @@ fn runtime_role_conditions(
         ));
         if kind == alien_core::RemoteBindings::RESOURCE_TYPE {
             workload_principals.remote_bindings.insert(stand_in);
+        } else if endpoint_identities.contains(resource_id.as_str()) {
+            // A public endpoint's identity holds one role, not the application's.
+            workload_principals.extra_assignments.insert((
+                stand_in,
+                alien_core::PUBLIC_ENDPOINT_IDENTITY_ROLE_ID.to_string(),
+            ));
         } else {
             workload_principals.service.insert(stand_in);
         }

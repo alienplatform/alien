@@ -1422,8 +1422,6 @@
             "Microsoft.Network/applicationGateways/backendhealth/action",
             "Microsoft.Network/loadBalancers/loadBalancingRules/health/action",
             "Microsoft.ManagedIdentity/userAssignedIdentities/read",
-            "Microsoft.ManagedIdentity/userAssignedIdentities/write",
-            "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
             "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
             "Microsoft.Authorization/roleAssignments/read",
             "Microsoft.Authorization/roleAssignments/write",
