@@ -17,11 +17,7 @@ use alien_core::{
     release_statement,
     sandbox_build_role::{sandbox_build_role_arn, SANDBOX_BUNDLE_STORAGE_ID},
     sandbox_egress::aws_sandbox_agent_environment,
-    sandbox_image::ENV_IMAGE_PERMISSIONS,
-    sandbox_image_permissions::{
-        aws_microvm_session_hooks, image_permissions_environment_with_resolved, ContractConnection,
-        ImagePermissionsContract,
-    },
+    sandbox_image_permissions::{aws_microvm_session_hooks, image_permissions_environment},
     standard_resource_tags,
 };
 use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
@@ -100,27 +96,28 @@ fn naming(request: &Value) -> Result<(Option<String>, String)> {
     Ok((description, token.to_string()))
 }
 
-/// The connection addresses the request's image-permissions contract names. The verifier cannot
-/// read what the targets published, so it takes these from the controller and checks only that
-/// each is a private `/32` on a declared port; setup's security group rule bounds each
-/// connection to the network's range on its port either way. Everything else in the contract is
+/// The image-permissions environment of the signed sandbox. A connection's addresses are the
+/// target's, which the release does not sign (the target is created after setup), so the
+/// verifier cannot tell them from any other private address on the port. A protected install
+/// therefore refuses a sandbox that declares connections; mounts and lifecycle steps are fully
 /// derived from the signed sandbox.
-fn sent_connections(request: &Value) -> Result<Vec<ContractConnection>> {
-    let Some(value) = request
-        .get("environmentVariables")
-        .and_then(|environment| environment.get(ENV_IMAGE_PERMISSIONS))
-    else {
-        return Ok(Vec::new());
-    };
-    let text = value
-        .as_str()
-        .ok_or_else(|| refused("the image permissions contract is not a string"))?;
-    let contract: ImagePermissionsContract = serde_json::from_str(text).map_err(|error| {
-        refused(format!(
-            "the image permissions contract is malformed: {error}"
-        ))
-    })?;
-    Ok(contract.connections)
+fn signed_image_permissions_environment(
+    sandbox: &alien_core::Sandbox,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    if let Some(connection) = sandbox
+        .image_permissions
+        .as_ref()
+        .and_then(|permissions| permissions.connections.first())
+    {
+        return Err(refused(format!(
+            "sandbox '{}' declares a direct connection to '{}' on port {}; a protected install \
+             cannot check a connection's addresses against the signed release, so it refuses \
+             image-permission connections",
+            sandbox.id, connection.to.id, connection.port
+        )));
+    }
+    image_permissions_environment(sandbox, |_| Ok(Vec::new()))
+        .map_err(|error| refused(error.message))
 }
 
 fn inputs(
@@ -128,7 +125,6 @@ fn inputs(
     region: &str,
     account: &str,
     bundle_uri: &str,
-    resolved: &[ContractConnection],
 ) -> Result<alien_aws_clients::sandbox_image_build::ImageBuildInputs> {
     let sandbox = facts.sandbox;
     let tier = sandbox
@@ -136,10 +132,7 @@ fn inputs(
         .map_err(|error| refused(format!("the signed limits fit no MicroVM tier: {error}")))?;
     let build_role = sandbox_build_role_arn(aws_partition(region), account, facts.prefix, facts.id);
     let mut environment = aws_sandbox_agent_environment(facts.stack, sandbox);
-    environment.extend(
-        image_permissions_environment_with_resolved(sandbox, resolved)
-            .map_err(|error| refused(error.message))?,
-    );
+    environment.extend(signed_image_permissions_environment(sandbox)?);
     Ok(image_build_inputs(
         region,
         facts.id,
@@ -182,8 +175,7 @@ pub fn check_create(
 ) -> Result<CreateMicrovmImageRequest> {
     let bundle = signed_bundle_uri(facts)?;
     let (description, token) = naming(request)?;
-    let resolved = sent_connections(request)?;
-    let mut derived = inputs(facts, region, account, &bundle, &resolved)?.create_request(
+    let mut derived = inputs(facts, region, account, &bundle)?.create_request(
         image_name(facts),
         standard_resource_tags(facts.prefix, facts.id)
             .into_iter()
@@ -213,8 +205,7 @@ pub fn check_update(
     }
     let bundle = signed_bundle_uri(facts)?;
     let (description, token) = naming(request)?;
-    let resolved = sent_connections(request)?;
-    let mut derived = inputs(facts, region, account, &bundle, &resolved)?.update_request();
+    let mut derived = inputs(facts, region, account, &bundle)?.update_request();
     derived.description = description;
     derived.client_token = token;
     same(request, &derived, "UpdateMicrovmImage request")?;
@@ -224,6 +215,7 @@ pub fn check_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::sandbox_image::ENV_IMAGE_PERMISSIONS;
     use alien_core::{
         ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
     };
@@ -277,7 +269,7 @@ mod tests {
     /// The bundle the verifier writes, and the create a controller sends for it.
     fn bundle_and_create(signed: &Signed<'_>) -> (RenderedBundle, Value) {
         let bundle = check_bundle(signed, &signed_image()).expect("the signed image");
-        let request = inputs(signed, REGION, ACCOUNT, &bundle.uri(), &[])
+        let request = inputs(signed, REGION, ACCOUNT, &bundle.uri())
             .expect("inputs")
             .with_receipt()
             .expect("receipt")
@@ -315,18 +307,13 @@ mod tests {
         });
     }
 
-    /// A sandbox with image permissions, lifecycle steps and a connection: the contract is
-    /// derived from the signed sandbox, and only the connection addresses come from the
-    /// controller, each a private `/32` on the declared port.
-    #[test]
-    fn a_build_with_image_permissions_is_accepted_and_only_its_addresses_come_from_the_controller()
-    {
-        use alien_core::{
-            ResourceRef, ResourceType, SandboxImageConnection, SandboxImageMount,
-            SandboxImageMountType, SandboxImagePermissions,
-        };
-        let mut stack = stack();
-        let entry = stack.resources.get_mut("agents").expect("the sandbox");
+    /// The signed sandbox with mounts and a pause step, and `connections` declared.
+    fn with_image_permissions(
+        connections: Vec<alien_core::SandboxImageConnection>,
+    ) -> (Stack, Sandbox) {
+        use alien_core::{SandboxImageMount, SandboxImageMountType, SandboxImagePermissions};
+        let stack = stack();
+        let entry = stack.resources.get("agents").expect("the sandbox");
         let mut sandbox = entry
             .config
             .downcast_ref::<Sandbox>()
@@ -337,45 +324,65 @@ mod tests {
         sandbox.lifecycle.on_pause = Some(vec!["/usr/local/bin/app".into(), "pause".into()]);
         sandbox.image_permissions = Some(SandboxImagePermissions {
             mounts: vec![SandboxImageMount {
-                mount_type: SandboxImageMountType::Nfs,
-                path: "/workspace".into(),
-                size: None,
+                mount_type: SandboxImageMountType::Tmpfs,
+                path: "/scratch".into(),
+                size: Some("64Mi".into()),
                 from: None,
             }],
-            connections: vec![SandboxImageConnection {
-                to: ResourceRef::new(ResourceType::from("acme/files"), "workspace-files"),
-                port: 2049,
-            }],
+            connections,
         });
+        (stack, sandbox)
+    }
+
+    fn create_for(signed: &Signed<'_>, environment: BTreeMapEnv) -> Value {
+        let bundle = check_bundle(signed, &signed_image()).expect("the signed image");
+        let tier = signed.sandbox.microvm_tier().expect("a tier");
+        let build_role =
+            sandbox_build_role_arn(aws_partition(REGION), ACCOUNT, signed.prefix, signed.id);
+        let mut agent = aws_sandbox_agent_environment(signed.stack, signed.sandbox);
+        agent.extend(environment);
+        serde_json::to_value(
+            image_build_inputs(
+                REGION,
+                signed.id,
+                &image_name(signed),
+                &build_role,
+                &bundle.uri(),
+                tier.baseline_memory_mib,
+            )
+            .with_agent_environment(agent, aws_microvm_session_hooks(signed.sandbox))
+            .with_receipt()
+            .expect("receipt")
+            .create_request(
+                format!("{PREFIX}-agents"),
+                standard_resource_tags(PREFIX, "agents")
+                    .into_iter()
+                    .collect(),
+            ),
+        )
+        .expect("serialises")
+    }
+
+    type BTreeMapEnv = std::collections::BTreeMap<String, String>;
+
+    /// Mounts and lifecycle steps: the whole contract is derived from the signed sandbox, so the
+    /// controller's build is accepted and any edit of the contract is refused.
+    #[test]
+    fn a_build_with_mounts_and_steps_is_derived_from_the_signed_sandbox() {
+        let (stack, sandbox) = with_image_permissions(Vec::new());
         let signed = Signed {
             sandbox: &sandbox,
             stack: &stack,
             prefix: PREFIX,
             id: "agents",
         };
-        let resolved = vec![ContractConnection {
-            cidr: "10.42.1.4/32".into(),
-            port: 2049,
-        }];
-        let bundle = check_bundle(&signed, &signed_image()).expect("the signed image");
-        let request = serde_json::to_value(
-            inputs(&signed, REGION, ACCOUNT, &bundle.uri(), &resolved)
-                .expect("inputs")
-                .with_receipt()
-                .expect("receipt")
-                .create_request(
-                    format!("{PREFIX}-agents"),
-                    standard_resource_tags(PREFIX, "agents")
-                        .into_iter()
-                        .collect(),
-                ),
-        )
-        .expect("serialises");
+        let environment =
+            image_permissions_environment(&sandbox, |_| Ok(Vec::new())).expect("the contract");
+        let request = create_for(&signed, environment);
         let contract = request["environmentVariables"][ENV_IMAGE_PERMISSIONS]
             .as_str()
             .expect("the contract is sent")
             .to_string();
-        assert!(contract.contains("10.42.1.4/32"), "{contract}");
         check_create(&signed, REGION, ACCOUNT, &request).expect("the controller's build");
         let mut roll = request.clone();
         roll.as_object_mut().unwrap().remove("name");
@@ -390,20 +397,15 @@ mod tests {
         };
         for (name, changed) in [
             (
-                "a public address",
-                with_contract(contract.replace("10.42.1.4/32", "8.8.8.8/32")),
-            ),
-            (
-                "a wider range",
-                with_contract(contract.replace("10.42.1.4/32", "10.0.0.0/8")),
-            ),
-            (
-                "an undeclared port",
-                with_contract(contract.replace("\"port\":2049", "\"port\":22")),
+                "an added connection",
+                with_contract(contract.replace(
+                    "\"connections\":[]",
+                    "\"connections\":[{\"cidr\":\"10.42.1.4/32\",\"port\":2049}]",
+                )),
             ),
             (
                 "another mount",
-                with_contract(contract.replace("/workspace", "/data")),
+                with_contract(contract.replace("/scratch", "/data")),
             ),
             (
                 "another pause step",
@@ -418,11 +420,46 @@ mod tests {
                 changed
             }),
         ] {
+            assert_ne!(changed, request, "{name} changed nothing");
             assert!(
                 check_create(&signed, REGION, ACCOUNT, &changed).is_err(),
                 "{name} was accepted"
             );
         }
+    }
+
+    /// Connections: the release signs only which resource a connection goes to, never its
+    /// addresses, so the verifier cannot tell a target's address from any other private one.
+    /// A protected install refuses the build, whatever addresses the controller sends.
+    #[test]
+    fn a_build_with_connections_is_refused_on_a_protected_install() {
+        use alien_core::{ResourceRef, ResourceType, SandboxImageConnection};
+        let (stack, sandbox) = with_image_permissions(vec![SandboxImageConnection {
+            to: ResourceRef::new(ResourceType::from("acme/files"), "workspace-files"),
+            port: 2049,
+        }]);
+        let signed = Signed {
+            sandbox: &sandbox,
+            stack: &stack,
+            prefix: PREFIX,
+            id: "agents",
+        };
+        let environment =
+            image_permissions_environment(&sandbox, |_| Ok(vec!["10.42.1.4/32".to_string()]))
+                .expect("the controller's contract");
+        let request = create_for(&signed, environment);
+        let error = check_create(&signed, REGION, ACCOUNT, &request)
+            .expect_err("the controller's build is refused");
+        assert!(
+            error.message.contains("protected install"),
+            "the reason names the limit: {}",
+            error.message
+        );
+        let mut roll = request.clone();
+        roll.as_object_mut().unwrap().remove("name");
+        roll.as_object_mut().unwrap().remove("tags");
+        let image = sandbox_image_arn(REGION, ACCOUNT, &format!("{PREFIX}-agents"));
+        assert!(check_update(&signed, REGION, ACCOUNT, &image, &roll).is_err());
     }
 
     #[test]

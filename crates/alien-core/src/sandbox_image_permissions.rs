@@ -355,69 +355,6 @@ pub fn image_permissions_environment(
     Ok(environment)
 }
 
-/// The environment for `sandbox` with its connections already resolved to `resolved`, for a
-/// reader that cannot see the targets' published addresses (a protected install's verifier,
-/// checking what the controller resolved). Everything but the addresses is derived from the
-/// sandbox; each address must be a private IPv4 `/32` on a declared port, and each declared
-/// port needs one. Setup's security group rule bounds a connection to the network's range on
-/// its port whichever addresses these are.
-pub fn image_permissions_environment_with_resolved(
-    sandbox: &Sandbox,
-    resolved: &[ContractConnection],
-) -> Result<BTreeMap<String, String>> {
-    let mut environment = image_permissions_environment(sandbox, |_| Ok(Vec::new()))?;
-    let Some(value) = environment.get(ENV_IMAGE_PERMISSIONS) else {
-        return Ok(environment);
-    };
-    let refuse = |value: String, reason: &str| {
-        AlienError::new(ErrorData::SandboxLimitInvalid {
-            resource_id: sandbox.id.clone(),
-            field: "imagePermissions.connections".to_string(),
-            value,
-            reason: reason.to_string(),
-        })
-    };
-    let declared = sandbox
-        .image_permissions
-        .as_ref()
-        .map(|permissions| &permissions.connections[..])
-        .unwrap_or_default();
-    for entry in resolved {
-        let value = format!("{}:{}", entry.cidr, entry.port);
-        if !declared
-            .iter()
-            .any(|connection| connection.port == entry.port)
-        {
-            return Err(refuse(value, "no declared connection is on this port"));
-        }
-        let private_host = entry
-            .cidr
-            .strip_suffix("/32")
-            .and_then(|address| address.parse::<std::net::Ipv4Addr>().ok())
-            .is_some_and(|address| address.is_private());
-        if !private_host {
-            return Err(refuse(value, "not a private IPv4 address as a /32"));
-        }
-    }
-    if let Some(connection) = declared
-        .iter()
-        .find(|connection| !resolved.iter().any(|entry| entry.port == connection.port))
-    {
-        return Err(refuse(
-            format!("{}:{}", connection.to.id, connection.port),
-            "resolved to no address",
-        ));
-    }
-    let mut contract: ImagePermissionsContract =
-        serde_json::from_str(value).expect("the contract was just serialized");
-    contract.connections = resolved.to_vec();
-    environment.insert(
-        ENV_IMAGE_PERMISSIONS.to_string(),
-        serde_json::to_string(&contract).expect("the contract serializes"),
-    );
-    Ok(environment)
-}
-
 /// Plain-language lines for the person approving setup: what the image may mount, which
 /// connections bypass the gateway, and whose responsibility isolation inside the image is.
 pub fn approval_statements(sandbox: &Sandbox) -> Vec<String> {
@@ -688,49 +625,6 @@ mod tests {
             published_connection_addresses(&declared, connection, None)
         })
         .is_err());
-    }
-
-    /// A protected install's verifier, given the addresses the controller resolved, derives the
-    /// very environment the controller sent, and refuses any address that is not a private /32
-    /// on a declared port.
-    #[test]
-    fn the_verifier_derives_the_controllers_environment_from_its_addresses() {
-        let declared = sandbox(SandboxEgress::Internet, designed());
-        let sent = resolve(
-            &declared,
-            serde_json::json!({ "privateIpv4Addresses": ["10.0.2.7", "10.0.1.5"] }),
-        )
-        .unwrap();
-        let contract: ImagePermissionsContract =
-            serde_json::from_str(&sent[ENV_IMAGE_PERMISSIONS]).unwrap();
-        assert_eq!(
-            image_permissions_environment_with_resolved(&declared, &contract.connections).unwrap(),
-            sent
-        );
-        let entry = |cidr: &str, port: u16| ContractConnection {
-            cidr: cidr.into(),
-            port,
-        };
-        for resolved in [
-            vec![],
-            vec![entry("8.8.8.8/32", 2049)],
-            vec![entry("10.0.0.0/16", 2049)],
-            vec![entry("10.0.1.5", 2049)],
-            vec![entry("10.0.1.5/32", 22)],
-            vec![entry("fd00::1/128", 2049)],
-        ] {
-            assert!(
-                image_permissions_environment_with_resolved(&declared, &resolved).is_err(),
-                "{resolved:?}"
-            );
-        }
-        // Without image permissions nothing is added and nothing is taken.
-        let mut plain = sandbox(SandboxEgress::Internet, designed());
-        plain.image_permissions = None;
-        plain.lifecycle = SandboxLifecyclePolicy::default();
-        assert!(image_permissions_environment_with_resolved(&plain, &[])
-            .unwrap()
-            .is_empty());
     }
 
     /// The exact value the agent box parses, from the shared contract.
