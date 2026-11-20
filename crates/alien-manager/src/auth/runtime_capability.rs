@@ -56,6 +56,8 @@ pub enum RuntimePurpose {
     RegistryPull,
     /// Receive the operator's fixed operations queue.
     OperatorOperations,
+    /// Report decisions on access requests for the recorded deployment.
+    OperatorAccessRequests,
     /// Relay commands to one app worker, without dispatch or administrative rights.
     OperationRelay { target: CommandTarget },
     /// Receive commands for one app-owned target.
@@ -74,7 +76,8 @@ impl RuntimePurpose {
             Self::RegistryPull => Duration::hours(24),
             Self::ReceiveCommands { .. }
             | Self::OperationRelay { .. }
-            | Self::OperatorOperations => Duration::minutes(5),
+            | Self::OperatorOperations
+            | Self::OperatorAccessRequests => Duration::minutes(5),
         }
     }
 }
@@ -241,7 +244,9 @@ impl RuntimeCredentials {
                 },
                 Role::DeploymentTelemetryWriter,
             ),
-            purpose @ (RuntimePurpose::OperatorSync | RuntimePurpose::RegistryPull) => (
+            purpose @ (RuntimePurpose::OperatorSync
+            | RuntimePurpose::RegistryPull
+            | RuntimePurpose::OperatorAccessRequests) => (
                 Scope::Deployment {
                     project_id: grant.project_id,
                     deployment_id: grant.deployment_id,
@@ -249,6 +254,7 @@ impl RuntimeCredentials {
                 match purpose {
                     RuntimePurpose::OperatorSync => Role::OperatorSync,
                     RuntimePurpose::RegistryPull => Role::RegistryPull,
+                    RuntimePurpose::OperatorAccessRequests => Role::OperatorAccessRequests,
                     _ => unreachable!(),
                 },
             ),
@@ -619,6 +625,10 @@ mod purpose_tests {
             (RuntimePurpose::Telemetry, Role::DeploymentTelemetryWriter),
             (RuntimePurpose::OperatorSync, Role::OperatorSync),
             (RuntimePurpose::RegistryPull, Role::RegistryPull),
+            (
+                RuntimePurpose::OperatorAccessRequests,
+                Role::OperatorAccessRequests,
+            ),
         ] {
             let subject = verified(&credentials, purpose);
             assert_eq!(subject.role, role);

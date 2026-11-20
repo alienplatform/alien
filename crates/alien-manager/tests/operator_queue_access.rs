@@ -1264,3 +1264,91 @@ async fn only_an_operators_daily_key_is_issued_the_operations_credential() {
     let (status, _) = exchange(&fixture, &fixture.dep_a, purpose, daily(successor)).await;
     assert_eq!(status, StatusCode::OK);
 }
+
+/// A credential for reporting decisions on access requests carries a role of
+/// its own. On this manager nothing accepts that role, so every route refuses
+/// it: it can never be used as a sync, command, telemetry or registry credential.
+#[tokio::test]
+async fn an_access_request_credential_is_refused_on_every_route() {
+    let fixture = fixture().await;
+    let router = alien_manager::routes::create_router_inner(
+        fixture.state.clone(),
+        alien_manager::routes::RouterOptions {
+            include_initialize: true,
+            include_install: true,
+        },
+    );
+    let own = fixture.runtime(
+        WORKSPACE,
+        &fixture.dep_a,
+        RuntimePurpose::OperatorAccessRequests,
+    );
+    let deployment = fixture.dep_a.clone();
+    let command_id = fixture.queue_command(&deployment).await;
+    let before = fixture.state_of(&command_id).await;
+
+    let routes: Vec<(&str, String)> = vec![
+        ("POST", "/v1/sync".into()),
+        ("POST", "/v1/sync/acquire".into()),
+        ("POST", "/v1/sync/reconcile".into()),
+        ("POST", "/v1/sync/renew".into()),
+        ("POST", "/v1/sync/release".into()),
+        ("POST", "/v1/initialize".into()),
+        ("POST", "/v1/commands".into()),
+        ("POST", "/v1/commands/leases".into()),
+        ("GET", format!("/v1/commands/{command_id}")),
+        ("PUT", format!("/v1/commands/{command_id}/response")),
+        ("POST", "/v1/logs".into()),
+        ("POST", "/v1/traces".into()),
+        ("POST", "/v1/metrics".into()),
+        ("GET", "/v2/alien-operator/manifests/v1".into()),
+        ("GET", format!("/v1/deployments/{deployment}")),
+        ("GET", format!("/v1/deployments/{deployment}/info")),
+        (
+            "POST",
+            format!("/v1/deployments/{deployment}/status-report"),
+        ),
+        ("POST", format!("/v1/deployments/{deployment}/delete")),
+        ("GET", "/v1/releases".into()),
+        ("POST", "/v1/releases".into()),
+        ("GET", "/v1/tokens".into()),
+        ("POST", "/v1/bindings/resolve".into()),
+        ("POST", "/v1/stack/import".into()),
+    ];
+    for (method, path) in routes {
+        let body = if path.ends_with("/leases") {
+            lease_body(&deployment, &operator_queue())
+        } else {
+            json!({})
+        };
+        let (status, text) = send(&router, &own, method, &path, body).await;
+        // A list shows only what the caller may read, which is nothing.
+        if method == "GET" && path == "/v1/releases" {
+            assert_eq!(status, StatusCode::OK, "{text}");
+            assert_eq!(text["items"], json!([]), "{text}");
+            continue;
+        }
+        // A route that checks its body before it authorizes answers an empty
+        // body with 400 or 422, which is also a refusal; none may succeed.
+        assert!(
+            matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+                || (method != "GET"
+                    && matches!(
+                        status,
+                        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+                    )),
+            "{method} {path}: {status} {text}"
+        );
+    }
+    // With a well-formed body the refusal is the authorization itself.
+    let (status, text) = send(
+        &router,
+        &own,
+        "POST",
+        "/v1/commands/leases",
+        lease_body(&deployment, &operator_queue()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+    assert_eq!(fixture.state_of(&command_id).await, before);
+}
