@@ -772,6 +772,7 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())
@@ -917,6 +918,7 @@ fn azure_sandbox_image_grant_reaches_the_manager_on_its_own_group_only() {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())
@@ -1031,6 +1033,7 @@ fn frozen_sandbox(id: &str) -> Sandbox {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build()
 }
@@ -1668,6 +1671,7 @@ fn an_aks_package_is_not_told_about_a_sandbox_group_it_does_not_get() {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())
@@ -1722,6 +1726,7 @@ fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())

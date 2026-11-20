@@ -540,6 +540,7 @@ fn aws_management_policy_on_eks_names_no_sandbox_gateway_subnets() {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let gateway = Container::new(SANDBOX_EGRESS_GATEWAY_ID.to_string())

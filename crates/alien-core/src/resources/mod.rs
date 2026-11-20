@@ -28,6 +28,7 @@ mod queue;
 pub use queue::*;
 
 mod sandbox;
+mod sandbox_image_permissions;
 mod sandbox_policy;
 pub use sandbox::*;
 

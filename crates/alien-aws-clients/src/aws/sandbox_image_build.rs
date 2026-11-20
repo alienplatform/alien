@@ -13,6 +13,7 @@ use super::lambda_microvms::{
     MicrovmLifecycleHooks, UpdateMicrovmImageRequest,
 };
 use alien_core::sandbox_image::AWS_MICROVM;
+use alien_core::sandbox_image_permissions::AwsMicrovmSessionHooks;
 
 /// The only architecture MicroVM images accept.
 pub const ARCHITECTURE: &str = "ARM_64";
@@ -55,6 +56,7 @@ pub fn image_build_inputs(
         // this image's token.
         client_token: build_client_token(image_name, bundle_uri),
         environment: agent_environment(),
+        session_hooks: AwsMicrovmSessionHooks::default(),
         additional_os_capabilities: vec![],
     }
 }
@@ -73,11 +75,19 @@ pub struct ImageBuildInputs {
     pub resources: Vec<MicrovmImageResources>,
     pub client_token: String,
     pub environment: BTreeMap<String, String>,
+    pub session_hooks: AwsMicrovmSessionHooks,
     pub additional_os_capabilities: Vec<String>,
 }
 
 impl ImageBuildInputs {
-    pub fn with_agent_environment(mut self, environment: BTreeMap<String, String>) -> Self {
+    /// The agent's environment and the session hooks its declared lifecycle steps need, both
+    /// derived from the sandbox, so a create, a roll and the verifier's check agree.
+    pub fn with_agent_environment(
+        mut self,
+        environment: BTreeMap<String, String>,
+        session_hooks: AwsMicrovmSessionHooks,
+    ) -> Self {
+        self.session_hooks = session_hooks;
         self.environment.extend(environment);
         if self.environment.contains_key("ALIEN_SANDBOX_EGRESS")
             || self.environment.contains_key("ALIEN_SANDBOX_IMAGE_COMMAND")
@@ -138,7 +148,7 @@ impl ImageBuildInputs {
                 architecture: ARCHITECTURE.to_string(),
             }])
             .resources(self.resources)
-            .hooks(agent_hooks())
+            .hooks(agent_hooks(self.session_hooks))
             .environment_variables(self.environment)
             .additional_os_capabilities(self.additional_os_capabilities)
             // The deployed `sandbox/provision` grant conditions `CreateMicrovmImage` on the
@@ -164,7 +174,7 @@ impl ImageBuildInputs {
                 architecture: ARCHITECTURE.to_string(),
             }])
             .resources(self.resources)
-            .hooks(agent_hooks())
+            .hooks(agent_hooks(self.session_hooks))
             .environment_variables(self.environment)
             .additional_os_capabilities(self.additional_os_capabilities)
             .client_token(self.client_token)
@@ -224,9 +234,11 @@ pub fn internet_egress_connector_arn(region: &str) -> String {
 /// is what defers the snapshot until the agent is serving. `Validate` runs on a MicroVM restored
 /// from the snapshot and fails the build when a command or a file write cannot work on it; 30s
 /// is AWS's default and far above the probe's sub-second work, where `Ready`'s 120s covers a
-/// boot. `Run` and `Resume` are acknowledged by the agent and nothing more: entropy separation
-/// between MicroVMs comes from the MicroVM service.
-pub fn agent_hooks() -> MicrovmImageHooks {
+/// boot. `Run` and `Resume` are acknowledged by the agent unless the image declares lifecycle
+/// steps (see [`alien_core::sandbox_image_permissions::aws_microvm_session_hooks`]): entropy
+/// separation between MicroVMs comes from the MicroVM service. Without a declared step the hooks
+/// are exactly the ones every earlier release sent.
+pub fn agent_hooks(session: AwsMicrovmSessionHooks) -> MicrovmImageHooks {
     MicrovmImageHooks::builder()
         .port(AWS_MICROVM.port)
         .microvm_image_hooks(MicrovmImageBuildHooks {
@@ -237,9 +249,13 @@ pub fn agent_hooks() -> MicrovmImageHooks {
         })
         .microvm_hooks(MicrovmLifecycleHooks {
             run: "ENABLED".to_string(),
-            run_timeout_in_seconds: 30,
+            run_timeout_in_seconds: session.run_timeout_in_seconds,
             resume: "ENABLED".to_string(),
-            resume_timeout_in_seconds: 30,
+            resume_timeout_in_seconds: session.resume_timeout_in_seconds,
+            suspend: session
+                .suspend_timeout_in_seconds
+                .map(|_| "ENABLED".to_string()),
+            suspend_timeout_in_seconds: session.suspend_timeout_in_seconds,
         })
         .build()
 }
@@ -262,4 +278,76 @@ pub fn agent_environment() -> BTreeMap<String, String> {
             AWS_MICROVM.authorization.env_value().to_string(),
         ),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::sandbox_image_permissions::aws_microvm_session_hooks;
+    use alien_core::{Sandbox, SandboxLifecyclePolicy};
+
+    fn sandbox(on_pause: bool, on_resume: bool) -> Sandbox {
+        Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://bundles/agents.zip".to_string(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(SandboxLifecyclePolicy {
+                on_pause: on_pause.then(|| vec!["/usr/local/bin/app".into(), "pause".into()]),
+                on_resume: on_resume.then(|| vec!["/usr/local/bin/app".into(), "resume".into()]),
+                ..Default::default()
+            })
+            .build()
+    }
+
+    fn hooks_json(on_pause: bool, on_resume: bool) -> String {
+        let session = aws_microvm_session_hooks(&sandbox(on_pause, on_resume));
+        let request = image_build_inputs(
+            "us-east-1",
+            "agents",
+            "stack-agents",
+            "arn:aws:iam::123456789012:role/build",
+            "s3://bundles/agents.zip",
+            2048,
+        )
+        .with_agent_environment(BTreeMap::new(), session)
+        .create_request("stack-agents".to_string(), BTreeMap::new());
+        serde_json::to_string(&request.hooks).unwrap()
+    }
+
+    /// The exact bytes every release before lifecycle steps sent: an image without them must not
+    /// see a new key, or the receipt and the verifier's comparison change under it.
+    #[test]
+    fn an_image_without_lifecycle_steps_sends_the_hooks_it_always_did() {
+        assert_eq!(
+            hooks_json(false, false),
+            r#"{"port":8971,"microvmImageHooks":{"ready":"ENABLED","readyTimeoutInSeconds":120,"validate":"ENABLED","validateTimeoutInSeconds":30},"microvmHooks":{"run":"ENABLED","runTimeoutInSeconds":30,"resume":"ENABLED","resumeTimeoutInSeconds":30}}"#
+        );
+    }
+
+    #[test]
+    fn on_pause_enables_the_suspend_hook() {
+        let hooks: serde_json::Value = serde_json::from_str(&hooks_json(true, false)).unwrap();
+        assert_eq!(
+            hooks["microvmHooks"],
+            serde_json::json!({
+                "run": "ENABLED", "runTimeoutInSeconds": 30,
+                "resume": "ENABLED", "resumeTimeoutInSeconds": 30,
+                "suspend": "ENABLED", "suspendTimeoutInSeconds": 60
+            })
+        );
+    }
+
+    #[test]
+    fn on_resume_gives_the_resume_hook_room_for_the_step() {
+        let hooks: serde_json::Value = serde_json::from_str(&hooks_json(false, true)).unwrap();
+        assert_eq!(
+            hooks["microvmHooks"],
+            serde_json::json!({
+                "run": "ENABLED", "runTimeoutInSeconds": 30,
+                "resume": "ENABLED", "resumeTimeoutInSeconds": 60
+            })
+        );
+    }
 }

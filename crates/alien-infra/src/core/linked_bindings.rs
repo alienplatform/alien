@@ -287,6 +287,7 @@ mod cluster {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(600),
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build()
     }

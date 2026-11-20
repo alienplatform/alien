@@ -3616,6 +3616,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(300),
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let mut pod = idle_pod("pool-0", "10.1.2.3");

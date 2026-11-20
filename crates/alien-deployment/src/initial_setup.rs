@@ -1156,6 +1156,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .preview_ports(vec![8080])
             .build();
@@ -1497,6 +1498,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let mut state = live_sandbox_setup(InitialSetupAuthority::DirectSetup);
@@ -1754,6 +1756,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let stack = Stack::new("test".to_string())

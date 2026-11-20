@@ -53,6 +53,7 @@ fn stack_state() -> Value {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let worker = Worker::new("jobs".to_string())

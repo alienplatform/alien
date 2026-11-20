@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { Resource } from "../resource.js"
 import { Sandbox, SandboxConfigSchema, type SandboxEgress } from "../sandbox.js"
 
 const limits = { cpu: "1", memory: "2Gi", disk: "20Gi", maxProcesses: 256 }
@@ -66,6 +67,48 @@ describe("Sandbox", () => {
 
     const r = sandbox.build()
     expect(r.config).not.toHaveProperty("anonymous")
+  })
+
+  it("declares image permissions with a resource as a connection target", () => {
+    const files = new Resource({ type: "acme/files", id: "workspace-files" })
+    const r = complete()
+      .egress("internet")
+      .lifecycle({
+        onPause: ["/usr/local/bin/app", "pause"],
+        onResume: ["/usr/local/bin/app", "resume"],
+      })
+      .imagePermissions({
+        mounts: [
+          { type: "nfs", path: "/workspace" },
+          { type: "tmpfs", path: "/workspace/tmp", size: "8Gi" },
+        ],
+        connections: [{ to: files, port: 2049 }],
+      })
+      .build()
+
+    expect(r.config.imagePermissions).toEqual({
+      mounts: [
+        { type: "nfs", path: "/workspace" },
+        { type: "tmpfs", path: "/workspace/tmp", size: "8Gi" },
+      ],
+      connections: [{ to: { type: "acme/files", id: "workspace-files" }, port: 2049 }],
+    })
+    expect(r.config.lifecycle).toEqual({
+      onPause: ["/usr/local/bin/app", "pause"],
+      onResume: ["/usr/local/bin/app", "resume"],
+    })
+  })
+
+  it("refuses a mount type it does not know", () => {
+    const sandbox = complete().imagePermissions({
+      // @ts-expect-error: only nfs and tmpfs exist
+      mounts: [{ type: "overlay", path: "/workspace" }],
+    })
+    expect(() => sandbox.build()).toThrow()
+  })
+
+  it("writes no imagePermissions when none are declared", () => {
+    expect("imagePermissions" in complete().build().config).toBe(false)
   })
 
   it("exposes the resource type for permission targets", () => {

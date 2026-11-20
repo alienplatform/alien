@@ -11,15 +11,20 @@ signed for the service's signing name, which the endpoint list has for few servi
 come from the service models of the same tag (`metadata.signingName` of the model with the
 endpoint prefix). A prefix with neither is left out, since nothing says what to sign it as.
 
-The endpoint list is the one the AWS SDKs used before each service got its own endpoint rules.
-A service AWS added since may be missing from it; the script prints those.
+The endpoint list is the one the AWS SDKs used before each service got its own endpoint rules,
+so a service AWS added since may be missing from it. Such a service is taken from its endpoint
+rules (`endpoint-rule-set-1.json` beside its model) when they name one standard regional host,
+`https://<prefix>.{Region}.{PartitionResult#dnsSuffix}` (or, when the rules name only that,
+`...#dualStackDnsSuffix}`), with FIPS hosts left out; it gets that host in every region of the
+partition, signed for the region and the model's signing name. A service whose rules name
+anything else is left out; the script prints those.
 
 Google Cloud: the first label of each API host in Google's discovery directory. The directory
 has no version, so the table records when it was read and the sha256 of what was read. Regional
 hosts (`us-central1-aiplatform.googleapis.com`) are not in the directory, and so not in the
 table. `www.googleapis.com`, the shared host of a few APIs outside Google Cloud, is left out.
 
-Usage: scripts/generate-cloud-endpoint-tables.py [--botocore-tag TAG]
+Usage: scripts/generate-cloud-endpoint-tables.py [--botocore-tag TAG] [--skip-gcp]
 
 Run it to take a newer botocore tag or a newer directory, then run alien-infra's tests: they
 check every host in the tables is one of the cloud's own.
@@ -47,27 +52,80 @@ def fetch(url):
         return response.read()
 
 
+def read(archive, member, compressed):
+    raw = archive.extractfile(member).read()
+    return json.loads(gzip.decompress(raw) if compressed else raw)
+
+
 def botocore_data(tarball):
-    """The endpoint list, and each endpoint prefix's signing name from the service models."""
+    """The endpoint list, each endpoint prefix's signing name from the service models, and the
+    endpoint URL templates of each prefix's endpoint rules."""
     endpoints = None
     signing_names = {}
+    prefixes = {}  # model directory -> endpoint prefix
+    rule_urls = {}  # model directory -> URL templates its rules name
     with tarfile.open(fileobj=io.BytesIO(tarball)) as archive:
         for member in archive:
             if member.name.endswith("/botocore/data/endpoints.json"):
                 endpoints = archive.extractfile(member).read()
-            model = re.search(r"/botocore/data/[^/]+/[^/]+/service-2\.json(\.gz)?$", member.name)
-            if not model:
+            found = re.search(
+                r"(/botocore/data/[^/]+/[^/]+)/(service-2|endpoint-rule-set-1)\.json(\.gz)?$",
+                member.name,
+            )
+            if not found:
                 continue
-            raw = archive.extractfile(member).read()
-            metadata = json.loads(gzip.decompress(raw) if model.group(1) else raw)["metadata"]
+            directory, kind, compressed = found.groups()
+            document = read(archive, member, compressed)
+            if kind == "endpoint-rule-set-1":
+                rule_urls[directory] = rule_set_urls(document)
+                continue
+            metadata = document["metadata"]
             prefix = metadata["endpointPrefix"]
+            prefixes[directory] = prefix
             name = metadata.get("signingName", prefix)
             if signing_names.setdefault(prefix, name) != name:
                 raise SystemExit(f"models disagree on the signing name of '{prefix}'")
-    return endpoints, signing_names
+    rules = {}
+    for directory, prefix in prefixes.items():
+        rules.setdefault(prefix, set()).update(rule_urls.get(directory, set()))
+    return endpoints, signing_names, rules
 
 
-def aws_table(raw, signing_names, tag):
+def rule_set_urls(rule_set):
+    """Every endpoint URL template an endpoint rule set names."""
+    urls = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("type") == "endpoint" and isinstance(node["endpoint"].get("url"), str):
+                urls.add(node["endpoint"]["url"])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(rule_set)
+    return urls
+
+
+def rule_host_template(prefix, urls):
+    """The regional host template a service's endpoint rules give by default, or None when they
+    name anything but the standard one."""
+    standard = f"https://{prefix}.{{Region}}.{{PartitionResult#dnsSuffix}}"
+    dual_stack = f"https://{prefix}.{{Region}}.{{PartitionResult#dualStackDnsSuffix}}"
+    plain = {url for url in urls if "fips" not in url}
+    if standard in plain and plain <= {standard, dual_stack}:
+        return "{dnsSuffix}"
+    if plain == {dual_stack}:
+        return "{dualStackDnsSuffix}"
+    return None
+
+
+DUAL_STACK_DNS_SUFFIX = {"aws": "api.aws"}
+
+
+def aws_table(raw, signing_names, rules, tag):
     partition = next(p for p in json.loads(raw)["partitions"] if p["partition"] == "aws")
     regions = sorted(partition["regions"])
     suffix = partition["dnsSuffix"]
@@ -100,12 +158,29 @@ def aws_table(raw, signing_names, tag):
                 entry["global"] = target
         if entry["regional"] or entry["global"]:
             services[name] = entry
+    # Services defined only by endpoint rules.
+    from_rules = []
+    for prefix in sorted(set(signing_names) - set(services)):
+        suffix_key = rule_host_template(prefix, rules.get(prefix, set()))
+        if suffix_key is None:
+            continue
+        host_suffix = suffix if suffix_key == "{dnsSuffix}" else DUAL_STACK_DNS_SUFFIX["aws"]
+        services[prefix] = {
+            "global": None,
+            "regional": {
+                region: [f"{prefix}.{region}.{host_suffix}", region, signing_names[prefix]]
+                for region in regions
+            },
+        }
+        from_rules.append(prefix)
+    services = dict(sorted(services.items()))
     source = (
         f"botocore {tag}: botocore/data/endpoints.json, sha256 {hashlib.sha256(raw).hexdigest()}, "
-        f"and the signing names of its {len(signing_names)} endpoint prefixes with a service model"
+        f"the signing names of its {len(signing_names)} endpoint prefixes with a service model, "
+        f"and the endpoint rules of the {len(from_rules)} services defined only by those"
     )
     missing = sorted(set(signing_names) - set(services))
-    return source, regions, services, missing
+    return source, regions, services, from_rules, missing
 
 
 def gcp_table(raw):
@@ -127,10 +202,17 @@ def compact(value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--botocore-tag", default=BOTOCORE_TAG)
+    parser.add_argument(
+        "--skip-gcp", action="store_true", help="leave the Google Cloud table as it is"
+    )
     args = parser.parse_args()
 
-    endpoints, signing_names = botocore_data(fetch(BOTOCORE_URL.format(tag=args.botocore_tag)))
-    source, regions, services, missing = aws_table(endpoints, signing_names, args.botocore_tag)
+    endpoints, signing_names, rules = botocore_data(
+        fetch(BOTOCORE_URL.format(tag=args.botocore_tag))
+    )
+    source, regions, services, from_rules, missing = aws_table(
+        endpoints, signing_names, rules, args.botocore_tag
+    )
     # One service per line, so a new tag's change reads as a diff.
     lines = ",\n".join(f"{compact(name)}:{compact(entry)}" for name, entry in services.items())
     (OUT / "aws_endpoints.json").write_text(
@@ -138,8 +220,12 @@ def main():
     )
     hosts = sum(len(e["regional"]) + bool(e["global"]) for e in services.values())
     print(f"aws: {len(services)} services, {len(regions)} regions, {hosts} hosts")
-    print(f"aws: {len(missing)} endpoint prefixes with a model and no endpoint in the list:")
+    print(f"aws: {len(from_rules)} services from their endpoint rules only:")
+    print("  " + " ".join(from_rules))
+    print(f"aws: {len(missing)} endpoint prefixes left out (rules name no standard host):")
     print("  " + " ".join(missing))
+    if args.skip_gcp:
+        return
 
     source, apis = gcp_table(fetch(GOOGLE_DIRECTORY_URL))
     lines = ",\n".join(compact(api) for api in apis)

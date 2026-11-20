@@ -1068,6 +1068,7 @@ async fn failed_artifact_registry_and_sandbox_creates_are_created_again_not_repl
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
                 idle_pause_seconds: Some(600),
+                ..Default::default()
             })
             .build()
     };

@@ -58,6 +58,7 @@ fn declared(id: &str, image_user: u32) -> Sandbox {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(600),
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     sandbox.image_user = Some(image_user);

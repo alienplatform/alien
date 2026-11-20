@@ -447,6 +447,7 @@ async fn the_chart_of_an_internet_sandbox_carries_the_gateway_service_account() 
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: Some(300),
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,

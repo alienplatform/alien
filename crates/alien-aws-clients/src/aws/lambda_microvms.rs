@@ -26,6 +26,10 @@ const API_VERSION: &str = "2025-09-09";
 /// Longest life AWS will mint an endpoint auth token for.
 pub const MAX_AUTH_TOKEN_MINUTES: u32 = 60;
 
+/// The longest Lambda keeps a MicroVM, in seconds (8 hours): `maximumDurationInSeconds`'s cap,
+/// and how long a paused MicroVM is kept when the sandbox declares no lifetime of its own.
+pub const MAX_SUSPENDED_DURATION_SECONDS: u32 = 28_800;
+
 /// A MicroVM image, the Frozen parent of a sandbox's sessions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -220,6 +224,12 @@ pub struct MicrovmLifecycleHooks {
     pub resume: String,
     /// Ceiling on the resume hook
     pub resume_timeout_in_seconds: u32,
+    /// `ENABLED` / `DISABLED`; left out unless the image runs a step before a pause
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspend: Option<String>,
+    /// Ceiling on the suspend hook; left out with `suspend`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspend_timeout_in_seconds: Option<u32>,
 }
 
 /// Hook configuration for `CreateMicrovmImage`.
@@ -536,8 +546,11 @@ fn run_microvm_body(
     if let Some(seconds) = idle_pause_seconds {
         // Suspend only. Auto-resume would bring a session back on a stray request after the
         // caller had moved on, which is a bill and a running sandbox nobody is watching.
+        // The API requires how long a paused MicroVM is kept: as long as the MicroVM may live,
+        // or Lambda's maximum when the sandbox declares no lifetime.
         body["idlePolicy"] = serde_json::json!({
             "maxIdleDurationSeconds": seconds,
+            "suspendedDurationSeconds": max_lifetime_seconds.unwrap_or(MAX_SUSPENDED_DURATION_SECONDS),
             "autoResumeEnabled": false,
         });
     }
@@ -1357,6 +1370,45 @@ mod tests {
         );
     }
 
+    /// `RunMicrovm` refuses an idle policy without `suspendedDurationSeconds` ("Value null at
+    /// idlePolicy.suspendedDurationSeconds"), so every sandbox that declares an idle pause failed
+    /// at create. The idle policy carries how long a paused MicroVM is kept: the declared lifetime
+    /// when there is one, otherwise Lambda's maximum.
+    #[test]
+    fn the_idle_policy_carries_how_long_a_paused_microvm_is_kept() {
+        let bounded = run_microvm_body(
+            "img",
+            "1",
+            "token",
+            None,
+            vec![],
+            Some(300),
+            Some(3600),
+            None,
+        );
+        assert_eq!(
+            bounded["idlePolicy"],
+            serde_json::json!({
+                "maxIdleDurationSeconds": 300,
+                "suspendedDurationSeconds": 3600,
+                "autoResumeEnabled": false,
+            })
+        );
+
+        let unbounded = run_microvm_body("img", "1", "token", None, vec![], Some(300), None, None);
+        assert_eq!(
+            unbounded["idlePolicy"]["suspendedDurationSeconds"],
+            serde_json::json!(MAX_SUSPENDED_DURATION_SECONDS)
+        );
+        assert_eq!(MAX_SUSPENDED_DURATION_SECONDS, 28_800);
+
+        let no_idle = run_microvm_body("img", "1", "token", None, vec![], None, Some(3600), None);
+        assert!(
+            no_idle.get("idlePolicy").is_none(),
+            "no idle pause declared, no idle policy: {no_idle}"
+        );
+    }
+
     /// Built the way the transport builds it, not by hand: `handle_json_response` raises
     /// `HttpResponseError`, whose variant declares no status of its own, so anything reading
     /// `http_status_code` sees the derive's 500 default and never sees the 404. A caller has to be
@@ -1458,6 +1510,8 @@ mod tests {
                         run_timeout_in_seconds: 30,
                         resume: "ENABLED".to_string(),
                         resume_timeout_in_seconds: 30,
+                        suspend: None,
+                        suspend_timeout_in_seconds: None,
                     })
                     .build(),
             )

@@ -1,0 +1,1 @@
+{"type":"string","description":"A file system type an image may ask the agent to mount.","enum":["nfs","tmpfs","bind"],"x-readme-ref-name":"SandboxImageMountType"}

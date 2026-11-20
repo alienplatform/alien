@@ -806,6 +806,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build()
     }
@@ -1545,6 +1546,7 @@ mod tests {
                 lifecycle: SandboxLifecyclePolicy {
                     max_lifetime_seconds: Some(3600),
                     idle_pause_seconds: Some(60),
+                    ..Default::default()
                 },
                 ..with(
                     SandboxEgress::None,

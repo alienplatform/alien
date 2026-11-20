@@ -126,6 +126,7 @@ async fn ubuntu_without_user_keeps_released_exec_identity() {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let settings = BuildSettings {

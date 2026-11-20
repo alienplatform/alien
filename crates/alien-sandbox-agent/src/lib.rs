@@ -1,11 +1,20 @@
+#[cfg(unix)]
+pub mod boot_error;
+#[cfg(unix)]
+pub mod boot_report;
 pub mod children;
 pub mod confine;
 pub mod error;
 pub mod exec;
 pub mod files;
+#[cfg(target_os = "linux")]
+pub mod image_lifecycle;
+pub mod image_permissions;
 pub mod interactive;
 pub mod jobs;
 pub mod metadata;
+#[cfg(unix)]
+pub mod mount_broker;
 pub mod paths;
 pub mod peer;
 pub mod pid_namespace;

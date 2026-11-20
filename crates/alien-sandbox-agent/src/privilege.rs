@@ -14,6 +14,13 @@ use crate::exec::ExecIdentity;
 
 static BLOCK_BPF: AtomicBool = AtomicBool::new(false);
 static BLOCK_IPV6: AtomicBool = AtomicBool::new(false);
+static IMAGE_MOUNT_FILTER: AtomicBool = AtomicBool::new(false);
+
+/// Set once, before the image starts, when a mount broker serves it: the image and its lifecycle
+/// steps then get [`deny_mount_bypass`] on top of the other filters.
+pub fn filter_image_mounts() {
+    IMAGE_MOUNT_FILTER.store(true, Ordering::Relaxed);
+}
 
 /// Set once before any image command or exec request can run. AWS transport may need IPv6,
 /// so retain it for the agent while denying it irreversibly to every command.
@@ -66,6 +73,9 @@ pub unsafe fn drop_image_to(identity: ExecIdentity) -> io::Result<()> {
     restrict_capabilities(IMAGE_ROOT_CAPABILITIES)?;
     if BLOCK_IPV6.load(Ordering::Relaxed) || BLOCK_BPF.load(Ordering::Relaxed) {
         deny_network_bypass(BLOCK_IPV6.load(Ordering::Relaxed))?;
+    }
+    if IMAGE_MOUNT_FILTER.load(Ordering::Relaxed) {
+        deny_mount_bypass()?;
     }
     Ok(())
 }
@@ -204,8 +214,92 @@ pub fn restrict_supervisor(network_admin: bool) -> io::Result<()> {
     restrict_capabilities(keep)
 }
 
+/// This thread's permitted capabilities (the low 32; nothing the agent keeps is above them).
 #[cfg(target_os = "linux")]
-fn restrict_capabilities(keep: u32) -> io::Result<()> {
+pub(crate) fn permitted_capabilities() -> io::Result<u32> {
+    #[repr(C)]
+    struct Header {
+        version: u32,
+        pid: i32,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct Data {
+        effective: u32,
+        permitted: u32,
+        inheritable: u32,
+    }
+    let mut header = Header {
+        version: 0x20080522,
+        pid: 0,
+    };
+    let mut data = [Data::default(); 2];
+    // SAFETY: a version 3 header and two data structures, as capget expects.
+    if unsafe { libc::syscall(libc::SYS_capget, &mut header, data.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(data[0].permitted)
+}
+
+/// The names of the capabilities in `mask` (bits 0 to 31).
+pub(crate) fn capability_names(mask: u32) -> String {
+    const NAMES: [&str; 32] = [
+        "CHOWN",
+        "DAC_OVERRIDE",
+        "DAC_READ_SEARCH",
+        "FOWNER",
+        "FSETID",
+        "KILL",
+        "SETGID",
+        "SETUID",
+        "SETPCAP",
+        "LINUX_IMMUTABLE",
+        "NET_BIND_SERVICE",
+        "NET_BROADCAST",
+        "NET_ADMIN",
+        "NET_RAW",
+        "IPC_LOCK",
+        "IPC_OWNER",
+        "SYS_MODULE",
+        "SYS_RAWIO",
+        "SYS_CHROOT",
+        "SYS_PTRACE",
+        "SYS_PACCT",
+        "SYS_ADMIN",
+        "SYS_BOOT",
+        "SYS_NICE",
+        "SYS_RESOURCE",
+        "SYS_TIME",
+        "SYS_TTY_CONFIG",
+        "MKNOD",
+        "LEASE",
+        "AUDIT_WRITE",
+        "AUDIT_CONTROL",
+        "SETFCAP",
+    ];
+    (0..32)
+        .filter(|bit| mask & (1 << bit) != 0)
+        .map(|bit| format!("CAP_{}", NAMES[bit]))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// This process's capability sets as `/proc/self/status` shows them, for error messages.
+pub(crate) fn capability_sets() -> String {
+    std::fs::read_to_string("/proc/self/status")
+        .map(|status| {
+            status
+                .lines()
+                .filter(|line| line.starts_with("Cap"))
+                .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_else(|error| format!("unreadable: {error}"))
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn restrict_capabilities(keep: u32) -> io::Result<()> {
     #[repr(C)]
     struct Header {
         version: u32,
@@ -318,6 +412,113 @@ unsafe fn deny_network_bypass(block_ipv6: bool) -> io::Result<()> {
         stmt(0x06, 0x7fff0000),
         stmt(0x06, 0x7fff0000),
     ];
+    let program = libc::sock_fprog {
+        len: filter.len() as u16,
+        filter: filter.as_mut_ptr(),
+    };
+    if libc::prctl(libc::PR_SET_SECCOMP, 2, &program, 0, 0) != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// The image filter when a mount broker serves the image. The image never holds `SYS_ADMIN`;
+/// this closes the ways around that:
+///
+/// * no new user or mount namespace (`unshare`/`clone` with `CLONE_NEWUSER` or `CLONE_NEWNS`
+///   fail with EPERM), so the image cannot become root of a namespace that may mount;
+/// * no `setns`, so it cannot enter another process's namespaces;
+/// * the new mount API, `pivot_root` and `clone3` return ENOSYS (`clone3` hides its flags in
+///   memory a filter cannot read; C libraries fall back to `clone`, whose flags it can);
+/// * no keyrings (`request_key`, `keyctl`, `add_key`), which reach kernel upcalls and the
+///   NFS client's identity mapping;
+/// * no `perf_event_open`: what it exposes depends on `perf_event_paranoid`, which the guest does
+///   not guarantee.
+///
+/// # Safety
+/// Must be called only between `fork` and `exec`, after `no_new_privs`.
+#[cfg(target_os = "linux")]
+pub unsafe fn deny_mount_bypass() -> io::Result<()> {
+    #[cfg(target_arch = "x86_64")]
+    const ARCH: u32 = 0xc000003e;
+    #[cfg(target_arch = "aarch64")]
+    const ARCH: u32 = 0xc00000b7;
+    const NAMESPACES: u32 = (libc::CLONE_NEWUSER | libc::CLONE_NEWNS) as u32;
+    const EPERM: u32 = 0x00050000 | libc::EPERM as u32;
+    const ENOSYS: u32 = 0x00050000 | libc::ENOSYS as u32;
+    const ALLOW: u32 = 0x7fff0000;
+    let stmt = |code, k| libc::sock_filter {
+        code,
+        jt: 0,
+        jf: 0,
+        k,
+    };
+    let jump = |k: libc::c_long, jt, jf| libc::sock_filter {
+        code: 0x15,
+        jt,
+        jf,
+        k: k as u32,
+    };
+    let enosys = [
+        libc::SYS_clone3,
+        libc::SYS_fsopen,
+        libc::SYS_fsconfig,
+        libc::SYS_fsmount,
+        libc::SYS_fspick,
+        libc::SYS_move_mount,
+        libc::SYS_open_tree,
+        libc::SYS_mount_setattr,
+        libc::SYS_pivot_root,
+    ];
+    let eperm = [
+        libc::SYS_setns,
+        libc::SYS_request_key,
+        libc::SYS_keyctl,
+        libc::SYS_add_key,
+        libc::SYS_perf_event_open,
+    ];
+    // No allocation between fork and exec: a fixed array, filled by index.
+    const CHECKS: usize = 9 + 5 + 2;
+    const LEN: usize = 6 + CHECKS + 7;
+    let mut filter = [stmt(0x06, ALLOW); LEN];
+    filter[0] = stmt(0x20, 4);
+    filter[1] = jump(ARCH as libc::c_long, 1, 0);
+    filter[2] = stmt(0x06, 0x80000000); // kill a foreign ABI
+    filter[3] = stmt(0x20, 0);
+    // x32 numbers under AUDIT_ARCH_X86_64: kill.
+    filter[4] = libc::sock_filter {
+        code: 0x45,
+        jt: 0,
+        jf: 1,
+        k: 0x40000000,
+    };
+    filter[5] = stmt(0x06, 0x80000000);
+    // Returns after the checks: ALLOW, ENOSYS, EPERM, then the flags test.
+    let allow = 6 + CHECKS;
+    let to = |at: usize, target: usize| (target - at - 1) as u8;
+    for (i, nr) in enosys.iter().enumerate() {
+        filter[6 + i] = jump(*nr, to(6 + i, allow + 1), 0);
+    }
+    for (i, nr) in eperm.iter().enumerate() {
+        let at = 6 + enosys.len() + i;
+        filter[at] = jump(*nr, to(at, allow + 2), 0);
+    }
+    let at = 6 + enosys.len() + eperm.len();
+    filter[at] = jump(libc::SYS_unshare, to(at, allow + 3), 0);
+    filter[at + 1] = jump(libc::SYS_clone, to(at + 1, allow + 3), 0);
+    filter[allow] = stmt(0x06, ALLOW);
+    filter[allow + 1] = stmt(0x06, ENOSYS);
+    filter[allow + 2] = stmt(0x06, EPERM);
+    // Flags: the low word of argument 0 (unshare's and clone's flags on both architectures).
+    filter[allow + 3] = stmt(0x20, 16);
+    filter[allow + 4] = libc::sock_filter {
+        code: 0x45,
+        jt: 0,
+        jf: 1,
+        k: NAMESPACES,
+    };
+    filter[allow + 5] = stmt(0x06, EPERM);
+    filter[allow + 6] = stmt(0x06, ALLOW);
     let program = libc::sock_fprog {
         len: filter.len() as u16,
         filter: filter.as_mut_ptr(),

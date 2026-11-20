@@ -134,6 +134,11 @@ pub struct ResourceTypeDescriptor {
     /// and Azure.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub requires_network: bool,
+    /// Where the type's private network endpoints are, when it has any. A sandbox's image may
+    /// then declare a direct connection to a resource of this type; see
+    /// [`crate::PrivateNetworkEndpoints`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_network_endpoints: Option<crate::PrivateEndpointPlacement>,
 }
 
 /// The stems of the files Alien's Terraform module writes besides one per resource: an

@@ -641,14 +641,17 @@ impl ResourceControllerContext<'_> {
     /// The deployment id a direct setup writes into ownership markers. The runner sets it on
     /// every step; without it nothing can be marked or recognised as owned, so this fails.
     pub fn setup_owner_deployment_id(&self) -> crate::error::Result<&str> {
-        self.deployment_config.deployment_id.as_deref().ok_or_else(|| {
-            alien_error::AlienError::new(crate::error::ErrorData::CloudPlatformError {
-                message: "the deployment id is not available, so ownership of what setup \
+        self.deployment_config
+            .deployment_id
+            .as_deref()
+            .ok_or_else(|| {
+                alien_error::AlienError::new(crate::error::ErrorData::CloudPlatformError {
+                    message: "the deployment id is not available, so ownership of what setup \
                           creates cannot be recorded"
-                    .to_string(),
-                resource_id: Some(self.desired_config.id().to_string()),
+                        .to_string(),
+                    resource_id: Some(self.desired_config.id().to_string()),
+                })
             })
-        })
     }
 
     pub fn emit_heartbeat(&self, heartbeat: ResourceHeartbeat) {

@@ -248,6 +248,7 @@ fn an_eks_install_names_no_sandbox_gateway_subnets() {
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .build(),
                 ResourceLifecycle::Live,

@@ -1062,6 +1062,7 @@ fn sandbox_source_stack(src: &Path, toolchain: ToolchainConfig, platform: Platfo
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     // A source sandbox must be Live on AWS, and only AWS accepts a Live sandbox at all.

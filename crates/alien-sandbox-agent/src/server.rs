@@ -150,6 +150,22 @@ impl AgentState {
 
     /// Called only after network checks, before accepting any session operation.
     pub fn start_image_once(&self) -> crate::error::Result<()> {
+        #[cfg(unix)]
+        if crate::boot_error::enabled() {
+            // Image permissions: the image never starts after a failure, and the caller (the
+            // provider's run hook) succeeds so the sandbox stays up to report why.
+            if crate::boot_error::reason().is_some() {
+                return Ok(());
+            }
+            if let Err(error) = self.start_image() {
+                crate::boot_error::record(error.to_string());
+            }
+            return Ok(());
+        }
+        self.start_image()
+    }
+
+    fn start_image(&self) -> crate::error::Result<()> {
         let mut env = std::collections::BTreeMap::new();
         self.native_environment(&mut env);
         #[cfg(target_os = "linux")]
@@ -340,10 +356,7 @@ pub fn router(state: Arc<AgentState>) -> Router {
             &hook_path("resume"),
             get(resume_egress_hook).post(resume_egress_hook),
         )
-        .route(
-            &hook_path("suspend"),
-            get(hook_lifecycle).post(hook_lifecycle),
-        )
+        .route(&hook_path("suspend"), get(suspend_hook).post(suspend_hook))
         .route(
             &hook_path("terminate"),
             get(hook_lifecycle).post(hook_lifecycle),
@@ -536,17 +549,172 @@ async fn resume_egress_hook(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> std::result::Result<StatusCode, ApiError> {
+    let started = std::time::Instant::now();
+    #[cfg(unix)]
+    crate::boot_error::lifecycle_note(&format!("resume hook: received from {peer}"));
+    let result = resume_steps(&state, peer, &headers, started).await;
+    #[cfg(unix)]
+    crate::boot_error::lifecycle_note(&format!(
+        "resume hook: {} after {} ms",
+        match &result {
+            Ok(_) => "200".to_string(),
+            Err(error) => format!("{} {}", error.status.as_u16(), error.message),
+        },
+        started.elapsed().as_millis()
+    ));
+    result
+}
+
+async fn resume_steps(
+    state: &Arc<AgentState>,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    started: std::time::Instant,
+) -> std::result::Result<StatusCode, ApiError> {
     if state.image_process.uses_image_user() {
-        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+        authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
     }
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
-        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
-        egress.resume().await?;
+        authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
+        let resumed = egress.resume().await;
+        if crate::image_permissions::declared().is_some() {
+            crate::boot_error::lifecycle_note(&format!(
+                "resume hook: network check {} at {} ms",
+                match &resumed {
+                    Ok(()) => "passed".to_string(),
+                    Err(error) => format!("failed: {error}"),
+                },
+                started.elapsed().as_millis()
+            ));
+        }
+        resumed?;
+    }
+    // After the network is back: the image's own resume step (a remount) needs it.
+    #[cfg(target_os = "linux")]
+    run_image_step(state, peer, headers, Step::OnResume).await?;
+    #[cfg(not(target_os = "linux"))]
+    let _ = (state, peer, headers, started);
+    Ok(StatusCode::OK)
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum Step {
+    OnPause,
+    OnResume,
+}
+
+/// Before the provider pauses the sandbox, the image's declared `onPause` runs (an unmount:
+/// network file system connections do not survive the snapshot). Without one the hook only
+/// acknowledges, as before.
+async fn suspend_hook(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> std::result::Result<StatusCode, ApiError> {
+    #[cfg(target_os = "linux")]
+    {
+        let started = std::time::Instant::now();
+        crate::boot_error::lifecycle_note(&format!("suspend hook: received from {peer}"));
+        let result = run_image_step(&state, peer, &headers, Step::OnPause).await;
+        crate::boot_error::lifecycle_note(&format!(
+            "suspend hook: {} after {} ms",
+            match &result {
+                Ok(()) => "200".to_string(),
+                Err(error) => format!("{} {}", error.status.as_u16(), error.message),
+            },
+            started.elapsed().as_millis()
+        ));
+        result?;
     }
     #[cfg(not(target_os = "linux"))]
     let _ = (state, peer, headers);
     Ok(StatusCode::OK)
+}
+
+/// One step at a time, and only on the platform's own call: a workload that could reach this
+/// port must not be able to make the image unmount or remount.
+#[cfg(target_os = "linux")]
+async fn run_image_step(
+    state: &Arc<AgentState>,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    step: Step,
+) -> std::result::Result<(), ApiError> {
+    static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let Some(declared) = crate::image_permissions::declared() else {
+        return Ok(());
+    };
+    let (name, command) = match step {
+        Step::OnPause => ("onPause", declared.permissions.on_pause.as_ref()),
+        Step::OnResume => ("onResume", declared.permissions.on_resume.as_ref()),
+    };
+    authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
+    let started = std::time::Instant::now();
+    let _serial = SERIAL.lock().await;
+    // From the pause until the resume the broker takes no new mounts: one made after the pause
+    // step would be in the snapshot. Resume allows them first, for the image's own remount.
+    let mode = match step {
+        Step::OnPause => crate::mount_broker::pausing,
+        Step::OnResume => crate::mount_broker::resumed,
+    };
+    let mode_set = tokio::task::spawn_blocking(mode)
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|result| result);
+    let settled = mode_set.is_ok();
+    if let Err(error) = mode_set {
+        tracing::error!(%error, step = name, "the mount broker did not take the pause state");
+        crate::boot_error::lifecycle_note(&format!(
+            "{name}: the mount broker did not take the state: {error}"
+        ));
+    }
+    crate::boot_error::lifecycle_note(&format!(
+        "{name}: mount broker state set at {} ms",
+        started.elapsed().as_millis()
+    ));
+    let Some(command) = command else {
+        crate::gateway_egress::record_nfs_port_drops(match step {
+            Step::OnPause => "after-onPause",
+            Step::OnResume => "after-onResume",
+        })
+        .await;
+        return Ok(());
+    };
+    // Best effort: a failed step never fails the provider's hook (a failed hook can make the
+    // provider discard the sandbox). A failed pause step still must not leave an NFS connection
+    // in the snapshot, so the broker detaches every NFS mount it made.
+    let ran = crate::image_lifecycle::run(name, command, declared.lifecycle_deadline).await;
+    crate::boot_error::lifecycle_note(&format!(
+        "{name}: step {} at {} ms",
+        match &ran {
+            Ok(()) => "succeeded".to_string(),
+            Err(reason) => format!("failed: {reason}"),
+        },
+        started.elapsed().as_millis()
+    ));
+    if let Err(reason) = &ran {
+        tracing::error!(%reason, step = name, "image lifecycle step failed");
+    }
+    // A pause the broker could not settle (a mount request it could not end) may leave a mount
+    // the step did not see: the detach runs then too.
+    if matches!(step, Step::OnPause) && (ran.is_err() || !settled) {
+        match tokio::task::spawn_blocking(crate::mount_broker::detach_nfs_mounts).await {
+            Ok(Ok(())) => tracing::warn!(
+                settled,
+                "detached the image's NFS mounts after onPause failed or the pause was not settled"
+            ),
+            Ok(Err(error)) => tracing::error!(%error, "cannot detach the image's NFS mounts"),
+            Err(error) => tracing::error!(%error, "cannot detach the image's NFS mounts"),
+        }
+    }
+    crate::gateway_egress::record_nfs_port_drops(match step {
+        Step::OnPause => "after-onPause",
+        Step::OnResume => "after-onResume",
+    })
+    .await;
+    Ok(())
 }
 
 async fn run_command(
@@ -556,6 +724,8 @@ async fn run_command(
     Json(mut request): Json<ExecRequest>,
 ) -> std::result::Result<Response, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    #[cfg(unix)]
+    crate::boot_error::refuse()?;
 
     state.native_environment(&mut request.env);
     #[cfg(target_os = "linux")]
@@ -703,6 +873,8 @@ async fn interactive_start(
     Json(mut body): Json<InteractiveStartBody>,
 ) -> std::result::Result<Response, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    #[cfg(unix)]
+    crate::boot_error::refuse()?;
 
     state.native_environment(&mut body.request.env);
     #[cfg(target_os = "linux")]
@@ -896,6 +1068,8 @@ async fn job_start(
     Json(mut request): Json<ExecRequest>,
 ) -> std::result::Result<Json<JobStartResponse>, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    #[cfg(unix)]
+    crate::boot_error::refuse()?;
 
     state.native_environment(&mut request.env);
     #[cfg(target_os = "linux")]
@@ -1347,7 +1521,11 @@ async fn authorize(
     authorize_control(state, peer, headers, required).await?;
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
-        egress.wait_ready().await?;
+        if let Err(error) = egress.wait_ready().await {
+            // A run hook that failed left the network unverified: say why it failed.
+            crate::boot_error::refuse()?;
+            return Err(error.into());
+        }
     }
     state.start_image_once()?;
     Ok(())
@@ -1362,13 +1540,22 @@ async fn authorize_control(
     if matches!(&state.authorization, AgentAuthorization::Transport) {
         let permitted = if state.image_process.uses_image_user() {
             crate::peer::image_transport_may_serve(peer).await
+        } else if crate::peer::transport_may_serve(peer, state.exec_identity.uid) {
+            Ok(())
         } else {
-            crate::peer::transport_may_serve(peer, state.exec_identity.uid)
+            Err(String::new())
         };
-        if !permitted {
+        if let Err(reason) = permitted {
+            // The reason names only the caller's own socket, so it is safe to return; it is the
+            // one place a provider caller that stops matching can be seen where logs are not.
+            let message = "the agent does not serve the code it is running".to_string();
             return Err(ApiError {
                 status: StatusCode::FORBIDDEN,
-                message: "the agent does not serve the code it is running".to_string(),
+                message: if reason.is_empty() {
+                    message
+                } else {
+                    format!("{message}: {reason}")
+                },
             });
         }
         return Ok(());
@@ -1491,18 +1678,47 @@ async fn run_egress_hook(
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> std::result::Result<StatusCode, ApiError> {
+    let result = run_hook_steps(&state, peer, &headers, body).await;
+    // With image permissions a failed run hook would end the sandbox and the reason with it.
+    // Past the caller's authorization, a failure instead keeps the image from ever starting (the
+    // record is checked before every start and every command) and the agent up to say why.
+    #[cfg(unix)]
+    if crate::boot_error::enabled() {
+        if let Err(error) = &result {
+            if !matches!(
+                error.status,
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ) {
+                crate::boot_error::record(format!(
+                    "the run hook failed ({}): {}",
+                    error.status.as_u16(),
+                    error.message
+                ));
+                return Ok(StatusCode::OK);
+            }
+        }
+    }
+    result
+}
+
+async fn run_hook_steps(
+    state: &AgentState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    body: bytes::Bytes,
+) -> std::result::Result<StatusCode, ApiError> {
     if state.image_process.uses_image_user() {
-        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+        authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
     }
     let Some(egress) = &state.gateway_egress else {
         if state.image_process.waiting_for_activation()? {
-            authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+            authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
             state.image_process.activate()?;
         }
         state.start_image_once()?;
         return Ok(StatusCode::OK);
     };
-    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
     if !egress.requires_token() {
         egress.activate_declared_none().await?;
         state.start_image_once()?;

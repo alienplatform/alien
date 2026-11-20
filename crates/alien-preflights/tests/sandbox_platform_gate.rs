@@ -43,6 +43,7 @@ fn sandbox(limits: Option<SandboxLimits>) -> Sandbox {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         });
     match limits {
         Some(limits) => builder.limits(limits).build(),
@@ -110,6 +111,7 @@ fn source_sandbox() -> Sandbox {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build()
 }
@@ -242,4 +244,61 @@ async fn gcp_plans_internet_without_a_gateway_and_refuses_an_allowlist_default()
         format!("{result:?}").contains("Google Cloud sandboxes have no outbound allowlist"),
         "{result:?}"
     );
+}
+
+/// Image permissions and the image's own pause and resume steps are AWS Lambda MicroVM only.
+/// Every other platform refuses them when the stack is planned, with an error naming the
+/// platform, rather than deploying a sandbox the agent would never honor.
+#[tokio::test]
+async fn image_permissions_and_lifecycle_steps_fail_planning_off_aws() {
+    let mut mounts = sandbox(None);
+    mounts.image_permissions = Some(alien_core::SandboxImagePermissions {
+        mounts: vec![alien_core::SandboxImageMount {
+            mount_type: alien_core::SandboxImageMountType::Tmpfs,
+            path: "/scratch".to_string(),
+            size: Some("1Gi".to_string()),
+            from: None,
+        }],
+        connections: vec![],
+    });
+    let mut on_pause = sandbox(None);
+    on_pause.lifecycle.on_pause = Some(vec!["/bin/sync".to_string()]);
+    let mut on_resume = sandbox(None);
+    on_resume.lifecycle.on_resume = Some(vec!["/bin/true".to_string()]);
+
+    let live = alien_core::ResourceLifecycle::Live;
+    for (field, declared) in [
+        ("imagePermissions", mounts),
+        ("onPause", on_pause),
+        ("onResume", on_resume),
+    ] {
+        let summary = PreflightRunner::new()
+            .run_compile_time_checks(&stack_with_lifecycle(declared.clone(), live), Platform::Aws)
+            .await
+            .expect("compile-time checks run");
+        assert!(summary.success, "AWS plans {field}: {summary:?}");
+
+        for platform in [
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
+            let summary = PreflightRunner::new()
+                .run_compile_time_checks(&stack_with_lifecycle(declared.clone(), live), platform)
+                .await
+                .expect("compile-time checks run");
+            assert!(
+                !summary.success,
+                "{platform} must refuse {field}: {summary:?}"
+            );
+            let rendered = format!("{summary:?}");
+            assert!(rendered.contains(field), "{platform}: {rendered}");
+            assert!(
+                rendered.contains(&platform.to_string()),
+                "the refusal names {platform}: {rendered}"
+            );
+            assert!(rendered.contains("agent"), "and the sandbox: {rendered}");
+        }
+    }
 }

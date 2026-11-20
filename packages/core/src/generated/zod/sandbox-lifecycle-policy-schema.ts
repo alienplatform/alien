@@ -10,7 +10,9 @@ import * as z from "zod";
  */
 export const SandboxLifecyclePolicySchema = z.object({
     "idlePauseSeconds": z.int().min(0).describe("Idle period after which the sandbox is paused, where the platform supports it.\n\nStored state written before the rename calls this `idleSuspendSeconds`.").nullish(),
-"maxLifetimeSeconds": z.int().min(0).describe("Wall-clock ceiling on a single sandbox, after which the platform terminates it.\n\nOptional because not every backend has the primitive: Kubernetes has\n`activeDeadlineSeconds` and AWS `maximumDurationInSeconds`, while neither Azure nor Local\nexpose one, so declaring a ceiling there is refused at plan time rather than accepted and\nnever applied. AWS caps it at 8 hours.").nullish()
+"maxLifetimeSeconds": z.int().min(0).describe("Wall-clock ceiling on a single sandbox, after which the platform terminates it.\n\nOptional because not every backend has the primitive: Kubernetes has\n`activeDeadlineSeconds` and AWS `maximumDurationInSeconds`, while neither Azure nor Local\nexpose one, so declaring a ceiling there is refused at plan time rather than accepted and\nnever applied. AWS caps it at 8 hours.").nullish(),
+"onPause": z.array(z.string()).describe("A program the agent runs inside the image, with the image's own grant, before the\nplatform pauses the sandbox with its memory kept. Killed by process group at a deadline.\nBest effort: the image must also survive a stop with no warning. The program must be one\nof the image's own files, not on a declared image-permissions mount. AWS only.").nullish(),
+"onResume": z.array(z.string()).describe("A program the agent runs inside the image after such a pause resumes. Best effort, with a\ndeadline. The same rule for the program applies. AWS only.").nullish()
     }).describe("How long a sandbox may live and when it is paused.\n\nDeclaration-time ceilings, not per-request values: every sandbox created through this\ndeclaration's binding is held to them, whatever a caller asks for at runtime.")
 
 export type SandboxLifecyclePolicy = z.infer<typeof SandboxLifecyclePolicySchema>

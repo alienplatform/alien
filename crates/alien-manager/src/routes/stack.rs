@@ -2494,6 +2494,7 @@ mod setup_update_authorization_tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let worker = Worker::new("api".to_string())
@@ -2725,6 +2726,7 @@ mod setup_update_authorization_tests {
                     .lifecycle(alien_core::SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .build(),
                 ResourceLifecycle::Live,
@@ -3211,6 +3213,7 @@ mod setup_update_authorization_tests {
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build();
             let network = alien_core::Network::new("net".to_string())

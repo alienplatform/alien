@@ -255,6 +255,7 @@ fn write_chart(directory: &Path) {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: Some(300),
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Frozen,

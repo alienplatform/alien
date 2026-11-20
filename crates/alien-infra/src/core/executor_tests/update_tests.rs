@@ -240,6 +240,7 @@ fn live_sandbox_entry() -> alien_core::ResourceEntry {
         .lifecycle(alien_core::SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     entry(Resource::new(sandbox), ResourceLifecycle::Live)
@@ -382,6 +383,7 @@ async fn imported_continuation_leaves_cloud_sandbox_builds_to_runtime() -> Resul
                     .lifecycle(alien_core::SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .build(),
             ),
@@ -808,6 +810,7 @@ async fn direct_setup_frozen_pass_verifies_kubernetes_compute_without_creating_a
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Live,
