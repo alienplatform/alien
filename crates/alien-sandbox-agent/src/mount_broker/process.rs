@@ -39,6 +39,9 @@ pub const DETACH_DEADLINE: Duration = Duration::from_secs(12);
 
 /// How long a caller has to send its whole request line.
 const REQUEST_READ: Duration = Duration::from_secs(2);
+/// The orphan sweep at a pause: with [`REQUEST_READ`] for the in-flight helper, inside the agent's
+/// 5 s wait for the pause acknowledgement.
+const PAUSE_SWEEP: Duration = Duration::from_millis(2500);
 
 /// Added to the broker's own bounds before the agent stops waiting for an answer.
 const ANSWER_SLACK: Duration = Duration::from_secs(10);
@@ -944,8 +947,12 @@ impl Loop<'_> {
         if message.tag == b'D' {
             self.detach_nfs();
         }
+        let mut pause_error = None;
         match message.tag {
-            b'Q' => self.paused = true,
+            b'Q' => {
+                self.paused = true;
+                pause_error = self.settle_for_pause().err();
+            }
             b'R' => self.paused = false,
             b'K' => self.kill_steps(),
             b'E' => self.end_steps(),
@@ -954,6 +961,11 @@ impl Loop<'_> {
         let mut ok = matches!(message.tag, b'D' | b'Q' | b'R' | b'K' | b'E')
             || (message.tag == b'S' && message.fds.len() == 2);
         let mut reason = String::new();
+        if let Some(error) = pause_error {
+            reason = format!("cannot settle the mounts for the pause: {error}");
+            eprintln!("mount broker: {reason}");
+            ok = false;
+        }
         if message.tag == b'S' && ok {
             match self.seal() {
                 // On success the ack carries the seal's report for the agent's boot report.
@@ -1288,30 +1300,59 @@ impl Loop<'_> {
     /// Used when the image's own pause step fails: an NFS connection does not survive the
     /// snapshot. A request still in flight is ended first, so its mount cannot land afterwards.
     fn detach_nfs(&mut self) {
-        if let Some(helper) = self.inflight.as_ref().map(|inflight| inflight.helper) {
-            self.expire();
-            // A killed helper is gone once it leaves the kernel; wait for that, bounded, so a
-            // mount it was attaching is in place (and detached below) or never made.
-            let gone_by = Instant::now() + REQUEST_READ;
-            while Instant::now() < gone_by {
-                // SAFETY: reaping our own helper without blocking.
-                if unsafe { libc::waitpid(helper, std::ptr::null_mut(), libc::WNOHANG) } != 0 {
-                    self.zombies.retain(|pid| *pid != helper);
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
+        self.end_inflight();
+        let _ = self.sweep(true, DETACH_DEADLINE.min(self.config.deadline));
+    }
+
+    /// At a pause: a request still in flight is ended and whatever its helper attached before
+    /// it died is detached, all before the pause is acknowledged, so the image's pause step sees
+    /// every mount that will exist. Fails when the helper or the sweep did not finish in time.
+    fn settle_for_pause(&mut self) -> Result<(), String> {
+        let had_request = self.inflight.is_some();
+        if !self.end_inflight() {
+            return Err("the in-flight mount helper did not exit after SIGKILL".to_string());
         }
+        if had_request && !self.sweep(false, PAUSE_SWEEP) {
+            return Err("the sweep of unrecorded mounts did not finish".to_string());
+        }
+        Ok(())
+    }
+
+    /// Ends a request in flight and waits, bounded, for its helper to leave the kernel, so a
+    /// mount it was attaching is in place or never made. False when the helper is still there.
+    fn end_inflight(&mut self) -> bool {
+        let Some(helper) = self.inflight.as_ref().map(|inflight| inflight.helper) else {
+            return true;
+        };
+        self.expire();
+        let gone_by = Instant::now() + REQUEST_READ;
+        while Instant::now() < gone_by {
+            // SAFETY: reaping our own helper without blocking.
+            if unsafe { libc::waitpid(helper, std::ptr::null_mut(), libc::WNOHANG) } != 0 {
+                self.zombies.retain(|pid| *pid != helper);
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    /// In a helper in the image's mount namespace, bound by `within`: detaches every NFS mount
+    /// (`all_nfs`, used when the image's own pause step fails: an NFS connection does not survive
+    /// the snapshot) or only the broker's mounts it has no record of (a helper killed after
+    /// attaching). False when the helper could not run or finish.
+    fn sweep(&mut self, all_nfs: bool, within: Duration) -> bool {
         let Some(namespace) = &self.namespace else {
-            return;
+            return true;
         };
         let namespace = namespace.as_raw_fd();
-        // The detach reports which recorded mounts are still there: a mount ID is reused once
+        let made: BTreeSet<u64> = self.made.keys().copied().collect();
+        // The sweep reports which recorded mounts are still there: a mount ID is reused once
         // its mount is gone, and a stale record would hide a new mount from the orphan sweep.
         let mut fds = [0; 2];
         // SAFETY: fds has room for two descriptors.
         if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-            return;
+            return false;
         }
         // SAFETY: two descriptors the kernel just returned.
         let (read, write) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
@@ -1321,7 +1362,11 @@ impl Loop<'_> {
             drop(read);
             // SAFETY: a mount namespace descriptor; the helper is single-threaded.
             let code = if unsafe { libc::setns(namespace, libc::CLONE_NEWNS) } == 0 {
-                ops::detach_nfs();
+                if all_nfs {
+                    ops::detach_nfs();
+                } else {
+                    ops::detach_orphans(&made);
+                }
                 let present: Vec<u64> = ops::mount_ids().into_iter().collect();
                 let _ = std::fs::File::from(write)
                     .write_all(&serde_json::to_vec(&present).unwrap_or_default());
@@ -1334,9 +1379,9 @@ impl Loop<'_> {
         }
         drop(write);
         if pid < 0 {
-            return;
+            return false;
         }
-        let deadline = Instant::now() + DETACH_DEADLINE.min(self.config.deadline);
+        let deadline = Instant::now() + within;
         loop {
             // SAFETY: reaping our own helper without blocking.
             if unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) } != 0 {
@@ -1346,14 +1391,18 @@ impl Loop<'_> {
                 // SAFETY: signalling our own helper.
                 unsafe { libc::kill(pid, libc::SIGKILL) };
                 self.zombies.push(pid);
-                return;
+                return false;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
         let mut text = Vec::new();
         let _ = std::fs::File::from(read).read_to_end(&mut text);
-        if let Ok(present) = serde_json::from_slice::<BTreeSet<u64>>(&text) {
-            self.made.retain(|id, _| present.contains(id));
+        match serde_json::from_slice::<BTreeSet<u64>>(&text) {
+            Ok(present) => {
+                self.made.retain(|id, _| present.contains(id));
+                true
+            }
+            Err(_) => false,
         }
     }
 

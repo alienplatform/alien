@@ -948,6 +948,38 @@ print(results)
         "PAUSE    a detach during an in-flight NFS request ended it ({took:?}); nothing landed"
     );
 
+    // A pause while an NFS request is in flight: the broker ends that request before it
+    // acknowledges, so the image's pause step cannot check its paths before the mount lands.
+    let mut pending = spawn_image(&format!(
+        "exec /opt/alien/bin/mount.nfs4 127.0.0.1:/ /workspace -o {}",
+        options.replace("port=20123", "port=20126")
+    ));
+    std::thread::sleep(Duration::from_millis(500));
+    let started = Instant::now();
+    mount_broker::pausing().expect("pausing while a request is in flight");
+    let took = started.elapsed();
+    let status = pending.wait().unwrap();
+    // Past the slow server's answer.
+    std::thread::sleep(Duration::from_secs(3));
+    let landed = mount_line("/workspace");
+    if landed.is_some() {
+        let _ = Command::new("umount").args(["-l", "/workspace"]).status();
+    }
+    mount_broker::resumed().expect("resumed");
+    assert!(
+        landed.is_none(),
+        "an in-flight NFS mount landed after the pause was acknowledged: {landed:?}"
+    );
+    assert_eq!(
+        status.code(),
+        Some(32),
+        "the in-flight request was not ended"
+    );
+    assert!(took < Duration::from_secs(5), "the pause waited {took:?}");
+    println!(
+        "PAUSE    a pause during an in-flight NFS request ended it ({took:?}); nothing landed"
+    );
+
     // Two NFS mounts stacked on one path both go at pause.
     allowed(&format!(
         "/opt/alien/bin/mount.nfs4 127.0.0.1:/ /workspace -o {options} && /opt/alien/bin/mount.nfs4 127.0.0.1:/ /workspace -o {options}"

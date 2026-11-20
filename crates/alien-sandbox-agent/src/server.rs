@@ -659,11 +659,12 @@ async fn run_image_step(
         Step::OnPause => crate::mount_broker::pausing,
         Step::OnResume => crate::mount_broker::resumed,
     };
-    if let Err(error) = tokio::task::spawn_blocking(mode)
+    let mode_set = tokio::task::spawn_blocking(mode)
         .await
         .map_err(std::io::Error::other)
-        .and_then(|result| result)
-    {
+        .and_then(|result| result);
+    let settled = mode_set.is_ok();
+    if let Err(error) = mode_set {
         tracing::error!(%error, step = name, "the mount broker did not take the pause state");
         crate::boot_error::lifecycle_note(&format!(
             "{name}: the mount broker did not take the state: {error}"
@@ -693,16 +694,19 @@ async fn run_image_step(
         },
         started.elapsed().as_millis()
     ));
-    if let Err(reason) = ran {
+    if let Err(reason) = &ran {
         tracing::error!(%reason, step = name, "image lifecycle step failed");
-        if matches!(step, Step::OnPause) {
-            match tokio::task::spawn_blocking(crate::mount_broker::detach_nfs_mounts).await {
-                Ok(Ok(())) => {
-                    tracing::warn!("detached the image's NFS mounts after onPause failed")
-                }
-                Ok(Err(error)) => tracing::error!(%error, "cannot detach the image's NFS mounts"),
-                Err(error) => tracing::error!(%error, "cannot detach the image's NFS mounts"),
-            }
+    }
+    // A pause the broker could not settle (a mount request it could not end) may leave a mount
+    // the step did not see: the detach runs then too.
+    if matches!(step, Step::OnPause) && (ran.is_err() || !settled) {
+        match tokio::task::spawn_blocking(crate::mount_broker::detach_nfs_mounts).await {
+            Ok(Ok(())) => tracing::warn!(
+                settled,
+                "detached the image's NFS mounts after onPause failed or the pause was not settled"
+            ),
+            Ok(Err(error)) => tracing::error!(%error, "cannot detach the image's NFS mounts"),
+            Err(error) => tracing::error!(%error, "cannot detach the image's NFS mounts"),
         }
     }
     crate::gateway_egress::record_nfs_port_drops(match step {
