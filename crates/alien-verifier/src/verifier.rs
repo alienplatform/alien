@@ -724,7 +724,10 @@ mod tests {
                     write,
                     &current,
                     REGION,
-                    Some(STORAGE_AGENT),
+                    crate::cloud_write::resource::GcpAgents {
+                        storage: Some(STORAGE_AGENT),
+                        pubsub: Some(PUBSUB_AGENT),
+                    },
                 );
             }
             let ResourceWrite::UpdateEventSourceMapping { uuid, .. } = write else {
@@ -768,6 +771,7 @@ mod tests {
                 ResourceWrite::SetPublicAccessPrevention { value, .. } => value.clone(),
                 ResourceWrite::CreateTopic { body, .. }
                 | ResourceWrite::CreateSubscription { body, .. }
+                | ResourceWrite::PatchSubscription { body, .. }
                 | ResourceWrite::CreateCommandSubscription { body, .. }
                 | ResourceWrite::CreateSchedulerJob { body, .. } => body.to_string(),
                 ResourceWrite::SetTopicIamPolicy { policy, .. }
@@ -1395,6 +1399,7 @@ mod tests {
     }
 
     const STORAGE_AGENT: &str = "service-1@gs-project-accounts.iam.gserviceaccount.com";
+    const PUBSUB_AGENT: &str = "service-4242@gcp-sa-pubsub.iam.gserviceaccount.com";
 
     fn gcp_queue_release(notified_by_storage: bool) -> alien_signing::SignedStatement {
         let mut assets = alien_core::Storage::new("assets".to_string()).build();
@@ -2418,6 +2423,315 @@ mod tests {
         ];
         for (what, write) in refused_writes {
             let (verifier, backend) = resource_verifier();
+            let reason = refusal(verifier.handle(write).await);
+            assert!(!reason.is_empty(), "{what}");
+            assert!(backend.forwarded.lock().unwrap().is_empty(), "{what}: sent");
+        }
+    }
+
+    /// A release whose stack has the queue `tasks`, dead-lettering to `failed` after 7 attempts,
+    /// and the queue `plain`, which has no dead-letter setting.
+    fn dead_letter_release(platform: alien_core::Platform) -> alien_signing::SignedStatement {
+        let mut tasks = alien_core::Queue::new("tasks".to_string()).build();
+        tasks.dead_letter = Some(
+            alien_core::QueueDeadLetter::builder()
+                .queue(alien_core::ResourceRef::new(
+                    alien_core::Queue::RESOURCE_TYPE,
+                    "failed",
+                ))
+                .max_attempts(7)
+                .build(),
+        );
+        let stack = alien_core::Stack::new("shop".to_string())
+            .add(tasks, alien_core::ResourceLifecycle::Frozen)
+            .add(
+                alien_core::Queue::new("failed".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Queue::new("plain".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let body = alien_core::release_statement::release_body(
+            platform,
+            &stack,
+            &alien_core::release_statement::ReleaseOptions {
+                channel: CHANNEL.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        signed_release(1, &body)
+    }
+
+    /// On AWS only the redrive policy and retention the signed stack declares are applied: the
+    /// target is a queue of this stack in this account, region and prefix.
+    #[tokio::test]
+    async fn aws_dead_letter_attributes_are_exactly_what_the_signed_stack_declares() {
+        let url =
+            |queue: &str| format!("https://sqs.{REGION}.amazonaws.com/{ACCOUNT}/{PREFIX}-{queue}");
+        let request = |queue: &str, attributes: Value| {
+            json!({"applyResourceWrite": {
+                "release": dead_letter_release(alien_core::Platform::Aws),
+                "signerLists": [signer_list()],
+                "resource": queue,
+                "writes": [{"setQueueAttributes": {"queueUrl": url(queue), "attributes": attributes}}],
+            }})
+        };
+        let redrive = |arn: String, count: u32| {
+            json!({"deadLetterTargetArn": arn, "maxReceiveCount": count}).to_string()
+        };
+        let own_target = format!("arn:aws:sqs:{REGION}:{ACCOUNT}:{PREFIX}-failed");
+
+        let (verifier, backend) = resource_verifier();
+        for write in [
+            request(
+                "tasks",
+                json!({"RedrivePolicy": redrive(own_target.clone(), 7)}),
+            ),
+            request("failed", json!({"MessageRetentionPeriod": "1209600"})),
+            request("plain", json!({"MessageRetentionPeriod": "345600"})),
+            request("plain", json!({"RedrivePolicy": ""})),
+        ] {
+            verifier
+                .handle(write.clone())
+                .await
+                .unwrap_or_else(|error| panic!("{write}: {}", crate::describe(&error)));
+        }
+        assert_eq!(backend.forwarded.lock().unwrap().len(), 4);
+
+        for (what, write) in [
+            (
+                "a target in another account",
+                request(
+                    "tasks",
+                    json!({"RedrivePolicy": redrive(
+                        format!("arn:aws:sqs:{REGION}:999988887777:{PREFIX}-failed"), 7)}),
+                ),
+            ),
+            (
+                "a target in another region",
+                request(
+                    "tasks",
+                    json!({"RedrivePolicy": redrive(
+                        format!("arn:aws:sqs:eu-north-1:{ACCOUNT}:{PREFIX}-failed"), 7)}),
+                ),
+            ),
+            (
+                "a target under another prefix",
+                request(
+                    "tasks",
+                    json!({"RedrivePolicy": redrive(
+                        format!("arn:aws:sqs:{REGION}:{ACCOUNT}:other-failed"), 7)}),
+                ),
+            ),
+            (
+                "a queue of the stack that is not the declared target",
+                request(
+                    "tasks",
+                    json!({"RedrivePolicy": redrive(
+                        format!("arn:aws:sqs:{REGION}:{ACCOUNT}:{PREFIX}-plain"), 7)}),
+                ),
+            ),
+            (
+                "a different count",
+                request(
+                    "tasks",
+                    json!({"RedrivePolicy": redrive(own_target.clone(), 6)}),
+                ),
+            ),
+            (
+                "a redrive policy on a queue without a dead letter",
+                request(
+                    "plain",
+                    json!({"RedrivePolicy": redrive(own_target.clone(), 7)}),
+                ),
+            ),
+            (
+                "clearing the policy the stack declares",
+                request("tasks", json!({"RedrivePolicy": ""})),
+            ),
+            (
+                "retention on a target other than 14 days",
+                request("failed", json!({"MessageRetentionPeriod": "345600"})),
+            ),
+            (
+                "long retention on a queue that is not a target",
+                request("plain", json!({"MessageRetentionPeriod": "1209600"})),
+            ),
+            (
+                "an odd retention",
+                request("failed", json!({"MessageRetentionPeriod": "60"})),
+            ),
+        ] {
+            let (verifier, backend) = resource_verifier();
+            let reason = refusal(verifier.handle(write).await);
+            assert!(!reason.is_empty(), "{what}");
+            assert!(backend.forwarded.lock().unwrap().is_empty(), "{what}: sent");
+        }
+    }
+
+    /// On GCP the subscription's dead-letter policy and the Pub/Sub service agent's grants are
+    /// exactly what the signed stack declares.
+    #[tokio::test]
+    async fn gcp_dead_letter_writes_are_exactly_what_the_signed_stack_declares() {
+        let request = |queue: &str, write: Value| {
+            json!({"applyResourceWrite": {
+                "release": dead_letter_release(alien_core::Platform::Gcp),
+                "signerLists": [signer_list()],
+                "resource": queue,
+                "writes": [write],
+            }})
+        };
+        let sub = |queue: &str| format!("{PREFIX}-{queue}-sub");
+        let topic_name = |queue: &str| format!("projects/acme-project/topics/{PREFIX}-{queue}");
+        let patch = |queue: &str, policy: Value, mask: &str| {
+            let subscription = if policy.is_null() {
+                json!({})
+            } else {
+                json!({"deadLetterPolicy": policy})
+            };
+            request(
+                queue,
+                json!({"patchSubscription": {"subscription": sub(queue), "body": {
+                    "subscription": subscription, "updateMask": mask}}}),
+            )
+        };
+        let declared = json!({"deadLetterTopic": topic_name("failed"), "maxDeliveryAttempts": 7});
+        let agent_member = format!("serviceAccount:{PUBSUB_AGENT}");
+        let grant =
+            |role: &str, member: &str| json!({"bindings": [{"role": role, "members": [member]}]});
+
+        // What the controller sends is accepted, and goes out unchanged.
+        let (verifier, backend) = gcp_resource_verifier(&json!({}));
+        for write in [
+            patch("tasks", declared.clone(), "deadLetterPolicy"),
+            request(
+                "tasks",
+                json!({"createSubscription": {"subscription": sub("tasks"), "body": {
+                    "topic": topic_name("tasks"), "deadLetterPolicy": declared}}}),
+            ),
+            patch("plain", Value::Null, "deadLetterPolicy"),
+            request(
+                "failed",
+                json!({"setTopicIamPolicy": {"topic": format!("{PREFIX}-failed"),
+                    "policy": grant("roles/pubsub.publisher", &agent_member)}}),
+            ),
+            request(
+                "tasks",
+                json!({"setSubscriptionIamPolicy": {"subscription": sub("tasks"),
+                    "policy": grant("roles/pubsub.subscriber", &agent_member)}}),
+            ),
+        ] {
+            verifier
+                .handle(write.clone())
+                .await
+                .unwrap_or_else(|error| panic!("{write}: {}", crate::describe(&error)));
+        }
+        assert_eq!(backend.forwarded.lock().unwrap().len(), 5);
+
+        let refused_writes = vec![
+            (
+                "a target topic in another project",
+                patch(
+                    "tasks",
+                    json!({"deadLetterTopic": format!("projects/theirs/topics/{PREFIX}-failed"),
+                        "maxDeliveryAttempts": 7}),
+                    "deadLetterPolicy",
+                ),
+            ),
+            (
+                "another topic of the stack",
+                patch(
+                    "tasks",
+                    json!({"deadLetterTopic": topic_name("plain"), "maxDeliveryAttempts": 7}),
+                    "deadLetterPolicy",
+                ),
+            ),
+            (
+                "a different count",
+                patch(
+                    "tasks",
+                    json!({"deadLetterTopic": topic_name("failed"), "maxDeliveryAttempts": 6}),
+                    "deadLetterPolicy",
+                ),
+            ),
+            (
+                "a wider update mask",
+                patch("tasks", declared.clone(), "deadLetterPolicy,pushConfig"),
+            ),
+            (
+                "a policy on a queue without a dead letter",
+                patch("plain", declared.clone(), "deadLetterPolicy"),
+            ),
+            (
+                "clearing the policy the stack declares",
+                patch("tasks", Value::Null, "deadLetterPolicy"),
+            ),
+            (
+                "another field in the patch",
+                request(
+                    "tasks",
+                    json!({"patchSubscription": {"subscription": sub("tasks"), "body": {
+                        "subscription": {"deadLetterPolicy": declared, "ackDeadlineSeconds": 600},
+                        "updateMask": "deadLetterPolicy"}}}),
+                ),
+            ),
+            (
+                "another subscription",
+                request(
+                    "tasks",
+                    json!({"patchSubscription": {"subscription": sub("plain"), "body": {
+                        "subscription": {"deadLetterPolicy": declared},
+                        "updateMask": "deadLetterPolicy"}}}),
+                ),
+            ),
+            (
+                "a policy at create that is not the declared one",
+                request(
+                    "tasks",
+                    json!({"createSubscription": {"subscription": sub("tasks"), "body": {
+                        "topic": topic_name("tasks"), "deadLetterPolicy": {
+                            "deadLetterTopic": topic_name("plain"), "maxDeliveryAttempts": 7}}}}),
+                ),
+            ),
+            (
+                "a service agent of another project publishing to the target",
+                request(
+                    "failed",
+                    json!({"setTopicIamPolicy": {"topic": format!("{PREFIX}-failed"),
+                        "policy": grant("roles/pubsub.publisher",
+                            "serviceAccount:service-1@gcp-sa-pubsub.iam.gserviceaccount.com")}}),
+                ),
+            ),
+            (
+                "the service agent as publisher on a topic that is not a target",
+                request(
+                    "plain",
+                    json!({"setTopicIamPolicy": {"topic": format!("{PREFIX}-plain"),
+                        "policy": grant("roles/pubsub.publisher", &agent_member)}}),
+                ),
+            ),
+            (
+                "the service agent as editor of the target",
+                request(
+                    "failed",
+                    json!({"setTopicIamPolicy": {"topic": format!("{PREFIX}-failed"),
+                        "policy": grant("roles/pubsub.editor", &agent_member)}}),
+                ),
+            ),
+            (
+                "the service agent as subscriber of a queue without a dead letter",
+                request(
+                    "plain",
+                    json!({"setSubscriptionIamPolicy": {"subscription": sub("plain"),
+                        "policy": grant("roles/pubsub.subscriber", &agent_member)}}),
+                ),
+            ),
+        ];
+        for (what, write) in refused_writes {
+            let (verifier, backend) = gcp_resource_verifier(&json!({}));
             let reason = refusal(verifier.handle(write).await);
             assert!(!reason.is_empty(), "{what}");
             assert!(backend.forwarded.lock().unwrap().is_empty(), "{what}: sent");

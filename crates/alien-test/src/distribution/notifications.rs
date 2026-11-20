@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use alien_core::{SetupConfigurationProfile, Stack, Storage};
+use alien_core::{Queue, QueueDeadLetter, ResourceRef, SetupConfigurationProfile, Stack, Storage};
 use alien_manager::auth::Subject;
 use anyhow::{ensure, Context};
 use serde_json::Value;
@@ -51,12 +51,63 @@ pub async fn verify_rule_update(ctx: &mut TestContext) -> anyhow::Result<()> {
         ctx.app == TestApp::StorageNotifications,
         "Notification fixture required"
     );
+    verify_setup_update(ctx, change_rule).await
+}
+
+/// How the dead-letter fixture's two Frozen queues (`tasks`, `pulled`) change in an update.
+#[derive(Clone, Copy)]
+pub enum DeadLetterChange {
+    /// Point each queue at its `*-failed` queue after this many attempts.
+    Set(u32),
+    /// Remove the setting.
+    Remove,
+}
+
+fn change_dead_letter(stack: &mut Stack, change: DeadLetterChange) -> anyhow::Result<()> {
+    for (source, target) in [("tasks", "tasks-failed"), ("pulled", "pulled-failed")] {
+        let (_, resource) = stack
+            .resources_mut()
+            .find(|(id, _)| id.as_str() == source)
+            .with_context(|| format!("Queue {source} missing"))?;
+        let queue = resource
+            .config
+            .downcast_mut::<Queue>()
+            .context("Expected Queue")?;
+        queue.dead_letter = match change {
+            DeadLetterChange::Set(max_attempts) => Some(QueueDeadLetter {
+                queue: ResourceRef::new(Queue::RESOURCE_TYPE, target),
+                max_attempts,
+            }),
+            DeadLetterChange::Remove => None,
+        };
+    }
+    Ok(())
+}
+
+/// Adds, changes or removes the dead-letter setting of the Frozen queues in a new release. Like
+/// a rule change, the manager must refuse the release until the generated package is applied
+/// again, and the rerun must update the same queues in place.
+pub async fn verify_dead_letter_update(
+    ctx: &mut TestContext,
+    change: DeadLetterChange,
+) -> anyhow::Result<()> {
+    ensure!(
+        ctx.app == TestApp::QueueDeadLetter,
+        "Dead-letter fixture required"
+    );
+    verify_setup_update(ctx, move |stack| change_dead_letter(stack, change)).await
+}
+
+async fn verify_setup_update(
+    ctx: &mut TestContext,
+    mutate: impl FnOnce(&mut Stack) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
     let mut prepared = ctx
         .distribution_setup
         .clone()
         .context("Distribution setup required")?;
     let old_release = prepared.release_id.clone();
-    change_rule(&mut prepared.built_stack)?;
+    mutate(&mut prepared.built_stack)?;
     prepared.release_id =
         create_release(&prepared.manager, prepared.platform, &prepared.built_stack).await?;
     let deadline = Instant::now() + Duration::from_secs(180);
@@ -75,13 +126,10 @@ pub async fn verify_rule_update(ctx: &mut TestContext) -> anyhow::Result<()> {
                 deployment.current_release_id.as_deref() == Some(old_release.as_str()),
                 "Refused update must not replace the installed release"
             );
-            info!("Frozen notification update correctly refused with DEPLOYMENT_SETUP_REQUIRED");
+            info!("Frozen update correctly refused with DEPLOYMENT_SETUP_REQUIRED");
             break;
         }
-        ensure!(
-            Instant::now() < deadline,
-            "Frozen notification update was not refused"
-        );
+        ensure!(Instant::now() < deadline, "Frozen update was not refused");
         sleep(Duration::from_secs(2)).await;
     }
 

@@ -25,25 +25,65 @@ impl TfEmitter for AwsQueueEmitter {
         let queue = downcast::<Queue>(ctx, Queue::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
 
-        let q = resource_block(
-            "aws_sqs_queue",
-            label,
-            [
-                attr("name", resource_prefix_template(queue.id())),
-                attr("sqs_managed_sse_enabled", Expression::Bool(true)),
-                attr(
-                    "visibility_timeout_seconds",
-                    Expression::Number(hcl::Number::from(i64::from(visibility_timeout(ctx)))),
-                ),
-                attr(
-                    "message_retention_seconds",
-                    Expression::Number(hcl::Number::from(345_600i64)),
-                ),
-                attr("tags", tags(ctx, "queue")),
-            ],
-        );
+        // A dead-lettered message keeps its original send time, so a target keeps messages
+        // longer than the sources that feed it.
+        let retention =
+            if alien_core::queues_dead_lettering_to(ctx.stack, ctx.resource_id).is_empty() {
+                alien_core::AWS_DEFAULT_RETENTION_SECONDS
+            } else {
+                alien_core::AWS_DEAD_LETTER_TARGET_RETENTION_SECONDS
+            };
+        let mut attrs = vec![
+            attr("name", resource_prefix_template(queue.id())),
+            attr("sqs_managed_sse_enabled", Expression::Bool(true)),
+            attr(
+                "visibility_timeout_seconds",
+                Expression::Number(hcl::Number::from(i64::from(visibility_timeout(ctx)))),
+            ),
+            attr(
+                "message_retention_seconds",
+                Expression::Number(hcl::Number::from(i64::from(retention))),
+            ),
+        ];
+        attrs.push(attr("tags", tags(ctx, "queue")));
+        let q = resource_block("aws_sqs_queue", label, attrs);
 
         let mut fragment = TfFragment::default().with_resource(q);
+        // A separate resource, not an inline `redrive_policy`: the provider keeps an inline
+        // policy when the attribute is removed, while destroying this resource clears it.
+        if let Some(dead_letter) = &queue.dead_letter {
+            let target_label = ctx.name_for(&dead_letter.queue.id).ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!(
+                        "Queue '{}' dead-letters to '{}', which has no Terraform label",
+                        queue.id(),
+                        dead_letter.queue.id
+                    ),
+                })
+            })?;
+            fragment = fragment.with_resource(resource_block(
+                "aws_sqs_queue_redrive_policy",
+                &format!("{label}_redrive"),
+                vec![
+                    attr("queue_url", expr::traversal(["aws_sqs_queue", label, "id"])),
+                    attr(
+                        "redrive_policy",
+                        crate::expr::jsonencode(expr::object([
+                            (
+                                "deadLetterTargetArn",
+                                expr::traversal(["aws_sqs_queue", target_label, "arn"]),
+                            ),
+                            (
+                                "maxReceiveCount",
+                                Expression::Number(hcl::Number::from(i64::from(
+                                    dead_letter.max_attempts,
+                                ))),
+                            ),
+                        ])),
+                    ),
+                ],
+            ));
+        }
         if alien_core::storage_notifications::queue_receives_storage_notifications(
             ctx.stack,
             ctx.resource_id,

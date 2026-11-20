@@ -66,7 +66,15 @@ static QUEUE_SPEC: StoreSpec = StoreSpec {
 #[derive(Debug)]
 pub struct LocalQueue {
     store: LocalStore,
+    /// Tests stop a dead-letter move at a chosen point, as a crash would.
+    #[cfg(test)]
+    fault: std::sync::atomic::AtomicU8,
 }
+
+#[cfg(test)]
+const FAIL_BEFORE_TARGET_INSERT: u8 = 1;
+#[cfg(test)]
+const FAIL_AFTER_TARGET_INSERT: u8 = 2;
 
 /// Build the standard queue operation error context.
 fn queue_error(operation: &str, reason: String) -> ErrorData {
@@ -121,6 +129,8 @@ impl LocalQueue {
     pub async fn new(data_dir: PathBuf) -> Result<Self> {
         Ok(Self {
             store: LocalStore::open(data_dir, &QUEUE_SPEC, Sharing::MultiProcess).await?,
+            #[cfg(test)]
+            fault: Default::default(),
         })
     }
 
@@ -137,6 +147,8 @@ impl LocalQueue {
     pub async fn single_process(data_dir: PathBuf) -> Result<Self> {
         Ok(Self {
             store: LocalStore::open(data_dir, &QUEUE_SPEC, Sharing::SingleProcess).await?,
+            #[cfg(test)]
+            fault: Default::default(),
         })
     }
 
@@ -170,6 +182,136 @@ impl LocalQueue {
             return None;
         }
         Some((id, receipt.to_string()))
+    }
+
+    /// Move messages that were delivered `max_attempts` times and are due again into `target`,
+    /// keeping their payloads, so the next delivery is never a `max_attempts + 1`th. Returns how
+    /// many moved.
+    ///
+    /// The two queues are separate databases, so the move is not one atomic transaction: the
+    /// target is written first and the source commits last. A crash in between leaves the message
+    /// in both queues (delivery stays at-least-once); it is never lost.
+    pub async fn move_dead_letters(
+        &self,
+        target: &LocalQueue,
+        max_attempts: u32,
+        limit: usize,
+    ) -> Result<usize> {
+        self.store
+            .with_conn(|conn| async move {
+                let mut conn = conn;
+                let now = Utc::now().timestamp_millis();
+                let tx = conn
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .await
+                    .into_alien_error()
+                    .context(queue_error(
+                        "dead_letter",
+                        "failed to begin immediate transaction".to_string(),
+                    ))?;
+                let rows = query_all(
+                    &tx,
+                    "SELECT id, payload_type, payload_data FROM messages \
+                     WHERE visible_at <= ?1 AND attempt >= ?2 \
+                     ORDER BY enqueued_at, id LIMIT ?3",
+                    (
+                        now,
+                        i64::from(max_attempts),
+                        i64::try_from(limit).unwrap_or(i64::MAX),
+                    ),
+                )
+                .await
+                .into_alien_error()
+                .context(queue_error(
+                    "dead_letter",
+                    "failed to scan exhausted messages".to_string(),
+                ))?;
+                if rows.is_empty() {
+                    return Ok(0);
+                }
+                let mut moving = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let (Some(id), Some(payload_type), Some(payload_data)) = (
+                        row.first().and_then(as_i64),
+                        row.get(1).and_then(as_text),
+                        row.get(2).and_then(as_text),
+                    ) else {
+                        return Err(AlienError::new(queue_error(
+                            "dead_letter",
+                            "failed to read an exhausted message".to_string(),
+                        )));
+                    };
+                    moving.push((id, payload_type, payload_data));
+                }
+                #[cfg(test)]
+                if self.fault.load(std::sync::atomic::Ordering::SeqCst) == FAIL_BEFORE_TARGET_INSERT
+                {
+                    return Err(AlienError::new(queue_error(
+                        "dead_letter",
+                        "injected failure before the target insert".to_string(),
+                    )));
+                }
+                // The target commits first: the source row is deleted only after this returns.
+                target.insert_raw(&moving).await?;
+                #[cfg(test)]
+                if self.fault.load(std::sync::atomic::Ordering::SeqCst) == FAIL_AFTER_TARGET_INSERT
+                {
+                    return Err(AlienError::new(queue_error(
+                        "dead_letter",
+                        "injected failure after the target insert".to_string(),
+                    )));
+                }
+                for (id, _, _) in &moving {
+                    tx.execute("DELETE FROM messages WHERE id = ?1", (*id,))
+                        .await
+                        .into_alien_error()
+                        .context(queue_error(
+                            "dead_letter",
+                            format!("failed to remove moved message {id}"),
+                        ))?;
+                }
+                tx.commit().await.into_alien_error().context(queue_error(
+                    "dead_letter",
+                    "failed to commit the move".to_string(),
+                ))?;
+                Ok(moving.len())
+            })
+            .await
+    }
+
+    /// Insert messages as new deliveries, keeping their stored payloads.
+    async fn insert_raw(&self, messages: &[(i64, String, String)]) -> Result<()> {
+        self.store
+            .with_conn(|conn| async move {
+                let mut conn = conn;
+                let tx = conn
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .await
+                    .into_alien_error()
+                    .context(queue_error(
+                        "dead_letter",
+                        "failed to begin target transaction".to_string(),
+                    ))?;
+                let now = Utc::now().timestamp_millis();
+                for (_, payload_type, payload_data) in messages {
+                    tx.execute(
+                        "INSERT INTO messages (payload_type, payload_data, enqueued_at, visible_at, attempt) \
+                         VALUES (?1, ?2, ?3, ?3, 0)",
+                        (payload_type.as_str(), payload_data.as_str(), now),
+                    )
+                    .await
+                    .into_alien_error()
+                    .context(queue_error(
+                        "dead_letter",
+                        "failed to insert into the target".to_string(),
+                    ))?;
+                }
+                tx.commit().await.into_alien_error().context(queue_error(
+                    "dead_letter",
+                    "failed to commit the target insert".to_string(),
+                ))
+            })
+            .await
     }
 
     /// Claim up to `max_messages` due messages with the given visibility
@@ -541,6 +683,92 @@ mod tests {
             .await
             .expect("Failed to create LocalQueue");
         (queue, temp_dir)
+    }
+
+    /// The target is committed before the source row is deleted, so a failure at either point
+    /// leaves the message in the source and at most a duplicate in the target, never a loss.
+    #[tokio::test]
+    async fn a_failed_move_never_loses_the_message() {
+        use std::sync::atomic::Ordering;
+        let (source, _source_dir) = create_test_queue().await;
+        let (target, _target_dir) = create_test_queue().await;
+        source
+            .send("q", MessagePayload::Text("poison".into()))
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            source
+                .receive_inner(1, Duration::from_millis(0))
+                .await
+                .unwrap();
+        }
+
+        // Fails before anything is written: nothing moved, nothing duplicated.
+        source
+            .fault
+            .store(FAIL_BEFORE_TARGET_INSERT, Ordering::SeqCst);
+        source.move_dead_letters(&target, 3, 10).await.unwrap_err();
+        assert_eq!(source.stats().await.unwrap().total, 1);
+        assert_eq!(target.stats().await.unwrap().total, 0);
+
+        // Fails after the target committed, before the source delete: the message is in both.
+        source
+            .fault
+            .store(FAIL_AFTER_TARGET_INSERT, Ordering::SeqCst);
+        source.move_dead_letters(&target, 3, 10).await.unwrap_err();
+        assert_eq!(
+            source.stats().await.unwrap().total,
+            1,
+            "the source row survives"
+        );
+        assert_eq!(
+            target.stats().await.unwrap().total,
+            1,
+            "a duplicate, not a loss"
+        );
+
+        // The retry completes the move: one more copy in the target, none left in the source.
+        source.fault.store(0, Ordering::SeqCst);
+        assert_eq!(source.move_dead_letters(&target, 3, 10).await.unwrap(), 1);
+        assert_eq!(source.stats().await.unwrap().total, 0);
+        assert_eq!(target.stats().await.unwrap().total, 2);
+    }
+
+    #[tokio::test]
+    async fn exhausted_messages_move_to_the_target_with_their_payload() {
+        let (source, _source_dir) = create_test_queue().await;
+        let (target, _target_dir) = create_test_queue().await;
+        source
+            .send("q", MessagePayload::Text("poison".into()))
+            .await
+            .unwrap();
+        source
+            .send("q", MessagePayload::Text("fine".into()))
+            .await
+            .unwrap();
+        // Fail "poison" three times: each delivery's lease expires at once.
+        for _ in 0..3 {
+            let got = source
+                .receive_inner(1, Duration::from_millis(0))
+                .await
+                .unwrap();
+            assert_eq!(payload_text(&got[0]), "poison");
+        }
+
+        // Not yet exhausted at four attempts.
+        assert_eq!(source.move_dead_letters(&target, 4, 10).await.unwrap(), 0);
+        assert_eq!(source.move_dead_letters(&target, 3, 10).await.unwrap(), 1);
+        assert_eq!(source.move_dead_letters(&target, 3, 10).await.unwrap(), 0);
+
+        let moved = target.receive("q", 10).await.unwrap();
+        assert_eq!(moved.len(), 1);
+        assert_eq!(payload_text(&moved[0]), "poison");
+        assert_eq!(moved[0].attempt, 1, "the target counts its own deliveries");
+        // "fine" is the only message the source still holds, and is delivered normally.
+        assert_eq!(source.stats().await.unwrap().total, 1);
+        let fine = source.receive("q", 10).await.unwrap();
+        assert_eq!(payload_text(&fine[0]), "fine");
+        assert_eq!(fine[0].attempt, 1);
     }
 
     #[tokio::test]

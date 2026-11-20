@@ -1403,3 +1403,39 @@ fn aws_storage_notifications_follow_deployer_enablement() {
         "Gated storage notifications",
     );
 }
+
+#[test]
+fn aws_dead_letter_queue_gets_a_redrive_policy_and_the_target_longer_retention() {
+    let build = |dead_letter: bool| {
+        let mut tasks = Queue::new("tasks".into()).build();
+        if dead_letter {
+            tasks.dead_letter = Some(
+                alien_core::QueueDeadLetter::builder()
+                    .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "tasks-failed"))
+                    .max_attempts(7)
+                    .build(),
+            );
+        }
+        let stack = Stack::new("dead-letter".into())
+            .add(tasks, ResourceLifecycle::Frozen)
+            .add(
+                Queue::new("tasks-failed".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        render_built_ins(
+            &stack,
+            StackSettings::default(),
+            RegistrationMode::OutputsFallback,
+            "Queue with a dead-letter target",
+        )
+    };
+    let with = build(true);
+    assert!(with.contains("RedrivePolicy"), "{with}");
+    assert!(with.contains("maxReceiveCount: 7"), "{with}");
+    assert!(with.contains("deadLetterTargetArn"), "{with}");
+    assert_eq!(with.matches("MessageRetentionPeriod: 1209600").count(), 1);
+    let without = build(false);
+    assert!(!without.contains("RedrivePolicy"));
+    assert_eq!(without.matches("MessageRetentionPeriod: 345600").count(), 2);
+}

@@ -579,6 +579,48 @@ pub(crate) fn generate_auto_management_profile(
             permission_set_ids.insert("queue/storage-notifications".to_string());
         }
 
+        if platform == Platform::Gcp
+            && resource_entry.lifecycle == ResourceLifecycle::Live
+            && resource_entry
+                .config
+                .downcast_ref::<alien_core::Queue>()
+                .is_some_and(|queue| {
+                    queue.dead_letter.is_some()
+                        || !alien_core::queues_dead_lettering_to(stack, resource_id).is_empty()
+                })
+        {
+            // Live queues may not exist at setup time, so this grant must be project-scoped.
+            // Pub/Sub's service agent needs publisher on the target and subscriber on the
+            // source's subscriptions.
+            permission_set_ids.insert("queue/dead-letter".to_string());
+        }
+
+        if platform == Platform::Gcp
+            && resource_entry.lifecycle == ResourceLifecycle::Live
+            && resource_entry
+                .config
+                .downcast_ref::<Worker>()
+                .is_some_and(|worker| {
+                    worker.triggers.iter().any(|trigger| {
+                        matches!(trigger, WorkerTrigger::Queue { queue, .. }
+                        if alien_core::queue_has_dead_letter(stack, &queue.id)
+                            && stack.resources.get(&queue.id).is_some_and(|entry| {
+                                entry.lifecycle == ResourceLifecycle::Live
+                            }))
+                    })
+                })
+        {
+            // Only when the trigger queue is Live, which already holds the equivalent grant on
+            // its own subscription. The grant is project scoped (Pub/Sub does not honor a name
+            // condition on subscription IAM) and lets management set the Pub/Sub service agent
+            // as subscriber on the worker's push subscription. When the queue is Frozen this set
+            // is not attached: setup grants the service agent `roles/pubsub.subscriber` for the
+            // project instead (see `alien_core::queue_needs_project_push_subscriber`). A stack
+            // with any Live queue already holds `pubsub.subscriptions.setIamPolicy` project-wide
+            // through `queue/provision`, whatever this set does.
+            permission_set_ids.insert("worker/dead-letter".to_string());
+        }
+
         if platform == Platform::Azure
             && resource_entry.lifecycle == ResourceLifecycle::Live
             && resource_entry
@@ -1979,6 +2021,174 @@ mod tests {
                             .any(|permission| permission.id() == permission_id)
                     });
                     assert_eq!(granted, notifying && lifecycle == ResourceLifecycle::Live);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dead_letter_permission_is_only_for_live_gcp_queues_that_use_it() {
+        for platform in [Platform::Gcp, Platform::Aws, Platform::Azure] {
+            for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
+                for dead_letter in [false, true] {
+                    let mut tasks = alien_core::Queue::new("tasks".into()).build();
+                    if dead_letter {
+                        tasks.dead_letter = Some(
+                            alien_core::QueueDeadLetter::builder()
+                                .queue(alien_core::ResourceRef::new(
+                                    alien_core::Queue::RESOURCE_TYPE,
+                                    "failed",
+                                ))
+                                .build(),
+                        );
+                    }
+                    let stack = Stack::new("test".into())
+                        .add(tasks, lifecycle)
+                        .add(alien_core::Queue::new("failed".into()).build(), lifecycle)
+                        .build();
+                    let config = DeploymentConfig::builder()
+                        .stack_settings(StackSettings::default())
+                        .environment_variables(empty_env_snapshot())
+                        .allow_frozen_changes(false)
+                        .external_bindings(ExternalBindings::default())
+                        .build();
+                    let prepared = ManagementPermissionProfileMutation
+                        .mutate(stack, &StackState::new(platform), &config)
+                        .await
+                        .unwrap();
+                    let holders: Vec<String> = prepared
+                        .management()
+                        .profile()
+                        .map(|profile| {
+                            profile
+                                .0
+                                .iter()
+                                .filter(|(_, grants)| {
+                                    grants.iter().any(|g| g.id() == "queue/dead-letter")
+                                })
+                                .map(|(resource, _)| resource.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let expected: Vec<&str> = if platform == Platform::Gcp
+                        && lifecycle == ResourceLifecycle::Live
+                        && dead_letter
+                    {
+                        vec!["*"]
+                    } else {
+                        vec![]
+                    };
+                    let mut holders = holders;
+                    holders.sort();
+                    assert_eq!(
+                        holders, expected,
+                        "{platform:?} {lifecycle:?} deadLetter={dead_letter}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn worker_dead_letter_permission_is_only_for_live_gcp_workers_triggered_by_a_live_dead_letter_queue(
+    ) {
+        for platform in [Platform::Gcp, Platform::Aws] {
+            for queue_lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+                for (dead_letter, unrelated_live_queue) in
+                    [(false, false), (true, false), (true, true)]
+                {
+                    let mut tasks = alien_core::Queue::new("tasks".into()).build();
+                    if dead_letter {
+                        tasks.dead_letter = Some(
+                            alien_core::QueueDeadLetter::builder()
+                                .queue(alien_core::ResourceRef::new(
+                                    alien_core::Queue::RESOURCE_TYPE,
+                                    "failed",
+                                ))
+                                .build(),
+                        );
+                    }
+                    let worker = Worker::new("consumer".into())
+                        .code(alien_core::WorkerCode::Image {
+                            image: "example.com/app:1".into(),
+                        })
+                        .permissions("execution".into())
+                        .trigger(WorkerTrigger::queue(&tasks))
+                        .build();
+                    let mut stack = Stack::new("test".into())
+                        .add(tasks, queue_lifecycle)
+                        .add(
+                            alien_core::Queue::new("failed".into()).build(),
+                            queue_lifecycle,
+                        )
+                        .add(worker, ResourceLifecycle::Live);
+                    if unrelated_live_queue {
+                        stack = stack.add(
+                            alien_core::Queue::new("other".into()).build(),
+                            ResourceLifecycle::Live,
+                        );
+                    }
+                    let stack = stack.build();
+                    let config = DeploymentConfig::builder()
+                        .stack_settings(StackSettings::default())
+                        .environment_variables(empty_env_snapshot())
+                        .allow_frozen_changes(false)
+                        .external_bindings(ExternalBindings::default())
+                        .build();
+                    let prepared = ManagementPermissionProfileMutation
+                        .mutate(stack, &StackState::new(platform), &config)
+                        .await
+                        .unwrap();
+                    let permissions: Vec<String> = prepared
+                        .management()
+                        .profile()
+                        .map(|profile| {
+                            profile
+                                .0
+                                .values()
+                                .flatten()
+                                .map(|permission| permission.id().to_string())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    // With only Frozen queues management holds no subscription IAM write. A Live
+                    // queue anywhere in the stack brings `queue/provision`, which holds it
+                    // project-wide; `worker/dead-letter` is still not attached for a Frozen
+                    // trigger queue.
+                    if platform == Platform::Gcp && queue_lifecycle == ResourceLifecycle::Frozen {
+                        let mut writers: Vec<&str> =
+                            permissions
+                                .iter()
+                                .filter(|id| {
+                                    alien_permissions::get_permission_set(id.as_str())
+                                        .and_then(|set| set.platforms.gcp.as_ref())
+                                        .is_some_and(|grants| {
+                                            grants.iter().any(|grant| {
+                                                grant.grant.permissions.iter().flatten().any(|p| {
+                                                    p == "pubsub.subscriptions.setIamPolicy"
+                                                })
+                                            })
+                                        })
+                                })
+                                .map(String::as_str)
+                                .collect();
+                        writers.sort();
+                        writers.dedup();
+                        let expected: &[&str] = if unrelated_live_queue {
+                            &["queue/provision"]
+                        } else {
+                            &[]
+                        };
+                        assert_eq!(writers, expected, "{dead_letter}/{unrelated_live_queue}");
+                    }
+                    assert_eq!(
+                        permissions.iter().any(|id| id == "worker/dead-letter"),
+                        platform == Platform::Gcp
+                            && dead_letter
+                            && queue_lifecycle == ResourceLifecycle::Live,
+                        "{platform:?} {queue_lifecycle:?} deadLetter={dead_letter} \
+                         unrelatedLive={unrelated_live_queue}: {permissions:?}"
+                    );
                 }
             }
         }

@@ -59,7 +59,7 @@ const KUBERNETES_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(1_80
 const KUBERNETES_FULL_STACK_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(3_600);
 
 mod notifications;
-pub use notifications::verify_rule_update;
+pub use notifications::{verify_dead_letter_update, verify_rule_update, DeadLetterChange};
 
 /// Artifact cleanup that sits outside the manager's normal destroy flow.
 pub enum DistributionArtifactCleanup {
@@ -2992,6 +2992,7 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
                 | TestApp::ByoAi
                 | TestApp::AutomaticSetup
                 | TestApp::StorageNotifications
+                | TestApp::QueueDeadLetter
                 | TestApp::SandboxRemote
         )
         && matches!(

@@ -319,6 +319,16 @@ impl Stack {
                     value["queueBatchVisibilityTimeout"] =
                         self.queue_visibility_timeout_seconds(id).into();
                 }
+                // A setup-owned dead-letter queue triggered by a Live Worker needs a
+                // project-level grant that only setup can write. Adding or removing such a
+                // trigger must therefore ask for setup. The digest does not know the platform,
+                // so the field also appears for such a queue on other platforms, where nothing
+                // asks for setup because of it (only GCP's compatibility check compares it).
+                // It is absent for every stack without a Frozen dead-letter queue that has a
+                // Live Worker trigger, so those stacks keep their digests.
+                if crate::queue_needs_project_push_subscriber(self, id) {
+                    value["queueProjectPushSubscriber"] = true.into();
+                }
                 (id, value)
             })
             .collect::<Vec<_>>();
@@ -997,6 +1007,68 @@ mod tests {
         let serialized = serde_json::to_string_pretty(&stack_extend).expect("Failed to serialize");
         let deserialized: Stack = serde_json::from_str(&serialized).expect("Failed to deserialize");
         assert_eq!(stack_extend, deserialized);
+    }
+
+    fn dead_letter_stack(with_worker: bool, worker_lifecycle: ResourceLifecycle) -> Stack {
+        use crate::{Queue, QueueDeadLetter, Worker, WorkerCode, WorkerTrigger};
+        let failed = Queue::new("failed".to_string()).build();
+        let tasks = Queue::new("tasks".to_string())
+            .dead_letter(
+                QueueDeadLetter::builder()
+                    .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "failed"))
+                    .build(),
+            )
+            .build();
+        let mut stack = Stack::new("dlq".to_string())
+            .add(failed, ResourceLifecycle::Frozen)
+            .add(tasks.clone(), ResourceLifecycle::Frozen);
+        if with_worker {
+            stack = stack.add(
+                Worker::new("consumer".to_string())
+                    .code(WorkerCode::Image {
+                        image: "img".to_string(),
+                    })
+                    .permissions("execution".to_string())
+                    .trigger(WorkerTrigger::queue(&tasks))
+                    .build(),
+                worker_lifecycle,
+            );
+        }
+        stack.build()
+    }
+
+    #[test]
+    fn a_live_worker_trigger_on_a_frozen_dead_letter_queue_changes_the_setup_digest() {
+        let without = dead_letter_stack(false, ResourceLifecycle::Live);
+        let with = dead_letter_stack(true, ResourceLifecycle::Live);
+        // The Worker is not setup-owned, so only the derived queue field can differ.
+        assert_ne!(without.setup_update_digest(), with.setup_update_digest());
+        assert_ne!(without.setup_owned_digest(), with.setup_owned_digest());
+    }
+
+    #[test]
+    fn the_dead_letter_queue_digest_is_unchanged_when_no_project_grant_is_needed() {
+        // Without a Worker trigger, or with a setup-owned Worker (setup grants on its
+        // subscription directly), the digest field must stay absent.
+        let plain_stack = dead_letter_stack(false, ResourceLifecycle::Live);
+        let (plain, _) = plain_stack.setup_owned_projection();
+        assert!(plain
+            .iter()
+            .all(|(_, v)| v.get("queueProjectPushSubscriber").is_none()));
+        let frozen_stack = dead_letter_stack(true, ResourceLifecycle::Frozen);
+        let (frozen_worker, _) = frozen_stack.setup_owned_projection();
+        assert!(frozen_worker
+            .iter()
+            .all(|(_, v)| v.get("queueProjectPushSubscriber").is_none()));
+        let live_stack = dead_letter_stack(true, ResourceLifecycle::Live);
+        let (live_worker, _) = live_stack.setup_owned_projection();
+        assert!(live_worker
+            .iter()
+            .any(|(id, v)| *id == "tasks" && v["queueProjectPushSubscriber"] == true));
+        assert!(live_worker
+            .iter()
+            .filter(|(id, _)| *id != "tasks")
+            .all(|(_, v)| v.get("queueProjectPushSubscriber").is_none()));
     }
 
     #[test]

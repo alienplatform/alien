@@ -24,7 +24,7 @@
 //! `tests`.
 
 use alien_core::{
-    Ai, ArtifactRegistry, Container, Daemon, Postgres, Sandbox, Stack, Storage, Worker,
+    Ai, ArtifactRegistry, Container, Daemon, Postgres, Queue, Sandbox, Stack, Storage, Worker,
 };
 
 /// The oldest supported Operator, assumed when none reports its version.
@@ -150,6 +150,12 @@ pub(crate) const STORAGE_NOTIFICATIONS: Feature = feature(
     Action::Refuse,
     "declared behavior an older Operator would silently not provide",
 );
+pub(crate) const QUEUE_DEAD_LETTER: Feature = feature(
+    "queue dead-letter targets",
+    "3.3.70",
+    Action::Refuse,
+    "declared behavior an older Operator would silently not provide",
+);
 pub(crate) const STORAGE_UPLOAD_ORIGINS: Feature = feature(
     "storage upload origins",
     "3.3.59",
@@ -220,6 +226,7 @@ pub(crate) const FEATURES: &[&Feature] = &[
     &WORKER_SECURITY,
     &DATABASE_ENCRYPTION_KEY,
     &STORAGE_NOTIFICATIONS,
+    &QUEUE_DEAD_LETTER,
     &STORAGE_UPLOAD_ORIGINS,
     &SANDBOX_POLICY,
     &SANDBOX_IMAGE_USER,
@@ -393,6 +400,10 @@ pub(crate) fn apply(
             }
             if !storage.cors_upload_origins.is_empty() {
                 refuse(&STORAGE_UPLOAD_ORIGINS);
+            }
+        } else if let Some(queue) = config.downcast_ref::<Queue>() {
+            if queue.dead_letter.is_some() {
+                refuse(&QUEUE_DEAD_LETTER);
             }
         } else if let Some(sandbox) = config.downcast_ref::<Sandbox>() {
             if !sandbox.links.is_empty() || sandbox.default_policy.is_some() {
@@ -959,6 +970,39 @@ mod tests {
             false
         )
         .is_empty());
+    }
+
+    #[test]
+    fn a_queue_dead_letter_target_is_refused_for_older_operators() {
+        use alien_core::{Queue, QueueDeadLetter, ResourceRef};
+        let queue = |dead_letter: bool| {
+            let mut source = Queue::new("tasks".to_string()).build();
+            if dead_letter {
+                source.dead_letter = Some(QueueDeadLetter {
+                    queue: ResourceRef::new(Queue::RESOURCE_TYPE, "failed"),
+                    max_attempts: 5,
+                });
+            }
+            Stack::new("app".to_string())
+                .add(source, ResourceLifecycle::Live)
+                .add(
+                    Queue::new("failed".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+        };
+        for version in [None, Some("3.3.31"), Some("3.3.62"), Some("3.3.68"), Some("3.3.69")] {
+            assert_eq!(
+                refused_for(&queue(true), version),
+                ["queue dead-letter targets"],
+                "{version:?}"
+            );
+            assert!(refused_for(&queue(false), version).is_empty());
+        }
+        assert!(refused_for(&queue(true), Some("3.3.70")).is_empty());
+        let message = refusal_message(&[&QUEUE_DEAD_LETTER]);
+        assert!(message.contains("queue dead-letter targets"));
+        assert!(message.contains("must be 3.3.70 or newer"));
     }
 
     #[test]

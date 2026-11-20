@@ -30,6 +30,9 @@ impl ResourceImporter for AwsQueueImporter {
             queue_name: Some(data.queue_name),
             storage_ingress_buckets: Vec::new(),
             storage_ingress_pending: None,
+            redrive_policy: None,
+            dead_letter_target: false,
+            dead_letter_write_started: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

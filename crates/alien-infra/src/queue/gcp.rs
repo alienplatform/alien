@@ -1,8 +1,13 @@
+use super::gcp_dead_letter::{
+    dead_letter_policy, policy_key, pubsub_service_agent, set_role_member, PUBLISHER, SUBSCRIBER,
+};
 use crate::core::{verifier::ResourceWrite, ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     bindings::{BindingValue, QueueBinding},
+    queue_needs_project_push_subscriber, queues_dead_lettering_to,
+    queues_needing_project_push_subscriber,
     storage_notifications::queue_receives_storage_notifications,
     GcpPubSubQueueHeartbeatData, HeartbeatBackend, InitialSetupAuthority, ObservedHealth, Platform,
     ProviderLifecycleState, Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs,
@@ -75,6 +80,46 @@ pub struct GcpQueueController {
     /// Persist intent before a policy write, including recovery after a lost response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) storage_publisher_pending: Option<bool>,
+    /// The dead-letter policy last written to the pull subscription, as `<topic>:<attempts>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dead_letter_policy: Option<String>,
+    /// A patch of the pull subscription's dead-letter policy was started and not confirmed,
+    /// recorded before the patch is sent. A patch whose response is lost may have been applied,
+    /// so the retry, or a removal of the setting before it, patches again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dead_letter_patch_started: bool,
+    /// The Pub/Sub service agent this queue granted subscriber on its pull subscription or
+    /// publisher on its topic, recorded before the grant is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dead_letter_agent: Option<String>,
+    /// Subscriber on the pull subscription is granted (the queue has a dead-letter setting).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dead_letter_subscriber: bool,
+    /// Publisher on the topic is granted (another queue dead-letters into this one).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dead_letter_publisher: bool,
+    /// The subscriber grant's intended state, recorded in a step of its own before the write, so
+    /// a grant whose response is lost is still revoked if the setting is removed before the retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dead_letter_subscriber_pending: Option<bool>,
+    /// The same for the publisher grant on the topic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dead_letter_publisher_pending: Option<bool>,
+    /// The project-level subscriber grant of the Pub/Sub service agent for a Worker's push
+    /// subscription on this setup-owned queue is in place (see
+    /// `alien_core::queue_needs_project_push_subscriber`). Written only by a setup run (direct
+    /// or automatic, where management is the setup engine), never by runtime.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dead_letter_project_subscriber: bool,
+    /// Its intended state, recorded before the write like the other grants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dead_letter_project_subscriber_pending: Option<bool>,
+    /// This controller added the member (it was absent when the grant was prepared), so it is
+    /// the one that removes it. A member that was already there, such as the customer's own
+    /// grant or another stack's, is never removed. Set when the write is recorded, before it
+    /// happens, so a lost response is still revoked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dead_letter_project_subscriber_added: bool,
 }
 
 #[controller]
@@ -139,7 +184,9 @@ impl GcpQueueController {
         })?;
         let sub = format!("{}-sub", topic);
 
-        // Create pull subscription
+        // Create the pull subscription without a dead-letter policy: the policy is patched on by
+        // `reconcile_dead_letter` after the Pub/Sub service agent's grants exist, so it never
+        // names a topic or subscription the agent cannot yet use.
         let subscription = Subscription::builder()
             .topic(format!("projects/{}/topics/{}", cfg.project_id, topic))
             .build();
@@ -163,6 +210,7 @@ impl GcpQueueController {
                 })?;
         }
 
+        self.dead_letter_policy = None;
         self.subscription_name = Some(sub);
         info!(topic=?self.topic_name, subscription=?self.subscription_name, "GCP Pub/Sub created");
         Ok(HandlerAction::Continue {
@@ -305,6 +353,7 @@ impl GcpQueueController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         self.prepare_storage_publisher(ctx).await?;
+        self.prepare_dead_letter(ctx).await?;
         Ok(HandlerAction::Continue {
             state: ApplyingStoragePublisher,
             suggested_delay: None,
@@ -318,6 +367,18 @@ impl GcpQueueController {
     ) -> Result<HandlerAction> {
         self.reconcile_storage_publisher(ctx).await?;
         Ok(HandlerAction::Continue {
+            state: ReconcilingDeadLetter,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = ReconcilingDeadLetter, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn reconciling_dead_letter(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.reconcile_dead_letter(ctx).await?;
+        Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
         })
@@ -330,6 +391,18 @@ impl GcpQueueController {
     ) -> Result<HandlerAction> {
         self.reconcile_storage_publisher(ctx).await?;
         Ok(HandlerAction::Continue {
+            state: UpdatingDeadLetter,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = UpdatingDeadLetter, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_dead_letter(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.reconcile_dead_letter(ctx).await?;
+        Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
         })
@@ -340,7 +413,8 @@ impl GcpQueueController {
         Ok(may_manage_storage_publisher(ctx, &queue.id)
             && (self.storage_publisher_pending.is_some()
                 || queue_receives_storage_notifications(ctx.desired_stack, &queue.id)
-                    != self.storage_publisher_member.is_some()))
+                    != self.storage_publisher_member.is_some()
+                || self.dead_letter_changed(ctx)?))
     }
 
     #[handler(
@@ -406,6 +480,7 @@ impl GcpQueueController {
         let config = ctx.desired_resource_config::<Queue>()?;
         info!(id=%config.id, "Reconciling GCP Queue storage ingress");
         self.prepare_storage_publisher(ctx).await?;
+        self.prepare_dead_letter(ctx).await?;
         Ok(HandlerAction::Continue {
             state: UpdatingStoragePublisher,
             suggested_delay: None,
@@ -461,10 +536,28 @@ impl GcpQueueController {
                 }
             }
         }
+        if let Some(agent) = self.dead_letter_agent.clone() {
+            // Setup teardown deletes setup-owned resources under direct setup authority but
+            // is not a setup run, so the delete path checks the authority only.
+            if self.dead_letter_project_subscriber_added
+                && ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup
+            {
+                let id = ctx.desired_config.id().to_string();
+                self.revoke_project_subscriber(ctx, &id, &agent).await?;
+            }
+        }
+        self.dead_letter_project_subscriber = false;
+        self.dead_letter_project_subscriber_pending = None;
+        self.dead_letter_project_subscriber_added = false;
         self.topic_name = None;
         self.subscription_name = None;
         self.storage_publisher_member = None;
         self.storage_publisher_pending = None;
+        self.dead_letter_policy = None;
+        self.dead_letter_patch_started = false;
+        self.dead_letter_agent = None;
+        self.dead_letter_subscriber = false;
+        self.dead_letter_publisher = false;
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
@@ -515,6 +608,169 @@ impl GcpQueueController {
             Ok(None)
         }
     }
+}
+
+/// Read-modify-write of one topic policy: adds or removes only the Pub/Sub service agent's
+/// publisher binding, keeping every other member and the etag.
+async fn set_agent_on_topic(
+    ctx: &ResourceControllerContext<'_>,
+    client: &dyn alien_gcp_clients::pubsub::PubSubApi,
+    queue_id: &str,
+    topic: &str,
+    agent: &str,
+    enabled: bool,
+) -> Result<()> {
+    let mut policy = client
+        .get_topic_iam_policy(topic.to_string())
+        .await
+        .context(ErrorData::CloudPlatformError {
+            resource_id: Some(queue_id.to_string()),
+            message: format!("Read the dead-letter publisher policy of topic '{topic}'"),
+        })?;
+    if set_role_member(&mut policy, PUBLISHER, agent, enabled) {
+        if !protected_queue_writes(
+            ctx,
+            queue_id,
+            vec![ResourceWrite::SetTopicIamPolicy {
+                topic: topic.to_string(),
+                policy: policy_json(&policy, queue_id)?,
+            }],
+        )
+        .await?
+        {
+            client
+                .set_topic_iam_policy(topic.to_string(), policy)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    resource_id: Some(queue_id.to_string()),
+                    message: format!(
+                        "Change the Pub/Sub service agent's publisher grant on topic '{topic}'"
+                    ),
+                })?;
+        }
+    }
+    Ok(())
+}
+
+/// The same for a subscription: the Pub/Sub service agent's subscriber binding.
+async fn set_agent_on_subscription(
+    ctx: &ResourceControllerContext<'_>,
+    client: &dyn alien_gcp_clients::pubsub::PubSubApi,
+    queue_id: &str,
+    subscription: &str,
+    agent: &str,
+    enabled: bool,
+) -> Result<()> {
+    let mut policy = client
+        .get_subscription_iam_policy(subscription.to_string())
+        .await
+        .context(ErrorData::CloudPlatformError {
+            resource_id: Some(queue_id.to_string()),
+            message: format!("Read the dead-letter subscriber policy of '{subscription}'"),
+        })?;
+    if set_role_member(&mut policy, SUBSCRIBER, agent, enabled) {
+        if !protected_queue_writes(
+            ctx,
+            queue_id,
+            vec![ResourceWrite::SetSubscriptionIamPolicy {
+                subscription: subscription.to_string(),
+                policy: policy_json(&policy, queue_id)?,
+            }],
+        )
+        .await?
+        {
+            client
+                .set_subscription_iam_policy(subscription.to_string(), policy)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    resource_id: Some(queue_id.to_string()),
+                    message: format!(
+                        "Change the Pub/Sub service agent's subscriber grant on '{subscription}'"
+                    ),
+                })?;
+        }
+    }
+    Ok(())
+}
+
+/// Reads the project IAM policy at version 3, so conditional bindings are returned and written
+/// back untouched (as every other project-policy writer does).
+async fn read_project_policy(
+    ctx: &ResourceControllerContext<'_>,
+    queue_id: &str,
+) -> Result<IamPolicy> {
+    let cfg = ctx.get_gcp_config()?;
+    let client = ctx.service_provider.get_gcp_resource_manager_client(cfg)?;
+    client
+        .get_project_iam_policy(
+            cfg.project_id.clone(),
+            Some(alien_gcp_clients::resource_manager::GetPolicyOptions {
+                requested_policy_version: Some(3),
+            }),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            resource_id: Some(queue_id.to_string()),
+            message: "Read the project IAM policy for the Pub/Sub service agent's subscriber grant"
+                .to_string(),
+        })
+}
+
+/// Whether another queue of this stack recorded that it added the shared project-level
+/// subscriber member (read from the stack state).
+fn another_queue_added_project_subscriber(
+    ctx: &ResourceControllerContext<'_>,
+    queue_id: &str,
+) -> bool {
+    queues_needing_project_push_subscriber(ctx.desired_stack)
+        .iter()
+        .filter(|id| id.as_str() != queue_id)
+        .filter_map(|id| ctx.state.resources.get(id))
+        .filter_map(|state| state.internal_state.as_ref())
+        .any(|state| {
+            state
+                .get("deadLetterProjectSubscriberAdded")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        })
+}
+
+/// Whether the Pub/Sub service agent already holds `roles/pubsub.subscriber` for the project.
+async fn project_subscriber_present(
+    ctx: &ResourceControllerContext<'_>,
+    queue_id: &str,
+    agent: &str,
+) -> Result<bool> {
+    let mut policy = read_project_policy(ctx, queue_id).await?;
+    // Adding to a policy that already has the member changes nothing.
+    Ok(!set_role_member(&mut policy, SUBSCRIBER, agent, true))
+}
+
+/// Adds or removes the Pub/Sub service agent's `roles/pubsub.subscriber` for the whole project,
+/// preserving every other member, conditional bindings and the etag. Written only by a setup
+/// run, for a Worker's push subscription on a setup-owned queue (nothing at runtime may write
+/// that subscription's IAM policy).
+async fn set_project_subscriber(
+    ctx: &ResourceControllerContext<'_>,
+    queue_id: &str,
+    agent: &str,
+    enabled: bool,
+) -> Result<()> {
+    let cfg = ctx.get_gcp_config()?;
+    let client = ctx.service_provider.get_gcp_resource_manager_client(cfg)?;
+    let mut policy = read_project_policy(ctx, queue_id).await?;
+    if set_role_member(&mut policy, SUBSCRIBER, agent, enabled) {
+        policy.version = Some(3);
+        client
+            .set_project_iam_policy(cfg.project_id.clone(), policy, None)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                resource_id: Some(queue_id.to_string()),
+                message: "Change the Pub/Sub service agent's project-level subscriber grant"
+                    .to_string(),
+            })?;
+    }
+    Ok(())
 }
 
 fn may_manage_storage_publisher(ctx: &ResourceControllerContext<'_>, id: &str) -> bool {
@@ -867,6 +1123,907 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn dead_letter_sets_the_policy_and_minimal_agent_grants_then_removes_them() {
+        use alien_gcp_clients::pubsub::{DeadLetterPolicy, SubscriptionPatch};
+        const AGENT: &str = "serviceAccount:service-4242@gcp-sa-pubsub.iam.gserviceaccount.com";
+        let mut source = Queue::new("tasks".into()).build();
+        source.dead_letter = Some(
+            alien_core::QueueDeadLetter::builder()
+                .queue(alien_core::ResourceRef::new(Queue::RESOURCE_TYPE, "failed"))
+                .max_attempts(6)
+                .build(),
+        );
+        let plain = Queue::new("tasks".into()).build();
+        let sub_policy = Arc::new(std::sync::Mutex::new(IamPolicy::default()));
+        let patches: Arc<std::sync::Mutex<Vec<(Option<DeadLetterPolicy>, Option<String>)>>> =
+            Default::default();
+        let mut pubsub = MockPubSubApi::new();
+        let reads = sub_policy.clone();
+        pubsub
+            .expect_get_subscription_iam_policy()
+            .returning(move |sub| {
+                assert_eq!(sub, "test-tasks-sub");
+                Ok(reads.lock().unwrap().clone())
+            });
+        let writes = sub_policy.clone();
+        pubsub
+            .expect_set_subscription_iam_policy()
+            .returning(move |_, value| {
+                *writes.lock().unwrap() = value.clone();
+                Ok(value)
+            });
+        let sink = patches.clone();
+        pubsub
+            .expect_patch_subscription()
+            .returning(move |sub, patch: SubscriptionPatch, mask| {
+                assert_eq!(sub, "test-tasks-sub");
+                sink.lock().unwrap().push((patch.dead_letter_policy, mask));
+                Ok(Subscription::default())
+            });
+        let pubsub = Arc::new(pubsub);
+        let mut manager = alien_gcp_clients::resource_manager::MockResourceManagerApi::new();
+        manager.expect_get_project_metadata().returning(|_| {
+            Ok(alien_gcp_clients::resource_manager::Project::builder()
+                .project_number("4242".to_string())
+                .build())
+        });
+        let manager = Arc::new(manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        let mut run = SingleControllerExecutor::builder()
+            .resource(plain.clone())
+            .controller(GcpQueueController {
+                state: GcpQueueState::Ready,
+                topic_name: Some("test-tasks".into()),
+                subscription_name: Some("test-tasks-sub".into()),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(Queue::new("failed".into()).build(), ResourceLifecycle::Live)
+            .build()
+            .await
+            .unwrap();
+        assert!(!run.needs_update().unwrap(), "no setting, no update");
+
+        *run.desired_resource_config_mut("tasks").unwrap() =
+            alien_core::Resource::new(source.clone());
+        assert!(run.needs_update().unwrap());
+        run.update(source).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert!(!run.needs_update().unwrap());
+        {
+            let patches = patches.lock().unwrap();
+            assert_eq!(patches.len(), 1);
+            let policy = patches[0].0.as_ref().unwrap();
+            assert_eq!(
+                policy.dead_letter_topic.as_deref(),
+                Some("projects/test-project-123/topics/test-failed")
+            );
+            assert_eq!(policy.max_delivery_attempts, Some(6));
+            assert_eq!(patches[0].1.as_deref(), Some("deadLetterPolicy"));
+            let policy = sub_policy.lock().unwrap();
+            assert_eq!(policy.bindings.len(), 1);
+            assert_eq!(policy.bindings[0].role, "roles/pubsub.subscriber");
+            assert_eq!(policy.bindings[0].members, [AGENT]);
+        }
+
+        *run.desired_resource_config_mut("tasks").unwrap() =
+            alien_core::Resource::new(plain.clone());
+        assert!(run.needs_update().unwrap());
+        run.update(plain).unwrap();
+        run.run_until_terminal().await.unwrap();
+        let patches = patches.lock().unwrap();
+        assert_eq!(patches.len(), 2);
+        assert!(patches[1].0.is_none(), "an absent policy clears it");
+        assert!(sub_policy.lock().unwrap().bindings.is_empty());
+    }
+
+    fn queue_dead_lettering(id: &str) -> Queue {
+        let mut queue = Queue::new(id.into()).build();
+        queue.dead_letter = Some(
+            alien_core::QueueDeadLetter::builder()
+                .queue(alien_core::ResourceRef::new(Queue::RESOURCE_TYPE, "failed"))
+                .build(),
+        );
+        queue
+    }
+
+    fn consumer_of(queue: &Queue) -> alien_core::Worker {
+        alien_core::Worker::new(format!("{}-consumer", queue.id))
+            .code(alien_core::WorkerCode::Image {
+                image: "example.com/app:1".into(),
+            })
+            .permissions("execution".into())
+            .trigger(alien_core::WorkerTrigger::queue(queue))
+            .build()
+    }
+
+    /// A setup-owned queue that dead-letters and triggers a Live Worker has the Pub/Sub service
+    /// agent granted subscriber for the project during a direct setup run (the Worker's push
+    /// subscription is written at runtime, where nothing may write subscription IAM). One member
+    /// serves every such queue: it stays while another queue needs it and goes with the last.
+    #[tokio::test]
+    async fn a_setup_owned_queue_with_a_live_worker_holds_one_project_subscriber_grant() {
+        const AGENT: &str = "serviceAccount:service-4242@gcp-sa-pubsub.iam.gserviceaccount.com";
+        let source = queue_dead_lettering("tasks");
+        let other = queue_dead_lettering("other");
+        let plain = Queue::new("tasks".into()).build();
+        let project_policy = Arc::new(std::sync::Mutex::new(IamPolicy::default()));
+        let mut pubsub = MockPubSubApi::new();
+        pubsub
+            .expect_get_subscription_iam_policy()
+            .returning(|_| Ok(IamPolicy::default()));
+        pubsub
+            .expect_set_subscription_iam_policy()
+            .returning(|_, value| Ok(value));
+        pubsub
+            .expect_patch_subscription()
+            .returning(|_, _, _| Ok(Subscription::default()));
+        let pubsub = Arc::new(pubsub);
+        let mut manager = alien_gcp_clients::resource_manager::MockResourceManagerApi::new();
+        manager.expect_get_project_metadata().returning(|_| {
+            Ok(alien_gcp_clients::resource_manager::Project::builder()
+                .project_number("4242".to_string())
+                .build())
+        });
+        let reads = project_policy.clone();
+        manager
+            .expect_get_project_iam_policy()
+            .returning(move |_, _| Ok(reads.lock().unwrap().clone()));
+        let writes = project_policy.clone();
+        manager
+            .expect_set_project_iam_policy()
+            .returning(move |_, value, _| {
+                *writes.lock().unwrap() = value.clone();
+                Ok(value)
+            });
+        let manager = Arc::new(manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        let members = |policy: &Arc<std::sync::Mutex<IamPolicy>>| -> Vec<String> {
+            policy
+                .lock()
+                .unwrap()
+                .bindings
+                .iter()
+                .filter(|binding| binding.role == "roles/pubsub.subscriber")
+                .flat_map(|binding| binding.members.clone())
+                .collect()
+        };
+        let mut run = SingleControllerExecutor::builder()
+            .resource(plain.clone())
+            .controller(GcpQueueController {
+                state: GcpQueueState::Ready,
+                topic_name: Some("test-tasks".into()),
+                subscription_name: Some("test-tasks-sub".into()),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(
+                Queue::new("failed".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .with_stack_resource(other.clone(), ResourceLifecycle::Frozen)
+            .with_stack_resource(consumer_of(&source), ResourceLifecycle::Live)
+            .with_stack_resource(consumer_of(&other), ResourceLifecycle::Live)
+            .build()
+            .await
+            .unwrap();
+
+        // Adding the setting grants the member.
+        *run.desired_resource_config_mut("tasks").unwrap() =
+            alien_core::Resource::new(source.clone());
+        assert!(run.needs_update().unwrap());
+        run.update(source).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(members(&project_policy), [AGENT]);
+
+        // Another queue still needs it: removing this queue's setting leaves the member.
+        *run.desired_resource_config_mut("tasks").unwrap() =
+            alien_core::Resource::new(plain.clone());
+        assert!(run.needs_update().unwrap());
+        run.update(plain.clone()).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(members(&project_policy), [AGENT], "`other` still needs it");
+        assert!(!run.needs_update().unwrap());
+    }
+
+    const AGENT_MEMBER: &str = "serviceAccount:service-4242@gcp-sa-pubsub.iam.gserviceaccount.com";
+
+    /// A project IAM policy the tests can read back, the request versions seen on reads and the
+    /// number of writes. `fail_first_write` stores the first write and then answers with an
+    /// error, as a lost response does.
+    struct ProjectPolicy {
+        policy: Arc<std::sync::Mutex<IamPolicy>>,
+        read_versions: Arc<std::sync::Mutex<Vec<Option<i32>>>>,
+        writes: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl ProjectPolicy {
+        fn members(&self) -> Vec<String> {
+            self.policy
+                .lock()
+                .unwrap()
+                .bindings
+                .iter()
+                .filter(|binding| binding.role == "roles/pubsub.subscriber")
+                .flat_map(|binding| binding.members.clone())
+                .collect()
+        }
+        fn writes(&self) -> usize {
+            self.writes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    fn project_grant_provider(
+        initial: IamPolicy,
+        fail_first_write: bool,
+    ) -> (MockPlatformServiceProvider, ProjectPolicy) {
+        let state = ProjectPolicy {
+            policy: Arc::new(std::sync::Mutex::new(initial)),
+            read_versions: Default::default(),
+            writes: Default::default(),
+        };
+        let mut pubsub = MockPubSubApi::new();
+        pubsub
+            .expect_get_subscription_iam_policy()
+            .returning(|_| Ok(IamPolicy::default()));
+        pubsub
+            .expect_set_subscription_iam_policy()
+            .returning(|_, value| Ok(value));
+        pubsub
+            .expect_patch_subscription()
+            .returning(|_, _, _| Ok(Subscription::default()));
+        pubsub.expect_delete_subscription().returning(|_| Ok(()));
+        pubsub.expect_delete_topic().returning(|_| Ok(()));
+        let pubsub = Arc::new(pubsub);
+        let mut manager = alien_gcp_clients::resource_manager::MockResourceManagerApi::new();
+        manager.expect_get_project_metadata().returning(|_| {
+            Ok(alien_gcp_clients::resource_manager::Project::builder()
+                .project_number("4242".to_string())
+                .build())
+        });
+        let (reads, versions) = (state.policy.clone(), state.read_versions.clone());
+        manager
+            .expect_get_project_iam_policy()
+            .returning(move |_, options| {
+                versions
+                    .lock()
+                    .unwrap()
+                    .push(options.and_then(|options| options.requested_policy_version));
+                Ok(reads.lock().unwrap().clone())
+            });
+        let (stored, attempts) = (state.policy.clone(), state.writes.clone());
+        manager
+            .expect_set_project_iam_policy()
+            .returning(move |_, value, _| {
+                *stored.lock().unwrap() = value.clone();
+                if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
+                    && fail_first_write
+                {
+                    return Err(AlienError::new(
+                        alien_client_core::ErrorData::RemoteServiceUnavailable {
+                            message: "response lost after the write".into(),
+                        },
+                    ));
+                }
+                Ok(value)
+            });
+        let manager = Arc::new(manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        (provider, state)
+    }
+
+    /// A Ready setup-owned queue `tasks` with a Live Worker, not yet dead-lettering.
+    async fn setup_owned_queue_run(
+        provider: MockPlatformServiceProvider,
+        configure: impl FnOnce(
+            crate::core::controller_test::SingleControllerExecutorBuilder,
+        ) -> crate::core::controller_test::SingleControllerExecutorBuilder,
+    ) -> crate::core::controller_test::SingleControllerExecutor {
+        let source = queue_dead_lettering("tasks");
+        let builder = SingleControllerExecutor::builder()
+            .resource(Queue::new("tasks".into()).build())
+            .controller(GcpQueueController {
+                state: GcpQueueState::Ready,
+                topic_name: Some("test-tasks".into()),
+                subscription_name: Some("test-tasks-sub".into()),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(
+                Queue::new("failed".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .with_stack_resource(consumer_of(&source), ResourceLifecycle::Live);
+        configure(builder).build().await.unwrap()
+    }
+
+    async fn declare(run: &mut crate::core::controller_test::SingleControllerExecutor, q: Queue) {
+        *run.desired_resource_config_mut("tasks").unwrap() = alien_core::Resource::new(q.clone());
+        run.update(q).unwrap();
+        run.run_until_terminal().await.unwrap();
+    }
+
+    /// A member that was already there (the customer's own grant, or another stack's) is not
+    /// the controller's to remove: it stays after the setting is removed, and after delete.
+    #[tokio::test]
+    async fn a_member_that_was_already_there_is_never_removed() {
+        let existing = IamPolicy {
+            version: Some(3),
+            bindings: vec![alien_gcp_clients::iam::Binding {
+                role: "roles/pubsub.subscriber".into(),
+                members: vec![AGENT_MEMBER.into()],
+                condition: None,
+            }],
+            ..Default::default()
+        };
+        let (provider, project) = project_grant_provider(existing, false);
+        let mut run = setup_owned_queue_run(provider, |builder| builder).await;
+        let source = queue_dead_lettering("tasks");
+
+        declare(&mut run, source.clone()).await;
+        assert_eq!(project.writes(), 0, "nothing to add");
+        assert!(!run.needs_update().unwrap());
+
+        declare(&mut run, Queue::new("tasks".into()).build()).await;
+        assert_eq!(
+            project.members(),
+            [AGENT_MEMBER],
+            "removal keeps their grant"
+        );
+
+        declare(&mut run, source).await;
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(
+            project.members(),
+            [AGENT_MEMBER],
+            "delete keeps their grant"
+        );
+        assert_eq!(project.writes(), 0);
+    }
+
+    /// A conditional binding on the same role is read (policy version 3) and written back
+    /// untouched; the unconditional member is added next to it and removed again.
+    #[tokio::test]
+    async fn a_conditional_binding_on_the_role_is_preserved() {
+        let conditional = alien_gcp_clients::iam::Binding {
+            role: "roles/pubsub.subscriber".into(),
+            members: vec![AGENT_MEMBER.into(), "user:someone@example.com".into()],
+            condition: Some(alien_gcp_clients::iam::Expr {
+                expression: "request.time < timestamp(\"2099-01-01T00:00:00Z\")".into(),
+                title: Some("temporary".into()),
+                description: None,
+                location: None,
+            }),
+        };
+        let existing = IamPolicy {
+            version: Some(3),
+            etag: Some("etag-1".into()),
+            bindings: vec![conditional.clone()],
+            ..Default::default()
+        };
+        let (provider, project) = project_grant_provider(existing, false);
+        let mut run = setup_owned_queue_run(provider, |builder| builder).await;
+
+        declare(&mut run, queue_dead_lettering("tasks")).await;
+        {
+            let policy = project.policy.lock().unwrap();
+            assert_eq!(policy.version, Some(3));
+            assert_eq!(policy.etag.as_deref(), Some("etag-1"));
+            let kept = serde_json::to_value(&conditional).unwrap();
+            assert!(
+                policy
+                    .bindings
+                    .iter()
+                    .any(|b| serde_json::to_value(b).unwrap() == kept),
+                "conditional kept"
+            );
+            assert!(policy
+                .bindings
+                .iter()
+                .any(|b| b.condition.is_none() && b.members == [AGENT_MEMBER]));
+        }
+        declare(&mut run, Queue::new("tasks".into()).build()).await;
+        assert_eq!(
+            serde_json::to_value(&project.policy.lock().unwrap().bindings).unwrap(),
+            serde_json::to_value(vec![conditional]).unwrap(),
+            "only the member this controller added is gone"
+        );
+        assert!(project
+            .read_versions
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|version| *version == Some(3)));
+    }
+
+    /// The write reaches Google but its response is lost; the setting is removed before the
+    /// retry. The member is still removed.
+    #[tokio::test]
+    async fn a_lost_project_grant_response_is_revoked_when_the_setting_is_removed() {
+        let (provider, project) = project_grant_provider(IamPolicy::default(), true);
+        let mut run = setup_owned_queue_run(provider, |builder| builder).await;
+        let source = queue_dead_lettering("tasks");
+
+        *run.desired_resource_config_mut("tasks").unwrap() =
+            alien_core::Resource::new(source.clone());
+        run.update(source).unwrap();
+        while project.writes() == 0 {
+            let _ = run.step().await;
+        }
+        assert_eq!(
+            project.members(),
+            [AGENT_MEMBER],
+            "the lost write still granted"
+        );
+
+        let plain = Queue::new("tasks".into()).build();
+        *run.desired_resource_config_mut("tasks").unwrap() =
+            alien_core::Resource::new(plain.clone());
+        run.run_until_terminal().await.unwrap();
+        if run.needs_update().unwrap() {
+            run.update(plain).unwrap();
+            run.run_until_terminal().await.unwrap();
+        }
+        assert!(
+            project.members().is_empty(),
+            "no member outlives the setting"
+        );
+    }
+
+    /// Deleting the queue removes the member it added.
+    #[tokio::test]
+    async fn delete_removes_the_project_member_the_queue_added() {
+        let (provider, project) = project_grant_provider(IamPolicy::default(), false);
+        let mut run = setup_owned_queue_run(provider, |builder| builder).await;
+        declare(&mut run, queue_dead_lettering("tasks")).await;
+        assert_eq!(project.members(), [AGENT_MEMBER]);
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert!(project.members().is_empty());
+    }
+
+    /// Setup teardown is direct setup authority but not a setup run: the delete still removes
+    /// the member the queue added (found when a real teardown left it behind).
+    #[tokio::test]
+    async fn setup_teardown_removes_the_project_member_the_queue_added() {
+        let existing = IamPolicy {
+            version: Some(3),
+            bindings: vec![alien_gcp_clients::iam::Binding {
+                role: "roles/pubsub.subscriber".into(),
+                members: vec![AGENT_MEMBER.into()],
+                condition: None,
+            }],
+            ..Default::default()
+        };
+        let (provider, project) = project_grant_provider(existing, false);
+        let mut run = SingleControllerExecutor::builder()
+            .resource(queue_dead_lettering("tasks"))
+            .controller(GcpQueueController {
+                state: GcpQueueState::Ready,
+                topic_name: Some("test-tasks".into()),
+                subscription_name: Some("test-tasks-sub".into()),
+                dead_letter_agent: Some(AGENT_MEMBER.into()),
+                dead_letter_project_subscriber: true,
+                dead_letter_project_subscriber_added: true,
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .setup_run(false)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(
+                Queue::new("failed".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build()
+            .await
+            .unwrap();
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert!(project.members().is_empty());
+    }
+
+    /// A delete that does not run under direct setup authority (the runtime after an imported
+    /// handoff) never touches the project policy, even for a member the queue added. Runtime
+    /// never deletes a setup-owned queue (the deployment stops at the teardown handoff), but if
+    /// it did, management's credentials must not attempt the project write.
+    #[tokio::test]
+    async fn a_delete_under_an_imported_handoff_writes_nothing_to_the_project_policy() {
+        let (provider, project) = project_grant_provider(member_policy(), false);
+        let mut run = SingleControllerExecutor::builder()
+            .resource(queue_dead_lettering("tasks"))
+            .controller(GcpQueueController {
+                state: GcpQueueState::Ready,
+                topic_name: Some("test-tasks".into()),
+                subscription_name: Some("test-tasks-sub".into()),
+                dead_letter_agent: Some(AGENT_MEMBER.into()),
+                dead_letter_project_subscriber: true,
+                dead_letter_project_subscriber_added: true,
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .setup_run(false)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(
+                Queue::new("failed".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build()
+            .await
+            .unwrap();
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(project.writes(), 0);
+        assert!(project.read_versions.lock().unwrap().is_empty());
+        assert_eq!(project.members(), [AGENT_MEMBER]);
+    }
+
+    /// A run that is not a setup run (the runtime after a handoff) never touches the project
+    /// policy: it neither reads nor writes it, and does not ask for an update because of it.
+    #[tokio::test]
+    async fn a_run_that_is_not_a_setup_run_writes_nothing_to_the_project_policy() {
+        let (provider, project) = project_grant_provider(IamPolicy::default(), false);
+        let mut run = setup_owned_queue_run(provider, |builder| {
+            builder
+                .setup_run(false)
+                .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+        })
+        .await;
+        let source = queue_dead_lettering("tasks");
+        *run.desired_resource_config_mut("tasks").unwrap() =
+            alien_core::Resource::new(source.clone());
+        run.update(source).unwrap();
+        let _ = run.run_until_terminal().await;
+        assert!(
+            !run.needs_update().unwrap(),
+            "the project grant alone does not ask for an update outside a setup run"
+        );
+        assert_eq!(project.writes(), 0);
+        assert!(project.read_versions.lock().unwrap().is_empty());
+        assert!(project.members().is_empty());
+    }
+
+    /// The patch of the pull subscription's dead-letter policy reaches Google but its response
+    /// is lost; the setting is removed before the retry. The policy that may have been applied
+    /// is still cleared.
+    #[tokio::test]
+    async fn a_pull_policy_patch_with_a_lost_response_is_cleared_when_the_setting_is_removed() {
+        use alien_gcp_clients::pubsub::{DeadLetterPolicy, SubscriptionPatch};
+        let source = queue_dead_lettering("tasks");
+        let plain = Queue::new("tasks".into()).build();
+        let cloud: Arc<std::sync::Mutex<Option<DeadLetterPolicy>>> = Default::default();
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut pubsub = MockPubSubApi::new();
+        pubsub
+            .expect_get_subscription_iam_policy()
+            .returning(|_| Ok(IamPolicy::default()));
+        pubsub
+            .expect_set_subscription_iam_policy()
+            .returning(|_, value| Ok(value));
+        pubsub
+            .expect_get_topic_iam_policy()
+            .returning(|_| Ok(IamPolicy::default()));
+        pubsub
+            .expect_set_topic_iam_policy()
+            .returning(|_, value| Ok(value));
+        let (stored, counted) = (cloud.clone(), attempts.clone());
+        pubsub
+            .expect_patch_subscription()
+            .returning(move |_, patch: SubscriptionPatch, _| {
+                *stored.lock().unwrap() = patch.dead_letter_policy;
+                if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    return Err(AlienError::new(
+                        alien_client_core::ErrorData::RemoteServiceUnavailable {
+                            message: "response lost after the write".into(),
+                        },
+                    ));
+                }
+                Ok(Subscription::default())
+            });
+        let pubsub = Arc::new(pubsub);
+        let mut manager = alien_gcp_clients::resource_manager::MockResourceManagerApi::new();
+        manager.expect_get_project_metadata().returning(|_| {
+            Ok(alien_gcp_clients::resource_manager::Project::builder()
+                .project_number("4242".to_string())
+                .build())
+        });
+        let manager = Arc::new(manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        let mut run = SingleControllerExecutor::builder()
+            .resource(plain.clone())
+            .controller(GcpQueueController {
+                state: GcpQueueState::Ready,
+                topic_name: Some("test-tasks".into()),
+                subscription_name: Some("test-tasks-sub".into()),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(Queue::new("failed".into()).build(), ResourceLifecycle::Live)
+            .build()
+            .await
+            .unwrap();
+        *run.desired_resource_config_mut("tasks").unwrap() =
+            alien_core::Resource::new(source.clone());
+        run.update(source).unwrap();
+        while attempts.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            let _ = run.step().await;
+        }
+        assert!(
+            cloud.lock().unwrap().is_some(),
+            "the lost patch was applied by Google"
+        );
+
+        // The setting is removed before the retry.
+        *run.desired_resource_config_mut("tasks").unwrap() = alien_core::Resource::new(plain);
+        run.run_until_terminal().await.unwrap();
+        if run.needs_update().unwrap() {
+            run.update(Queue::new("tasks".into()).build()).unwrap();
+            run.run_until_terminal().await.unwrap();
+        }
+        assert!(
+            cloud.lock().unwrap().is_none(),
+            "no policy may outlive the setting"
+        );
+        assert!(!run.needs_update().unwrap());
+    }
+
+    /// A queue of the setup-owned stack `id` that already holds the shared project member as a
+    /// co-owner (`added`), with `sibling` another queue that still needs the member (or only
+    /// declared without a dead letter), as the controller state a real run would have recorded.
+    async fn co_owner_run(
+        provider: MockPlatformServiceProvider,
+        id: &str,
+        sibling: &str,
+        sibling_needs_it: bool,
+    ) -> crate::core::controller_test::SingleControllerExecutor {
+        let mine = queue_dead_lettering(id);
+        let other = if sibling_needs_it {
+            queue_dead_lettering(sibling)
+        } else {
+            Queue::new(sibling.into()).build()
+        };
+        let mut builder = SingleControllerExecutor::builder()
+            .resource(mine.clone())
+            .controller(GcpQueueController {
+                state: GcpQueueState::Ready,
+                topic_name: Some(format!("test-{id}")),
+                subscription_name: Some(format!("test-{id}-sub")),
+                dead_letter_agent: Some(AGENT_MEMBER.into()),
+                dead_letter_policy: Some("old:5".into()),
+                dead_letter_subscriber: true,
+                dead_letter_project_subscriber: true,
+                dead_letter_project_subscriber_added: true,
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(
+                Queue::new("failed".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .with_stack_resource(consumer_of(&mine), ResourceLifecycle::Live)
+            .with_stack_resource(other.clone(), ResourceLifecycle::Frozen);
+        if sibling_needs_it {
+            builder = builder.with_stack_resource(consumer_of(&other), ResourceLifecycle::Live);
+        }
+        builder.build().await.unwrap()
+    }
+
+    fn member_policy() -> IamPolicy {
+        IamPolicy {
+            version: Some(3),
+            bindings: vec![alien_gcp_clients::iam::Binding {
+                role: "roles/pubsub.subscriber".into(),
+                members: vec![AGENT_MEMBER.into()],
+                condition: None,
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// Queue A adds the shared member; queue B, preparing later, finds it present but sees in
+    /// the stack state that A added it, so B co-owns it. A pre-existing member that no queue of
+    /// the stack added stays unowned.
+    #[tokio::test]
+    async fn a_queue_finding_the_member_that_a_sibling_added_co_owns_it() {
+        for (sibling_added, expect_owned) in [(true, true), (false, false)] {
+            let (provider, _project) = project_grant_provider(member_policy(), false);
+            let sibling = queue_dead_lettering("other");
+            let saved = crate::core::serialize_controller(&GcpQueueController {
+                state: GcpQueueState::Ready,
+                dead_letter_project_subscriber: true,
+                dead_letter_project_subscriber_added: sibling_added,
+                ..Default::default()
+            })
+            .unwrap();
+            let mut run = setup_owned_queue_run(provider, |builder| {
+                builder
+                    .with_stack_resource(sibling.clone(), ResourceLifecycle::Frozen)
+                    .with_stack_resource(consumer_of(&sibling), ResourceLifecycle::Live)
+                    .with_stack_resource_state("other", saved)
+            })
+            .await;
+            declare(&mut run, queue_dead_lettering("tasks")).await;
+            let controller = run.internal_state::<GcpQueueController>().unwrap();
+            assert!(controller.dead_letter_project_subscriber);
+            assert_eq!(
+                controller.dead_letter_project_subscriber_added, expect_owned,
+                "sibling_added={sibling_added}"
+            );
+        }
+    }
+
+    /// Whichever co-owner is removed first leaves the member for the other, and the one removed
+    /// last revokes it: in both orders nothing is left once both are gone.
+    #[tokio::test]
+    async fn the_member_is_revoked_by_the_last_co_owner_in_either_order() {
+        for (first, second) in [("tasks", "other"), ("other", "tasks")] {
+            let (provider, project) = project_grant_provider(member_policy(), false);
+            // `first` loses its dead letter while `second` still needs the member.
+            let mut run = co_owner_run(provider, first, second, true).await;
+            declare_as(&mut run, first, Queue::new(first.into()).build()).await;
+            assert_eq!(
+                project.members(),
+                [AGENT_MEMBER],
+                "{first} first: {second} needs it"
+            );
+            let controller = run.internal_state::<GcpQueueController>().unwrap();
+            assert!(!controller.dead_letter_project_subscriber_added);
+
+            // `second` then loses it too, and `first` no longer needs it.
+            let left = project.policy.lock().unwrap().clone();
+            let (provider, project) = project_grant_provider(left, false);
+            let mut run = co_owner_run(provider, second, first, false).await;
+            declare_as(&mut run, second, Queue::new(second.into()).build()).await;
+            assert!(
+                project.members().is_empty(),
+                "{second} last: nothing is left"
+            );
+        }
+    }
+
+    /// Whole-stack teardown: the first queue deleted leaves the member while another queue of
+    /// the stack needs it, the last one removes it.
+    #[tokio::test]
+    async fn stack_teardown_leaves_no_member_behind() {
+        let (provider, project) = project_grant_provider(member_policy(), false);
+        let mut run = co_owner_run(provider, "tasks", "other", true).await;
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(
+            project.members(),
+            [AGENT_MEMBER],
+            "`other` is still deployed"
+        );
+
+        let left = project.policy.lock().unwrap().clone();
+        let (provider, project) = project_grant_provider(left, false);
+        let mut run = co_owner_run(provider, "other", "tasks", false).await;
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert!(project.members().is_empty());
+    }
+
+    async fn declare_as(
+        run: &mut crate::core::controller_test::SingleControllerExecutor,
+        id: &str,
+        q: Queue,
+    ) {
+        *run.desired_resource_config_mut(id).unwrap() = alien_core::Resource::new(q.clone());
+        run.update(q).unwrap();
+        run.run_until_terminal().await.unwrap();
+    }
+
+    /// The last queue that needs the project-level grant removes it.
+    #[tokio::test]
+    async fn the_project_subscriber_grant_is_removed_with_the_last_queue_that_needs_it() {
+        const AGENT: &str = "serviceAccount:service-4242@gcp-sa-pubsub.iam.gserviceaccount.com";
+        let source = queue_dead_lettering("tasks");
+        let plain = Queue::new("tasks".into()).build();
+        let project_policy = Arc::new(std::sync::Mutex::new(IamPolicy::default()));
+        let mut pubsub = MockPubSubApi::new();
+        pubsub
+            .expect_get_subscription_iam_policy()
+            .returning(|_| Ok(IamPolicy::default()));
+        pubsub
+            .expect_set_subscription_iam_policy()
+            .returning(|_, value| Ok(value));
+        pubsub
+            .expect_patch_subscription()
+            .returning(|_, _, _| Ok(Subscription::default()));
+        let pubsub = Arc::new(pubsub);
+        let mut manager = alien_gcp_clients::resource_manager::MockResourceManagerApi::new();
+        manager.expect_get_project_metadata().returning(|_| {
+            Ok(alien_gcp_clients::resource_manager::Project::builder()
+                .project_number("4242".to_string())
+                .build())
+        });
+        let reads = project_policy.clone();
+        manager
+            .expect_get_project_iam_policy()
+            .returning(move |_, _| Ok(reads.lock().unwrap().clone()));
+        let writes = project_policy.clone();
+        manager
+            .expect_set_project_iam_policy()
+            .returning(move |_, value, _| {
+                *writes.lock().unwrap() = value.clone();
+                Ok(value)
+            });
+        let manager = Arc::new(manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        let mut run = SingleControllerExecutor::builder()
+            .resource(plain.clone())
+            .controller(GcpQueueController {
+                state: GcpQueueState::Ready,
+                topic_name: Some("test-tasks".into()),
+                subscription_name: Some("test-tasks-sub".into()),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(
+                Queue::new("failed".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .with_stack_resource(consumer_of(&source), ResourceLifecycle::Live)
+            .build()
+            .await
+            .unwrap();
+        *run.desired_resource_config_mut("tasks").unwrap() =
+            alien_core::Resource::new(source.clone());
+        run.update(source).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(project_policy.lock().unwrap().bindings[0].members, [AGENT]);
+
+        *run.desired_resource_config_mut("tasks").unwrap() =
+            alien_core::Resource::new(plain.clone());
+        run.update(plain).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert!(project_policy.lock().unwrap().bindings.is_empty());
+    }
+
     /// The grant reaches Google but its response is lost, and the Storage stops notifying
     /// before the retry. The recorded intent still lets removal revoke the grant.
     #[tokio::test]
@@ -961,6 +2118,138 @@ mod tests {
         );
     }
 
+    /// A dead-letter grant reaches Google but its response is lost; the setting is removed before
+    /// the retry. The grant is still revoked. `on_target` selects the publisher grant on the
+    /// target topic, otherwise the subscriber grant on the source's pull subscription.
+    async fn lost_dead_letter_grant_then_removal(on_target: bool) {
+        const AGENT: &str = "serviceAccount:service-4242@gcp-sa-pubsub.iam.gserviceaccount.com";
+        let mut source = Queue::new("tasks".into()).build();
+        source.dead_letter = Some(
+            alien_core::QueueDeadLetter::builder()
+                .queue(alien_core::ResourceRef::new(Queue::RESOURCE_TYPE, "failed"))
+                .max_attempts(6)
+                .build(),
+        );
+        let plain = Queue::new("tasks".into()).build();
+        let target = Queue::new("failed".into()).build();
+        let iam = Arc::new(std::sync::Mutex::new(IamPolicy::default()));
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut pubsub = MockPubSubApi::new();
+        let (reads_topic, reads_sub) = (iam.clone(), iam.clone());
+        pubsub
+            .expect_get_topic_iam_policy()
+            .returning(move |_| Ok(reads_topic.lock().unwrap().clone()));
+        pubsub
+            .expect_get_subscription_iam_policy()
+            .returning(move |_| Ok(reads_sub.lock().unwrap().clone()));
+        let write = {
+            let (stored, attempts) = (iam.clone(), writes.clone());
+            move |value: IamPolicy| {
+                *stored.lock().unwrap() = value.clone();
+                if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    return Err(AlienError::new(
+                        alien_client_core::ErrorData::RemoteServiceUnavailable {
+                            message: "response lost after the write".into(),
+                        },
+                    ));
+                }
+                Ok(value)
+            }
+        };
+        let (topic_write, sub_write) = (write.clone(), write);
+        pubsub
+            .expect_set_topic_iam_policy()
+            .returning(move |_, value| topic_write(value));
+        pubsub
+            .expect_set_subscription_iam_policy()
+            .returning(move |_, value| sub_write(value));
+        pubsub
+            .expect_patch_subscription()
+            .returning(|_, _, _| Ok(Subscription::default()));
+        let pubsub = Arc::new(pubsub);
+        let mut manager = alien_gcp_clients::resource_manager::MockResourceManagerApi::new();
+        manager.expect_get_project_metadata().returning(|_| {
+            Ok(alien_gcp_clients::resource_manager::Project::builder()
+                .project_number("4242".to_string())
+                .build())
+        });
+        let manager = Arc::new(manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        let (own, other, name) = if on_target {
+            (target.clone(), source.clone(), "failed")
+        } else {
+            (plain.clone(), target.clone(), "tasks")
+        };
+        let mut run = SingleControllerExecutor::builder()
+            .resource(own.clone())
+            .controller(GcpQueueController {
+                state: GcpQueueState::Ready,
+                topic_name: Some(format!("test-{name}")),
+                subscription_name: Some(format!("test-{name}-sub")),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(other, ResourceLifecycle::Live)
+            .build()
+            .await
+            .unwrap();
+        // The declaration appears: on the source queue itself, or on the other queue.
+        if on_target {
+            assert!(run.needs_update().unwrap());
+            run.update(own.clone()).unwrap();
+        } else {
+            *run.desired_resource_config_mut("tasks").unwrap() =
+                alien_core::Resource::new(source.clone());
+            run.update(source.clone()).unwrap();
+        }
+        while writes.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            let _ = run.step().await;
+        }
+        assert_eq!(
+            iam.lock().unwrap().bindings.len(),
+            1,
+            "the lost write still granted the service agent"
+        );
+        assert_eq!(iam.lock().unwrap().bindings[0].members, [AGENT]);
+
+        // The setting is removed before the retry.
+        if on_target {
+            *run.desired_resource_config_mut("tasks").unwrap() =
+                alien_core::Resource::new(plain.clone());
+        } else {
+            *run.desired_resource_config_mut("tasks").unwrap() =
+                alien_core::Resource::new(plain.clone());
+        }
+        run.run_until_terminal().await.unwrap();
+        if run.needs_update().unwrap() {
+            run.update(if on_target { own } else { plain }).unwrap();
+            run.run_until_terminal().await.unwrap();
+        }
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert!(!run.needs_update().unwrap());
+        assert!(
+            iam.lock().unwrap().bindings.is_empty(),
+            "no service-agent grant may outlive the setting"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscriber_grant_with_lost_response_is_revoked_when_the_dead_letter_is_removed() {
+        lost_dead_letter_grant_then_removal(false).await;
+    }
+
+    #[tokio::test]
+    async fn publisher_grant_with_lost_response_is_revoked_when_the_dead_letter_is_removed() {
+        lost_dead_letter_grant_then_removal(true).await;
+    }
+
     #[tokio::test]
     async fn ordinary_queue_and_frozen_import_never_request_ingress_updates() {
         for (notifying, lifecycle) in [
@@ -1029,6 +2318,84 @@ mod tests {
         Arc::new(provider)
     }
 
+    /// A new queue with a dead letter: the subscription is created without a policy, the Pub/Sub
+    /// service agent gets its subscriber grant, and only then is the policy patched on.
+    #[tokio::test]
+    async fn the_dead_letter_policy_is_set_after_the_service_agent_grants() {
+        let events: Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let mut mock = MockPubSubApi::new();
+        mock.expect_create_topic()
+            .returning(|_, _| Ok(Topic::default()));
+        let log = events.clone();
+        mock.expect_create_subscription().returning(move |_, sub| {
+            log.lock().unwrap().push(format!(
+                "create policy={}",
+                sub.dead_letter_policy.is_some()
+            ));
+            Ok(Subscription::default())
+        });
+        mock.expect_get_subscription_iam_policy()
+            .returning(|_| Ok(IamPolicy::default()));
+        let log = events.clone();
+        mock.expect_set_subscription_iam_policy()
+            .returning(move |_, value| {
+                log.lock().unwrap().push("subscriber grant".to_string());
+                Ok(value)
+            });
+        let log = events.clone();
+        mock.expect_patch_subscription()
+            .returning(move |_, patch, _| {
+                log.lock().unwrap().push(format!(
+                    "patch policy={}",
+                    patch.dead_letter_policy.is_some()
+                ));
+                Ok(Subscription::default())
+            });
+        mock.expect_get_topic().returning(|_| Ok(Topic::default()));
+        mock.expect_get_subscription()
+            .returning(|_| Ok(Subscription::default()));
+        let mut manager = alien_gcp_clients::resource_manager::MockResourceManagerApi::new();
+        manager.expect_get_project_metadata().returning(|_| {
+            Ok(alien_gcp_clients::resource_manager::Project::builder()
+                .project_number("4242".to_string())
+                .build())
+        });
+        let manager = Arc::new(manager);
+        let mock = Arc::new(mock);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(mock.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        let iam = create_gcp_iam_mock_for_resource_permissions();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(queue_dead_lettering("tasks"))
+            .controller(GcpQueueController::default())
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .with_stack_resource(Queue::new("failed".into()).build(), ResourceLifecycle::Live)
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                "create policy=false",
+                "subscriber grant",
+                "patch policy=true"
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn test_create_and_delete_pubsub_queue_succeeds() {
         let queue = Queue::new("gcp-queue".to_string()).build();
@@ -1055,6 +2422,243 @@ mod tests {
 }
 
 impl GcpQueueController {
+    fn dead_letter_changed(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let queue = ctx.desired_resource_config::<Queue>()?;
+        Ok(
+            policy_key(&dead_letter_policy(ctx, &queue)?) != self.dead_letter_policy
+                || self.dead_letter_patch_started
+                || queue.dead_letter.is_some() != self.dead_letter_subscriber
+                || !queues_dead_lettering_to(ctx.desired_stack, &queue.id).is_empty()
+                    != self.dead_letter_publisher
+                || self.dead_letter_subscriber_pending.is_some()
+                || self.dead_letter_publisher_pending.is_some()
+                // The project-level grant is written only by a setup run.
+                || (ctx.is_direct_setup_run()
+                    && (queue_needs_project_push_subscriber(ctx.desired_stack, &queue.id)
+                        != self.dead_letter_project_subscriber
+                        || self.dead_letter_project_subscriber_pending.is_some())),
+        )
+    }
+
+    /// Makes the pull subscription's dead-letter policy and the Pub/Sub service agent's grants
+    /// match the declaration. Grants are added before the policy and removed after it, so the
+    /// policy never names a topic the service agent cannot publish to.
+    async fn reconcile_dead_letter(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        if !self.dead_letter_changed(ctx)? {
+            return Ok(());
+        }
+        let queue = ctx.desired_resource_config::<Queue>()?;
+        let desired_policy = dead_letter_policy(ctx, &queue)?;
+        let invalid = |message: &str| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: message.to_string(),
+                resource_id: Some(queue.id.clone()),
+            })
+        };
+        let client = ctx
+            .service_provider
+            .get_gcp_pubsub_client(ctx.get_gcp_config()?)?;
+
+        let agent = self.dead_letter_agent.clone();
+        let topic = self.topic_name.clone();
+        let subscription = self.subscription_name.clone();
+
+        if let (Some(agent), Some(true)) = (&agent, self.dead_letter_publisher_pending) {
+            let topic = topic
+                .clone()
+                .ok_or_else(|| invalid("Topic name not set in state"))?;
+            set_agent_on_topic(ctx, client.as_ref(), &queue.id, &topic, agent, true).await?;
+            self.dead_letter_publisher = true;
+            self.dead_letter_publisher_pending = None;
+        }
+        if let (Some(agent), Some(true)) = (&agent, self.dead_letter_subscriber_pending) {
+            let subscription = subscription
+                .clone()
+                .ok_or_else(|| invalid("Subscription name not set in state"))?;
+            set_agent_on_subscription(ctx, client.as_ref(), &queue.id, &subscription, agent, true)
+                .await?;
+            self.dead_letter_subscriber = true;
+            self.dead_letter_subscriber_pending = None;
+        }
+
+        if let (Some(agent), Some(true), true) = (
+            &agent,
+            self.dead_letter_project_subscriber_pending,
+            ctx.is_direct_setup_run(),
+        ) {
+            set_project_subscriber(ctx, &queue.id, agent, true).await?;
+            self.dead_letter_project_subscriber = true;
+            self.dead_letter_project_subscriber_pending = None;
+        }
+
+        if policy_key(&desired_policy) != self.dead_letter_policy || self.dead_letter_patch_started
+        {
+            let subscription = subscription
+                .clone()
+                .ok_or_else(|| invalid("Subscription name not set in state"))?;
+            // An absent policy in the patch removes it.
+            let request = alien_gcp_clients::pubsub::SubscriptionPatchRequest::builder()
+                .subscription(
+                    alien_gcp_clients::pubsub::SubscriptionPatch::builder()
+                        .maybe_dead_letter_policy(desired_policy.clone())
+                        .build(),
+                )
+                .update_mask("deadLetterPolicy".to_string())
+                .build();
+            // Recorded before the write: a lost response must not hide an applied policy.
+            self.dead_letter_patch_started = true;
+            if !protected_queue_writes(
+                ctx,
+                &queue.id,
+                vec![ResourceWrite::PatchSubscription {
+                    subscription: subscription.clone(),
+                    body: body_json(&request, &queue.id)?,
+                }],
+            )
+            .await?
+            {
+                client
+                    .patch_subscription(
+                        subscription.clone(),
+                        request.subscription,
+                        request.update_mask,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        resource_id: Some(queue.id.clone()),
+                        message: format!(
+                            "Update the dead-letter policy of subscription '{subscription}'"
+                        ),
+                    })?;
+            }
+            self.dead_letter_policy = policy_key(&desired_policy);
+            self.dead_letter_patch_started = false;
+        }
+
+        // Revoking is idempotent, so a grant that may have been written without being recorded
+        // is removed too.
+        if self.dead_letter_publisher_pending == Some(false) {
+            if let Some(agent) = &agent {
+                let topic = topic.ok_or_else(|| invalid("Topic name not set in state"))?;
+                set_agent_on_topic(ctx, client.as_ref(), &queue.id, &topic, agent, false).await?;
+            }
+            self.dead_letter_publisher = false;
+            self.dead_letter_publisher_pending = None;
+        }
+        if self.dead_letter_subscriber_pending == Some(false) {
+            if let Some(agent) = &agent {
+                let subscription =
+                    subscription.ok_or_else(|| invalid("Subscription name not set in state"))?;
+                set_agent_on_subscription(
+                    ctx,
+                    client.as_ref(),
+                    &queue.id,
+                    &subscription,
+                    agent,
+                    false,
+                )
+                .await?;
+            }
+            self.dead_letter_subscriber = false;
+            self.dead_letter_subscriber_pending = None;
+        }
+        if self.dead_letter_project_subscriber_pending == Some(false) && ctx.is_direct_setup_run() {
+            if let (Some(agent), true) = (&agent, self.dead_letter_project_subscriber_added) {
+                self.revoke_project_subscriber(ctx, &queue.id, agent)
+                    .await?;
+            }
+            self.dead_letter_project_subscriber = false;
+            self.dead_letter_project_subscriber_pending = None;
+            self.dead_letter_project_subscriber_added = false;
+        }
+        if !self.dead_letter_publisher
+            && !self.dead_letter_subscriber
+            && !self.dead_letter_project_subscriber
+        {
+            self.dead_letter_agent = None;
+        }
+        Ok(())
+    }
+
+    /// Removes the project-level subscriber grant unless another queue of the stack still needs
+    /// it: one member serves every such queue.
+    async fn revoke_project_subscriber(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        queue_id: &str,
+        agent: &str,
+    ) -> Result<()> {
+        let others = queues_needing_project_push_subscriber(ctx.desired_stack)
+            .into_iter()
+            .any(|id| id != queue_id);
+        if !others {
+            set_project_subscriber(ctx, queue_id, agent, false).await?;
+        }
+        Ok(())
+    }
+
+    /// Records the intended grants, and the service agent they are for, in a step of their own
+    /// before any write. A grant whose response is lost is then still reconciled, including when
+    /// the setting is removed before the retry.
+    async fn prepare_dead_letter(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let queue = ctx.desired_resource_config::<Queue>()?;
+        let want_subscriber = queue.dead_letter.is_some();
+        let want_publisher = !queues_dead_lettering_to(ctx.desired_stack, &queue.id).is_empty();
+        if want_subscriber != self.dead_letter_subscriber
+            || self.dead_letter_subscriber_pending.is_some()
+        {
+            self.dead_letter_subscriber_pending = Some(want_subscriber);
+        }
+        if want_publisher != self.dead_letter_publisher
+            || self.dead_letter_publisher_pending.is_some()
+        {
+            self.dead_letter_publisher_pending = Some(want_publisher);
+        }
+        let want_project = queue_needs_project_push_subscriber(ctx.desired_stack, &queue.id)
+            && ctx.is_direct_setup_run();
+        if (want_subscriber
+            || want_publisher
+            || want_project
+            || self.dead_letter_project_subscriber_added)
+            && self.dead_letter_agent.is_none()
+        {
+            self.dead_letter_agent = Some(pubsub_service_agent(ctx, &queue.id).await?);
+        }
+        if ctx.is_direct_setup_run() {
+            let want_project = queue_needs_project_push_subscriber(ctx.desired_stack, &queue.id);
+            if want_project != self.dead_letter_project_subscriber
+                || self.dead_letter_project_subscriber_pending.is_some()
+            {
+                if want_project
+                    && self.dead_letter_project_subscriber_pending.is_none()
+                    && !self.dead_letter_project_subscriber
+                {
+                    // Take ownership only of a member this run is about to add.
+                    let agent = self.dead_letter_agent.clone().ok_or_else(|| {
+                        AlienError::new(ErrorData::ResourceConfigInvalid {
+                            message: "Pub/Sub service agent not recorded".to_string(),
+                            resource_id: Some(queue.id.clone()),
+                        })
+                    })?;
+                    if project_subscriber_present(ctx, &queue.id, &agent).await? {
+                        self.dead_letter_project_subscriber = true;
+                        // The member was added by this stack, not by someone else, when
+                        // another queue of the stack recorded that it added it: co-own it, so
+                        // whichever queue is removed last revokes it.
+                        self.dead_letter_project_subscriber_added =
+                            another_queue_added_project_subscriber(ctx, &queue.id);
+                    } else {
+                        self.dead_letter_project_subscriber_added = true;
+                        self.dead_letter_project_subscriber_pending = Some(true);
+                    }
+                } else {
+                    self.dead_letter_project_subscriber_pending = Some(want_project);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Record the intended membership, and for a grant the member itself, before the
     /// policy write. A grant whose response is lost is then still reconciled, including
     /// when notifications are removed before the retry.

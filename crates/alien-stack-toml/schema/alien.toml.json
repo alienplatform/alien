@@ -2539,6 +2539,10 @@
       "additionalProperties": false,
       "description": "Represents a message queue resource with minimal, portable semantics.\nQueue integrates with platform-native services (AWS SQS, GCP Pub/Sub, Azure Service Bus).",
       "properties": {
+        "dead-letter": {
+          "$ref": "#/definitions/QueueDeadLetter",
+          "description": "Move a message to another Queue in the stack after it failed to be processed\n`max_attempts` times. Omitted when absent so existing serialized configurations and\nsetup digests do not change."
+        },
         "description": {
           "type": "string"
         },
@@ -2590,6 +2594,27 @@
       "required": [
         "max-messages",
         "max-window"
+      ],
+      "type": "object"
+    },
+    "QueueDeadLetter": {
+      "additionalProperties": false,
+      "description": "Where a Queue moves messages that keep failing.\n\nThe target is a normal Queue in the same stack with the same lifecycle. The attempt count is\napproximate: it is the cloud's own delivery count (SQS counts every receive, Pub/Sub is\nbest-effort). The payload is preserved; there is no portable failure reason.",
+      "properties": {
+        "max-attempts": {
+          "default": 5,
+          "description": "Deliveries after which the message moves (5 to 100, default 5).",
+          "maximum": 100,
+          "minimum": 5,
+          "type": "integer"
+        },
+        "queue": {
+          "$ref": "#/definitions/ResourceRef",
+          "description": "The Queue that receives the messages. Must be a Queue in the stack with the same\nlifecycle, must not be this Queue and must not have a dead-letter setting itself."
+        }
+      },
+      "required": [
+        "queue"
       ],
       "type": "object"
     },

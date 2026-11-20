@@ -114,3 +114,8 @@ CreateChangeSet.
 See [storage notifications into queues](./STORAGE_NOTIFICATIONS.md) for the
 `.notify(queue, options)` API, filter limits, lifecycle ownership and delivery
 semantics.
+
+## Queue dead-letter declarations
+
+See [dead-letter queues](./QUEUE_DEAD_LETTER.md) for the `.deadLetter(queue, options)`
+API, the rules checked at build time, what each cloud does, and the delivery semantics.

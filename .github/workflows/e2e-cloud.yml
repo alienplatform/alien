@@ -65,6 +65,7 @@ on:
           - comprehensive-ts
           - automatic-setup
           - storage-notifications
+          - queue-dead-letter
           - full-stack-microservices
           - enabled-demo
           - byo-ai

@@ -81,6 +81,9 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 panic!("remote AI checks failed: {error:#}");
             }
         }
+        TestApp::QueueDeadLetter => {
+            common::queue_dead_letter::check_upgrade(ctx).await;
+        }
         TestApp::StorageNotifications => {
             common::storage_notifications::check_delivery(&ctx.deployment).await;
             alien_test::distribution::verify_rule_update(ctx)
@@ -892,6 +895,12 @@ macro_rules! distribution_test_context {
         impl test_context::AsyncTestContext for $name {
             async fn setup() -> Self {
                 alien_test::e2e::init_tracing();
+                if $app == TestApp::QueueDeadLetter {
+                    // The upgrade check starts from a release without `deadLetter` (what an
+                    // existing install runs), then adds, changes and removes the setting.
+                    std::env::set_var("DLQ_E2E_NO_DEAD_LETTER", "1");
+                    std::env::set_var("DLQ_E2E_UPGRADE", "1");
+                }
                 let ctx = alien_test::e2e::setup_distribution($flow, $app)
                     .await
                     .expect(concat!(stringify!($name), " setup failed"));
@@ -1394,5 +1403,53 @@ distribution_test_context!(
 #[test_context(TerraformAzureNotifications)]
 #[tokio::test]
 async fn terraform_azure_push_storage_notifications(ctx: &mut TerraformAzureNotifications) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    CloudFormationAwsQueueDeadLetter,
+    DistributionFlow::CloudFormationAwsPush,
+    TestApp::QueueDeadLetter
+);
+
+#[test_context(CloudFormationAwsQueueDeadLetter)]
+#[tokio::test]
+async fn cloudformation_aws_push_queue_dead_letter(ctx: &mut CloudFormationAwsQueueDeadLetter) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAwsQueueDeadLetter,
+    DistributionFlow::TerraformAwsPush,
+    TestApp::QueueDeadLetter
+);
+
+#[test_context(TerraformAwsQueueDeadLetter)]
+#[tokio::test]
+async fn terraform_aws_push_queue_dead_letter(ctx: &mut TerraformAwsQueueDeadLetter) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformGcpQueueDeadLetter,
+    DistributionFlow::TerraformGcpPush,
+    TestApp::QueueDeadLetter
+);
+
+#[test_context(TerraformGcpQueueDeadLetter)]
+#[tokio::test]
+async fn terraform_gcp_push_queue_dead_letter(ctx: &mut TerraformGcpQueueDeadLetter) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAzureQueueDeadLetter,
+    DistributionFlow::TerraformAzurePush,
+    TestApp::QueueDeadLetter
+);
+
+#[test_context(TerraformAzureQueueDeadLetter)]
+#[tokio::test]
+async fn terraform_azure_push_queue_dead_letter(ctx: &mut TerraformAzureQueueDeadLetter) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
