@@ -2824,15 +2824,17 @@ fn deployer_secret_outputs(
         let (value, description) = if target.is_kubernetes() {
             // The Secret the pods read: the vault prefix the Kubernetes vault controller
             // derives (`<resource prefix>-deployer-secrets`), joined to the key the same way
-            // `vault_naming::kubernetes_secret_name` does.
-            let suffix = alien_core::vault_naming::kubernetes_secret_name("", &vault_key);
+            // `vault_naming::kubernetes_secret_name` does, including the length limit on the
+            // whole name (the prefix is only known when Terraform runs, so `substr` cuts it).
+            let tail = alien_core::vault_naming::kubernetes_secret_name_tail(&vault_key);
             (
                 expr::object([
                     (
                         "name",
-                        expr::template(format!(
-                            "${{lower(local.resource_prefix)}}-{}{suffix}",
-                            alien_core::DEPLOYER_SECRETS_VAULT_ID
+                        expr::raw(format!(
+                            "substr(\"${{lower(local.resource_prefix)}}-{}{tail}\", 0, {})",
+                            alien_core::DEPLOYER_SECRETS_VAULT_ID,
+                            alien_core::vault_naming::KUBERNETES_SECRET_NAME_MAX_CHARS
                         )),
                     ),
                     ("namespace", expr::raw("var.kubernetes_namespace")),

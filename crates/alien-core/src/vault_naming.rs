@@ -48,17 +48,37 @@ pub fn is_azure_deployer_vault_name(resource_prefix: &str, name: &str) -> bool {
     })
 }
 
+/// Longest Kubernetes object name.
+pub const KUBERNETES_SECRET_NAME_MAX_CHARS: usize = 253;
+
+/// The part of a Kubernetes Secret name that follows the vault prefix: `-{secret_name}`,
+/// lowercased, with underscores turned into hyphens and other characters dropped. Not cut to
+/// the length limit: the limit applies to the whole name, prefix included.
+pub fn kubernetes_secret_name_tail(secret_name: &str) -> String {
+    format!("-{secret_name}")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .collect::<String>()
+        .to_lowercase()
+        .replace('_', "-")
+}
+
 /// Kubernetes Secret name: `{vault_prefix}-{secret_name}`, lowercased, with
 /// underscores turned into hyphens and other characters dropped, cut to the
-/// 253-character object name limit. The value lives under the `value` key.
+/// 253-character object name limit (the whole name, prefix included). The value
+/// lives under the `value` key.
 pub fn kubernetes_secret_name(vault_prefix: &str, secret_name: &str) -> String {
-    let clean = format!("{vault_prefix}-{secret_name}")
+    let clean = format!("{vault_prefix}{}", kubernetes_secret_name_tail(secret_name));
+    let clean: String = clean
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
         .collect::<String>()
         .to_lowercase()
         .replace('_', "-");
-    clean.chars().take(253).collect()
+    clean
+        .chars()
+        .take(KUBERNETES_SECRET_NAME_MAX_CHARS)
+        .collect()
 }
 
 /// Data key of a Kubernetes Secret that holds a vault value.

@@ -480,7 +480,7 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
                 assert!(main.contains("listenerPort     = 443"));
                 assert!(main.contains("provider          = \"gkeGateway\""));
                 assert!(main.contains("mode               = \"managedTlsSecret\""));
-                assert!(main.contains("secretNameTemplate = \"deployment-{{ resourceId }}-tls\""));
+                assert!(main.contains("secretNameTemplate = \"{{ workloadName }}-tls\""));
                 assert!(!main.contains("mode = \"none\""));
                 assert!(main.contains("gke-gcloud-auth-plugin"));
                 assert!(main.contains("provideClusterInfo = true"));
@@ -493,7 +493,7 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
                 assert!(main.contains("gatewayClassName = \"azure-alb-external\""));
                 assert!(main.contains("listenerPort     = 443"));
                 assert!(main.contains("mode               = \"managedTlsSecret\""));
-                assert!(main.contains("secretNameTemplate = \"deployment-{{ resourceId }}-tls\""));
+                assert!(main.contains("secretNameTemplate = \"{{ workloadName }}-tls\""));
                 assert!(main.contains(
                     "\"alb.networking.azure.io/alb-namespace\" = var.kubernetes_namespace"
                 ));
@@ -3209,7 +3209,10 @@ fn the_installed_chart_gets_the_bindings_of_the_resources_the_module_created() {
             let infra_at = output.find("local.chart_values_infrastructure");
             assert!(provider_at < infra_at, "{output}");
             if product {
-                assert!(infra_at < output.find("remoteOperator = merge("), "{output}");
+                assert!(
+                    infra_at < output.find("remoteOperator = merge("),
+                    "{output}"
+                );
             }
         }
     }

@@ -1116,7 +1116,7 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
   }
   certificate = {
     mode               = "managedTlsSecret"
-    secretNameTemplate = "deployment-{{ resourceId }}-tls"
+    secretNameTemplate = "{{ workloadName }}-tls"
   }
 }"#,
                 ),
@@ -1256,7 +1256,7 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
   }
   certificate = {
     mode               = "managedTlsSecret"
-    secretNameTemplate = "deployment-{{ resourceId }}-tls"
+    secretNameTemplate = "{{ workloadName }}-tls"
   }
 }"#,
                 ),
