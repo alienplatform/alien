@@ -2232,10 +2232,11 @@ async fn push_target(
         layered,
     )
     .await?;
-    if *platform == Platform::Aws {
+    if matches!(platform, Platform::Aws | Platform::Gcp) {
         // Tags are unique per push, not per image. The deployment's bundle names the image in its
         // `FROM` and its key is the bundle's digest, so an unchanged sandbox must keep one
-        // reference across releases or every release would rebuild it.
+        // reference across releases or every release would rebuild it. On GCP the digest is what
+        // the deployment copies into its own project and what a signed install accepts.
         pin_to_digest(target.resource_name(), &agent_uri, push_options).await
     } else {
         Ok(agent_uri)
@@ -8253,7 +8254,12 @@ mod sandbox_push_tests {
             let image = push_target(&targets[0], &platform, &repository, &options, &agent_image)
                 .await
                 .expect("the sandbox pushes");
-            assert!(image.ends_with("-agent"), "{platform}: {image}");
+            if platform == Platform::Gcp {
+                // GCP pins the released image to its digest.
+                assert!(image.contains("@sha256:"), "{platform}: {image}");
+            } else {
+                assert!(image.ends_with("-agent"), "{platform}: {image}");
+            }
             let reference = Reference::try_from(image.as_str()).expect("reference");
             let (_, _, config) = OciClient::new(OciClientConfig {
                 protocol: dockdash::ClientProtocol::Http,

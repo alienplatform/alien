@@ -377,6 +377,31 @@ pub struct SingleControllerExecutor {
     // How to wait between steps, and the delays the controller suggested so far.
     delay_mode: DelayMode,
     suggested_delays: Vec<Duration>,
+    manager_url: Option<String>,
+    native_image_host: Option<String>,
+}
+
+/// The registry hosts a test asked for, over the config's defaults.
+trait WithRegistryHosts {
+    fn with_registry_hosts(
+        self,
+        manager_url: &Option<String>,
+        native_host: &Option<String>,
+    ) -> Self;
+}
+
+impl WithRegistryHosts for DeploymentConfig {
+    fn with_registry_hosts(
+        mut self,
+        manager_url: &Option<String>,
+        native_host: &Option<String>,
+    ) -> Self {
+        if let Some(url) = manager_url {
+            self.manager_url = Some(url.clone());
+        }
+        self.native_image_host = native_host.clone();
+        self
+    }
 }
 
 impl SingleControllerExecutor {
@@ -441,7 +466,8 @@ impl SingleControllerExecutor {
                 .deletion_policy(self.deletion_policy)
                 .manager_url("https://test-manager.alien.dev".to_string())
                 .deployment_token("test-deployment-token".to_string())
-                .build(),
+                .build()
+                .with_registry_hosts(&self.manager_url, &self.native_image_host),
             initial_setup_authority: self.initial_setup_authority,
             heartbeat_collector: HeartbeatCollector::default(),
         };
@@ -704,6 +730,7 @@ impl SingleControllerExecutor {
             .manager_url("https://test-manager.alien.dev".to_string())
             .deployment_token("test-deployment-token".to_string())
             .build()
+            .with_registry_hosts(&self.manager_url, &self.native_image_host)
     }
 
     /// Runs the controller's [`ResourceController::sync_membership`] with the context the
@@ -879,6 +906,8 @@ pub struct SingleControllerExecutorBuilder {
     remote_access: bool,
     extensions: Vec<alien_core::ExtensionManifest>,
     delay_mode: DelayMode,
+    manager_url: Option<String>,
+    native_image_host: Option<String>,
 }
 
 impl SingleControllerExecutorBuilder {
@@ -925,7 +954,21 @@ impl SingleControllerExecutorBuilder {
             remote_access: false,
             extensions: Vec::new(),
             delay_mode: DelayMode::default(),
+            manager_url: None,
+            native_image_host: None,
         }
+    }
+
+    /// Point the deployment config at another manager than the default.
+    pub fn manager_url(mut self, url: impl Into<String>) -> Self {
+        self.manager_url = Some(url.into());
+        self
+    }
+
+    /// The native registry host the deployment config names (default none).
+    pub fn native_image_host(mut self, host: impl Into<String>) -> Self {
+        self.native_image_host = Some(host.into());
+        self
     }
 
     /// Sleeps for each delay the controller suggests. Use it for tests that drive real
@@ -1702,6 +1745,8 @@ impl SingleControllerExecutorBuilder {
             initial_setup_authority: self.initial_setup_authority,
             delay_mode: self.delay_mode,
             suggested_delays: Vec::new(),
+            manager_url: self.manager_url,
+            native_image_host: self.native_image_host,
         })
     }
 }

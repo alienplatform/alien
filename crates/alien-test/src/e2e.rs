@@ -964,6 +964,39 @@ pub async fn deploy_test_app(
     Ok((deployment, pushed_stack))
 }
 
+/// Copy a test app's directory to `to`, for a test that releases a changed version of it.
+pub fn copy_test_app(app: TestApp, to: &std::path::Path) -> anyhow::Result<()> {
+    let from = e2e_test_apps_root()?.join(test_app_path(app));
+    let status = std::process::Command::new("cp")
+        .arg("-r")
+        .arg(&from)
+        .arg(to)
+        .status()
+        .context("run cp")?;
+    anyhow::ensure!(status.success(), "cp -r {} failed", from.display());
+    Ok(())
+}
+
+/// Build the app in `app_dir`, push its images and create a release from it on `manager`. A
+/// deployment of the same project picks it up on its next redeploy.
+pub async fn push_release_from_dir(
+    manager: &Arc<TestManager>,
+    platform: Platform,
+    app_dir: &std::path::Path,
+) -> anyhow::Result<String> {
+    let config = TestConfig::from_env();
+    let by_platform = load_stack_json(app_dir, CONFIG_FILE, platform).await?;
+    let stack: Stack = serde_json::from_value(
+        by_platform
+            .get(platform.as_str())
+            .context("Stack JSON missing platform key")?
+            .clone(),
+    )
+    .context("Failed to deserialize Stack from JSON")?;
+    let pushed = build_and_push_stack(stack, platform, &config, app_dir, manager).await?;
+    create_release(manager, platform, &pushed).await
+}
+
 /// Push `stack` as a release (POST /v1/releases) and return the release id.
 pub async fn create_release(
     manager: &Arc<TestManager>,
@@ -2012,9 +2045,12 @@ async fn setup_inner(
 
     // Provision the managed test secret via the manager vault API.
     // Only for push mode — pull-mode agents manage secrets directly.
+    // The sandbox-remote stack has no vault to provision into.
     if model == DeploymentModel::Push
-        && app != TestApp::StorageNotifications
-        && app != TestApp::QueueDeadLetter
+        && !matches!(
+            app,
+            TestApp::StorageNotifications | TestApp::QueueDeadLetter | TestApp::SandboxRemote
+        )
         && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
     {
         if let Err(e) = provision_managed_test_secret(&manager, &deployment).await {

@@ -173,6 +173,106 @@ async fn push_gcp_comprehensive_rust(ctx: &mut GcpPushRust) {
 }
 
 e2e_test_context!(
+    GcpPushSandboxRemote,
+    Platform::Gcp,
+    DeploymentModel::Push,
+    TestApp::SandboxRemote
+);
+
+/// A source-built Frozen sandbox set up directly on GCP: the template runs from a digest-pinned
+/// copy in the deployment's project and a session cut from it runs a command.
+#[test_context(GcpPushSandboxRemote)]
+#[tokio::test]
+async fn push_gcp_sandbox_remote(ctx: &mut GcpPushSandboxRemote) {
+    let gcp = alien_test::config::TestConfig::from_env()
+        .gcp_target
+        .expect("GOOGLE_TARGET_* is set");
+    common::sandbox::check_gcp_template_runs_a_command(
+        &gcp.project_id,
+        &gcp.region,
+        gcp.credentials_json.as_deref().expect("a target key"),
+        &std::env::var("ALIEN_E2E_RESOURCE_PREFIX").expect("a resource prefix"),
+        "sandbox-remote v1",
+    )
+    .await
+    .expect("a session from the deployed template runs a command");
+}
+
+/// A release that changes only the sandbox image rolls on a Frozen GCP sandbox without a setup
+/// update: the manager's identity copies the new image and the template is replaced.
+#[test_context(GcpPushSandboxRemote)]
+#[tokio::test]
+async fn push_gcp_sandbox_remote_image_only_release(ctx: &mut GcpPushSandboxRemote) {
+    let gcp = alien_test::config::TestConfig::from_env()
+        .gcp_target
+        .expect("GOOGLE_TARGET_* is set");
+    let key = gcp.credentials_json.as_deref().expect("a target key");
+    let prefix = std::env::var("ALIEN_E2E_RESOURCE_PREFIX").expect("a resource prefix");
+    let first = common::sandbox::check_gcp_template_runs_a_command(
+        &gcp.project_id,
+        &gcp.region,
+        key,
+        &prefix,
+        "sandbox-remote v1",
+    )
+    .await
+    .expect("release 1 runs");
+
+    // Release 2: the same declaration, only the Dockerfile's mark differs.
+    let scratch = tempfile::tempdir().expect("scratch dir");
+    let app = scratch.path().join("sandbox-remote");
+    alien_test::copy_test_app(TestApp::SandboxRemote, &app).expect("copy the app");
+    let dockerfile = app.join("sandbox/Dockerfile");
+    let text = std::fs::read_to_string(&dockerfile).expect("read Dockerfile");
+    assert!(text.contains("SANDBOX_IMAGE_MARK=v1"));
+    std::fs::write(
+        &dockerfile,
+        text.replace("SANDBOX_IMAGE_MARK=v1", "SANDBOX_IMAGE_MARK=v2"),
+    )
+    .expect("write Dockerfile");
+    let release = alien_test::push_release_from_dir(&ctx.ctx.manager, ctx.ctx.platform, &app)
+        .await
+        .expect("release 2 is pushed");
+    eprintln!("release 2: {release}");
+
+    ctx.ctx.deployment.upgrade().await.expect("redeploy");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1200);
+    let mut seen = Vec::new();
+    let second = loop {
+        let status = ctx.ctx.deployment.status().await.unwrap_or_default();
+        if seen.last() != Some(&status) {
+            eprintln!("deployment status: {status}");
+            seen.push(status.clone());
+        }
+        if status.ends_with("failed") || status.contains("setup") {
+            panic!("the image-only release did not roll: deployment status {status}");
+        }
+        match common::sandbox::check_gcp_template_runs_a_command(
+            &gcp.project_id,
+            &gcp.region,
+            key,
+            &prefix,
+            "sandbox-remote v2",
+        )
+        .await
+        {
+            Ok(image) if status == "running" => break image,
+            Ok(_) => {}
+            Err(error) => eprintln!("not rolled yet: {error:#}"),
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out; statuses {seen:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+    };
+    eprintln!("statuses seen: {seen:?}");
+    eprintln!("template image before: {first}");
+    eprintln!("template image after:  {second}");
+    assert_ne!(first, second);
+}
+
+e2e_test_context!(
     GcpPushTypeScript,
     Platform::Gcp,
     DeploymentModel::Push,

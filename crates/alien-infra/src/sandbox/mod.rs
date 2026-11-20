@@ -95,6 +95,9 @@ mod gcp_engine_setup_tests;
 pub use gcp_agent_platform_engine::*;
 
 #[cfg(feature = "gcp")]
+mod gcp_image_copy;
+
+#[cfg(feature = "gcp")]
 mod gcp_import;
 #[cfg(feature = "gcp")]
 pub use gcp_import::*;

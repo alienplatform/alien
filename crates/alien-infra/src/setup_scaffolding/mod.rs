@@ -5,8 +5,9 @@
 use std::collections::BTreeMap;
 
 use alien_core::{
-    import::ImportContext, ownership_policy_for_resource_type, ClientConfig, ManagementConfig,
-    Platform, ResourceEntry, ResourceLifecycle, SetupScaffolding, Stack, StackSettings, StackState,
+    import::ImportContext, ownership_policy_for_resource_type, ClientConfig, GcpSandboxScaffolding,
+    ManagementConfig, Platform, ResourceEntry, ResourceLifecycle, SetupScaffolding, Stack,
+    StackSettings, StackState,
 };
 use alien_error::{AlienError, Context};
 
@@ -16,6 +17,9 @@ use crate::{ErrorData, ImporterRegistry, PlatformServiceProvider, Result};
 mod aws_sandbox;
 #[cfg(feature = "aws")]
 mod aws_sandbox_egress;
+#[cfg(feature = "gcp")]
+mod gcp_sandbox;
+mod gcp_sandbox_state;
 
 /// The credentials a scaffolding step acts with: setup's, never the runtime identity's.
 pub struct SetupScaffoldingContext<'a> {
@@ -109,6 +113,7 @@ pub async fn reconcile(
     stack: &Stack,
     stack_state: &StackState,
     records: &mut BTreeMap<String, SetupScaffolding>,
+    gcp_records: &mut BTreeMap<String, GcpSandboxScaffolding>,
 ) -> Result<ScaffoldingProgress> {
     let mut progress = ScaffoldingProgress::Done;
     for (resource_id, entry, scaffolded) in scaffolded(stack, stack_state.platform) {
@@ -120,6 +125,12 @@ pub async fn reconcile(
             }
             #[cfg(not(feature = "aws"))]
             Scaffolded::AwsSandbox(_) => return Err(aws_not_built()),
+            #[cfg(feature = "gcp")]
+            Scaffolded::GcpSandbox(sandbox) => {
+                gcp_sandbox::reconcile(ctx, stack_state, &sandbox.id, gcp_records).await?
+            }
+            #[cfg(not(feature = "gcp"))]
+            Scaffolded::GcpSandbox(_) => return Err(gcp_not_built()),
         };
         if step == ScaffoldingProgress::InProgress {
             tracing::info!(resource_id = %resource_id, "Setup scaffolding in progress");
@@ -136,6 +147,8 @@ pub fn changes_requiring_setup(
     client_config: &ClientConfig,
     installed: &Stack,
     records: &BTreeMap<String, SetupScaffolding>,
+    gcp_records: &BTreeMap<String, GcpSandboxScaffolding>,
+    stack_state: &StackState,
     target: &Stack,
     platform: Platform,
 ) -> Result<Vec<String>> {
@@ -180,18 +193,31 @@ pub fn changes_requiring_setup(
             }
             #[cfg(not(feature = "aws"))]
             Scaffolded::AwsSandbox(_) => return Err(aws_not_built()),
+            // Its changes are the image's, below.
+            Scaffolded::GcpSandbox(_) => {}
         }
     }
     if platform == Platform::Gcp {
-        changes.extend(gcp_frozen_sandbox_image_changes(installed, target));
+        changes.extend(gcp_frozen_sandbox_image_changes(
+            installed,
+            gcp_records,
+            stack_state,
+            target,
+        ));
     }
     Ok(changes)
 }
 
-/// A new image for a Frozen GCP sandbox replaces its template, which takes `sandbox/templates` on
-/// its engine. A Terraform setup is taken to grant that to the manager and a direct setup never
-/// does, so after a direct setup the replace needs the deployer's credentials.
-fn gcp_frozen_sandbox_image_changes(installed: &Stack, target: &Stack) -> Vec<String> {
+/// A new image for a Frozen GCP sandbox is copied into the sandbox's repository and replaces its
+/// template. A setup that recorded both the manager's write access to that repository and its
+/// template grant on the engine lets the manager do that; any other install needs the deployer's
+/// credentials once to get them, and the message says so.
+fn gcp_frozen_sandbox_image_changes(
+    installed: &Stack,
+    records: &BTreeMap<String, GcpSandboxScaffolding>,
+    stack_state: &StackState,
+    target: &Stack,
+) -> Vec<String> {
     target
         .resources()
         .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
@@ -206,8 +232,26 @@ fn gcp_frozen_sandbox_image_changes(installed: &Stack, target: &Stack) -> Vec<St
                     "sandbox '{resource_id}' is new, and setup creates its template"
                 ));
             };
-            (installed.code != target.code)
-                .then(|| format!("sandbox '{resource_id}' changes its image"))
+            if installed.code == target.code {
+                return None;
+            }
+            let writer_granted = matches!(
+                records.get(resource_id),
+                Some(GcpSandboxScaffolding {
+                    writer_granted: true,
+                    ..
+                })
+            );
+            match writer_granted
+                && gcp_sandbox_state::templates_grant_recorded(stack_state, resource_id)
+            {
+                true => None,
+                false => Some(format!(
+                    "sandbox '{resource_id}' changes its image, and this setup did not give the \
+                     manager the access to roll an image on its own. Running the deployment's \
+                     setup once enables image-only releases"
+                )),
+            }
         })
         .collect()
 }
@@ -223,6 +267,8 @@ fn scaffolded(
         }
         let scaffolded = match platform {
             Platform::Aws => Scaffolded::AwsSandbox(entry.config.downcast_ref()?),
+            // Either lifecycle: the runtime controller cannot create what a repository needs.
+            Platform::Gcp => Scaffolded::GcpSandbox(entry.config.downcast_ref()?),
             _ => return None,
         };
         Some((resource_id, entry, scaffolded))
@@ -231,6 +277,15 @@ fn scaffolded(
 
 enum Scaffolded<'a> {
     AwsSandbox(&'a alien_core::Sandbox),
+    GcpSandbox(&'a alien_core::Sandbox),
+}
+
+#[cfg(not(feature = "gcp"))]
+fn gcp_not_built() -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ControllerNotAvailable {
+        resource_type: alien_core::Sandbox::RESOURCE_TYPE,
+        platform: Platform::Gcp,
+    })
 }
 
 #[cfg(not(feature = "aws"))]
@@ -259,11 +314,15 @@ pub fn seeds(
     records: &BTreeMap<String, SetupScaffolding>,
 ) -> Result<Vec<ScaffoldingSeed>> {
     scaffolded(stack, stack_state.platform)
-        .map(|(_, _, scaffolded)| match scaffolded {
+        .filter_map(|(_, _, scaffolded)| match scaffolded {
             #[cfg(feature = "aws")]
-            Scaffolded::AwsSandbox(sandbox) => aws_sandbox::seed(ctx, stack, sandbox, records),
+            Scaffolded::AwsSandbox(sandbox) => {
+                Some(aws_sandbox::seed(ctx, stack, sandbox, records))
+            }
             #[cfg(not(feature = "aws"))]
-            Scaffolded::AwsSandbox(_) => Err(aws_not_built()),
+            Scaffolded::AwsSandbox(_) => Some(Err(aws_not_built())),
+            // Its controller is built by the setup run's own executor; there is nothing to seed.
+            Scaffolded::GcpSandbox(_) => None,
         })
         .collect()
 }
@@ -359,6 +418,7 @@ pub async fn recover_unrecorded(
     stack: &Stack,
     platform: Platform,
     records: &mut BTreeMap<String, SetupScaffolding>,
+    gcp_records: &mut BTreeMap<String, GcpSandboxScaffolding>,
 ) -> Result<()> {
     for (resource_id, entry, scaffolded) in scaffolded(stack, platform) {
         let recovered = match scaffolded {
@@ -368,6 +428,19 @@ pub async fn recover_unrecorded(
             }
             #[cfg(not(feature = "aws"))]
             Scaffolded::AwsSandbox(_) => return Err(aws_not_built()),
+            #[cfg(feature = "gcp")]
+            Scaffolded::GcpSandbox(sandbox) => {
+                // A repository is found by its fixed name, so a record never lacks anything a
+                // found one would add.
+                if !gcp_records.contains_key(resource_id) {
+                    if let Some(found) = gcp_sandbox::recover(ctx, &sandbox.id).await? {
+                        gcp_records.insert(resource_id.clone(), found);
+                    }
+                }
+                continue;
+            }
+            #[cfg(not(feature = "gcp"))]
+            Scaffolded::GcpSandbox(_) => return Err(gcp_not_built()),
         };
         let Some(recovered) = recovered else {
             continue;
@@ -387,8 +460,33 @@ pub async fn recover_unrecorded(
 pub async fn teardown(
     ctx: &SetupScaffoldingContext<'_>,
     records: &mut BTreeMap<String, SetupScaffolding>,
+    gcp_records: &mut BTreeMap<String, GcpSandboxScaffolding>,
 ) -> Result<ScaffoldingProgress> {
     let mut progress = ScaffoldingProgress::Done;
+    for resource_id in gcp_records.keys().cloned().collect::<Vec<_>>() {
+        let Some(record) = gcp_records.get(&resource_id) else {
+            continue;
+        };
+        #[cfg(feature = "gcp")]
+        let step = gcp_sandbox::teardown(
+            ctx,
+            &resource_id,
+            &record.image_repository,
+            &record.write_role,
+        )
+        .await?;
+        #[cfg(not(feature = "gcp"))]
+        let step = {
+            let _ = record;
+            return Err(gcp_not_built());
+        };
+        match step {
+            ScaffoldingProgress::Done => {
+                gcp_records.remove(&resource_id);
+            }
+            ScaffoldingProgress::InProgress => progress = ScaffoldingProgress::InProgress,
+        }
+    }
     let resource_ids: Vec<String> = records.keys().cloned().collect();
     for resource_id in resource_ids {
         let step = match records.get_mut(&resource_id) {
