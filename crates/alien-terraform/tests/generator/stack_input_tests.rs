@@ -185,6 +185,154 @@ fn deployer_secrets_never_reach_terraform_variables_or_state() {
     }
 }
 
+/// Terraform's `substr(string, offset, length)` for ASCII test values.
+fn substr_func() -> FuncDef {
+    fn substr(args: FuncArgs) -> Result<Value, String> {
+        let text = args[0].as_str().ok_or("substr takes a string")?;
+        let offset = args[1].as_u64().ok_or("offset must be a number")? as usize;
+        let length = args[2].as_u64().ok_or("length must be a number")? as usize;
+        Ok(Value::from(
+            text.chars().skip(offset).take(length).collect::<String>(),
+        ))
+    }
+    FuncDef::builder()
+        .param(ParamType::String)
+        .param(ParamType::Number)
+        .param(ParamType::Number)
+        .build(substr)
+}
+
+/// The deployer secret name on a Kubernetes target applies the 253-character limit to the whole
+/// name, prefix included, the way the readiness check names the Secret
+/// (`vault_naming::kubernetes_secret_name`).
+#[test]
+fn kubernetes_deployer_secret_names_apply_the_length_limit_to_the_whole_name() {
+    fn lower(args: FuncArgs) -> Result<Value, String> {
+        Ok(Value::from(
+            args[0]
+                .as_str()
+                .ok_or("lower takes a string")?
+                .to_lowercase(),
+        ))
+    }
+
+    let prefix = "Acme-Prod-0123456789-0123456789-01234567"; // 40 characters
+    assert_eq!(prefix.len(), 40);
+    let input_id = "k".repeat(200);
+    let mut stack = deployer_secret_stack(vec![StackInputProvider::Deployer]);
+    stack.inputs[0].id = input_id.clone();
+
+    let module = render(&stack, TerraformTarget::Gke, StackSettings::default());
+    let outputs = module.get("outputs.tf").expect("outputs.tf");
+    let body: hcl::Body = hcl::from_str(outputs).expect("outputs.tf parses");
+    let value = body
+        .blocks()
+        .find(|block| {
+            block.identifier() == "output"
+                && block
+                    .labels()
+                    .first()
+                    .is_some_and(|label| label.as_str().starts_with("deployer_secret_"))
+        })
+        .expect("deployer secret output")
+        .body()
+        .attributes()
+        .find(|attribute| attribute.key() == "value")
+        .expect("output value")
+        .expr()
+        .clone();
+    let mut context = Context::new();
+    context.declare_var("local", hcl::value!({ resource_prefix = (prefix) }));
+    context.declare_var("var", hcl::value!({ kubernetes_namespace = "apps" }));
+    context.declare_func(
+        "lower",
+        FuncDef::builder().param(ParamType::String).build(lower),
+    );
+    context.declare_func("substr", substr_func());
+    let output = value.evaluate(&context).expect("output evaluates");
+    let name = output.as_object().expect("object")["name"]
+        .as_str()
+        .expect("name")
+        .to_string();
+
+    let expected = alien_core::vault_naming::kubernetes_secret_name(
+        &format!("{}-deployer-secrets", prefix.to_lowercase()),
+        &deployer_secret_vault_key(&input_id),
+    );
+    assert_eq!(expected.chars().count(), 253);
+    assert_eq!(name, expected);
+}
+
+/// On a Kubernetes target pods read deployer secrets from Kubernetes Secrets in the release
+/// namespace, so the module's outputs name the Secret the deployer writes. The cloud vault's IAM
+/// stays in the module, at its earlier addresses: an install from an earlier release still
+/// records that vault, and removing it is a separate change.
+#[test]
+fn kubernetes_targets_put_deployer_secrets_in_the_release_namespace() {
+    fn lower(args: FuncArgs) -> Result<Value, String> {
+        Ok(Value::from(
+            args[0]
+                .as_str()
+                .ok_or("lower takes a string")?
+                .to_lowercase(),
+        ))
+    }
+
+    for target in [
+        TerraformTarget::Eks,
+        TerraformTarget::Gke,
+        TerraformTarget::Aks,
+    ] {
+        let module = render(
+            &deployer_secret_stack(vec![StackInputProvider::Deployer]),
+            target,
+            StackSettings::default(),
+        );
+        let rendered = module.files.values().cloned().collect::<String>();
+        // No removed block: an earlier release's deployer vault resources stay managed.
+        assert!(!rendered.contains("removed {"), "{target:?}");
+
+        let outputs = module.get("outputs.tf").expect("outputs.tf");
+        let body: hcl::Body = hcl::from_str(outputs).expect("outputs.tf parses");
+        let value = body
+            .blocks()
+            .find(|block| {
+                block.identifier() == "output"
+                    && block.labels().first().map(|label| label.as_str())
+                        == Some("deployer_secret_api_key")
+            })
+            .expect("deployer secret output")
+            .body()
+            .attributes()
+            .find(|attribute| attribute.key() == "value")
+            .expect("output value")
+            .expr()
+            .clone();
+        let mut context = Context::new();
+        context.declare_var("local", hcl::value!({ resource_prefix = "Acme-Prod" }));
+        context.declare_var("var", hcl::value!({ kubernetes_namespace = "apps" }));
+        context.declare_func(
+            "lower",
+            FuncDef::builder().param(ParamType::String).build(lower),
+        );
+        context.declare_func("substr", substr_func());
+        let output = value.evaluate(&context).expect("output evaluates");
+        let object = output.as_object().expect("object output");
+
+        let expected = deployer_secret_location(
+            &VaultBinding::kubernetes_secret("apps", "acme-prod-deployer-secrets"),
+            &deployer_secret_vault_key("apiKey"),
+            &DeployerSecretLocationContext::default(),
+        )
+        .expect("location");
+        assert_eq!(object["name"].as_str(), Some(expected.name.as_str()));
+        assert_eq!(object["namespace"].as_str(), Some("apps"));
+        assert_eq!(object["key"].as_str(), Some("value"));
+
+        assert_terraform_valid(&module, "kubernetes deployer secret");
+    }
+}
+
 /// Distinct ids can normalize to the same Terraform variable; a silent shadow
 /// would make both inputs read one variable, so generation must refuse.
 #[test]

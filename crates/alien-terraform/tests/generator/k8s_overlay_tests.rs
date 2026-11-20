@@ -11,7 +11,7 @@
 use super::helpers::{
     assert_terraform_formatted, assert_terraform_valid,
     assert_terraform_variable_plan_invalid_contains, gate_input, prepare_for_target, render,
-    snapshot_module,
+    resource_attributes, snapshot_module,
 };
 use alien_core::{
     ArtifactRegistry, AzureResourceGroup, AzureStorageAccount, CapacityGroup, ComputeCluster,
@@ -20,7 +20,8 @@ use alien_core::{
     KubernetesExposureSettings, KubernetesHeartbeatMode, KubernetesIngressRouteProfile,
     KubernetesRouteProfile, KubernetesSettings, ManagementPermissions, Network, NetworkSettings,
     PermissionProfile, PermissionsConfig, Postgres, RemoteStackManagement, ResourceLifecycle,
-    ResourceSpec, Sandbox, ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
+    ResourceSpec, Sandbox, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker,
+    WorkerCode,
 };
 use alien_terraform::{
     generate_product_terraform_module, generate_terraform_module, TerraformHelmInstall,
@@ -244,6 +245,122 @@ fn gke_overlay_emits_workload_identity_binding() {
     assert_terraform_valid(&module, "gke_overlay_workload_identity");
 }
 
+/// An install from an earlier release still records the cloud deployer vault, so an upgraded
+/// module keeps its IAM resources at the same addresses: removing them is a separate change.
+#[test]
+fn upgraded_gke_and_eks_modules_keep_the_deployer_vault_iam_and_registration() {
+    let deployer_vault_addresses = |target: TerraformTarget| {
+        let stack = Stack::new("deployer-vault-upgrade".to_string())
+            .permission(
+                "execution",
+                PermissionProfile::new().resource("deployer-secrets", ["vault/data-read"]),
+            )
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Vault::new("deployer-secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let module = render(&stack, target, StackSettings::default());
+        let rendered = module.files.values().cloned().collect::<String>();
+        let addresses: Vec<String> = rendered
+            .lines()
+            .filter(|line| {
+                line.starts_with("resource \"")
+                    && line.contains("secret")
+                    && line.contains("execution_sa")
+            })
+            .map(|line| line.trim_end_matches(" {").to_string())
+            .collect();
+        (addresses, module)
+    };
+
+    // The cluster targets address the vault's IAM exactly as the cloud targets, which an
+    // earlier release's module used.
+    for (kubernetes, cloud) in [
+        (TerraformTarget::Gke, TerraformTarget::Gcp),
+        (TerraformTarget::Eks, TerraformTarget::Aws),
+    ] {
+        let (addresses, module) = deployer_vault_addresses(kubernetes);
+        let (cloud_addresses, _) = deployer_vault_addresses(cloud);
+        assert!(
+            !addresses.is_empty(),
+            "{kubernetes:?} no longer emits the deployer vault's IAM"
+        );
+        assert_eq!(addresses, cloud_addresses, "{kubernetes:?} addresses moved");
+        assert!(
+            module
+                .get("locals.tf")
+                .unwrap()
+                .contains("deployer-secrets"),
+            "{kubernetes:?} still registers the vault"
+        );
+    }
+}
+
+#[test]
+fn gke_management_service_account_has_one_workload_identity_role_resource() {
+    let stack = Stack::new("gke-management".to_string())
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gke, StackSettings::default());
+
+    // The binding is authoritative for the role, so any other resource granting the same role
+    // on the same service account is overwritten by it on every apply.
+    let bindings = resource_attributes(&module, "google_service_account_iam_binding");
+    let members = resource_attributes(&module, "google_service_account_iam_member");
+    let mut grants_by_service_account: std::collections::BTreeMap<(String, String), usize> =
+        Default::default();
+    for (_, attributes) in bindings.iter().chain(members.iter()) {
+        *grants_by_service_account
+            .entry((
+                attributes["service_account_id"].clone(),
+                attributes["role"].clone(),
+            ))
+            .or_default() += 1;
+    }
+    for ((service_account, role), count) in &grants_by_service_account {
+        assert_eq!(
+            *count, 1,
+            "{service_account} has {count} resources granting {role}"
+        );
+    }
+
+    let (label, binding) = bindings
+        .iter()
+        .find(|(_, attributes)| attributes["role"].contains("roles/iam.workloadIdentityUser"))
+        .expect("the management service account has a Workload Identity binding");
+    assert!(
+        label.ends_with("_workload_identity"),
+        "the binding keeps its address: {label}"
+    );
+    assert!(
+        binding["members"].contains("workload_identity_config")
+            && binding["members"].contains("principal://iam.googleapis.com/"),
+        "the binding lists the Kubernetes service account and the federated principal: {}",
+        binding["members"]
+    );
+    assert!(
+        members.is_empty(),
+        "no separate member resource for the same role"
+    );
+
+    // Upgrade: the old member address is forgotten, not destroyed.
+    let rendered = module.files.values().cloned().collect::<String>();
+    assert!(
+        rendered.contains("google_service_account_iam_member."),
+        "removed block names the old member address"
+    );
+    assert!(rendered.contains("destroy = false"));
+    assert_terraform_valid(&module, "gke_management_workload_identity");
+}
+
 #[test]
 fn aks_overlay_emits_workload_identity_federated_credential() {
     let stack = Stack::new("aks-overlay".to_string())
@@ -360,9 +477,11 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
             TerraformTarget::Gke => {
                 assert!(main.contains("routeApi         = \"gateway\""));
                 assert!(main.contains("gatewayClassName = \"gke-l7-global-external-managed\""));
-                assert!(main.contains("listenerPort     = 80"));
+                assert!(main.contains("listenerPort     = 443"));
                 assert!(main.contains("provider          = \"gkeGateway\""));
-                assert!(main.contains("mode = \"none\""));
+                assert!(main.contains("mode               = \"managedTlsSecret\""));
+                assert!(main.contains("secretNameTemplate = \"{{ workloadName }}-tls\""));
+                assert!(!main.contains("mode = \"none\""));
                 assert!(main.contains("gke-gcloud-auth-plugin"));
                 assert!(main.contains("provideClusterInfo = true"));
                 assert!(cluster.contains(r#"data "google_client_config" "current""#));
@@ -372,7 +491,9 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
             TerraformTarget::Aks => {
                 assert!(main.contains("routeApi         = \"gateway\""));
                 assert!(main.contains("gatewayClassName = \"azure-alb-external\""));
-                assert!(main.contains("listenerPort     = 80"));
+                assert!(main.contains("listenerPort     = 443"));
+                assert!(main.contains("mode               = \"managedTlsSecret\""));
+                assert!(main.contains("secretNameTemplate = \"{{ workloadName }}-tls\""));
                 assert!(main.contains(
                     "\"alb.networking.azure.io/alb-namespace\" = var.kubernetes_namespace"
                 ));
@@ -382,7 +503,7 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
                 assert!(main.contains("provider     = \"azureApplicationGatewayForContainers\""));
                 assert!(main.contains("albNamespace = var.kubernetes_namespace"));
                 assert!(main.contains("albName      = \"${local.resource_prefix}-alb\""));
-                assert!(main.contains("mode = \"none\""));
+                assert!(!main.contains("mode = \"none\""));
             }
             _ => unreachable!("only managed Kubernetes targets are tested here"),
         }
@@ -1091,6 +1212,18 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
         .get("helm.tf")
         .expect("registered module with helm install should include helm.tf");
     assert!(helm.contains("acme_app_deployment.this.helm_values"));
+    // The `helm_values` output carries the merged values the release installs with.
+    assert!(helm.contains("output \"helm_values\""));
+    let compact_values = helm.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(compact_values
+        .contains("chart_values_provider_yaml = acme_app_deployment.this.helm_values"));
+    assert!(compact_values
+        .contains("chart_values_provider = yamldecode(local.chart_values_provider_yaml)"));
+    assert_eq!(
+        helm.matches("acme_app_deployment.this.helm_values").count(),
+        1
+    );
+    assert!(compact_values.contains("sensitive = true"));
     assert!(!helm.contains("local.helm_values"));
     assert!(helm.contains("resource \"kubernetes_secret_v1\" \"remote_operator_credentials\""));
     assert!(helm.contains("var.remote_operator_sync_token"));
@@ -1182,6 +1315,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     assert!(readme.contains("permanently retires the setup"));
     assert!(readme.contains("disabling it in place is unsupported"));
     assert!(readme.contains("separately managed Helm release"));
+    assert!(readme.contains("terraform output -raw helm_values > values.yaml"));
     assert!(readme.contains("Supply `remote_operator_collector_token` only when"));
     assert!(readme.contains("Keep the credentials required by the chart populated"));
     assert!(readme.contains("terraform apply -replace=terraform_data.remote_operator_ownership"));
@@ -3035,7 +3169,7 @@ fn the_installed_chart_gets_the_bindings_of_the_resources_the_module_created() {
                 .nth(1)
                 .and_then(|rest| rest.split(" ]").next())
                 .unwrap_or_else(|| panic!("no values list: {helm}"));
-            let provider_at = values.find("acme_app_deployment.this.helm_values");
+            let provider_at = values.find("local.chart_values_provider_yaml");
             let infrastructure_at = values.find("yamlencode({ infrastructure = {");
             assert!(
                 provider_at.is_some() && infrastructure_at.is_some(),
@@ -3058,6 +3192,31 @@ fn the_installed_chart_gets_the_bindings_of_the_resources_the_module_created() {
             // The output carries the same object.
             let outputs = module.get("outputs.tf").expect("outputs.tf");
             assert!(outputs.contains("chart_infrastructure_json"), "{outputs}");
+            // The `helm_values` output carries the same infrastructure entry, merged in the
+            // release's order: provider, infrastructure, remoteOperator.
+            let local = compact
+                .split("chart_values_infrastructure = ")
+                .nth(1)
+                .unwrap_or_else(|| panic!("no chart_values_infrastructure local: {helm}"));
+            assert!(
+                local.starts_with("{ infrastructure = {")
+                    && local.contains("type = \"storage\"")
+                    && local.contains(bucket),
+                "{target:?} product={product}: {local}"
+            );
+            let output = compact
+                .split("output \"helm_values\"")
+                .nth(1)
+                .unwrap_or_else(|| panic!("no helm_values output: {helm}"));
+            let provider_at = output.find("local.chart_values_provider");
+            let infra_at = output.find("local.chart_values_infrastructure");
+            assert!(provider_at < infra_at, "{output}");
+            if product {
+                assert!(
+                    infra_at < output.find("remoteOperator = merge("),
+                    "{output}"
+                );
+            }
         }
     }
 }
