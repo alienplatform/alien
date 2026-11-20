@@ -494,6 +494,7 @@ async fn reconcile_setup_scaffolding(
         target_stack,
         stack_state,
         &mut runtime_metadata.setup_scaffolding,
+        &mut runtime_metadata.gcp_sandbox_scaffolding,
     )
     .await
     .context(ErrorData::StackExecutionFailed {

@@ -197,6 +197,15 @@ fn json_output_keeps_the_status_change_events() {
 
 #[test]
 fn works_against_a_platform_that_does_not_know_status_changes() {
+    works_when_the_option_is_refused_with(400);
+}
+
+#[test]
+fn works_against_a_platform_that_refuses_the_option_as_invalid_input() {
+    works_when_the_option_is_refused_with(422);
+}
+
+fn works_when_the_option_is_refused_with(status: u16) {
     let api = MockServer::start();
     mock_platform(&api);
     // An older platform refuses an `include` value it does not know.
@@ -204,7 +213,7 @@ fn works_against_a_platform_that_does_not_know_status_changes() {
         when.method(GET)
             .path("/v1/events")
             .query_param("include", "statusChanges");
-        then.status(400).json_body(json!({
+        then.status(status).json_body(json!({
             "error": {"code": "INVALID_INPUT", "message": "Invalid enum value for include"}
         }));
     });

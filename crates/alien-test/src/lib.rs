@@ -38,7 +38,7 @@ pub use cleanup::{
 };
 pub use config::TestConfig;
 pub use deployment::TestDeployment;
-pub use e2e::{Binding, DeploymentModel, DistributionFlow, TestApp, TestContext};
+pub use e2e::{copy_test_app, push_release_from_dir, Binding, DeploymentModel, DistributionFlow, TestApp, TestContext};
 pub use manager::TestManager;
 pub use operator::TestAlienOperator;
 pub use setup::{setup_target, teardown_target};

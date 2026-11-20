@@ -1184,6 +1184,20 @@ async fn terraform_azure_push_sandbox_remote(ctx: &mut TerraformAzurePushSandbox
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 
+distribution_test_context!(
+    TerraformGcpPushSandboxRemote,
+    DistributionFlow::TerraformGcpPush,
+    TestApp::SandboxRemote
+);
+
+/// A source-built Frozen sandbox installed by Terraform on GCP: a remote session runs an
+/// interactive command.
+#[test_context(TerraformGcpPushSandboxRemote)]
+#[tokio::test]
+async fn terraform_gcp_push_sandbox_remote(ctx: &mut TerraformGcpPushSandboxRemote) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
 // ---------------------------------------------------------------------------
 // Terraform + Helm pull
 // ---------------------------------------------------------------------------

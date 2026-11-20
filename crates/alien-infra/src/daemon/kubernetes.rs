@@ -17,8 +17,10 @@ use crate::kubernetes_public_endpoint::{
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
+    emit_kubernetes_workload_heartbeat, label_selector, last_poll, readiness_holds, recovery_check,
+    recovery_restart_free, rollout_budget_exhausted, rollout_timeout_message,
+    unchanged_update_rechecks, update_wait_max_polls, workload_pod_reason, KubernetesWorkload,
+    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, NotReadyObservations, ReadyHold,
     KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -63,6 +65,22 @@ fn daemonset_rollout_complete(daemonset: &DaemonSet) -> bool {
     })
 }
 
+/// Polls (5 s apart) the create wait may take.
+const CREATE_WAIT_MAX_POLLS: u32 = 60;
+
+/// "desired 10, updated 6, available 6" for the DaemonSet, as the rollout timeout reports it.
+fn daemonset_counts(daemonset: Option<&DaemonSet>) -> String {
+    match daemonset.and_then(|d| d.status.as_ref()) {
+        Some(status) => format!(
+            "desired {}, updated {}, available {}",
+            status.desired_number_scheduled,
+            status.updated_number_scheduled.unwrap_or(0),
+            status.number_available.unwrap_or(0)
+        ),
+        None => "the DaemonSet reports no status".to_string(),
+    }
+}
+
 #[controller]
 pub struct KubernetesDaemonController {
     /// The name of the created Kubernetes DaemonSet.
@@ -95,6 +113,29 @@ pub struct KubernetesDaemonController {
     /// publish outputs for a DaemonSet that may not exist.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) create_unfinished: bool,
+    /// Not-ready observations of the Running DaemonSet; the third in a window fails the refresh.
+    #[serde(default)]
+    pub(crate) not_ready: NotReadyObservations,
+    /// Ready polls of the create or update wait; the rollout completes when readiness holds.
+    #[serde(default)]
+    pub(crate) ready_hold: ReadyHold,
+    /// Consecutive ready checks since the resource failed a health check.
+    #[serde(default)]
+    pub(crate) recovery_checks: u32,
+    /// When the last ready check counted towards recovery.
+    #[serde(default)]
+    pub(crate) last_recovery_check_unix: Option<i64>,
+    /// Whether the last update left the pod template as it was (no pods roll). Such an update
+    /// waits for readiness only briefly.
+    #[serde(default)]
+    pub(crate) update_template_unchanged: bool,
+    /// Why an unchanged update that ran out of time went to the refresh check, kept so the
+    /// executor reports it as the resource error instead of an empty failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) update_timeout_reason: Option<String>,
+    /// Set only while the RefreshFailed handler re-checks; never stored.
+    #[serde(skip)]
+    pub(crate) recovering: bool,
 }
 
 /// The `nodeSelector` the Pods get: the pool or stack architecture, else the single
@@ -364,20 +405,31 @@ impl KubernetesDaemonController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if self.daemonset_ready(ctx).await? {
-            return Ok(HandlerAction::Continue {
-                state: ReconcilePublicEndpoint,
-                suggested_delay: None,
-            });
+        let live = self.read_daemonset(ctx).await?;
+        if live.as_ref().is_some_and(daemonset_is_ready) {
+            if self.readiness_holds(ctx).await? {
+                self.ready_hold.reset();
+                return Ok(HandlerAction::Continue {
+                    state: ReconcilePublicEndpoint,
+                    suggested_delay: None,
+                });
+            }
+        } else {
+            self.ready_hold.reset();
         }
         let restricted_hint = self.root_image_hint(ctx).await?;
         self.record_workload_failure(ctx).await;
         if self.workload_failure.is_none() {
             self.workload_failure = restricted_hint;
         }
+        if last_poll(self._internal_stay_count, CREATE_WAIT_MAX_POLLS) {
+            self.ready_hold.reset();
+            let pod_reason = self.pod_reason(ctx).await;
+            return Err(self.rollout_timeout(ctx, live.as_ref(), pod_reason));
+        }
 
         Ok(HandlerAction::Stay {
-            max_times: Some(60),
+            max_times: Some(CREATE_WAIT_MAX_POLLS),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -468,14 +520,59 @@ impl KubernetesDaemonController {
                 });
             }
         }
-        if !live.as_ref().is_some_and(daemonset_is_ready) {
+        if live.is_none() {
             let config = ctx.desired_resource_config::<Daemon>()?;
             return Err(AlienError::new(ErrorData::ResourceDrift {
                 resource_id: config.id.clone(),
-                message: "Daemon daemonset is not fully ready".to_string(),
+                message: "Daemon daemonset is missing".to_string(),
             }));
         }
+        // While recovering from a failed refresh, "ready" also means the rollout is complete:
+        // during a stalled rolling update the old pods keep every node ready.
+        let healthy = live.as_ref().is_some_and(daemonset_is_ready)
+            && (!self.recovering || live.as_ref().is_some_and(daemonset_rollout_complete));
+        if !healthy {
+            let config = ctx.desired_resource_config::<Daemon>()?;
+            // Not ready (or still rolling) is a health observation, not drift: it is retried
+            // (three observations in a window fail the refresh), and the refresh that follows a
+            // failure re-checks and recovers on its own.
+            let name = self.daemon_set_name.clone().unwrap_or_default();
+            let pod_reason = match self.namespace.as_deref() {
+                Some(namespace) => {
+                    workload_pod_reason(
+                        ctx,
+                        namespace,
+                        &self.build_labels(&name),
+                        self.workload_failure.as_deref(),
+                    )
+                    .await
+                }
+                None => None,
+            };
+            let counts = daemonset_counts(live.as_ref());
+            let error = AlienError::new(ErrorData::WorkloadNotReady {
+                resource_id: config.id.clone(),
+                message: match pod_reason {
+                    Some(reason) => {
+                        format!("DaemonSet '{name}' is not fully ready: {counts}; {reason}")
+                    }
+                    None => format!("DaemonSet '{name}' is not fully ready: {counts}"),
+                },
+            });
+            return self
+                .not_ready
+                .outcome(error, self.recovering, crate::kubernetes_workload_heartbeat::not_ready_now_unix())
+                .map(|delay| HandlerAction::Stay {
+                    max_times: None,
+                    suggested_delay: Some(delay),
+                });
+        }
 
+        // A ready read ends the not-ready bound only when no ready pod restarted since the last
+        // check: a crash-looping pod is ready for a few seconds in each cycle.
+        if self.not_ready.is_active() && self.restart_free(ctx).await {
+            self.not_ready.clear();
+        }
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Daemon>()?;
         if let (Some(daemon_set_name), Some(namespace)) = (&self.daemon_set_name, &self.namespace) {
@@ -585,6 +682,7 @@ impl KubernetesDaemonController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        self.not_ready.clear();
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Daemon>()?;
         let daemon_set_name = self.daemon_set_name.as_ref().ok_or_else(|| {
@@ -629,6 +727,7 @@ impl KubernetesDaemonController {
             }));
         }
         let resource_version = existing.metadata.resource_version.clone();
+        let generation_before = existing.metadata.generation;
         let registry_secret_name = format!("{}-registry", daemon_set_name);
         let environment_secret_name = format!("{}-env", daemon_set_name);
         let pod_spec = existing
@@ -723,13 +822,15 @@ impl KubernetesDaemonController {
             .await?;
         new_daemonset.metadata.resource_version = resource_version;
 
-        workload_client
+        let updated = workload_client
             .update_daemonset(namespace, daemon_set_name, &new_daemonset)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to update daemonset '{}'.", daemon_set_name),
                 resource_id: Some(config.id.clone()),
             })?;
+        self.update_template_unchanged =
+            generation_before.is_some_and(|before| Some(before) == updated.metadata.generation);
 
         Ok(HandlerAction::Continue {
             state: WaitingForUpdate,
@@ -746,25 +847,45 @@ impl KubernetesDaemonController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if self
-            .read_daemonset(ctx)
-            .await?
-            .as_ref()
-            .is_some_and(daemonset_rollout_complete)
-        {
-            return Ok(HandlerAction::Continue {
-                state: ReconcilePublicEndpointAfterUpdate,
-                suggested_delay: None,
-            });
+        let live = self.read_daemonset(ctx).await?;
+        if live.as_ref().is_some_and(daemonset_rollout_complete) {
+            if self.readiness_holds(ctx).await? {
+                self.ready_hold.reset();
+                return Ok(HandlerAction::Continue {
+                    state: ReconcilePublicEndpointAfterUpdate,
+                    suggested_delay: None,
+                });
+            }
+        } else {
+            self.ready_hold.reset();
         }
         let restricted_hint = self.root_image_hint(ctx).await?;
         self.record_workload_failure(ctx).await;
         if self.workload_failure.is_none() {
             self.workload_failure = restricted_hint;
         }
+        let max_polls = update_wait_max_polls(self.update_template_unchanged);
+        if last_poll(self._internal_stay_count, max_polls) {
+            self.ready_hold.reset();
+            let pod_reason = self.pod_reason(ctx).await;
+            if unchanged_update_rechecks(self.update_template_unchanged, pod_reason.as_deref()) {
+                // Nothing rolled and the pods are not failing for good: the refresh check looks
+                // again later. An update failure is never checked again. The reason is kept as
+                // the resource error, so a retry applies the spec again.
+                self.update_timeout_reason = Some(
+                    self.rollout_timeout(ctx, live.as_ref(), pod_reason)
+                        .message,
+                );
+                return Ok(HandlerAction::Continue {
+                    state: RefreshFailed,
+                    suggested_delay: Some(Duration::from_secs(10)),
+                });
+            }
+            return Err(self.rollout_timeout(ctx, live.as_ref(), pod_reason));
+        }
 
         Ok(HandlerAction::Stay {
-            max_times: Some(UPDATE_WAIT_MAX_POLLS),
+            max_times: Some(max_polls),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -1072,11 +1193,71 @@ impl KubernetesDaemonController {
     );
     terminal_state!(state = UpdateFailed, status = ResourceStatus::UpdateFailed);
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
-    terminal_state!(
+    // A failed health check is checked again: the resource returns to Running when every node
+    // runs a ready pod, and keeps reporting its error while it does not.
+    #[handler(
         state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.update_timeout_reason = None;
+        self.ready_hold.clear_restart_check();
+        self.recovering = true;
+        let checked = self.ready(ctx).await;
+        self.recovering = false;
+        match checked {
+            // Back to Running only after the same run of ready checks as containers and
+            // workers: one ready read can be a pod that is about to crash again.
+            Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay,
+            }) => {
+                // A pod that is ready for a moment on each restart is not recovered.
+                let restart_free = match self.ready_hold.take_restart_check() {
+                    Some(already_checked) => already_checked,
+                    None => self.restart_free(ctx).await,
+                };
+                if recovery_check(
+                    &mut self.recovery_checks,
+                    &mut self.last_recovery_check_unix,
+                    restart_free,
+                    chrono::Utc::now().timestamp(),
+                ) {
+                    Ok(HandlerAction::Continue {
+                        state: Ready,
+                        suggested_delay,
+                    })
+                } else {
+                    Ok(HandlerAction::Stay {
+                        max_times: None,
+                        suggested_delay: Some(Duration::from_secs(10)),
+                    })
+                }
+            }
+            other => {
+                recovery_check(
+                    &mut self.recovery_checks,
+                    &mut self.last_recovery_check_unix,
+                    false,
+                    0,
+                );
+                other
+            }
+        }
+    }
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
+
+    fn reapplies_after_failed_refresh(&self) -> bool {
+        true
+    }
+
+    fn refresh_failure_reason(&self) -> Option<String> {
+        self.update_timeout_reason.clone()
+    }
 
     /// Secret-typed env vars never enter the resource config on Kubernetes
     /// (they're projected via secretKeyRef), so config diffing alone cannot
@@ -1227,12 +1408,63 @@ impl KubernetesDaemonController {
         };
     }
 
-    async fn daemonset_ready(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        Ok(self
-            .read_daemonset(ctx)
-            .await?
-            .as_ref()
-            .is_some_and(daemonset_is_ready))
+    /// True when no ready pod of the DaemonSet restarted since the last refresh check.
+    async fn restart_free(&mut self, ctx: &ResourceControllerContext<'_>) -> bool {
+        let name = self.daemon_set_name.clone().unwrap_or_default();
+        let namespace = self.namespace.clone().unwrap_or_default();
+        let selector = self.build_labels(&name);
+        recovery_restart_free(ctx, &mut self.ready_hold, &namespace, &selector).await
+    }
+
+    /// Records a poll that found the DaemonSet ready; true once readiness has held.
+    async fn readiness_holds(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let name = self.daemon_set_name.clone().unwrap_or_default();
+        let namespace = self.namespace.clone().unwrap_or_default();
+        let selector = self.build_labels(&name);
+        readiness_holds(ctx, &mut self.ready_hold, &namespace, &selector).await
+    }
+
+    /// The first pod that is not ready, with its reason, and what Kubernetes says about the
+    /// DaemonSet.
+    async fn pod_reason(&self, ctx: &ResourceControllerContext<'_>) -> Option<String> {
+        let name = self.daemon_set_name.clone().unwrap_or_default();
+        match self.namespace.as_deref() {
+            Some(namespace) => {
+                workload_pod_reason(
+                    ctx,
+                    namespace,
+                    &self.build_labels(&name),
+                    self.workload_failure.as_deref(),
+                )
+                .await
+            }
+            None => self.workload_failure.clone(),
+        }
+    }
+
+    /// The error for a DaemonSet that did not become ready in time: the counts and the first
+    /// pod that is not ready, with its reason. Final, with the not-ready code: a retry applies
+    /// the spec again.
+    fn rollout_timeout(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        live: Option<&DaemonSet>,
+        pod_reason: Option<String>,
+    ) -> AlienError<ErrorData> {
+        let resource_id = ctx
+            .desired_resource_config::<Daemon>()
+            .map(|config| config.id.clone())
+            .unwrap_or_default();
+        let name = self.daemon_set_name.clone().unwrap_or_default();
+        rollout_budget_exhausted(AlienError::new(ErrorData::WorkloadNotReady {
+            resource_id,
+            message: rollout_timeout_message(
+                "DaemonSet",
+                &name,
+                &daemonset_counts(live),
+                pod_reason.as_deref(),
+            ),
+        }))
     }
 
     /// The live DaemonSet, or `None` when it does not exist.
@@ -2662,5 +2894,557 @@ mod tests {
             })
             .await;
         }
+    }
+
+    /// A refresh-failed daemon is retried by applying its current spec again, so a retry does
+    /// not run the same failed readiness check.
+    #[test]
+    fn a_retry_of_a_refresh_failed_daemon_applies_the_spec_again() {
+        use crate::core::state_utils::StackResourceStateExt;
+        let config = manifest_test_daemon(&[]);
+        let mut record = alien_core::StackResourceState::new_pending(
+            Daemon::RESOURCE_TYPE.to_string(),
+            Resource::new(config),
+            Some(alien_core::ResourceLifecycle::Live),
+            vec![],
+        );
+        let mut controller = manifest_test_controller();
+        controller.state = KubernetesDaemonState::RefreshFailed;
+        record.status = ResourceStatus::RefreshFailed;
+        record.error = Some(crate::core::state_utils::saved_refresh_error("x", true));
+        record
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+
+        assert!(record.retry_failed().unwrap());
+
+        assert_eq!(record.status, ResourceStatus::Updating);
+        let resumed = record.get_internal_controller().unwrap().unwrap();
+        let resumed = resumed
+            .as_any()
+            .downcast_ref::<KubernetesDaemonController>()
+            .unwrap();
+        assert_eq!(resumed.state, KubernetesDaemonState::UpdateStart);
+    }
+
+    fn daemonset_status_body(
+        labels: &std::collections::BTreeMap<String, String>,
+        ready: i32,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "apiVersion":"apps/v1", "kind":"DaemonSet",
+            "metadata":{"name":"agent", "generation":2, "labels":labels},
+            "spec":{"selector":{"matchLabels":{"app":"agent"}},"template":{"spec":{"containers":[]}}},
+            "status":{"desiredNumberScheduled":10, "numberReady":ready, "observedGeneration":2,
+                "updatedNumberScheduled":ready, "numberAvailable":ready}
+        })
+    }
+
+    /// A healthy DaemonSet observed in the middle of a roll is not drift: the check fails with
+    /// a retryable not-ready error, and the refresh that follows recovers once every node runs
+    /// a ready pod.
+    #[tokio::test]
+    async fn a_daemonset_observed_mid_roll_recovers_when_it_is_fully_ready() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes config")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual config")
+        };
+        *server_url = server.base_url();
+
+        for (path, kind) in [("pods", "PodList"), ("events", "EventList")] {
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path(format!("/api/v1/namespaces/test-ns/{path}"));
+                then.status(200).json_body(
+                    serde_json::json!({"apiVersion":"v1","kind":kind,"metadata":{},"items":[]}),
+                );
+            });
+        }
+        let mut controller = manifest_test_controller();
+        let labels = controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+        controller.state = KubernetesDaemonState::Ready;
+        let mut rolling = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200)
+                .json_body(daemonset_status_body(&labels, 6));
+        });
+        // Inside the bound the check waits: no error, the resource stays Running.
+        controller.step(&ctx).await.expect("mid-roll is waited for");
+        assert_eq!(controller.get_status(), ResourceStatus::Running);
+        controller.not_ready = crate::kubernetes_workload_heartbeat::NotReadyObservations::since(
+            chrono::Utc::now().timestamp()
+                - crate::kubernetes_workload_heartbeat::REFRESH_NOT_READY_BOUND_SECS,
+        );
+        let error = controller
+            .step(&ctx)
+            .await
+            .expect_err("mid-roll for the whole bound");
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
+        assert!(!error.retryable);
+
+        // The refresh failed.
+        controller.state = KubernetesDaemonState::RefreshFailed;
+        let error = controller.step(&ctx).await.expect_err("still rolling");
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
+        assert_eq!(controller.get_status(), ResourceStatus::RefreshFailed);
+
+        rolling.delete();
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200)
+                .json_body(daemonset_status_body(&labels, 10));
+        });
+        // One ready read is not recovery: three ready checks, 10 s apart, are.
+        for check in 1..=3 {
+            controller
+                .step(&ctx)
+                .await
+                .expect("a ready check of the refresh");
+            if check < 3 {
+                assert_eq!(controller.get_status(), ResourceStatus::RefreshFailed);
+                controller.last_recovery_check_unix = controller
+                    .last_recovery_check_unix
+                    .map(|counted| counted - 20);
+            }
+        }
+        assert_eq!(controller.get_status(), ResourceStatus::Running);
+    }
+
+    /// Points the context at the mock API server and answers pod and event lists with nothing.
+    fn point_daemon_ctx(ctx: &mut ResourceControllerContext<'_>, server: &httpmock::MockServer) {
+        point_daemon_ctx_with_pods(ctx, server, true);
+    }
+
+    fn point_daemon_ctx_with_pods(
+        ctx: &mut ResourceControllerContext<'_>,
+        server: &httpmock::MockServer,
+        empty_pods: bool,
+    ) {
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes config")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual config")
+        };
+        *server_url = server.base_url();
+        for (path, kind) in [("pods", "PodList"), ("events", "EventList")] {
+            if path == "pods" && !empty_pods {
+                continue;
+            }
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path(format!("/api/v1/namespaces/test-ns/{path}"));
+                then.status(200).json_body(
+                    serde_json::json!({"apiVersion":"v1","kind":kind,"metadata":{},"items":[]}),
+                );
+            });
+        }
+    }
+
+    /// A DaemonSet not ready for the whole bound fails its refresh; the error carries the counts.
+    /// Before the bound the check only waits.
+    #[tokio::test]
+    async fn a_daemonset_not_ready_for_the_whole_bound_fails_its_refresh() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        point_daemon_ctx(&mut ctx, &server);
+        let mut controller = manifest_test_controller();
+        let labels = controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+        controller.state = KubernetesDaemonState::Ready;
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200)
+                .json_body(daemonset_status_body(&labels, 6));
+        });
+        for _ in 0..3 {
+            controller.step(&ctx).await.expect("inside the bound");
+            assert_eq!(controller.get_status(), ResourceStatus::Running);
+        }
+        controller.not_ready = crate::kubernetes_workload_heartbeat::NotReadyObservations::since(
+            chrono::Utc::now().timestamp()
+                - crate::kubernetes_workload_heartbeat::REFRESH_NOT_READY_BOUND_SECS,
+        );
+        let error = controller.step(&ctx).await.expect_err("not ready");
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
+        assert!(error.message.contains("desired 10"), "{}", error.message);
+        assert!(!error.retryable);
+    }
+
+    /// A node joins and its pod pulls the image for a while: not ready, then ready. The resource
+    /// stays Running, and the next not-ready read starts a new bound instead of being final.
+    #[tokio::test]
+    async fn a_node_that_joins_and_becomes_ready_never_fails_the_refresh() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        point_daemon_ctx(&mut ctx, &server);
+        let mut controller = manifest_test_controller();
+        let labels = controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+        controller.state = KubernetesDaemonState::Ready;
+        let mut joining = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200)
+                .json_body(daemonset_status_body(&labels, 9));
+        });
+        // Not ready for 30 s.
+        controller.not_ready = crate::kubernetes_workload_heartbeat::NotReadyObservations::since(
+            chrono::Utc::now().timestamp() - 30,
+        );
+        controller
+            .step(&ctx)
+            .await
+            .expect("30 s is inside the bound");
+        assert_eq!(controller.get_status(), ResourceStatus::Running);
+        joining.delete();
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200)
+                .json_body(daemonset_status_body(&labels, 10));
+        });
+        controller.step(&ctx).await.expect("ready");
+        assert_eq!(controller.get_status(), ResourceStatus::Running);
+        assert_eq!(
+            controller.not_ready,
+            crate::kubernetes_workload_heartbeat::NotReadyObservations::default(),
+            "a ready check clears the bound"
+        );
+    }
+
+    fn ready_pod_body(restarts: i32) -> serde_json::Value {
+        serde_json::json!({"apiVersion":"v1","kind":"PodList","metadata":{},"items":[{
+            "metadata":{"name":"agent-x"},
+            "status":{"conditions":[{"type":"Ready","status":"True"}],
+                "containerStatuses":[{"name":"c","image":"i","imageID":"","ready":true,
+                    "restartCount":restarts,"state":{"running":{}}}]}
+        }]})
+    }
+
+    /// A crash-looping pod is ready for a few seconds in each cycle. A ready read that follows a
+    /// restart does not end the not-ready bound, so the refresh reaches RefreshFailed; a ready
+    /// read with no restart (a node that joined) does end it.
+    #[tokio::test]
+    async fn a_pod_alternating_not_ready_and_ready_with_a_restart_fails_its_refresh() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        point_daemon_ctx_with_pods(&mut ctx, &server, false);
+        let mut controller = manifest_test_controller();
+        let labels = controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+        controller.state = KubernetesDaemonState::Ready;
+        let now = chrono::Utc::now().timestamp();
+        controller
+            .ready_hold
+            .observe_ready([("agent-x".to_string(), 0)].into(), now);
+        let pods_path = "/api/v1/namespaces/test-ns/pods";
+        let ds_path = "/apis/apps/v1/namespaces/test-ns/daemonsets/agent";
+        let mut failed = None;
+        for cycle in 1..=100 {
+            for (ready, restarts) in [(9, cycle - 1), (10, cycle)] {
+                let mut pods = server.mock(|when, then| {
+                    when.method(httpmock::Method::GET).path(pods_path);
+                    then.status(200).json_body(ready_pod_body(restarts));
+                });
+                let mut ds = server.mock(|when, then| {
+                    when.method(httpmock::Method::GET).path(ds_path);
+                    then.status(200)
+                        .json_body(daemonset_status_body(&labels, ready));
+                });
+                let step = controller.step(&ctx).await;
+                if let Err(error) = step {
+                    failed = Some((cycle, error));
+                }
+                pods.delete();
+                ds.delete();
+                if failed.is_some() {
+                    break;
+                }
+            }
+            if failed.is_some() {
+                break;
+            }
+        }
+        let (cycle, error) = failed.expect("the crash loop fails the refresh");
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
+        assert!(!error.retryable);
+        assert!(cycle > 3, "not before the bound: cycle {cycle}");
+    }
+
+    /// A ready read right after a restart of a ready pod keeps the bound's original start.
+    #[tokio::test]
+    async fn a_ready_read_after_a_restart_keeps_the_not_ready_bound() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        point_daemon_ctx_with_pods(&mut ctx, &server, false);
+        let mut controller = manifest_test_controller();
+        let labels = controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+        controller.state = KubernetesDaemonState::Ready;
+        let now = chrono::Utc::now().timestamp();
+        controller
+            .ready_hold
+            .observe_ready([("agent-x".to_string(), 1)].into(), now);
+        controller.not_ready =
+            crate::kubernetes_workload_heartbeat::NotReadyObservations::since(now - 30);
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200)
+                .json_body(daemonset_status_body(&labels, 10));
+        });
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/api/v1/namespaces/test-ns/pods");
+            then.status(200).json_body(ready_pod_body(2));
+        });
+        controller.step(&ctx).await.expect("ready");
+        assert_eq!(
+            controller.not_ready,
+            crate::kubernetes_workload_heartbeat::NotReadyObservations::since(now - 30),
+            "a ready read after a restart keeps the original start"
+        );
+    }
+
+    /// A DaemonSet that is gone is drift, not a health observation: re-checking never brings it
+    /// back, so the error is not retryable and says the object is missing.
+    #[tokio::test]
+    async fn a_deleted_daemonset_is_drift() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes config")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual config")
+        };
+        *server_url = server.base_url();
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(404).json_body(serde_json::json!({
+                "kind":"Status","apiVersion":"v1","status":"Failure",
+                "reason":"NotFound","code":404,"message":"agent: NotFound",
+                "details":{"name":"agent"}
+            }));
+        });
+        let mut controller = manifest_test_controller();
+        controller.state = KubernetesDaemonState::Ready;
+        let error = controller.step(&ctx).await.expect_err("missing");
+        assert_eq!(error.code, "RESOURCE_DRIFT");
+        assert!(!error.retryable);
+        assert!(error.message.contains("missing"), "{}", error.message);
+    }
+
+    /// A roll that stalls (a node has no room for the new pod) ends with the counts and the
+    /// first pod that is not ready, not with the generic polling timeout.
+    #[tokio::test]
+    async fn a_daemon_update_wait_that_times_out_says_why() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes config")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual config")
+        };
+        *server_url = server.base_url();
+
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/api/v1/namespaces/test-ns/events");
+            then.status(200).json_body(
+                serde_json::json!({"apiVersion":"v1","kind":"EventList","metadata":{},"items":[]}),
+            );
+        });
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/api/v1/namespaces/test-ns/pods");
+            then.status(200).json_body(serde_json::json!({
+                "apiVersion":"v1","kind":"PodList","metadata":{},
+                "items":[{
+                    "metadata":{"name":"agent-x7k2p"},
+                    "status":{"phase":"Pending","conditions":[{
+                        "type":"PodScheduled","status":"False","reason":"Unschedulable",
+                        "message":"0/10 nodes are available: Insufficient cpu"
+                    }]}
+                }]
+            }));
+        });
+        let mut controller = manifest_test_controller();
+        let labels = controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200).json_body(serde_json::json!({
+                "apiVersion":"apps/v1", "kind":"DaemonSet",
+                "metadata":{"name":"agent", "generation":2, "labels":labels},
+                "spec":{"selector":{"matchLabels":{"app":"agent"}},"template":{"spec":{"containers":[]}}},
+                "status":{"desiredNumberScheduled":10, "numberReady":6, "updatedNumberScheduled":6,
+                    "numberAvailable":6, "observedGeneration":2}
+            }));
+        });
+        controller.state = KubernetesDaemonState::WaitingForUpdate;
+        controller._internal_stay_count = Some(UPDATE_WAIT_MAX_POLLS - 1);
+
+        let error = controller.step(&ctx).await.expect_err("times out");
+
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
+        // The whole budget is spent: final, so the executor does not wait out ~10 more budgets.
+        assert!(!error.retryable);
+        for part in [
+            "desired 10, updated 6, available 6",
+            "pod agent-x7k2p is Pending",
+            "0/10 nodes are available: Insufficient cpu",
+        ] {
+            assert!(error.message.contains(part), "{}", error.message);
+        }
+    }
+
+    /// An update that changed nothing and ran out of time goes back to the refresh check, which
+    /// looks again later; an update failure is never checked again. A crash loop or an image
+    /// back-off still fails the update at once.
+    #[tokio::test]
+    async fn an_unchanged_daemon_update_that_times_out_is_rechecked_unless_it_crash_loops() {
+        for (pod_status, rechecked) in [
+            (
+                serde_json::json!({"phase":"Pending","conditions":[{
+                    "type":"PodScheduled","status":"False","reason":"Unschedulable",
+                    "message":"0/10 nodes are available: Insufficient cpu"}]}),
+                true,
+            ),
+            (
+                serde_json::json!({"containerStatuses":[{"name":"agent","ready":false,
+                    "image":"i","imageID":"i","restartCount":4,
+                    "state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}),
+                false,
+            ),
+            (
+                serde_json::json!({"containerStatuses":[{"name":"agent","ready":false,
+                    "image":"i","imageID":"i","restartCount":0,
+                    "state":{"waiting":{"reason":"ImagePullBackOff"}}}]}),
+                false,
+            ),
+        ] {
+            let config = manifest_test_daemon(&[]);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+            let server = httpmock::MockServer::start_async().await;
+            let mut ctx = harness.ctx();
+            let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+                panic!("Kubernetes config")
+            };
+            let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut()
+            else {
+                panic!("manual config")
+            };
+            *server_url = server.base_url();
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/api/v1/namespaces/test-ns/events");
+                then.status(200).json_body(
+                    serde_json::json!({"apiVersion":"v1","kind":"EventList","metadata":{},"items":[]}),
+                );
+            });
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/api/v1/namespaces/test-ns/pods");
+                then.status(200).json_body(serde_json::json!({
+                    "apiVersion":"v1","kind":"PodList","metadata":{},
+                    "items":[{"metadata":{"name":"agent-x7k2p"},"status":pod_status}]
+                }));
+            });
+            let mut controller = manifest_test_controller();
+            let labels =
+                controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+                then.status(200)
+                    .json_body(daemonset_status_body(&labels, 6));
+            });
+            controller.state = KubernetesDaemonState::WaitingForUpdate;
+            controller.update_template_unchanged = true;
+            controller._internal_stay_count =
+                Some(crate::kubernetes_workload_heartbeat::UNCHANGED_REAPPLY_MAX_POLLS - 1);
+
+            let result = controller.step(&ctx).await;
+            if rechecked {
+                result.expect("goes back to the refresh check");
+                assert_eq!(controller.state, KubernetesDaemonState::RefreshFailed);
+                assert_eq!(controller.get_status(), ResourceStatus::RefreshFailed);
+            } else {
+                let error = result.expect_err("a crash loop fails the update now");
+                assert_eq!(error.code, "WORKLOAD_NOT_READY");
+                assert!(!error.retryable);
+            }
+        }
+    }
+
+    /// During a stalled rolling update the old pods keep every node ready, so `numberReady`
+    /// alone is no proof of recovery: a refresh-failed DaemonSet whose rollout is unfinished
+    /// does not count ready checks, and resets any it had.
+    #[tokio::test]
+    async fn a_stalled_rollout_with_ready_old_pods_does_not_recover_a_failed_refresh() {
+        let config = manifest_test_daemon(&[]);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        let server = httpmock::MockServer::start_async().await;
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes config")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual config")
+        };
+        *server_url = server.base_url();
+        for (path, kind) in [("pods", "PodList"), ("events", "EventList")] {
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path(format!("/api/v1/namespaces/test-ns/{path}"));
+                then.status(200).json_body(
+                    serde_json::json!({"apiVersion":"v1","kind":kind,"metadata":{},"items":[]}),
+                );
+            });
+        }
+        let mut controller = manifest_test_controller();
+        let labels = controller.workload_labels(&ctx, "agent", controller.build_labels("agent"));
+        // All 10 old pods are ready, but only 4 run the current template.
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/daemonsets/agent");
+            then.status(200).json_body(serde_json::json!({
+                "apiVersion":"apps/v1", "kind":"DaemonSet",
+                "metadata":{"name":"agent", "generation":2, "labels":labels},
+                "spec":{"selector":{"matchLabels":{"app":"agent"}},"template":{"spec":{"containers":[]}}},
+                "status":{"desiredNumberScheduled":10, "numberReady":10, "updatedNumberScheduled":4,
+                    "numberAvailable":10, "observedGeneration":2}
+            }));
+        });
+        controller.state = KubernetesDaemonState::RefreshFailed;
+        controller.recovery_checks = 2;
+        let error = controller
+            .step(&ctx)
+            .await
+            .expect_err("an unfinished rollout is not a recovery");
+        assert_eq!(error.code, "WORKLOAD_NOT_READY");
+        assert_eq!(controller.recovery_checks, 0);
+        assert_eq!(controller.get_status(), ResourceStatus::RefreshFailed);
     }
 }

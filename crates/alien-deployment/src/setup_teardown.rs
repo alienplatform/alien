@@ -570,6 +570,18 @@ fn outstanding_scaffolding(state: &DeploymentState) -> String {
                 format!("sandbox '{resource_id}': role '{build_role_name}'")
             }
         })
+        .chain(
+            state
+                .runtime_metadata
+                .iter()
+                .flat_map(|metadata| &metadata.gcp_sandbox_scaffolding)
+                .map(|(resource_id, record)| {
+                    format!(
+                        "sandbox '{resource_id}': image repository '{}' and role '{}'",
+                        record.image_repository, record.write_role
+                    )
+                }),
+        )
         .collect();
     if outstanding.is_empty() {
         "nothing recorded".to_string()
@@ -593,6 +605,7 @@ pub(crate) fn has_setup_scaffolding(
     runtime_metadata.is_some_and(|metadata| {
         metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
             && (!metadata.setup_scaffolding.is_empty()
+                || !metadata.gcp_sandbox_scaffolding.is_empty()
                 || metadata
                     .prepared_stack
                     .as_ref()
@@ -632,14 +645,19 @@ async fn teardown_setup_scaffolding(
             stack,
             platform,
             &mut runtime_metadata.setup_scaffolding,
+            &mut runtime_metadata.gcp_sandbox_scaffolding,
         )
         .await
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to look for setup scaffolding the record does not hold".to_string(),
         })?;
     }
-    setup_scaffolding::teardown(&ctx, &mut runtime_metadata.setup_scaffolding)
-        .await
+    setup_scaffolding::teardown(
+        &ctx,
+        &mut runtime_metadata.setup_scaffolding,
+        &mut runtime_metadata.gcp_sandbox_scaffolding,
+    )
+    .await
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to delete setup scaffolding".to_string(),
         })

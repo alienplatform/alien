@@ -279,6 +279,9 @@ async fn process_command_with_budget(
     }
 }
 
+/// The shortest read timeout the forwarding client uses, whatever the Worker is configured with.
+pub const FORWARD_READ_TIMEOUT_FLOOR: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Create a shared reqwest client for forwarding HTTP requests.
 ///
 /// This client is meant to be created once and reused across all requests
@@ -287,12 +290,25 @@ async fn process_command_with_budget(
 /// and disabled TCP user timeout (gVisor on Cloud Run Gen2 can prematurely
 /// close idle connections with the default settings).
 ///
+/// The longest a request may wait without receiving a byte (including the wait for response
+/// headers) is the larger of `configured` (the Worker's configured timeout) and
+/// [`FORWARD_READ_TIMEOUT_FLOOR`]. A Worker configured below the floor keeps the 300 s behavior; a
+/// longer configured timeout is not cut short by the proxy in front of it.
+///
 /// # Panics
 ///
 /// Panics if the forwarding client cannot be initialized, like [reqwest::Client::new].
-pub fn create_forward_client() -> reqwest::Client {
+pub fn create_forward_client(configured: std::time::Duration) -> reqwest::Client {
+    create_forward_client_with_floor(configured, FORWARD_READ_TIMEOUT_FLOOR)
+}
+
+/// [`create_forward_client`] with an explicit floor, so tests can run at a small time scale.
+pub fn create_forward_client_with_floor(
+    configured: std::time::Duration,
+    floor: std::time::Duration,
+) -> reqwest::Client {
     forward_client_builder()
-        .read_timeout(std::time::Duration::from_secs(300))
+        .read_timeout(configured.max(floor))
         .build()
         .expect("Failed to configure application HTTP forwarding")
 }

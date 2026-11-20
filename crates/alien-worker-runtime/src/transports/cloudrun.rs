@@ -97,7 +97,7 @@ impl CloudRunTransport {
             // Push acknowledgments cannot be extended past Pub/Sub's 600s
             // deadline. Leave time for response submission and HTTP completion.
             command_timeout: self.command_timeout.min(Duration::from_secs(565)),
-            http_client: create_forward_client(),
+            http_client: create_forward_client(self.command_timeout),
             proxy_shutdown: proxy_shutdown.clone(),
         };
 
@@ -535,7 +535,7 @@ mod queue_routing_tests {
             control_server: Arc::new(ControlGrpcServer::new()),
             app_http_port: Some(port),
             command_timeout: Duration::from_secs(30),
-            http_client: create_forward_client(),
+            http_client: create_forward_client(std::time::Duration::from_secs(300)),
             proxy_shutdown: CancellationToken::new(),
         };
         let upload =
@@ -608,7 +608,7 @@ mod queue_routing_tests {
                     control_server: control.clone(),
                     app_http_port: None,
                     command_timeout: Duration::from_secs(30),
-                    http_client: create_forward_client(),
+                    http_client: create_forward_client(std::time::Duration::from_secs(300)),
                     proxy_shutdown: CancellationToken::new(),
                 };
                 let body = serde_json::json!({"message": {"data": "e30=", "messageId": "provider-id"}, "subscription": subscription});
@@ -698,7 +698,7 @@ mod queue_routing_tests {
                     control_server: control.clone(),
                     app_http_port: None,
                     command_timeout: Duration::from_secs(30),
-                    http_client: create_forward_client(),
+                    http_client: create_forward_client(std::time::Duration::from_secs(300)),
                     proxy_shutdown: CancellationToken::new(),
                 };
                 let body = serde_json::json!({"message": {"data": "e30=", "messageId": "provider-id"}, "subscription": subscription});
@@ -789,7 +789,7 @@ mod queue_routing_tests {
                 control_server: control.clone(),
                 app_http_port: None,
                 command_timeout: Duration::from_secs(30),
-                http_client: create_forward_client(),
+                http_client: create_forward_client(std::time::Duration::from_secs(300)),
                 proxy_shutdown: CancellationToken::new(),
             };
             let request = |key: &str| {

@@ -47,6 +47,15 @@ struct FakeApi {
     /// A workload path whose next update finds the object changed since the controller read it,
     /// as when the workload controller writes its status in between.
     changed_before_next_update: Option<String>,
+    /// Workload paths whose pods crash-loop: no replica is ready until the pod template changes.
+    crash_looping: BTreeSet<String>,
+    /// Pods that are Ready for a moment after each start and then crash again, as a container
+    /// without a readiness probe is: the workload reports ready, and the restart count of the
+    /// ready pod grows with every pod list.
+    restart_blip: bool,
+    /// Crash-looping pods wait for a node instead: Pending, unschedulable (a slow autoscaler).
+    pending: bool,
+    pod_lists: i64,
 }
 
 fn status(code: u16, reason: &str, name: &str) -> Value {
@@ -87,7 +96,65 @@ impl FakeApi {
     fn answer(&mut self, method: &Method, path: &str, body: &str) -> (u16, Value) {
         let name = path.rsplit('/').next().unwrap_or_default().to_string();
         match *method {
+            // The health check lists pods and events: the fake cluster has none.
+            Method::GET if self.restart_blip && path.ends_with("/pods") => {
+                self.pod_lists += 1;
+                (
+                    200,
+                    json!({"apiVersion": "v1", "kind": "PodList", "metadata": {}, "items": [{
+                        "metadata": {"name": "platform-abc"},
+                        "status": {
+                            "conditions": [{"type": "Ready", "status": "True"}],
+                            "containerStatuses": [{
+                                "name": "platform", "ready": true, "image": "i", "imageID": "i",
+                                "restartCount": self.pod_lists,
+                            }],
+                        },
+                    }]}),
+                )
+            }
+            Method::GET if !self.crash_looping.is_empty() && path.ends_with("/pods") => {
+                let pod = if self.pending {
+                    json!({
+                        "metadata": {"name": "platform-abc"},
+                        "status": {"phase": "Pending", "conditions": [{
+                            "type": "PodScheduled", "status": "False", "reason": "Unschedulable",
+                            "message": "0/3 nodes are available: Insufficient cpu",
+                        }]},
+                    })
+                } else {
+                    json!({
+                        "metadata": {"name": "platform-abc"},
+                        "status": {"containerStatuses": [{
+                            "name": "platform", "ready": false, "image": "i", "imageID": "i",
+                            "restartCount": 5,
+                            "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+                        }]},
+                    })
+                };
+                (
+                    200,
+                    json!({"apiVersion": "v1", "kind": "PodList", "metadata": {}, "items": [pod]}),
+                )
+            }
+            Method::GET if path.ends_with("/pods") || path.ends_with("/events") => {
+                let kind = if path.ends_with("/pods") {
+                    "PodList"
+                } else {
+                    "EventList"
+                };
+                (
+                    200,
+                    json!({"apiVersion": "v1", "kind": kind, "metadata": {}, "items": []}),
+                )
+            }
             Method::GET => match self.objects.get(path) {
+                Some(object) if self.crash_looping.contains(path) => {
+                    let mut object = object.clone();
+                    object["status"]["readyReplicas"] = 0.into();
+                    object["status"]["availableReplicas"] = 0.into();
+                    (200, object)
+                }
                 Some(object) => (200, object.clone()),
                 None => (404, status(404, "NotFound", &name)),
             },
@@ -136,7 +203,15 @@ impl FakeApi {
                 let generation = stored["metadata"]["generation"].as_i64().unwrap_or(1);
                 object["metadata"]["resourceVersion"] = (stored_version + 1).to_string().into();
                 if is_workload(path) {
-                    object = rolled_out(object, generation + 1);
+                    // As Kubernetes does: an identical pod template keeps the generation and
+                    // creates no pods, so crash-looping pods keep crash-looping. A changed
+                    // template is a new generation whose pods replace them.
+                    if object["spec"]["template"] == stored["spec"]["template"] {
+                        object = rolled_out(object, generation);
+                    } else {
+                        object = rolled_out(object, generation + 1);
+                        self.crash_looping.remove(path);
+                    }
                 }
                 self.objects.insert(path.to_string(), object.clone());
                 (200, object)
@@ -474,9 +549,10 @@ async fn a_release_of_a_container_chain_waits_on_dependencies_without_api_calls(
         waiting_writes.is_empty(),
         "waiting dependents wrote: {waiting_writes:#?}"
     );
-    // Each Container takes three steps: submit its rollout, see it complete, publish its
-    // endpoints (Running). Its dependent submits in the step after.
-    assert_eq!(release.steps, 3 * CHAIN.len());
+    // Each Container takes five steps: submit its rollout, see it complete on three polls in a
+    // row (readiness must hold), publish its endpoints (Running). Its dependent submits in the
+    // step after.
+    assert_eq!(release.steps, 5 * CHAIN.len());
 }
 
 /// An update carries the `resourceVersion` the controller read. When the workload changed in
@@ -520,5 +596,463 @@ async fn an_update_of_a_workload_changed_since_it_was_read_is_retried_by_the_exe
         "rolled out once"
     );
     // One step more than a release without the conflict.
-    assert_eq!(release.steps, 3 * CHAIN.len() + 1);
+    assert_eq!(release.steps, 5 * CHAIN.len() + 1);
+}
+
+/// Installs release 1, marks `failed` as a Container whose readiness check failed (its refresh
+/// failed), then steps `release_to_apply` the way a deployment update does. Returns the
+/// requests sent after the failure and the final state.
+async fn release_over_a_refresh_failed_container(
+    failed: &str,
+    release_to_apply: &str,
+) -> (Vec<Call>, StackState, BTreeMap<String, Value>) {
+    use crate::container::kubernetes::{KubernetesContainerController, KubernetesContainerState};
+    use crate::core::state_utils::StackResourceStateExt;
+    use crate::core::ResourceController;
+
+    let (url, api) = start_fake_api().await;
+    let config = deployment_config();
+    let mut statuses = BTreeMap::new();
+    let installed = stack("1");
+    let install = StackExecutor::builder(&installed, client_config(&url))
+        .deployment_config(&config)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("install executor");
+    let (mut state, first_step) = run_steps(
+        &install,
+        &api,
+        StackState::with_resource_prefix(Platform::Kubernetes, "test".to_string()),
+        0,
+        &mut statuses,
+    )
+    .await;
+
+    // The Ready step failed: the controller sits in RefreshFailed, as a saved state has it.
+    let record = state.resources.get_mut(failed).unwrap();
+    let mut controller = record
+        .get_internal_controller()
+        .unwrap()
+        .unwrap()
+        .as_any()
+        .downcast_ref::<KubernetesContainerController>()
+        .unwrap()
+        .clone();
+    controller.state = KubernetesContainerState::RefreshFailed;
+    record.status = ResourceStatus::RefreshFailed;
+    record.error = Some(crate::core::state_utils::saved_refresh_error(failed, true));
+    record
+        .set_internal_controller(Some(Box::new(controller)))
+        .unwrap();
+    assert_eq!(controller_status(record), ResourceStatus::RefreshFailed);
+
+    let release = stack(release_to_apply);
+    let update = StackExecutor::builder(&release, client_config(&url))
+        .deployment_config(&config)
+        .resume_unchanged_failed_resources(true)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("update executor");
+    // A refresh-failed Container is not Running until its update completes, so the stepping
+    // here does not treat that status as a failure.
+    let mut state = state;
+    for step in first_step..first_step + 60 {
+        api.lock().unwrap().step = step;
+        state = update.step(state).await.expect("executor step").next_state;
+        if state
+            .resources
+            .values()
+            .all(|resource| resource.status == ResourceStatus::Running)
+        {
+            break;
+        }
+    }
+    let api = api.lock().unwrap();
+    let calls = api
+        .calls
+        .iter()
+        .filter(|call| call.step >= first_step)
+        .cloned()
+        .collect();
+    (calls, state, api.objects.clone())
+}
+
+fn controller_status(record: &alien_core::StackResourceState) -> ResourceStatus {
+    use crate::core::state_utils::StackResourceStateExt;
+    record
+        .get_internal_controller()
+        .unwrap()
+        .unwrap()
+        .get_status()
+}
+
+/// A release with an unchanged config over a Container that failed its readiness check applies
+/// the pod spec again, instead of re-running the check that read the same pods.
+#[tokio::test]
+async fn an_unchanged_release_applies_the_spec_of_a_container_that_failed_readiness() {
+    let (calls, state, _) = release_over_a_refresh_failed_container("platform", "1").await;
+    assert_eq!(state.resources["platform"].status, ResourceStatus::Running);
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.method == Method::PUT && call.path == deployment_path("platform")),
+        "the workload is updated: {calls:#?}"
+    );
+}
+
+/// A changed config is still planned as an update of the failed Container.
+#[tokio::test]
+async fn a_changed_release_updates_a_container_that_failed_readiness() {
+    let (calls, state, objects) = release_over_a_refresh_failed_container("platform", "2").await;
+    assert_eq!(state.resources["platform"].status, ResourceStatus::Running);
+    assert!(calls
+        .iter()
+        .any(|call| call.method == Method::PUT && call.path == deployment_path("platform")));
+    assert_eq!(
+        objects[&deployment_path("platform")]["spec"]["template"]["spec"]["containers"][0]["image"],
+        "registry.example.com/platform:2"
+    );
+}
+
+/// Installs release 1, makes the workload of `failed` crash-loop, and steps the executor until the
+/// Container's own Ready step fails its retries and the record is RefreshFailed: the record the
+/// executor writes, with its `lastFailedState`.
+async fn crash_loop_until_refresh_failed(
+    failed: &str,
+) -> (String, Arc<Mutex<FakeApi>>, StackState, usize) {
+    let path = deployment_path(failed);
+    refresh_failed_after(failed, move |api| {
+        api.crash_looping.insert(path);
+    })
+    .await
+}
+
+/// Like `crash_loop_until_refresh_failed`, with `fault` applied to the cluster after the install.
+async fn refresh_failed_after(
+    failed: &str,
+    fault: impl FnOnce(&mut FakeApi),
+) -> (String, Arc<Mutex<FakeApi>>, StackState, usize) {
+    let (url, api) = start_fake_api().await;
+    let config = deployment_config();
+    let mut statuses = BTreeMap::new();
+    let installed = stack("1");
+    let install = StackExecutor::builder(&installed, client_config(&url))
+        .deployment_config(&config)
+        .running_resource_policy(RunningResourcePolicy::All)
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("install executor");
+    let (mut state, mut step) = run_steps(
+        &install,
+        &api,
+        StackState::with_resource_prefix(Platform::Kubernetes, "test".to_string()),
+        0,
+        &mut statuses,
+    )
+    .await;
+    fault(&mut api.lock().unwrap());
+
+    let observe = StackExecutor::builder(&installed, client_config(&url))
+        .deployment_config(&config)
+        .running_resource_policy(RunningResourcePolicy::All)
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("observing executor");
+    let limit = step + 200;
+    while state.resources[failed].status != ResourceStatus::RefreshFailed {
+        assert!(step < limit, "the faulty container never fails its check");
+        api.lock().unwrap().step = step;
+        state = observe.step(state).await.expect("executor step").next_state;
+        step += 1;
+    }
+    assert!(
+        state.resources[failed].last_failed_state.is_some(),
+        "the executor saves the controller that failed"
+    );
+    (url, api, state, step)
+}
+
+/// Steps `executor` until `platform` is Running or has failed an update, and returns the state.
+async fn step_until_settled(
+    executor: &StackExecutor,
+    api: &Arc<Mutex<FakeApi>>,
+    mut state: StackState,
+    first_step: usize,
+) -> (StackState, usize) {
+    let mut step = first_step;
+    // A resource that starts in RefreshFailed has settled there only after it left it.
+    let mut left_refresh_failed =
+        state.resources["platform"].status != ResourceStatus::RefreshFailed;
+    while step < first_step + 80 {
+        api.lock().unwrap().step = step;
+        state = executor
+            .step(state)
+            .await
+            .expect("executor step")
+            .next_state;
+        step += 1;
+        let now = state.resources["platform"].status;
+        left_refresh_failed |= now != ResourceStatus::RefreshFailed;
+        if matches!(now, ResourceStatus::Running | ResourceStatus::UpdateFailed)
+            || (now == ResourceStatus::RefreshFailed && left_refresh_failed)
+        {
+            break;
+        }
+    }
+    (state, step - first_step)
+}
+
+fn put_calls(api: &Arc<Mutex<FakeApi>>, first_step: usize) -> usize {
+    api.lock()
+        .unwrap()
+        .calls
+        .iter()
+        .filter(|call| {
+            call.step >= first_step
+                && call.method == Method::PUT
+                && call.path == deployment_path("platform")
+        })
+        .count()
+}
+
+/// A retry of a Container whose real Ready step failed applies the CURRENT pod spec again. The
+/// spec has not changed, so no pods roll (the fake API, like Kubernetes, creates none for an
+/// identical template) and the crash loop continues: the update waits only the short bound for
+/// readiness and fails with the not-ready error, instead of the 30-minute rollout limit.
+#[tokio::test]
+async fn a_retry_of_a_crash_looping_container_applies_the_spec_and_fails_fast_when_nothing_rolls() {
+    use crate::container::kubernetes::{KubernetesContainerController, KubernetesContainerState};
+    use crate::core::state_utils::{StackResourceStateExt, StackStateExt};
+
+    let (url, api, mut state, first_step) = crash_loop_until_refresh_failed("platform").await;
+    assert_eq!(
+        state.resources["platform"].error.as_ref().unwrap().code,
+        "WORKLOAD_NOT_READY"
+    );
+    assert!(state
+        .retry_failed()
+        .unwrap()
+        .contains(&"platform".to_string()));
+    let resumed = state.resources["platform"]
+        .get_internal_controller()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        resumed
+            .as_any()
+            .downcast_ref::<KubernetesContainerController>()
+            .unwrap()
+            .state,
+        KubernetesContainerState::UpdateStart
+    );
+
+    let config = deployment_config();
+    let observe = StackExecutor::builder(&stack("1"), client_config(&url))
+        .deployment_config(&config)
+        .running_resource_policy(RunningResourcePolicy::All)
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("executor");
+    let (state, steps) = step_until_settled(&observe, &api, state, first_step).await;
+    assert_eq!(put_calls(&api, first_step), 1, "the spec is applied once");
+    assert_eq!(
+        state.resources["platform"].status,
+        ResourceStatus::UpdateFailed
+    );
+    assert_eq!(
+        state.resources["platform"].error.as_ref().unwrap().code,
+        "WORKLOAD_NOT_READY"
+    );
+    // The short bound (12 polls) plus the steps that start, apply and fail the update; the
+    // rollout limit would be 360 polls.
+    assert!(
+        steps < 40,
+        "the wait is bounded by the short limit: {steps} steps"
+    );
+}
+
+/// An unchanged release over the same record goes through `resume_unchanged_failed_resources`:
+/// the same short bound applies.
+#[tokio::test]
+async fn an_unchanged_release_over_a_crash_looping_container_fails_fast_when_nothing_rolls() {
+    let (url, api, state, first_step) = crash_loop_until_refresh_failed("platform").await;
+    let config = deployment_config();
+    let update = StackExecutor::builder(&stack("1"), client_config(&url))
+        .deployment_config(&config)
+        .resume_unchanged_failed_resources(true)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("update executor");
+    let (state, steps) = step_until_settled(&update, &api, state, first_step).await;
+    assert_eq!(put_calls(&api, first_step), 1);
+    assert_eq!(
+        state.resources["platform"].status,
+        ResourceStatus::UpdateFailed
+    );
+    assert_eq!(
+        state.resources["platform"].error.as_ref().unwrap().code,
+        "WORKLOAD_NOT_READY"
+    );
+    assert!(
+        steps < 40,
+        "the wait is bounded by the short limit: {steps} steps"
+    );
+}
+
+/// A re-apply whose pod template changed (an operator change, or a changed config) rolls new
+/// pods, and the container heals.
+#[tokio::test]
+async fn a_changed_release_over_a_crash_looping_container_rolls_new_pods_and_heals() {
+    let (url, api, state, first_step) = crash_loop_until_refresh_failed("platform").await;
+    let config = deployment_config();
+    let update = StackExecutor::builder(&stack("2"), client_config(&url))
+        .deployment_config(&config)
+        .resume_unchanged_failed_resources(true)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("update executor");
+    let (state, _) = step_until_settled(&update, &api, state, first_step).await;
+    assert_eq!(state.resources["platform"].status, ResourceStatus::Running);
+    assert_eq!(put_calls(&api, first_step), 1);
+}
+
+/// A Deployment deleted out of band is not a readiness problem: the refresh failure is not the
+/// not-ready error, and a retry does not apply the spec (which would silently recreate nothing
+/// and hide the loss). It runs the check again and reports the missing Deployment as before.
+#[tokio::test]
+async fn a_retry_over_a_deleted_deployment_is_not_applied_and_reports_it_again() {
+    use crate::container::kubernetes::{KubernetesContainerController, KubernetesContainerState};
+    use crate::core::state_utils::{StackResourceStateExt, StackStateExt};
+
+    let path = deployment_path("platform");
+    let (url, api, mut state, first_step) = refresh_failed_after("platform", |api| {
+        api.objects.remove(&path);
+    })
+    .await;
+    let error = state.resources["platform"].error.clone().unwrap();
+    assert_ne!(error.code, "WORKLOAD_NOT_READY", "{error:?}");
+
+    assert!(state
+        .retry_failed()
+        .unwrap()
+        .contains(&"platform".to_string()));
+    let resumed = state.resources["platform"]
+        .get_internal_controller()
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        resumed
+            .as_any()
+            .downcast_ref::<KubernetesContainerController>()
+            .unwrap()
+            .state,
+        KubernetesContainerState::UpdateStart
+    );
+
+    let config = deployment_config();
+    let observe = StackExecutor::builder(&stack("1"), client_config(&url))
+        .deployment_config(&config)
+        .running_resource_policy(RunningResourcePolicy::All)
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("executor");
+    let mut step = first_step;
+    while state.resources["platform"].status != ResourceStatus::RefreshFailed {
+        assert!(
+            step < first_step + 200,
+            "the missing Deployment is reported again"
+        );
+        api.lock().unwrap().step = step;
+        state = observe.step(state).await.expect("executor step").next_state;
+        step += 1;
+    }
+    assert_eq!(put_calls(&api, first_step), 0, "nothing is applied");
+    assert_ne!(
+        state.resources["platform"].error.as_ref().unwrap().code,
+        "WORKLOAD_NOT_READY"
+    );
+}
+
+/// A pod that is Ready for a moment after each restart makes the workload look ready on every
+/// poll. The rollout never completes, because the restart count of the ready pod grows: the
+/// update does not report a finished rollout: after its bound it goes back to the refresh check,
+/// which does not recover it while the restart count keeps growing.
+#[tokio::test]
+async fn a_crash_looping_pod_that_is_briefly_ready_on_each_restart_never_completes_the_rollout() {
+    let (url, api, state, first_step) = crash_loop_until_refresh_failed("platform").await;
+    {
+        let mut api = api.lock().unwrap();
+        api.crash_looping.clear();
+        api.restart_blip = true;
+    }
+    let config = deployment_config();
+    let update = StackExecutor::builder(&stack("1"), client_config(&url))
+        .deployment_config(&config)
+        .resume_unchanged_failed_resources(true)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("update executor");
+    let (state, steps) = step_until_settled(&update, &api, state, first_step).await;
+    assert_eq!(
+        state.resources["platform"].status,
+        ResourceStatus::RefreshFailed
+    );
+    assert!(steps < 40, "the short bound applies: {steps} steps");
+}
+
+/// A release over a workload whose pods wait for a node (a slow autoscaler or image pull) does
+/// not become an update failure, which is never checked again: after the short bound the
+/// resource goes back to the refresh check, which recovers it once the pods run.
+#[tokio::test]
+async fn an_unchanged_release_over_pods_waiting_for_a_node_goes_back_to_the_refresh_check() {
+    let (url, api, state, first_step) = crash_loop_until_refresh_failed("platform").await;
+    api.lock().unwrap().pending = true;
+    let config = deployment_config();
+    let update = StackExecutor::builder(&stack("1"), client_config(&url))
+        .deployment_config(&config)
+        .resume_unchanged_failed_resources(true)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("update executor");
+    let (state, steps) = step_until_settled(&update, &api, state, first_step).await;
+    assert_eq!(put_calls(&api, first_step), 1);
+    assert_eq!(
+        state.resources["platform"].status,
+        ResourceStatus::RefreshFailed
+    );
+    // The failure carries the reason the update wait ran out of time.
+    assert_eq!(
+        state.resources["platform"].error.as_ref().unwrap().code,
+        "WORKLOAD_NOT_READY"
+    );
+    assert!(steps < 40, "the short bound applies: {steps} steps");
+
+    // The pods get a node and run: the refresh check recovers the resource.
+    api.lock().unwrap().crash_looping.clear();
+    api.lock().unwrap().pending = false;
+    let observe = StackExecutor::builder(&stack("1"), client_config(&url))
+        .deployment_config(&config)
+        .running_resource_policy(RunningResourcePolicy::All)
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("observing executor");
+    let mut state = state;
+    let mut step = first_step + steps;
+    while state.resources["platform"].status != ResourceStatus::Running {
+        assert!(step < first_step + steps + 60, "the refresh check recovers");
+        api.lock().unwrap().step = step;
+        state = observe.step(state).await.expect("executor step").next_state;
+        step += 1;
+    }
 }

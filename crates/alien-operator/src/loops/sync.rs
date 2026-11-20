@@ -1352,7 +1352,7 @@ fn refreshes_installed_release(
             == release.release_id.as_deref()
 }
 
-fn accept_target_release(
+pub(super) fn accept_target_release(
     deployment_state: &mut alien_core::DeploymentState,
     release: alien_core::ReleaseInfo,
 ) {
@@ -3242,6 +3242,80 @@ mod tests {
             .await
             .unwrap();
         assert!(deployment_woken(&db).await);
+    }
+
+    /// A failed update with an automatic retry scheduled on release A, and the manager
+    /// then sends release B (posted while A was updating). B replaces the target, the
+    /// pending retry of A never fires, and B gets its own budget.
+    #[tokio::test]
+    async fn a_newer_target_replaces_the_scheduled_automatic_retry_of_the_failed_one() {
+        use crate::db::AutomaticRetry;
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let stack = fixtures::stack(&fixtures::pinned());
+        let release_a = fixtures::signed_release(5, &stack);
+        let release_b = fixtures::signed_release(6, &stack);
+        let target_a = fixtures::target(release_a.clone(), vec![]);
+        super::accept_target(&state, &target_a, false)
+            .await
+            .unwrap();
+        let mut failed = db.get_deployment_state().await.unwrap().unwrap();
+        failed.status = alien_core::DeploymentStatus::UpdateFailed;
+        failed.stack_state = Some(alien_core::StackState::new(Platform::Kubernetes));
+        db.set_deployment_state(&failed).await.unwrap();
+        let now = chrono::Utc::now();
+        assert!(matches!(
+            db.prepare_automatic_retry(&failed, &target_a.config, now)
+                .await
+                .unwrap(),
+            AutomaticRetry::Scheduled { attempt: 1, .. }
+        ));
+
+        let target_b = fixtures::target(release_b.clone(), vec![]);
+        super::accept_target(&state, &target_b, false)
+            .await
+            .unwrap();
+        let moved = db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(moved.status, alien_core::DeploymentStatus::UpdatePending);
+        assert_eq!(moved.target_release, Some(release_b));
+        assert!(!moved.retry_requested);
+
+        // The old retry is due, but the stored state is no longer the one it was
+        // scheduled for: it does not run.
+        assert_eq!(
+            db.prepare_automatic_retry(
+                &failed,
+                &target_a.config,
+                now + chrono::Duration::seconds(31)
+            )
+            .await
+            .unwrap(),
+            AutomaticRetry::Idle
+        );
+        assert!(
+            !db.get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .retry_requested
+        );
     }
 
     fn approval_required_state(data_dir: &std::path::Path, db: Arc<OperatorDb>) -> OperatorState {
