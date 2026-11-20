@@ -1722,7 +1722,7 @@ jobs:
               return 0
             fi
 
-            printf 'Deleting slot-scoped custom IAM roles:\n'
+            printf 'Removing bindings of slot-scoped custom IAM roles (the roles stay):\n'
             printf '  %s\n' "${role_ids[@]}"
 
             gcloud projects get-iam-policy "$GOOGLE_TARGET_PROJECT_ID" --format=json > "$policy_file"
@@ -1735,9 +1735,9 @@ jobs:
               gcloud projects set-iam-policy "$GOOGLE_TARGET_PROJECT_ID" "$clean_policy_file" >/dev/null
             fi
 
-            for role_id in "${role_ids[@]}"; do
-              gcloud iam roles delete "$role_id" --project="$GOOGLE_TARGET_PROJECT_ID" --quiet || true
-            done
+            # The roles are kept on purpose. Their IDs are stable per slot, the next run
+            # reuses them, and a role deleted for more than 7 days cannot be undeleted
+            # while its ID stays unusable until purge.
           }
 
           cleanup_deleted_service_account_bindings
