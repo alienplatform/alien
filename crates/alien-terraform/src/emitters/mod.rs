@@ -14,3 +14,5 @@ pub mod gcp;
 pub mod kubernetes_cluster;
 pub mod verifier;
 pub mod worker_environment;
+
+mod postgres_credentials;

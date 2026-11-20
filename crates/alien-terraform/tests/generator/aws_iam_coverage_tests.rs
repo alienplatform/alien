@@ -302,7 +302,12 @@ fn fixture(
 
 #[tokio::test]
 async fn every_aws_emitter_renders_every_permission_set_it_supports() {
-    let registry = TfRegistry::built_in();
+    // The compute cluster, database and cache emitters need a network, a vault or a cluster
+    // of their own and are rendered by their emitter tests, not by this family fixture.
+    let mut registry = TfRegistry::built_in();
+    for resource_type in ["compute-cluster", "postgres", "redis"] {
+        registry.unregister(resource_type, Platform::Aws);
+    }
     let mut rendered_types = BTreeSet::new();
     let mut modules = Vec::new();
     for families in FIXTURES {

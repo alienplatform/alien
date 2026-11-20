@@ -10,7 +10,7 @@ use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module
 use alien_core::{
     ownership_policy_for_resource_type, Ai, AzureResourceGroup, AzureServiceBusNamespace,
     AzureStorageAccount, GcpAgentPlatformEngine, Key, Kv, Network, NetworkSettings,
-    PermissionProfile, Platform, Queue, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
+    PermissionProfile, Platform, Postgres, Queue, Redis, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
     SandboxLifecyclePolicy, SandboxLimits, ServiceAccount, Stack, StackBuilder, StackSettings,
     Storage, Vault, Worker, WorkerCode,
 };
@@ -121,10 +121,45 @@ fn gated_fixture(resource_type: &str, platform: Platform) -> Option<(Stack, Stac
             ResourceLifecycle::Frozen,
             "fixtureEnabled",
         ),
+        // A database and a cache are placed in the stack's network, so the fixture declares
+        // the network the emitters refuse to render without; Azure keeps the connection
+        // secret in a vault.
+        "postgres" | "redis" => {
+            let builder = base().add(
+                Network::new("default-network".to_string())
+                    .settings(sandbox_network())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            );
+            let builder = if platform == Platform::Azure {
+                builder.add(
+                    Vault::new("secrets".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+            } else {
+                builder
+            };
+            if resource_type == "postgres" {
+                builder.add_enabled_when(
+                    Postgres::new("fixture".to_string())
+                        .version("16".to_string())
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                    "fixtureEnabled",
+                )
+            } else {
+                builder.add_enabled_when(
+                    Redis::new("fixture".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                    "fixtureEnabled",
+                )
+            }
+        }
         _ => return None,
     };
     let settings = StackSettings {
-        network: (resource_type == "sandbox").then(sandbox_network),
+        network: matches!(resource_type, "sandbox" | "postgres" | "redis")
+            .then(sandbox_network),
         ..StackSettings::default()
     };
     Some((stack.build(), settings))
@@ -181,7 +216,12 @@ fn assert_gated_render(
     // one — the gate variable is unknown at validate time, so `count` is
     // unknown and both branches type-check. These two assertions are what
     // actually prove the gate, per rendered block.
-    let gate_count = "var.input_fixture_enabled ? 1 : 0";
+    // The count is the gate's own, or the gate wrapped around another condition (a block that
+    // is also skipped when setup reuses the default network).
+    let is_gate_count = |line: &str| {
+        let line = line.trim();
+        line.starts_with("count") && line.contains("= var.input_fixture_enabled ?") && line.ends_with(": 0")
+    };
     let mut gated_blocks = 0usize;
     for (file_name, contents) in module.iter() {
         if !file_name.ends_with(".tf") {
@@ -191,7 +231,7 @@ fn assert_gated_render(
         let padded = format!("\n{contents}");
         for block in padded.split("\nresource \"").skip(1) {
             let header = block.lines().next().unwrap_or_default();
-            let counted = block.contains(gate_count);
+            let counted = block.lines().any(is_gate_count);
             if counted {
                 gated_blocks += 1;
             }

@@ -21,6 +21,7 @@ pub mod secrets_digest_key;
 
 mod deployer_secrets;
 pub use deployer_secrets::*;
+pub mod aws_alarm_settings;
 pub mod aws_naming;
 pub mod gcp_naming;
 pub mod vault_naming;

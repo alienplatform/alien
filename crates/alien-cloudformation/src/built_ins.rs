@@ -5,7 +5,8 @@
 
 use crate::{
     emitters::aws::{
-        AwsAiEmitter, AwsArtifactRegistryEmitter, AwsBuildEmitter, AwsEmailEmitter, AwsKeyEmitter,
+        AwsAiEmitter, AwsArtifactRegistryEmitter, AwsBuildEmitter, AwsComputeClusterEmitter,
+        AwsPostgresEmitter, AwsRedisEmitter, AwsEmailEmitter, AwsKeyEmitter,
         AwsKubernetesClusterEmitter, AwsKvEmitter, AwsNetworkEmitter, AwsOpenSearchEmitter,
         AwsQueueEmitter, AwsRemoteBindingsEmitter, AwsRemoteStackManagementEmitter,
         AwsSandboxEmitter, AwsServiceAccountEmitter, AwsStorageEmitter, AwsVaultEmitter,
@@ -14,7 +15,7 @@ use crate::{
     registry::CfRegistry,
 };
 use alien_core::{
-    Ai, ArtifactRegistry, AwsOpenSearch, Build, Email, Key, KubernetesCluster, Kv, Network,
+    ComputeCluster, Postgres, Redis, Ai, ArtifactRegistry, AwsOpenSearch, Build, Email, Key, KubernetesCluster, Kv, Network,
     Platform, Queue, RemoteBindings, RemoteStackManagement, ResourceType, Sandbox, ServiceAccount,
     SigningVerifier, Storage, Vault, Worker,
 };
@@ -28,6 +29,9 @@ pub(crate) fn register_aws(registry: &mut CfRegistry) {
     }
 
     aws(registry, Ai::RESOURCE_TYPE, AwsAiEmitter);
+    aws(registry, ComputeCluster::RESOURCE_TYPE, AwsComputeClusterEmitter);
+    aws(registry, Postgres::RESOURCE_TYPE, AwsPostgresEmitter);
+    aws(registry, Redis::RESOURCE_TYPE, AwsRedisEmitter);
     aws(registry, Storage::RESOURCE_TYPE, AwsStorageEmitter);
     aws(registry, Key::RESOURCE_TYPE, AwsKeyEmitter);
     // Experimental resources are provider-specific: AwsOpenSearch only

@@ -27,7 +27,8 @@ tempfile = { workspace = true }
 uuid = { workspace = true, features = ["v5"] }
 
 [dev-dependencies]
-alien-cloudformation = { workspace = true }
+alien-terraform = { path = ".", features = ["test-utils"] }
+alien-cloudformation = { workspace = true, features = ["test-utils"] }
 alien-preflights = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 indexmap = { workspace = true }
