@@ -158,14 +158,26 @@ pub struct RegistryAccess {
 }
 
 fn client(access: &RegistryAccess) -> OciClient {
+    client_with(access, false)
+}
+
+fn client_with(access: &RegistryAccess, monolithic_push: bool) -> OciClient {
     OciClient::new(ClientConfig {
         protocol: if access.insecure {
             ClientProtocol::Http
         } else {
             ClientProtocol::Https
         },
+        use_monolithic_push: monolithic_push,
         ..Default::default()
     })
+}
+
+/// Artifact Registry answers the first chunk of a chunked upload with a location that refuses
+/// the next chunk (405), so a layer over one chunk (8 MiB) cannot be pushed in pieces. It takes a
+/// blob in a single request.
+fn pushes_monolithically(host: &str) -> bool {
+    host.ends_with("-docker.pkg.dev")
 }
 
 fn copy_failed(image: &str, message: impl Into<String>) -> ErrorData {
@@ -482,7 +494,8 @@ pub async fn import_images(
     registry_prefix: &str,
     access: &RegistryAccess,
 ) -> Result<HashMap<String, String>> {
-    let client = client(access);
+    let prefix_host = registry_prefix.split('/').next().unwrap_or(registry_prefix);
+    let client = client_with(access, pushes_monolithically(prefix_host));
     for image in images {
         let (host, repository) = site_repository(registry_prefix, image);
         let target = Reference::with_tag(
@@ -1158,6 +1171,14 @@ mod tests {
         LogCollectorDefault, OperatorImageDefault, PackageDefaults,
     };
     use httpmock::prelude::*;
+
+    #[test]
+    fn artifact_registry_takes_a_blob_in_one_request() {
+        assert!(pushes_monolithically("us-central1-docker.pkg.dev"));
+        assert!(pushes_monolithically("europe-docker.pkg.dev"));
+        assert!(!pushes_monolithically("123456789012.dkr.ecr.us-east-1.amazonaws.com"));
+        assert!(!pushes_monolithically("registry.example.com"));
+    }
 
     #[tokio::test]
     async fn architecture_export_downloads_only_selected_layers_and_preserves_source_mapping() {
