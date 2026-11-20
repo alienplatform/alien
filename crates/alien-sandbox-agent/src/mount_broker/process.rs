@@ -609,23 +609,30 @@ unsafe fn join_cgroup(tag: u8) -> io::Result<()> {
     let sent = receive_timeout(fds[0], &broker.answer_within)
         .and_then(|()| send_with_fds(broker.join.as_raw_fd(), tag, &[fds[1]]));
     libc::close(fds[1]);
-    let result = sent.and_then(|()| join_answer(fds[0]));
+    let within = Duration::from_secs(broker.answer_within.tv_sec as u64);
+    let result = sent.and_then(|()| join_answer(fds[0], within));
     libc::close(fds[0]);
     result
 }
 
 /// The broker's answer to a cgroup join: `k`, or `e` and the errno of the step that failed. A
-/// signal during the wait is not an answer (the receive timeout makes it EINTR), and a failed
-/// receive keeps its own errno. Allocates nothing: it runs between fork and exec.
-fn join_answer(socket: RawFd) -> io::Result<()> {
+/// signal or the cgroup freezer during the wait is not an answer (the receive timeout makes either
+/// EINTR), and a failed receive keeps its own errno. Allocates nothing: it runs between fork and
+/// exec.
+fn join_answer(socket: RawFd, within: Duration) -> io::Result<()> {
     let mut ack = [0u8; 5];
+    let started = Instant::now();
     loop {
         // SAFETY: reading into a buffer we own, at most its length.
         let n = unsafe { libc::recv(socket, ack.as_mut_ptr().cast(), ack.len(), 0) };
         if n < 0 {
             let error = io::Error::last_os_error();
             if error.kind() == io::ErrorKind::Interrupted {
-                continue;
+                // Each retry waits the socket's full timeout again; the whole wait stays bound.
+                if started.elapsed() < within {
+                    continue;
+                }
+                return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT));
             }
             return Err(error);
         }
@@ -1591,14 +1598,56 @@ mod tests {
         let (agent, broker) = UnixStream::pair().unwrap();
         (&broker).write_all(&ack).unwrap();
         assert_eq!(
-            join_answer(agent.as_raw_fd()).unwrap_err().raw_os_error(),
+            join_answer(agent.as_raw_fd(), Duration::from_secs(5))
+                .unwrap_err()
+                .raw_os_error(),
             Some(libc::EBUSY)
         );
         drop(broker);
         assert_eq!(
-            join_answer(agent.as_raw_fd()).unwrap_err().raw_os_error(),
+            join_answer(agent.as_raw_fd(), Duration::from_secs(5))
+                .unwrap_err()
+                .raw_os_error(),
             Some(libc::ECONNRESET)
         );
+    }
+
+    /// The image spawn's wait for its cgroup join is interrupted too: by a signal, or by the
+    /// cgroup freezer (which stops a task in a syscall the same way). With a receive timeout set
+    /// that is EINTR, not an answer.
+    #[test]
+    fn an_interrupted_cgroup_join_wait_is_not_a_refusal() {
+        extern "C" fn ignore(_: libc::c_int) {}
+        // SAFETY: a no-op handler with SA_RESTART.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = ignore as *const () as usize;
+            action.sa_flags = libc::SA_RESTART;
+            libc::sigaction(libc::SIGUSR2, &action, std::ptr::null_mut());
+        }
+        let (agent, broker) = UnixStream::pair().unwrap();
+        receive_timeout(
+            agent.as_raw_fd(),
+            &libc::timeval {
+                tv_sec: 5,
+                tv_usec: 0,
+            },
+        )
+        .unwrap();
+        // SAFETY: our own thread's handle.
+        let waiter = unsafe { libc::pthread_self() } as usize;
+        let answer = std::thread::spawn(move || {
+            for _ in 0..3 {
+                std::thread::sleep(Duration::from_millis(100));
+                // SAFETY: signalling the waiting thread, which outlives this one (joined below).
+                unsafe { libc::pthread_kill(waiter as libc::pthread_t, libc::SIGUSR2) };
+            }
+            (&broker).write_all(b"k").unwrap();
+            broker
+        });
+        let result = join_answer(agent.as_raw_fd(), Duration::from_secs(5));
+        let _broker = answer.join().unwrap();
+        result.unwrap();
     }
 
     /// A signal while the agent waits for the broker (its runtime's SIGCHLD, say) is not an
