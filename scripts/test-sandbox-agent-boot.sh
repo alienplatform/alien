@@ -35,7 +35,7 @@ export ALIEN_SANDBOX_ROOT=/session ALIEN_SANDBOX_PORT=8080 ALIEN_SANDBOX_AUTHORI
   ALIEN_SANDBOX_EXEC_UID=1000 ALIEN_SANDBOX_EXEC_GID=1000 ALIEN_SANDBOX_ISOLATION=uid-split \
   ALIEN_SANDBOX_IMAGE_COMMAND=image-permissions-v1 ALIEN_SANDBOX_EGRESS_RUN_HOOK=true \
   ALIEN_SANDBOX_EGRESS='"none"' ALIEN_SANDBOX_IMAGE_PERMISSIONS_V=1 \
-  ALIEN_SANDBOX_IMAGE_PERMISSIONS='{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/var/lib/app/scratch","sizeBytes":1048576}],"connections":[{"cidr":"10.0.1.5/32","port":2049}],"onPause":["/bin/true"],"onResume":["/bin/true"]}'
+  ALIEN_SANDBOX_IMAGE_PERMISSIONS='{"mounts":[{"type":"nfs","path":"/workspace"},{"type":"tmpfs","path":"/var/lib/app/scratch","sizeBytes":1048576}],"connections":[{"cidr":"10.0.1.5/32","port":2049}],"onPause":["/bin/sh","-c","echo paused >> /tmp/steps"],"onResume":["/bin/sh","-c","echo resumed >> /tmp/steps"]}'
 ip link set lo up
 # The seal writes kernel-wide helper settings that can only be lowered until reboot. Files bound
 # over them in this container's mount namespace (inherited by the agent and its broker) take the
@@ -117,6 +117,24 @@ if [ "$variant" = started ]; then
   ! /sbin/request-key 2>/dev/null || fail "request-key ran"
   grep -q '^seal: request-key: /sbin/request-key.*: /dev/null' /run/alien/boot-report \
     || fail "boot report: $(cat /run/alien/boot-report)"
+  # The provider's suspend and resume: each answers 200 at once, runs the image's step and
+  # leaves its timeline in the lifecycle report.
+  for hook in suspend resume; do
+    t0=$(date +%s%N)
+    code=$(as_provider curl -s -o /tmp/hook-body -w '%{http_code}' -X POST -d '{}' \
+      "http://127.0.0.1:8080/aws/lambda-microvms/runtime/v1/$hook")
+    took=$(( ($(date +%s%N) - t0) / 1000000 ))
+    echo "$hook hook: $code in $took ms"
+    [ "$code" = 200 ] || fail "the $hook hook answered $code: $(cat /tmp/hook-body)"
+    [ "$took" -lt 5000 ] || fail "the $hook hook took $took ms"
+  done
+  [ "$(cat /tmp/steps)" = "$(printf 'paused\nresumed')" ] || fail "steps: $(cat /tmp/steps)"
+  for fact in 'suspend hook: received' 'onPause: step succeeded' 'suspend hook: 200' \
+    'resume hook: network check passed' 'onResume: step succeeded' 'resume hook: 200'; do
+    grep -q "$fact" /run/alien/lifecycle-report || fail "lifecycle report lacks $fact: $(cat /run/alien/lifecycle-report)"
+  done
+  [ "$(stat -c %a /run/alien/lifecycle-report)" = 644 ] || fail "lifecycle-report mode"
+  echo "lifecycle report:"; sed 's/^/  /' /run/alien/lifecycle-report
   echo "boot report:"; sed 's/^/  /' /run/alien/boot-report
   echo "OK started: run hook 200, image running, exec ran, declared path created before the seal"
 else

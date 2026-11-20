@@ -75,6 +75,30 @@ pub(crate) fn write(path: &Path, reason: &str) -> std::io::Result<()> {
     std::io::Write::write_all(&mut file, format!("{reason}\n").as_bytes())
 }
 
+/// The root-owned, world-readable timeline of the provider's suspend and resume hooks.
+pub const LIFECYCLE_PATH: &str = "/run/alien/lifecycle-report";
+
+/// One line of the suspend/resume timeline, with the wall-clock time: on stderr (the default log
+/// level keeps only errors) and appended to [`LIFECYCLE_PATH`]. Only with image permissions.
+pub fn lifecycle_note(line: &str) {
+    if !enabled() {
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let line = format!("{}.{:03} {line}", now.as_secs(), now.subsec_millis());
+    eprintln!("alien-sandbox-agent: lifecycle: {line}");
+    use std::os::unix::fs::OpenOptionsExt;
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o644)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(LIFECYCLE_PATH)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, format!("{line}\n").as_bytes()));
+}
+
 /// The recorded reason, if the image could not start.
 pub fn reason() -> Option<&'static str> {
     REASON.get().map(String::as_str)

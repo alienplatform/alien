@@ -549,19 +549,52 @@ async fn resume_egress_hook(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> std::result::Result<StatusCode, ApiError> {
+    let started = std::time::Instant::now();
+    #[cfg(unix)]
+    crate::boot_error::lifecycle_note(&format!("resume hook: received from {peer}"));
+    let result = resume_steps(&state, peer, &headers, started).await;
+    #[cfg(unix)]
+    crate::boot_error::lifecycle_note(&format!(
+        "resume hook: {} after {} ms",
+        match &result {
+            Ok(_) => "200".to_string(),
+            Err(error) => format!("{} {}", error.status.as_u16(), error.message),
+        },
+        started.elapsed().as_millis()
+    ));
+    result
+}
+
+async fn resume_steps(
+    state: &Arc<AgentState>,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    started: std::time::Instant,
+) -> std::result::Result<StatusCode, ApiError> {
     if state.image_process.uses_image_user() {
-        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+        authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
     }
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
-        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
-        egress.resume().await?;
+        authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
+        let resumed = egress.resume().await;
+        if crate::image_permissions::declared().is_some() {
+            crate::boot_error::lifecycle_note(&format!(
+                "resume hook: network check {} at {} ms",
+                match &resumed {
+                    Ok(()) => "passed".to_string(),
+                    Err(error) => format!("failed: {error}"),
+                },
+                started.elapsed().as_millis()
+            ));
+        }
+        resumed?;
     }
     // After the network is back: the image's own resume step (a remount) needs it.
     #[cfg(target_os = "linux")]
-    run_image_step(&state, peer, &headers, Step::OnResume).await?;
+    run_image_step(state, peer, headers, Step::OnResume).await?;
     #[cfg(not(target_os = "linux"))]
-    let _ = (state, peer, headers);
+    let _ = (state, peer, headers, started);
     Ok(StatusCode::OK)
 }
 
@@ -581,7 +614,20 @@ async fn suspend_hook(
     headers: HeaderMap,
 ) -> std::result::Result<StatusCode, ApiError> {
     #[cfg(target_os = "linux")]
-    run_image_step(&state, peer, &headers, Step::OnPause).await?;
+    {
+        let started = std::time::Instant::now();
+        crate::boot_error::lifecycle_note(&format!("suspend hook: received from {peer}"));
+        let result = run_image_step(&state, peer, &headers, Step::OnPause).await;
+        crate::boot_error::lifecycle_note(&format!(
+            "suspend hook: {} after {} ms",
+            match &result {
+                Ok(()) => "200".to_string(),
+                Err(error) => format!("{} {}", error.status.as_u16(), error.message),
+            },
+            started.elapsed().as_millis()
+        ));
+        result?;
+    }
     #[cfg(not(target_os = "linux"))]
     let _ = (state, peer, headers);
     Ok(StatusCode::OK)
@@ -605,6 +651,7 @@ async fn run_image_step(
         Step::OnResume => ("onResume", declared.permissions.on_resume.as_ref()),
     };
     authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
+    let started = std::time::Instant::now();
     let _serial = SERIAL.lock().await;
     // From the pause until the resume the broker takes no new mounts: one made after the pause
     // step would be in the snapshot. Resume allows them first, for the image's own remount.
@@ -618,7 +665,14 @@ async fn run_image_step(
         .and_then(|result| result)
     {
         tracing::error!(%error, step = name, "the mount broker did not take the pause state");
+        crate::boot_error::lifecycle_note(&format!(
+            "{name}: the mount broker did not take the state: {error}"
+        ));
     }
+    crate::boot_error::lifecycle_note(&format!(
+        "{name}: mount broker state set at {} ms",
+        started.elapsed().as_millis()
+    ));
     let Some(command) = command else {
         crate::gateway_egress::record_nfs_port_drops(match step {
             Step::OnPause => "after-onPause",
@@ -630,9 +684,16 @@ async fn run_image_step(
     // Best effort: a failed step never fails the provider's hook (a failed hook can make the
     // provider discard the sandbox). A failed pause step still must not leave an NFS connection
     // in the snapshot, so the broker detaches every NFS mount it made.
-    if let Err(reason) =
-        crate::image_lifecycle::run(name, command, declared.lifecycle_deadline).await
-    {
+    let ran = crate::image_lifecycle::run(name, command, declared.lifecycle_deadline).await;
+    crate::boot_error::lifecycle_note(&format!(
+        "{name}: step {} at {} ms",
+        match &ran {
+            Ok(()) => "succeeded".to_string(),
+            Err(reason) => format!("failed: {reason}"),
+        },
+        started.elapsed().as_millis()
+    ));
+    if let Err(reason) = ran {
         tracing::error!(%reason, step = name, "image lifecycle step failed");
         if matches!(step, Step::OnPause) {
             match tokio::task::spawn_blocking(crate::mount_broker::detach_nfs_mounts).await {

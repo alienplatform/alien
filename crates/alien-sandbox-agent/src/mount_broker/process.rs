@@ -763,6 +763,32 @@ struct Inflight {
     pipe: std::fs::File,
     deadline: Instant,
     plan: Plan,
+    started: Instant,
+}
+
+/// One line per request on the broker's stderr (the agent's), so a slow or refused mount shows
+/// in the sandbox's log with its time: the operation, the path and how it ended.
+fn log_request(plan: Option<&Plan>, started: Instant, reply: &Reply) {
+    let what = match plan {
+        Some(Plan::Nfs { target, port, .. }) => format!("nfs {target} (port {port})"),
+        Some(Plan::Tmpfs { target, .. }) => format!("tmpfs {target}"),
+        Some(Plan::Bind { from, target }) => format!("bind {from} -> {target}"),
+        Some(Plan::Umount { target, .. }) => format!("umount {target}"),
+        None => "request".to_string(),
+    };
+    let outcome = if reply.ok {
+        "ok".to_string()
+    } else {
+        format!(
+            "{} {}",
+            reply.errno.as_deref().unwrap_or("error"),
+            reply.reason.as_deref().unwrap_or_default()
+        )
+    };
+    eprintln!(
+        "mount broker: {what}: {outcome} in {} ms",
+        started.elapsed().as_millis()
+    );
 }
 
 fn broker_main(
@@ -1242,6 +1268,7 @@ impl Loop<'_> {
             return;
         };
         let _ = connection.set_write_timeout(Some(REQUEST_READ));
+        let started = Instant::now();
         // One deadline for the whole request, not per read: a caller that trickles bytes must
         // not hold the broker's only thread.
         let read_by = Instant::now() + REQUEST_READ;
@@ -1283,18 +1310,19 @@ impl Loop<'_> {
         let plan = match request::plan(self.declared, &parsed) {
             Ok(plan) => plan,
             Err((errno, reason)) => {
-                respond(&mut connection, Reply::refused(errno, reason));
+                let reply = Reply::refused(errno, reason);
+                log_request(None, started, &reply);
+                respond(&mut connection, reply);
                 return;
             }
         };
         if self.paused && !matches!(plan, Plan::Umount { .. }) {
-            respond(
-                &mut connection,
-                Reply::refused(
-                    Errno::Ebusy,
-                    "the sandbox is pausing; mounts are refused until it resumes",
-                ),
+            let reply = Reply::refused(
+                Errno::Ebusy,
+                "the sandbox is pausing; mounts are refused until it resumes",
             );
+            log_request(Some(&plan), started, &reply);
+            respond(&mut connection, reply);
             return;
         }
         let Some(namespace) = &self.namespace else {
@@ -1313,6 +1341,7 @@ impl Loop<'_> {
                     pipe,
                     deadline,
                     plan,
+                    started,
                 });
             }
             Err(error) => respond(
@@ -1466,6 +1495,7 @@ impl Loop<'_> {
             }
             Err(_) => Reply::refused(Errno::Eio, "the helper failed"),
         };
+        log_request(Some(&inflight.plan), inflight.started, &reply);
         respond(&mut inflight.connection, reply);
     }
 
@@ -1476,16 +1506,15 @@ impl Loop<'_> {
         // SAFETY: signalling our own helper.
         unsafe { libc::kill(inflight.helper, libc::SIGKILL) };
         self.zombies.push(inflight.helper);
-        respond(
-            &mut inflight.connection,
-            Reply::refused(
-                Errno::Etimedout,
-                format!(
-                    "the request did not finish within {}s",
-                    self.config.deadline.as_secs()
-                ),
+        let reply = Reply::refused(
+            Errno::Etimedout,
+            format!(
+                "the request did not finish within {}s",
+                self.config.deadline.as_secs()
             ),
         );
+        log_request(Some(&inflight.plan), inflight.started, &reply);
+        respond(&mut inflight.connection, reply);
     }
 }
 
