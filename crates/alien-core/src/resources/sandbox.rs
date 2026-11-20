@@ -1074,6 +1074,33 @@ impl Sandbox {
                     .to_string(),
             }));
         }
+        // The agent serves them only on the guest network it runs for `internet` and `none`,
+        // and only to an image whose command starts as root.
+        if self.declares_image_permissions()
+            && !matches!(self.egress, SandboxEgress::Internet | SandboxEgress::None)
+        {
+            return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "egress".to_string(),
+                value: match self.egress {
+                    SandboxEgress::Allow => "allow",
+                    _ => "allowDomains",
+                }
+                .to_string(),
+                reason: "image permissions and lifecycle steps need egress `internet` or `none`"
+                    .to_string(),
+            }));
+        }
+        if self.declares_image_permissions() && self.image_user.is_some_and(|uid| uid != 0) {
+            return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "imagePermissions".to_string(),
+                value: "image USER".to_string(),
+                reason: "image permissions and lifecycle steps need an image whose command \
+                         starts as root (USER root or no USER)"
+                    .to_string(),
+            }));
+        }
         Ok(())
     }
 

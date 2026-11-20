@@ -17,7 +17,11 @@ use alien_core::{
     release_statement,
     sandbox_build_role::{sandbox_build_role_arn, SANDBOX_BUNDLE_STORAGE_ID},
     sandbox_egress::aws_sandbox_agent_environment,
-    sandbox_image_permissions::aws_microvm_session_hooks,
+    sandbox_image::ENV_IMAGE_PERMISSIONS,
+    sandbox_image_permissions::{
+        aws_microvm_session_hooks, image_permissions_environment_with_resolved, ContractConnection,
+        ImagePermissionsContract,
+    },
     standard_resource_tags,
 };
 use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
@@ -96,17 +100,46 @@ fn naming(request: &Value) -> Result<(Option<String>, String)> {
     Ok((description, token.to_string()))
 }
 
+/// The connection addresses the request's image-permissions contract names. The verifier cannot
+/// read what the targets published, so it takes these from the controller and checks only that
+/// each is a private `/32` on a declared port; setup's security group rule bounds each
+/// connection to the network's range on its port either way. Everything else in the contract is
+/// derived from the signed sandbox.
+fn sent_connections(request: &Value) -> Result<Vec<ContractConnection>> {
+    let Some(value) = request
+        .get("environmentVariables")
+        .and_then(|environment| environment.get(ENV_IMAGE_PERMISSIONS))
+    else {
+        return Ok(Vec::new());
+    };
+    let text = value
+        .as_str()
+        .ok_or_else(|| refused("the image permissions contract is not a string"))?;
+    let contract: ImagePermissionsContract = serde_json::from_str(text).map_err(|error| {
+        refused(format!(
+            "the image permissions contract is malformed: {error}"
+        ))
+    })?;
+    Ok(contract.connections)
+}
+
 fn inputs(
     facts: &Signed<'_>,
     region: &str,
     account: &str,
     bundle_uri: &str,
+    resolved: &[ContractConnection],
 ) -> Result<alien_aws_clients::sandbox_image_build::ImageBuildInputs> {
     let sandbox = facts.sandbox;
     let tier = sandbox
         .microvm_tier()
         .map_err(|error| refused(format!("the signed limits fit no MicroVM tier: {error}")))?;
     let build_role = sandbox_build_role_arn(aws_partition(region), account, facts.prefix, facts.id);
+    let mut environment = aws_sandbox_agent_environment(facts.stack, sandbox);
+    environment.extend(
+        image_permissions_environment_with_resolved(sandbox, resolved)
+            .map_err(|error| refused(error.message))?,
+    );
     Ok(image_build_inputs(
         region,
         facts.id,
@@ -115,10 +148,7 @@ fn inputs(
         bundle_uri,
         tier.baseline_memory_mib,
     )
-    .with_agent_environment(
-        aws_sandbox_agent_environment(facts.stack, sandbox),
-        aws_microvm_session_hooks(sandbox),
-    ))
+    .with_agent_environment(environment, aws_microvm_session_hooks(sandbox)))
 }
 
 fn same(sent: &Value, derived: &impl serde::Serialize, what: &str) -> Result<()> {
@@ -152,7 +182,8 @@ pub fn check_create(
 ) -> Result<CreateMicrovmImageRequest> {
     let bundle = signed_bundle_uri(facts)?;
     let (description, token) = naming(request)?;
-    let mut derived = inputs(facts, region, account, &bundle)?.create_request(
+    let resolved = sent_connections(request)?;
+    let mut derived = inputs(facts, region, account, &bundle, &resolved)?.create_request(
         image_name(facts),
         standard_resource_tags(facts.prefix, facts.id)
             .into_iter()
@@ -182,7 +213,8 @@ pub fn check_update(
     }
     let bundle = signed_bundle_uri(facts)?;
     let (description, token) = naming(request)?;
-    let mut derived = inputs(facts, region, account, &bundle)?.update_request();
+    let resolved = sent_connections(request)?;
+    let mut derived = inputs(facts, region, account, &bundle, &resolved)?.update_request();
     derived.description = description;
     derived.client_token = token;
     same(request, &derived, "UpdateMicrovmImage request")?;
@@ -245,7 +277,7 @@ mod tests {
     /// The bundle the verifier writes, and the create a controller sends for it.
     fn bundle_and_create(signed: &Signed<'_>) -> (RenderedBundle, Value) {
         let bundle = check_bundle(signed, &signed_image()).expect("the signed image");
-        let request = inputs(signed, REGION, ACCOUNT, &bundle.uri())
+        let request = inputs(signed, REGION, ACCOUNT, &bundle.uri(), &[])
             .expect("inputs")
             .with_receipt()
             .expect("receipt")
@@ -281,6 +313,116 @@ mod tests {
             let image = sandbox_image_arn(REGION, ACCOUNT, &format!("{PREFIX}-agents"));
             check_update(signed, REGION, ACCOUNT, &image, &roll).expect("the signed roll");
         });
+    }
+
+    /// A sandbox with image permissions, lifecycle steps and a connection: the contract is
+    /// derived from the signed sandbox, and only the connection addresses come from the
+    /// controller, each a private `/32` on the declared port.
+    #[test]
+    fn a_build_with_image_permissions_is_accepted_and_only_its_addresses_come_from_the_controller()
+    {
+        use alien_core::{
+            ResourceRef, ResourceType, SandboxImageConnection, SandboxImageMount,
+            SandboxImageMountType, SandboxImagePermissions,
+        };
+        let mut stack = stack();
+        let entry = stack.resources.get_mut("agents").expect("the sandbox");
+        let mut sandbox = entry
+            .config
+            .downcast_ref::<Sandbox>()
+            .expect("a sandbox")
+            .clone();
+        sandbox.egress = SandboxEgress::None;
+        sandbox.image_user = Some(0);
+        sandbox.lifecycle.on_pause = Some(vec!["/usr/local/bin/app".into(), "pause".into()]);
+        sandbox.image_permissions = Some(SandboxImagePermissions {
+            mounts: vec![SandboxImageMount {
+                mount_type: SandboxImageMountType::Nfs,
+                path: "/workspace".into(),
+                size: None,
+                from: None,
+            }],
+            connections: vec![SandboxImageConnection {
+                to: ResourceRef::new(ResourceType::from("acme/files"), "workspace-files"),
+                port: 2049,
+            }],
+        });
+        let signed = Signed {
+            sandbox: &sandbox,
+            stack: &stack,
+            prefix: PREFIX,
+            id: "agents",
+        };
+        let resolved = vec![ContractConnection {
+            cidr: "10.42.1.4/32".into(),
+            port: 2049,
+        }];
+        let bundle = check_bundle(&signed, &signed_image()).expect("the signed image");
+        let request = serde_json::to_value(
+            inputs(&signed, REGION, ACCOUNT, &bundle.uri(), &resolved)
+                .expect("inputs")
+                .with_receipt()
+                .expect("receipt")
+                .create_request(
+                    format!("{PREFIX}-agents"),
+                    standard_resource_tags(PREFIX, "agents")
+                        .into_iter()
+                        .collect(),
+                ),
+        )
+        .expect("serialises");
+        let contract = request["environmentVariables"][ENV_IMAGE_PERMISSIONS]
+            .as_str()
+            .expect("the contract is sent")
+            .to_string();
+        assert!(contract.contains("10.42.1.4/32"), "{contract}");
+        check_create(&signed, REGION, ACCOUNT, &request).expect("the controller's build");
+        let mut roll = request.clone();
+        roll.as_object_mut().unwrap().remove("name");
+        roll.as_object_mut().unwrap().remove("tags");
+        let image = sandbox_image_arn(REGION, ACCOUNT, &format!("{PREFIX}-agents"));
+        check_update(&signed, REGION, ACCOUNT, &image, &roll).expect("the controller's roll");
+
+        let with_contract = |contract: String| {
+            let mut changed = request.clone();
+            changed["environmentVariables"][ENV_IMAGE_PERMISSIONS] = json!(contract);
+            changed
+        };
+        for (name, changed) in [
+            (
+                "a public address",
+                with_contract(contract.replace("10.42.1.4/32", "8.8.8.8/32")),
+            ),
+            (
+                "a wider range",
+                with_contract(contract.replace("10.42.1.4/32", "10.0.0.0/8")),
+            ),
+            (
+                "an undeclared port",
+                with_contract(contract.replace("\"port\":2049", "\"port\":22")),
+            ),
+            (
+                "another mount",
+                with_contract(contract.replace("/workspace", "/data")),
+            ),
+            (
+                "another pause step",
+                with_contract(contract.replace("pause", "sh")),
+            ),
+            ("no contract", {
+                let mut changed = request.clone();
+                changed["environmentVariables"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(ENV_IMAGE_PERMISSIONS);
+                changed
+            }),
+        ] {
+            assert!(
+                check_create(&signed, REGION, ACCOUNT, &changed).is_err(),
+                "{name} was accepted"
+            );
+        }
     }
 
     #[test]

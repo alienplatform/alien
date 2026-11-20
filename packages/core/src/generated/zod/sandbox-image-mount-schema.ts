@@ -10,8 +10,8 @@ import { SandboxImageMountTypeSchema } from "./sandbox-image-mount-type-schema.j
  * @description One mount an image may ask for.
  */
 export const SandboxImageMountSchema = z.object({
-    "from": z.string().describe("Source of a bind mount: the path of a declared `tmpfs` mount, or a path inside one. The\nbind's own path must be inside a declared `nfs` mount. Required for bind and refused for\nother types.").nullish(),
-"path": z.string().describe("Absolute, normalized path the mount is placed at. It may not be or contain a system path\n(`/`, `/opt/alien`, `/proc`, `/sys`, `/dev`, `/run`, `/etc`, `/usr`, `/bin`, `/sbin`,\n`/lib*`)."),
+    "from": z.string().describe("Source of a bind mount: the path of a declared `tmpfs` mount. The\nbind's own path must be inside a declared `nfs` mount. Required for bind and refused for\nother types.").nullish(),
+"path": z.string().describe("Absolute, normalized path the mount is placed at. It may not be or contain a system path\n(`/`, `/opt/alien`, `/proc`, `/sys`, `/dev`, `/run`, `/etc`, `/usr`, `/bin`, `/sbin`,\n`/boot`, `/lib*`)."),
 "size": z.string().describe("Size of a tmpfs, as a whole quantity such as `8Gi` or `512Mi`. Required for tmpfs and\nrefused for other types.").nullish(),
 get "type"(){
                 return SandboxImageMountTypeSchema.describe("A file system type an image may ask the agent to mount.")

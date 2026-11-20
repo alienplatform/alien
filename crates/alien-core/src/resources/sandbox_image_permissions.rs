@@ -52,13 +52,13 @@ pub struct SandboxImageMount {
     pub mount_type: SandboxImageMountType,
     /// Absolute, normalized path the mount is placed at. It may not be or contain a system path
     /// (`/`, `/opt/alien`, `/proc`, `/sys`, `/dev`, `/run`, `/etc`, `/usr`, `/bin`, `/sbin`,
-    /// `/lib*`).
+    /// `/boot`, `/lib*`).
     pub path: String,
     /// Size of a tmpfs, as a whole quantity such as `8Gi` or `512Mi`. Required for tmpfs and
     /// refused for other types.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<String>,
-    /// Source of a bind mount: the path of a declared `tmpfs` mount, or a path inside one. The
+    /// Source of a bind mount: the path of a declared `tmpfs` mount. The
     /// bind's own path must be inside a declared `nfs` mount. Required for bind and refused for
     /// other types.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,6 +124,7 @@ const PROTECTED_PATHS: &[&str] = &[
     "/usr",
     "/bin",
     "/sbin",
+    "/boot",
 ];
 
 /// Largest tmpfs a declaration may name: 1 TiB, far above any MicroVM's memory, so the value
@@ -199,19 +200,15 @@ impl SandboxImagePermissions {
                     if let Err(reason) = check_mount_path(from) {
                         return refuse("from", from, &reason);
                     }
-                    // Only from a tmpfs the agent itself mounted, so a bind can never expose a
-                    // path of the image's own file system (or one shared file system at a second
-                    // place) somewhere the declaration did not name.
+                    // Only a tmpfs the agent itself mounted, exactly at its path (the agent takes
+                    // nothing else), so a bind can never expose a path of the image's own file
+                    // system (or one shared file system at a second place) somewhere the
+                    // declaration did not name.
                     let source = self.mounts.iter().find(|source| {
-                        source.mount_type == SandboxImageMountType::Tmpfs
-                            && is_same_or_under(from, &source.path)
+                        source.mount_type == SandboxImageMountType::Tmpfs && from == &source.path
                     });
                     if source.is_none() {
-                        return refuse(
-                            "from",
-                            from,
-                            "must be the path of a declared tmpfs mount, or inside one",
-                        );
+                        return refuse("from", from, "must be the path of a declared tmpfs mount");
                     }
                     // Only into a declared nfs mount: the bind exists to place local scratch
                     // inside the shared file system, not to cover any other path of the image.
@@ -479,6 +476,8 @@ mod tests {
             "/lib",
             "/lib64",
             "/libx32/foo",
+            "/boot",
+            "/boot/efi",
             "/work space",
             "/work,space",
         ] {
@@ -561,18 +560,17 @@ mod tests {
         )
         .validate("s")
         .unwrap();
-        permissions(
-            vec![
-                nfs(),
-                tmpfs(),
-                bind("/var/lib/app/scratch/a", "/workspace/a"),
-            ],
-            vec![],
-        )
-        .validate("s")
-        .unwrap();
 
         for (mounts, why) in [
+            (
+                vec![
+                    nfs(),
+                    tmpfs(),
+                    bind("/var/lib/app/scratch/a", "/workspace/a"),
+                ],
+                "source inside a tmpfs rather than the tmpfs itself (the agent takes only a \
+                 declared mount path)",
+            ),
             (
                 vec![nfs(), bind("/var/lib/app/scratch", "/workspace/tmp")],
                 "undeclared source",
@@ -726,6 +724,47 @@ mod tests {
                 .expect_err("onPause refused off AWS");
             assert!(error.to_string().contains("onPause"), "{error}");
             assert!(error.to_string().contains(&platform.to_string()), "{error}");
+        }
+    }
+
+    /// The agent serves image permissions and lifecycle steps only on the guest network
+    /// (egress `internet` or `none`) and only to an image whose command starts as root, so
+    /// planning refuses anything else instead of an image that never starts.
+    #[test]
+    fn image_permissions_need_guest_network_egress_and_a_root_image() {
+        let steps_only = || {
+            let mut sandbox = declared_sandbox();
+            sandbox.image_permissions = None;
+            sandbox.lifecycle.on_pause = Some(vec!["/bin/sync".into()]);
+            sandbox
+        };
+        for declared in [declared_sandbox, steps_only] {
+            for egress in [crate::SandboxEgress::Internet, crate::SandboxEgress::None] {
+                let mut sandbox = declared();
+                sandbox.egress = egress;
+                sandbox.validate_for_platform(Platform::Aws).unwrap();
+                sandbox.image_user = Some(0);
+                sandbox.validate_for_platform(Platform::Aws).unwrap();
+            }
+            for egress in [
+                crate::SandboxEgress::Allow,
+                crate::SandboxEgress::AllowDomains {
+                    domains: vec!["example.com".into()],
+                },
+            ] {
+                let mut sandbox = declared();
+                sandbox.egress = egress;
+                let error = sandbox
+                    .validate_for_platform(Platform::Aws)
+                    .expect_err("egress without the guest network");
+                assert!(error.to_string().contains("egress"), "{error}");
+            }
+            let mut sandbox = declared();
+            sandbox.image_user = Some(1000);
+            let error = sandbox
+                .validate_for_platform(Platform::Aws)
+                .expect_err("a non-root image");
+            assert!(error.to_string().contains("root"), "{error}");
         }
     }
 

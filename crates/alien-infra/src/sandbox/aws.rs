@@ -1328,6 +1328,24 @@ impl AwsSandboxController {
         status = ResourceStatus::RefreshFailed
     );
 
+    /// A connection target that publishes new addresses changes the image's contract with no
+    /// change to any config, so the update that rolls the image is asked for here: until it runs,
+    /// new sessions still reach only the old addresses. A target that published nothing usable
+    /// asks for nothing; the roll could not be built.
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        let connects = config
+            .image_permissions
+            .as_ref()
+            .is_some_and(|permissions| !permissions.connections.is_empty());
+        if !connects || self.image_identifier.is_none() || !self.owns_image_builds(ctx, &config.id)
+        {
+            return Ok(false);
+        }
+        Ok(agent_environment(ctx, config)
+            .is_ok_and(|environment| environment != self.supervisor_environment))
+    }
+
     // ─────────────── HELPER METHODS ──────────────────────────────────────
 
     fn build_outputs(&self) -> Option<CoreResourceOutputs> {
@@ -3979,6 +3997,31 @@ mod tests {
             environment.get(alien_core::sandbox_image::ENV_IMAGE_PERMISSIONS),
             "the recorded environment matches, so the next pass does not roll"
         );
+        assert!(
+            !executor.needs_update().expect("update check"),
+            "nothing moved, so no update is asked for"
+        );
+
+        // The target publishes new addresses with its own config unchanged: the image's contract
+        // is stale, so the sandbox asks for the update that rolls it.
+        let mut target = executor.stack_state().resources["workspace-files"].clone();
+        target.outputs = Some(alien_core::ResourceOutputs::new(
+            alien_core::CustomResourceOutputs::from_untagged(
+                "acme/files",
+                serde_json::json!({ "privateIpv4Addresses": ["10.42.3.9", "10.42.2.7"] }),
+            )
+            .unwrap(),
+        ));
+        executor.insert_saved_resource("workspace-files", target.clone());
+        assert!(
+            executor.needs_update().expect("update check"),
+            "a moved address asks for the update that rolls the image"
+        );
+
+        // A target that published nothing (yet) cannot be rolled onto; no update is asked for.
+        target.outputs = None;
+        executor.insert_saved_resource("workspace-files", target);
+        assert!(!executor.needs_update().expect("update check"));
     }
 
     /// A Worker creates sessions under its profile's role, so a direct setup that builds a Frozen
