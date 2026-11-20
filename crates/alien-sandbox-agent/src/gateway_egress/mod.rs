@@ -109,6 +109,28 @@ pub struct GatewayEgress {
 /// Where the NFS-port drop's counters are recorded, one line per moment.
 pub const NFS_PORT_DROPS: &str = "/run/alien/unmarked-drops";
 
+/// How long the path check waits for an answer that must not come. A path that is open answers a
+/// connection or a DNS question within one round trip.
+#[derive(Debug, Clone, Copy)]
+struct PathWindow {
+    canary: Duration,
+    udp: Duration,
+}
+
+impl PathWindow {
+    /// The first check of a network path (run, start, token delivery): generous windows.
+    const FIRST: Self = Self {
+        canary: Duration::from_secs(3),
+        udp: Duration::from_millis(500),
+    };
+    /// A restored sandbox checks again the path the first check verified, while the provider
+    /// waits for its resume hook: a short window, still many round trips to an open path.
+    const RESUME: Self = Self {
+        canary: Duration::from_millis(300),
+        udp: Duration::from_millis(300),
+    };
+}
+
 /// With image permissions: appends the NFS-port drop's counters at `moment` (boot, after
 /// onPause, after onResume) to [`NFS_PORT_DROPS`] (root only) and the log.
 pub async fn record_nfs_port_drops(moment: &str) {
@@ -349,7 +371,7 @@ impl GatewayEgress {
         // Delivery and the platform hook can arrive in either order. The token identifies
         // this sandbox; the gateway's current policy remains the authorization authority.
         self.awaiting_delivery.store(false, Ordering::Release);
-        match self.self_check().await {
+        match self.self_check_within(PathWindow::RESUME).await {
             Ok(()) => Ok(()),
             Err(_)
                 if self.path_verified.load(Ordering::Acquire)
@@ -724,25 +746,34 @@ impl GatewayEgress {
             .context(failed("connect gateway"))
     }
 
-    async fn check_path(&self) -> Result<()> {
+    async fn check_path(&self, window: PathWindow) -> Result<()> {
         self.path_verified.store(false, Ordering::Release);
         // Marked sockets bypass the in-guest filter, proving the external network boundary.
+        // The three probes wait on independent silences: they run together.
         let canary: SocketAddr = SocketAddr::from(([1, 1, 1, 1], 443));
-        let direct = timeout(Duration::from_secs(3), self.connect(canary)).await;
+        let (direct, udp, command) = tokio::join!(
+            timeout(window.canary, self.connect(canary)),
+            probe::supervisor_udp(self.privileged, window.udp),
+            probe::command(self.command_identity, self.privileged),
+        );
         if matches!(direct, Ok(Ok(_))) {
             return Err(self.unverified(
                 "direct-connect",
                 "1.1.1.1:443 is reachable without the gateway",
             ));
         }
-        probe::supervisor_udp(self.privileged).await?;
-        probe::command(self.command_identity, self.privileged).await?;
+        udp?;
+        command?;
         self.path_verified.store(true, Ordering::Release);
         Ok(())
     }
 
     async fn self_check(&self) -> Result<()> {
-        self.check_path().await.inspect_err(|error| {
+        self.self_check_within(PathWindow::FIRST).await
+    }
+
+    async fn self_check_within(&self, window: PathWindow) -> Result<()> {
+        self.check_path(window).await.inspect_err(|error| {
             self.remember_unverified(error);
             tracing::warn!(cause = "check-failed", code = %error.code, "physical egress check failed");
         })?;

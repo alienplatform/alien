@@ -113,8 +113,19 @@ if [ "$variant" = started ]; then
     || fail "the seal did not write the inheritable stand-in"
   [ ! -e /proc/sys/kernel/modprobe ] || [ -z "$(cat /tmp/kernel-settings/modprobe)" ] \
     || fail "the seal did not write the modprobe stand-in"
+  # As on the provider's network: what the sandbox may not reach is dropped silently, never
+  # refused. The default route leads into a namespace that forwards nothing and answers nothing.
+  ip netns add sink
+  ip link add drop0 type veth peer name sink0 netns sink
+  ip -n sink link set sink0 up && ip -n sink addr add 10.9.0.2/24 dev sink0
+  ip netns exec sink sysctl -qw net.ipv4.ip_forward=0
+  ip link set drop0 up && ip addr add 10.9.0.1/24 dev drop0
+  ip route add default via 10.9.0.2 dev drop0
+  rc=0; timeout 1 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null || rc=$?
+  [ "$rc" = 124 ] || fail "1.1.1.1:443 is not silently dropped in this test (exit $rc)"
   # The provider's suspend and resume: each answers 200 at once, runs the image's step and
-  # leaves its timeline in the lifecycle report.
+  # leaves its timeline in the lifecycle report. The resume's network check must not wait out
+  # the drops.
   for hook in suspend resume; do
     t0=$(date +%s%N)
     code=$(as_provider curl -s -o /tmp/hook-body -w '%{http_code}' -X POST -d '{}' \
@@ -123,6 +134,8 @@ if [ "$variant" = started ]; then
     echo "$hook hook: $code in $took ms"
     [ "$code" = 200 ] || fail "the $hook hook answered $code: $(cat /tmp/hook-body)"
     [ "$took" -lt 5000 ] || fail "the $hook hook took $took ms"
+    [ "$hook" != resume ] || [ "$took" -lt 500 ] \
+      || fail "the resume hook took $took ms: $(grep 'resume hook' /run/alien/lifecycle-report | tr '\n' ' ')"
   done
   [ "$(cat /tmp/steps)" = "$(printf 'paused\nresumed')" ] || fail "steps: $(cat /tmp/steps)"
   for fact in 'suspend hook: received' 'onPause: step succeeded' 'suspend hook: 200' \
@@ -130,6 +143,23 @@ if [ "$variant" = started ]; then
     grep -q "$fact" /run/alien/lifecycle-report || fail "lifecycle report lacks $fact: $(cat /run/alien/lifecycle-report)"
   done
   [ "$(stat -c %a /run/alien/lifecycle-report)" = 644 ] || fail "lifecycle-report mode"
+  # The short resume window still sees an open path: 1.1.1.1:443 now answers, and the resume's
+  # network check refuses.
+  ip addr add 1.1.1.1/32 dev lo
+  python3 -c '
+import socket
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("1.1.1.1", 443)); s.listen(16)
+while True:
+    c, _ = s.accept(); c.recv(1024); c.sendall(b"HTTP/1.0 200 OK\r\n\r\n"); c.close()
+' &
+  for _ in $(seq 50); do (exec 3<>/dev/tcp/1.1.1.1/443) 2>/dev/null && break; sleep 0.1; done
+  code=$(as_provider curl -s -o /tmp/hook-body -w '%{http_code}' -X POST -d '{}' \
+    http://127.0.0.1:8080/aws/lambda-microvms/runtime/v1/resume)
+  echo "resume hook with 1.1.1.1:443 open: $code $(cat /tmp/hook-body)"
+  [ "$code" != 200 ] || fail "the resume hook passed with 1.1.1.1:443 open"
+  grep -q 'resume hook: network check failed: .*1.1.1.1:443 is reachable without the gateway' \
+    /run/alien/lifecycle-report || fail "lifecycle report: $(cat /run/alien/lifecycle-report)"
   echo "lifecycle report:"; sed 's/^/  /' /run/alien/lifecycle-report
   echo "boot report:"; sed 's/^/  /' /run/alien/boot-report
   echo "OK started: run hook 200, image running, exec ran, sealed"
