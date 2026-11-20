@@ -22,7 +22,9 @@ use super::stack::{
 use super::sync::HelmRelease;
 use super::AppState;
 use crate::auth::{Scope, Subject};
-use crate::traits::deployment_store::{DeploymentRecord, UpdateImportedDeploymentParams};
+use crate::traits::deployment_store::{
+    DeploymentRecord, SetupLane, UpdateImportedDeploymentParams,
+};
 
 /// Whether a frozen resource of this type is realized in the cluster, with no cloud
 /// credentials, so a `helm upgrade` alone carries a change to it. A compute cluster and a
@@ -637,10 +639,30 @@ async fn write(
     ) else {
         return Ok(false);
     };
-    let lane_known = deployment.setup_target.is_some();
     // A refused chart's fingerprint is not stored as the deployment's: the next
     // report would match it and clear the refusal while the chart still differs.
     let chart_accepted = runtime_metadata.setup_report_refusal.is_none();
+    let setup_lane = if deployment.setup_target.is_some() {
+        Some(SetupLane {
+            target: deployment.setup_target.clone().unwrap_or_default(),
+            fingerprint: if schedule_reconciliation {
+                report.setup_fingerprint.clone()
+            } else {
+                deployment.setup_fingerprint.clone().unwrap_or_default()
+            },
+            fingerprint_version: deployment.setup_fingerprint_version.unwrap_or_default(),
+        })
+    } else if schedule_reconciliation || chart_accepted {
+        Some(SetupLane {
+            target: report.setup_target.clone(),
+            fingerprint: report.setup_fingerprint.clone(),
+            fingerprint_version: report.setup_fingerprint_version,
+        })
+    } else {
+        // No lane yet and the chart is refused: there is no fingerprint to
+        // record, so none of the lane is.
+        None
+    };
     let result = state
         .deployment_store
         .update_imported_stack_state(
@@ -653,21 +675,7 @@ async fn write(
                 runtime_metadata,
                 setup_metadata: deployment.setup_metadata.clone(),
                 current_release_id: None,
-                setup_target: if lane_known {
-                    deployment.setup_target.clone().unwrap_or_default()
-                } else {
-                    report.setup_target.clone()
-                },
-                setup_fingerprint: if schedule_reconciliation || (!lane_known && chart_accepted) {
-                    report.setup_fingerprint.clone()
-                } else {
-                    deployment.setup_fingerprint.clone().unwrap_or_default()
-                },
-                setup_fingerprint_version: if lane_known {
-                    deployment.setup_fingerprint_version.unwrap_or_default()
-                } else {
-                    report.setup_fingerprint_version
-                },
+                setup_lane,
                 activation_status: None,
                 schedule_reconciliation,
                 expected_updated_at: deployment.updated_at,
@@ -1429,8 +1437,8 @@ pub(super) mod tests {
         installed_release: String,
         waiting_release: String,
         written: std::sync::Arc<std::sync::Mutex<Vec<alien_core::RuntimeMetadata>>>,
-        /// The (lane, fingerprint) each write would store on the deployment.
-        stored_setup: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        /// The lane each write would store on the deployment.
+        stored_setup: std::sync::Arc<std::sync::Mutex<Vec<Option<SetupLane>>>>,
         db: std::sync::Arc<crate::stores::sqlite::SqliteDatabase>,
         _temp: tempfile::TempDir,
     }
@@ -1512,10 +1520,7 @@ pub(super) mod tests {
         store
             .expect_update_imported_stack_state()
             .returning(move |_, _, params| {
-                setup_sink
-                    .lock()
-                    .expect("log")
-                    .push((params.setup_target, params.setup_fingerprint));
+                setup_sink.lock().expect("log").push(params.setup_lane);
                 sink.lock().expect("log").push(params.runtime_metadata);
                 Err(if conflict {
                     AlienError::new(crate::error::ErrorData::DeploymentChangedConcurrently {
@@ -1607,13 +1612,9 @@ pub(super) mod tests {
         drop(written);
 
         // The next sync sees the record that write produced, on a deployment
-        // whose lane was not known before. The refused chart's fingerprint is
-        // not what the deployment holds, so the report is judged again and the
-        // refusal stays.
-        let (target, fingerprint) = f.stored_setup.lock().expect("log")[0].clone();
-        f.record.setup_target = Some(target);
-        f.record.setup_fingerprint = Some(fingerprint);
-        f.record.setup_fingerprint_version = Some(rolled_back.setup_fingerprint_version);
+        // whose lane was not known before. The refused chart records no lane,
+        // so the report is judged again and the refusal stays.
+        assert_eq!(f.stored_setup.lock().expect("log")[0], None);
         f.record.runtime_metadata = Some(f.written.lock().expect("log")[0].clone());
         handle_installed_setup(&f.state, &f.subject, &f.record, &rolled_back).await;
         let written = f.written.lock().expect("log");
@@ -2065,6 +2066,49 @@ pub(super) mod tests {
             assert_eq!(refusal.reported_release_id, world.first);
             assert!(refusal.reason.contains(&world.second), "{}", refusal.reason);
         }
+    }
+
+    /// A Helm deployment that has no setup lane yet waits for a release, and
+    /// its Operator reports a chart for a release this manager cannot read.
+    /// The refusal is stored, and since the chart is refused and the lane is
+    /// unknown, no lane is recorded: the stored lane stays empty.
+    #[tokio::test]
+    async fn a_refused_chart_on_a_deployment_with_no_setup_lane_is_stored_without_a_lane() {
+        let world = store_world(baseline(), with_vault(&baseline()), "updating", false, true).await;
+        let before = stored(&world.deployments, &world.deployment_id).await;
+        assert_eq!(before.setup_target, None);
+        assert_eq!(
+            before.desired_release_id.as_deref(),
+            Some(world.second.as_str())
+        );
+
+        let mut unknown = report("rel_unknown");
+        unknown.setup_target = "helm".to_string();
+        let record = world.sync(&unknown).await;
+
+        let refusal = record
+            .runtime_metadata
+            .as_ref()
+            .expect("metadata")
+            .setup_report_refusal
+            .as_ref()
+            .expect("the refusal is stored");
+        assert_eq!(refusal.reported_release_id, "rel_unknown");
+        assert!(
+            refusal.reason.contains("Release rel_unknown is unknown"),
+            "{}",
+            refusal.reason
+        );
+        assert_eq!(
+            (
+                record.setup_target.as_deref(),
+                record.setup_fingerprint.as_deref(),
+                record.setup_fingerprint_version,
+            ),
+            (None, None, None),
+            "a refused chart on a deployment with no lane records no lane"
+        );
+        assert_eq!(record.status, "updating");
     }
 
     fn helm(args: &[&str]) -> String {

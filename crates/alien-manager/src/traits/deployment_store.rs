@@ -243,6 +243,15 @@ pub struct CreateImportedDeploymentParams {
     pub input_values: HashMap<String, serde_json::Value>,
 }
 
+/// The setup a deployment was installed with: its target, its fingerprint and
+/// the fingerprint's version, recorded together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupLane {
+    pub target: String,
+    pub fingerprint: String,
+    pub fingerprint_version: u32,
+}
+
 /// Import-owned fields replaced when setup re-registers a deployment.
 #[derive(Debug, Clone)]
 pub struct UpdateImportedDeploymentParams {
@@ -258,9 +267,8 @@ pub struct UpdateImportedDeploymentParams {
     pub runtime_metadata: RuntimeMetadata,
     pub setup_metadata: Option<serde_json::Value>,
     pub current_release_id: Option<String>,
-    pub setup_target: String,
-    pub setup_fingerprint: String,
-    pub setup_fingerprint_version: u32,
+    /// The setup lane to record. `None` keeps the stored lane as it is.
+    pub setup_lane: Option<SetupLane>,
     /// Initial status when this import activates a launch-time reservation.
     /// Ordinary re-imports leave this unset and preserve their current status.
     pub activation_status: Option<String>,
