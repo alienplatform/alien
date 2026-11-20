@@ -788,6 +788,7 @@ mod tests {
     use alien_core::{
         CapacityGroup, ComputeCluster, Resource, ResourceEntry, ResourceLifecycle, Stack, Storage,
     };
+    use alien_permissions::generators::azure_setup_owned::azure_setup_update_digest;
     use indexmap::IndexMap;
 
     fn account_stack(profile: PermissionProfile, captured: bool) -> Stack {
@@ -869,6 +870,107 @@ mod tests {
             "{:?}",
             result.errors
         );
+    }
+
+    /// A stack installed while `build/*` bound at a single job (a job that is never created) and
+    /// released with the resource-group binding: the embedded permission-set body differs, so the
+    /// service account counts as modified and the release needs setup. This is deliberate. The
+    /// installed role grants nothing on a real job and the new sets carry more actions, so only
+    /// setup can give the identity a working grant; the check is not loosened for these sets.
+    #[tokio::test]
+    async fn a_build_set_rebound_from_a_job_to_the_resource_group_needs_setup() {
+        let job_scope = "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}\
+                         /providers/Microsoft.App/jobs/${resourceName}";
+        for set in ["build/execute", "build/management", "build/heartbeat"] {
+            let profile = PermissionProfile::new().resource("builder", [set]);
+            let current = account_stack(profile, true);
+            let mut installed = current.clone();
+            edit_account_sets(&mut installed, |platforms| {
+                for permission in platforms.azure.iter_mut().flatten() {
+                    permission.binding.resource.as_mut().unwrap().scope = job_scope.to_string();
+                }
+            });
+            assert_ne!(installed, current, "{set}: the fixture changed nothing");
+
+            let result = FrozenResourcesUnchangedCheck {
+                platform: Platform::Azure,
+            }
+            .check(&installed, &current)
+            .await
+            .unwrap();
+            assert!(!result.success, "{set}: {:?}", result.errors);
+            assert!(
+                result.errors[0].contains("'reader-sa' was modified"),
+                "{set}: {:?}",
+                result.errors
+            );
+            // Setup then runs and records the new release as installed: the same release is no
+            // longer asked for setup, so one setup rerun is enough.
+            let after_setup = FrozenResourcesUnchangedCheck {
+                platform: Platform::Azure,
+            }
+            .check(&current, &current)
+            .await
+            .unwrap();
+            assert!(
+                after_setup.success,
+                "{set}: a setup rerun must settle the release: {:?}",
+                after_setup.errors
+            );
+            // The same release on another cloud leaves this cloud's section alone.
+            let other = FrozenResourcesUnchangedCheck {
+                platform: Platform::Aws,
+            }
+            .check(&installed, &current)
+            .await
+            .unwrap();
+            assert!(other.success, "{set}: {:?}", other.errors);
+
+            // And setup can then run: the new release's setup roles and digest compute, with a
+            // Build in the stack and the set granted by name or stack-wide, and they differ from
+            // what was installed.
+            for grants in [[("builder", set)], [("*", set)]] {
+                let mut profile = PermissionProfile::new();
+                profile = if grants[0].0 == "*" {
+                    profile.global([set])
+                } else {
+                    profile.resource("builder", [set])
+                };
+                let with_build = |stack: Stack| {
+                    let mut stack = stack;
+                    stack.resources.insert(
+                        "builder".to_string(),
+                        alien_core::ResourceEntry {
+                            display_name: None,
+                            description: None,
+                            enabled_when: None,
+                            config: alien_core::Resource::new(
+                                alien_core::Build::new("builder".to_string())
+                                    .permissions("reader".to_string())
+                                    .build(),
+                            ),
+                            lifecycle: ResourceLifecycle::Frozen,
+                            dependencies: Vec::new(),
+                            remote_access: false,
+                        },
+                    );
+                    stack
+                };
+                let new_release = with_build(account_stack(profile, true));
+                let mut old_release = new_release.clone();
+                edit_account_sets(&mut old_release, |platforms| {
+                    for permission in platforms.azure.iter_mut().flatten() {
+                        if let Some(resource) = permission.binding.resource.as_mut() {
+                            resource.scope = job_scope.to_string();
+                        }
+                    }
+                });
+                let new_digest = azure_setup_update_digest(&new_release)
+                    .unwrap_or_else(|e| panic!("{set} {grants:?}: setup digest: {e}"));
+                let old_digest = azure_setup_update_digest(&old_release).unwrap();
+                assert_ne!(new_digest, old_digest, "{set} {grants:?}");
+            }
+        }
     }
 
     /// Dropping an account's last resource-scoped grant only narrows it. Dropping only the

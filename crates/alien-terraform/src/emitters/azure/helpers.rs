@@ -235,6 +235,101 @@ pub fn permission_context(label: &str) -> PermissionContext {
         .with_service_account_name(label.to_string())
 }
 
+fn required_environment_label<'a>(ctx: &'a EmitContext<'_>, id: &str) -> Result<&'a str> {
+    ctx.name_for(id).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!("no Terraform label for Container Apps environment '{id}'"),
+        })
+    })
+}
+
+/// Add the identities and the environment the stack's Builds use to `context`, so a stack-wide
+/// `build/execute` grant binds on those resources and no others. The identities are references to the
+/// profiles' service account resources, so the first apply creates them first. A stack with no Build adds nothing.
+pub fn with_build_scopes(
+    context: PermissionContext,
+    ctx: &EmitContext<'_>,
+) -> Result<PermissionContext> {
+    let mut profiles: Vec<String> = ctx
+        .stack
+        .resources()
+        .filter_map(|(_id, entry)| entry.config.downcast_ref::<alien_core::Build>())
+        .map(|build| build.get_permissions().to_string())
+        .collect();
+    if profiles.is_empty() {
+        return Ok(context);
+    }
+    profiles.sort();
+    profiles.dedup();
+    let mut context = context;
+    for profile in profiles {
+        // Reference the identity resource so Terraform creates it before the grant that names
+        // it; the literal name is only for a profile with no service account in the stack, which
+        // has no resource to wait for.
+        let identity_id = match ctx.name_for(&format!("{profile}-sa")) {
+            Some(label) => format!("${{azurerm_user_assigned_identity.{label}.id}}"),
+            None => format!(
+                "/subscriptions/${{var.azure_subscription_id}}/resourceGroups/${{var.azure_resource_group_name}}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${{local.resource_prefix}}-{profile}-sa"
+            ),
+        };
+        context = context.with_build_identity_id(identity_id);
+    }
+    // The stack's one Container Apps environment, found by type rather than by a fixed id.
+    let environment = ctx
+        .stack
+        .resources()
+        .find(|(_id, entry)| {
+            entry
+                .config
+                .downcast_ref::<alien_core::AzureContainerAppsEnvironment>()
+                .is_some()
+        })
+        .map(|(id, _entry)| id.as_str())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: "a stack with a Build has no Container Apps environment to join"
+                    .to_string(),
+            })
+        })?;
+    // The join grant is assigned on the environment itself; the role behind it is assignable at
+    // the environment's resource group, which is the stack's own unless the environment is a
+    // shared one in another group.
+    let (environment_id, environment_group) = match container_apps_environment_binding(
+        ctx,
+        environment,
+    )? {
+        Some(binding) => {
+            let resource_id =
+                binding_string_value(environment, "resource_id", &binding.resource_id)?;
+            // The group the id names, with its own subscription; the binding's group name in the
+            // stack's subscription when the id is not a plain resource id.
+            let group = match alien_permissions::resource_group_scope_of(&resource_id) {
+                Some(group) => group,
+                None => format!(
+                    "/subscriptions/${{var.azure_subscription_id}}/resourceGroups/{}",
+                    binding_string_value(
+                        environment,
+                        "resource_group_name",
+                        &binding.resource_group_name
+                    )?
+                ),
+            };
+            (resource_id, group)
+        }
+        None => {
+            let label = required_environment_label(ctx, environment)?;
+            (
+                format!("${{azurerm_container_app_environment.{label}.id}}"),
+                "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+                    .to_string(),
+            )
+        }
+    };
+    Ok(context
+        .with_build_environment_id(environment_id)
+        .with_build_environment_group_id(environment_group))
+}
+
 /// HCL `locals` expression that derives the Azure storage account name
 /// deterministically.
 ///
@@ -359,6 +454,16 @@ pub fn emit_role_definition_and_assignments_for_target(
         BindingTarget::Resource => sa_label,
     };
     for custom_role in &grant_plan.custom_roles {
+        let mut custom_role = custom_role.clone();
+        if target == BindingTarget::Stack {
+            // Written in the stack's group; also assignable in the group of a shared
+            // Container Apps environment that a Build's join grant is assigned in.
+            custom_role.role_definition.assignable_scopes =
+                alien_permissions::generators::role_definition_assignable_scopes(
+                    &custom_role.role_definition.assignable_scopes,
+                    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}",
+                );
+        }
         let role_segment = custom_role_segment(&custom_role.key);
         let role_label = stack_custom_role_label(sa_label, &role_segment);
         let role_name = format!("${{local.resource_prefix}}-{assignment_owner}-{role_segment}");

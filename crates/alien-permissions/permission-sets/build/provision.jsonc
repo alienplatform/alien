@@ -215,7 +215,7 @@
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/jobs/${resourceName}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           }
         }
       }

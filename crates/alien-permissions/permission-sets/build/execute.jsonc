@@ -49,12 +49,15 @@
     ],
     "azure": [
       {
+        // A build run creates its own job, starts it, reads the job and its execution, and deletes the job to stop it.
+        "label": "jobs",
         "grant": {
           "actions": [
+            "Microsoft.App/jobs/read",
+            "Microsoft.App/jobs/write",
+            "Microsoft.App/jobs/delete",
             "Microsoft.App/jobs/start/action",
-            "Microsoft.App/jobs/stop/action",
-            "Microsoft.App/jobs/executions/read",
-            "Microsoft.App/jobs/read"
+            "Microsoft.App/jobs/executions/read"
           ],
           "dataActions": []
         },
@@ -63,8 +66,32 @@
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/jobs/${resourceName}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           }
+        }
+      },
+      {
+        // Creating a job in the environment needs the right to join that one environment.
+        "label": "environment",
+        "grant": {
+          "actions": ["Microsoft.App/managedEnvironments/join/action"],
+          "dataActions": []
+        },
+        "binding": {
+          "stack": { "scope": "${buildEnvironmentId}" },
+          "resource": { "scope": "${buildEnvironmentId}" }
+        }
+      },
+      {
+        // The job runs as the build's own identity: the right to assign that one identity.
+        "label": "identity",
+        "grant": {
+          "actions": ["Microsoft.ManagedIdentity/userAssignedIdentities/assign/action"],
+          "dataActions": []
+        },
+        "binding": {
+          "stack": { "scope": "${buildIdentityId}" },
+          "resource": { "scope": "${buildIdentityId}" }
         }
       }
     ]

@@ -410,9 +410,10 @@ impl AzureRuntimePermissionsGenerator {
             }
 
             // Interpolate variables in the scope
-            let interpolated_scope =
-                VariableInterpolator::interpolate_variables(&binding_spec.scope, context)?;
-            assignable_scopes.push(interpolated_scope);
+            assignable_scopes.extend(VariableInterpolator::interpolate_scopes(
+                &binding_spec.scope,
+                context,
+            )?);
         }
 
         if !declares_target {
@@ -508,59 +509,104 @@ impl AzureRuntimePermissionsGenerator {
             };
             declares_target = true;
 
-            let scope = VariableInterpolator::interpolate_variables(&binding_spec.scope, context)?;
-            self.validate_azure_scope(&scope, permission_set, index)?;
+            let scopes = VariableInterpolator::interpolate_scopes(&binding_spec.scope, context)?;
+            for scope in scopes {
+                self.validate_azure_scope(&scope, permission_set, index)?;
 
-            if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
-                for role_name in predefined_roles {
-                    if context.signing_protected {
-                        // The two built-in roles a held set binds that reach the verifier's
-                        // identity are replaced by the custom role the entry renders below.
-                        if protected_role_substitute(permission_set, role_name).is_some()
-                            || protected_data_role_substitute(permission_set, role_name).is_some()
-                        {
-                            continue;
+                if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
+                    for role_name in predefined_roles {
+                        if context.signing_protected {
+                            // The two built-in roles a held set binds that reach the verifier's
+                            // identity are replaced by the custom role the entry renders below.
+                            if protected_role_substitute(permission_set, role_name).is_some()
+                                || protected_data_role_substitute(permission_set, role_name)
+                                    .is_some()
+                            {
+                                continue;
+                            }
+                            require_built_in_azure_role(&permission_set.id, role_name)?;
                         }
-                        require_built_in_azure_role(&permission_set.id, role_name)?;
+                        let role_definition_id =
+                            self.predefined_role_definition_id(role_name, context)?;
+                        bindings.push(AzureRoleBinding {
+                            permission_set_id: permission_set.id.clone(),
+                            role_name: role_name.clone(),
+                            role_definition: AzureRoleDefinitionRef::Predefined {
+                                role_definition_id,
+                            },
+                            scope: scope.clone(),
+                        });
                     }
-                    let role_definition_id =
-                        self.predefined_role_definition_id(role_name, context)?;
+                }
+
+                if grants_residual_azure_permissions(
+                    permission_set,
+                    &platform_permission.grant,
+                    context,
+                ) {
+                    let entry_label = entry_snake_label(
+                        platform_permission.label.as_deref(),
+                        &platform_permission.grant,
+                    );
+                    let key = if has_explicit_label(platform_permission.label.as_deref()) {
+                        entry_label
+                    } else {
+                        format!("{}:{}", permission_set.id, entry_label)
+                    };
+                    // A grant that names the Build identity gets one role definition for the
+                    // stack. All Builds of an Azure stack share one permission profile, hence one
+                    // identity, so the key does not carry the identity's name: setup renders
+                    // this role before the identity exists and the runtime renders it with the
+                    // real one, and both must ask for the same role id.
+                    let per_identity = binding_spec.scope.contains("${buildIdentityId}");
+                    let key = if per_identity {
+                        format!("{key}-identity")
+                    } else {
+                        key
+                    };
+                    let mut role_definition = self.generate_entry_role_definition(
+                        permission_set,
+                        index,
+                        &scope,
+                        context,
+                    )?;
+                    let assignable = role_assignable_scope(
+                        &binding_spec.scope,
+                        &scope,
+                        context,
+                        &permission_set.id,
+                    )?;
+                    // Several identities share the one role: it becomes assignable wherever
+                    // each of them lives.
+                    let shared = per_identity
+                        .then(|| {
+                            custom_roles
+                                .iter_mut()
+                                .find(|role: &&mut AzureCustomRole| role.key == key)
+                        })
+                        .flatten();
+                    if let Some(existing) = shared {
+                        if !existing
+                            .role_definition
+                            .assignable_scopes
+                            .contains(&assignable)
+                        {
+                            existing.role_definition.assignable_scopes.push(assignable);
+                        }
+                    } else {
+                        role_definition.assignable_scopes = vec![assignable];
+                        custom_roles.push(AzureCustomRole {
+                            key: key.clone(),
+                            role_definition,
+                        });
+                    }
                     bindings.push(AzureRoleBinding {
                         permission_set_id: permission_set.id.clone(),
-                        role_name: role_name.clone(),
-                        role_definition: AzureRoleDefinitionRef::Predefined { role_definition_id },
-                        scope: scope.clone(),
+                        role_name: self.generate_scoped_role_name(permission_set, index),
+                        role_definition: AzureRoleDefinitionRef::Custom { key },
+                        scope,
                     });
                 }
-            }
-
-            if grants_residual_azure_permissions(
-                permission_set,
-                &platform_permission.grant,
-                context,
-            ) {
-                let entry_label = entry_snake_label(
-                    platform_permission.label.as_deref(),
-                    &platform_permission.grant,
-                );
-                let key = if has_explicit_label(platform_permission.label.as_deref()) {
-                    entry_label
-                } else {
-                    format!("{}:{}", permission_set.id, entry_label)
-                };
-                let mut role_definition =
-                    self.generate_entry_role_definition(permission_set, index, &scope, context)?;
-                role_definition.assignable_scopes = vec![scope.clone()];
-                custom_roles.push(AzureCustomRole {
-                    key: key.clone(),
-                    role_definition,
-                });
-                bindings.push(AzureRoleBinding {
-                    permission_set_id: permission_set.id.clone(),
-                    role_name: self.generate_scoped_role_name(permission_set, index),
-                    role_definition: AzureRoleDefinitionRef::Custom { key },
-                    scope,
-                });
             }
         }
 
@@ -1142,4 +1188,60 @@ mod management_role_tests {
             vec!["Microsoft.Authorization/roleDefinitions/write"]
         );
     }
+}
+
+/// The last path segment of a scope, reduced to characters safe in a role key.
+/// The scope a custom role is made assignable at for a grant bound at `scope`.
+///
+/// Azure accepts only a management group, subscription or resource group as an assignable
+/// scope, so a grant bound on one resource gets a role assignable at that resource's group, and
+/// the assignment itself stays on the resource. The Build grants bind on a job identity (always
+/// in the stack's group) and on the Container Apps environment (in the stack's group, or in
+/// the group of a shared environment).
+fn role_assignable_scope(
+    template: &str,
+    scope: &str,
+    context: &PermissionContext,
+    permission_set_id: &str,
+) -> Result<String> {
+    let stack_group = || match (&context.subscription_id, &context.resource_group) {
+        (Some(subscription), Some(group)) => Some(format!(
+            "/subscriptions/{subscription}/resourceGroups/{group}"
+        )),
+        _ => None,
+    };
+    let assignable = if template.contains("${buildEnvironmentId}") {
+        context.build_environment_group_id.clone()
+    } else if template.contains("${buildIdentityId}") {
+        stack_group().or_else(|| crate::infrastructure::resource_group_scope_of(scope))
+    } else {
+        Some(scope.to_string())
+    };
+    assignable.ok_or_else(|| {
+        alien_error::AlienError::new(ErrorData::GeneratorError {
+            platform: "azure".to_string(),
+            message: format!(
+                "permission set '{permission_set_id}': the resource group of '{scope}' is unknown, so the role cannot be made assignable there"
+            ),
+        })
+    })
+}
+
+/// Assignable scopes for a custom role written in `home_group`: the group itself, then the
+/// role's own scopes (a shared build environment's group). A role assignable at the
+/// subscription is left as it is.
+pub fn role_definition_assignable_scopes(role_scopes: &[String], home_group: &str) -> Vec<String> {
+    if role_scopes
+        .iter()
+        .any(|scope| scope.matches('/').count() == 2)
+    {
+        return role_scopes.to_vec();
+    }
+    let mut scopes = vec![home_group.to_string()];
+    for scope in role_scopes {
+        if !scopes.iter().any(|known| known.eq_ignore_ascii_case(scope)) {
+            scopes.push(scope.clone());
+        }
+    }
+    scopes
 }

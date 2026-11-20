@@ -35,10 +35,10 @@ pub use aws_runtime::{
 };
 pub use azure_runtime::{
     azure_predefined_role_id, custom_roles_by_scope, dedupe_azure_role_bindings,
-    management_roles_by_scope, protected_management_assignable_scopes, AzureCustomRole,
-    AzureGrantPlan, AzureManagementRoles, AzureManagementScopeKind, AzureRoleBinding,
-    AzureRoleDefinition, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator,
-    AzureScopedCustomRole, AZURE_BUILT_IN_ROLES,
+    management_roles_by_scope, protected_management_assignable_scopes,
+    role_definition_assignable_scopes, AzureCustomRole, AzureGrantPlan, AzureManagementRoles,
+    AzureManagementScopeKind, AzureRoleBinding, AzureRoleDefinition, AzureRoleDefinitionRef,
+    AzureRuntimePermissionsGenerator, AzureScopedCustomRole, AZURE_BUILT_IN_ROLES,
 };
 pub use azure_setup_owned::{
     azure_role_assignment_allowlist_conditions, azure_role_key_segment,

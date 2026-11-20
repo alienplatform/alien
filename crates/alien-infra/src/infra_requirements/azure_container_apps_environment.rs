@@ -1004,7 +1004,7 @@ impl AzureContainerAppsEnvironmentController {
 }
 
 /// Generates the full, prefixed Azure Container Apps Environment name (pure function).
-fn generate_container_apps_environment_name(resource_prefix: &str, id: &str) -> String {
+pub(crate) fn generate_container_apps_environment_name(resource_prefix: &str, id: &str) -> String {
     // Azure Container Apps Environment names must be valid DNS names
     // Format: {prefix}-{id} with length constraints and character restrictions
     let clean_prefix = resource_prefix

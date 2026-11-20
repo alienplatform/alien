@@ -30,6 +30,35 @@ impl VariableInterpolator {
         Ok(result)
     }
 
+    /// Interpolate a binding scope that may name `${buildIdentityId}`: one scope per Build
+    /// identity, none when the context has no Build.
+    pub fn interpolate_scopes(template: &str, context: &PermissionContext) -> Result<Vec<String>> {
+        const BUILD_IDENTITY: &str = "${buildIdentityId}";
+        if !template.contains(BUILD_IDENTITY) {
+            return Ok(vec![Self::interpolate_variables(template, context)?]);
+        }
+        // The identities are values, not templates: they may themselves hold `${...}` (a
+        // Terraform reference), so only the template around them is interpolated.
+        let (head, tail) = template.split_once(BUILD_IDENTITY).expect("checked above");
+        let head = Self::interpolate_variables(head, context)?;
+        let tail = Self::interpolate_variables(tail, context)?;
+        // Fail closed: a grant that names the build identity must not vanish because the
+        // context has none.
+        if context.build_identity_ids.is_empty() {
+            return Err(alien_error::AlienError::new(ErrorData::VariableNotFound {
+                variable: "buildIdentityId".to_string(),
+            }));
+        }
+        let mut scopes: Vec<String> = context
+            .build_identity_ids
+            .iter()
+            .map(|id| format!("{head}{id}{tail}"))
+            .collect();
+        scopes.sort();
+        scopes.dedup();
+        Ok(scopes)
+    }
+
     /// Interpolate variables in a list of strings
     pub fn interpolate_string_list(
         templates: &[String],

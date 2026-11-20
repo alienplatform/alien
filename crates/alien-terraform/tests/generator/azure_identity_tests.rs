@@ -53,6 +53,151 @@ fn azure_service_account_with_permission_set_emits_role_definitions() {
     assert_terraform_valid(&module, "azure_service_account");
 }
 
+/// A stack-wide `build/execute` names the Build's environment and identity. Setup renders both
+/// for the service account that holds it: the environment and the Build's identity both by
+/// reference to their resources, so the first apply creates them first. Without them setup fails
+/// to render.
+#[test]
+fn azure_service_account_build_execute_binds_the_builds_environment_and_identity() {
+    let sa = ServiceAccount::new("execution-sa".to_string())
+        .stack_permission_set(
+            alien_permissions::get_permission_set("build/execute")
+                .expect("build/execute permission set")
+                .clone(),
+        )
+        .build();
+    let stack = Stack::new("acme-build-execute".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            AzureContainerAppsEnvironment::new("default-container-env".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::ArtifactRegistry::new("registry".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::Build::new("builder".to_string())
+                .permissions("build".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sa, ResourceLifecycle::Frozen)
+        .add(
+            ServiceAccount::new("build-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        !rendered.contains("userAssignedIdentities/${local.resource_prefix}-build-sa"),
+        "the assign grant must not name the build's identity by its literal name:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("azurerm_user_assigned_identity.build_sa.id"),
+        "the assign grant references the build's identity resource:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("managedEnvironments/join/action"),
+        "{rendered}"
+    );
+    assert!(
+        // `terraform fmt` drops the `"${...}"` wrapper of a lone reference, so match the reference.
+        rendered.contains("azurerm_container_app_environment.default_container_env.id"),
+        "the join grant names the environment resource:\n{rendered}"
+    );
+    assert_terraform_valid(&module, "azure_service_account_build_execute");
+}
+
+/// A shared Container Apps environment in another resource group: the join grant is assigned on
+/// that environment, the role behind it is assignable in the stack's group and the shared group
+/// (never at the environment resource, which Azure refuses), and no job right reaches the shared
+/// group.
+#[test]
+fn azure_service_account_build_execute_joins_a_shared_environment_in_another_group() {
+    use alien_core::{ContainerAppsEnvironmentBinding, ExternalBinding, ExternalBindings};
+    let sa = ServiceAccount::new("execution-sa".to_string())
+        .stack_permission_set(
+            alien_permissions::get_permission_set("build/execute")
+                .expect("build/execute permission set")
+                .clone(),
+        )
+        .build();
+    let stack = Stack::new("acme-build-shared-env".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            AzureContainerAppsEnvironment::new("default-container-env".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::ArtifactRegistry::new("registry".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::Build::new("builder".to_string())
+                .permissions("build".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sa, ResourceLifecycle::Frozen)
+        .add(
+            ServiceAccount::new("build-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let environment_id = "/subscriptions/sub-123/resourceGroups/shared-rg/providers/Microsoft.App/managedEnvironments/shared-env";
+    let mut external_bindings = ExternalBindings::new();
+    external_bindings.insert(
+        "default-container-env",
+        ExternalBinding::ContainerAppsEnvironment(ContainerAppsEnvironmentBinding::new(
+            "shared-env",
+            environment_id,
+            "shared-rg",
+            "shared.example.azurecontainerapps.io",
+        )),
+    );
+    let module = render(
+        &stack,
+        TerraformTarget::Azure,
+        StackSettings {
+            external_bindings: Some(external_bindings),
+            ..StackSettings::default()
+        },
+    );
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // The assignment is on the environment resource.
+    assert!(
+        rendered.contains(&format!("\"{environment_id}\"")),
+        "the join grant is assigned on the shared environment:\n{rendered}"
+    );
+    // The role behind it: assignable in the stack's group and in the shared group, and never at
+    // the environment resource.
+    assert!(
+        rendered.contains("/subscriptions/sub-123/resourceGroups/shared-rg\""),
+        "the join role is assignable in the shared group:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains(&format!("assignable_scopes = [\"{environment_id}")),
+        "{rendered}"
+    );
+    // The job rights stay in the stack's group: the shared group appears only as the join
+    // role's assignable scope and the environment's own id.
+    let shared_group_mentions = rendered.matches("resourceGroups/shared-rg").count();
+    assert!(shared_group_mentions >= 2, "{rendered}");
+    assert_terraform_valid(&module, "azure_service_account_build_execute_shared_env");
+}
+
 #[test]
 fn azure_service_account_storage_data_write_uses_predefined_blob_contributor() {
     let sa = ServiceAccount::new("execution-sa".to_string())

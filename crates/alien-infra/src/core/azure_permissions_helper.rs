@@ -229,6 +229,7 @@ impl AzurePermissionsHelper {
                     ctx,
                     &authorization_client,
                     resource_id,
+                    resource_type,
                     profile_name,
                     &combined_refs,
                     &generator,
@@ -416,6 +417,7 @@ impl AzurePermissionsHelper {
         ctx: &ResourceControllerContext<'_>,
         authorization_client: &Arc<dyn AuthorizationApi>,
         resource_id: &str,
+        resource_type: &str,
         profile_name: &str,
         permission_set_refs: &[alien_core::permissions::PermissionSetReference],
         generator: &AzureRuntimePermissionsGenerator,
@@ -503,15 +505,24 @@ impl AzurePermissionsHelper {
                     &role_definition_scope,
                     azure_config,
                 );
-                let role_assignment_id = Uuid::new_v5(
-                    &Uuid::NAMESPACE_OID,
-                    format!(
-                        "deployment:azure:res-role-assign:{}:{}:{}:{}",
-                        ctx.resource_prefix, resource_id, profile_name, binding_index
+                let role_assignment_id = if resource_type == "build" {
+                    build_role_assignment_id(
+                        ctx.resource_prefix,
+                        &managed_identity_principal_id,
+                        &role_definition_id,
+                        &assignment_scope,
                     )
-                    .as_bytes(),
-                )
-                .to_string();
+                } else {
+                    Uuid::new_v5(
+                        &Uuid::NAMESPACE_OID,
+                        format!(
+                            "deployment:azure:res-role-assign:{}:{}:{}:{}",
+                            ctx.resource_prefix, resource_id, profile_name, binding_index
+                        )
+                        .as_bytes(),
+                    )
+                    .to_string()
+                };
 
                 PlannedRoleAssignment {
                     scope: assignment_scope,
@@ -723,8 +734,24 @@ impl AzurePermissionsHelper {
         custom_role: AzureCustomRole,
         permission_set_id: &str,
     ) -> Result<()> {
-        let assignable_scope = role_definition_scope.to_resource_id_string(azure_config);
+        let home_group = role_definition_scope.to_resource_id_string(azure_config);
         let role_definition = custom_role.role_definition;
+        // The role is assignable in the group it is written in, and in any other resource group
+        // its grant is bound in (a shared Container Apps environment's group).
+        let other_groups: Vec<String> = role_definition
+            .assignable_scopes
+            .iter()
+            .filter(|_| permission_set_id.starts_with("build/"))
+            .filter(|scope| {
+                alien_permissions::resource_group_scope_of(scope).as_deref() == Some(scope.as_str())
+            })
+            .cloned()
+            .collect();
+        let assignable_scopes = alien_permissions::generators::role_definition_assignable_scopes(
+            &other_groups,
+            &home_group,
+        );
+        let assignable_scopes_text = assignable_scopes.join(", ");
         let role_definition = RoleDefinition {
             properties: Some(RoleDefinitionProperties {
                 role_name: Some(role_name.clone()),
@@ -736,7 +763,7 @@ impl AzurePermissionsHelper {
                     data_actions: role_definition.data_actions,
                     not_data_actions: role_definition.not_data_actions,
                 }],
-                assignable_scopes: vec![assignable_scope],
+                assignable_scopes,
                 ..Default::default()
             }),
             ..Default::default()
@@ -750,10 +777,22 @@ impl AzurePermissionsHelper {
             )
             .await
             .map_err(|error| {
+                if let Some(CloudClientErrorData::RemoteResourceConflict { .. }) = error.error {
+                    return Self::role_name_conflict(
+                        error,
+                        &role_name,
+                        role_definition_id,
+                        &assignable_scopes_text,
+                        permission_set_id,
+                    );
+                }
                 role_write_error(
                     error,
                     permission_set_id,
-                    &format!("write role definition '{role_name}'"),
+                    &format!(
+                        "write role definition '{role_name}' (assignable at {})",
+                        assignable_scopes_text
+                    ),
                     "Microsoft.Authorization/roleDefinitions/write",
                     ErrorData::CloudPlatformError {
                         message: format!(
@@ -772,6 +811,28 @@ impl AzurePermissionsHelper {
         );
 
         Ok(())
+    }
+
+    /// A write under the role's own id adopts our role; a conflict is another definition holding
+    /// the name under a different id. Retrying cannot fix it, so it is not retryable, and it names
+    /// the role, its id and the scopes it was to be assignable at.
+    pub(crate) fn role_name_conflict(
+        error: AlienError<CloudClientErrorData>,
+        role_name: &str,
+        role_definition_id: &str,
+        assignable_scopes: &str,
+        resource_id: &str,
+    ) -> AlienError<ErrorData> {
+        error.context(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "Azure custom role '{role_name}' (assignable at {assignable_scopes}) cannot be \
+                 written under id '{role_definition_id}': another role definition in this \
+                 directory already has that name with a different id (for example one left by \
+                 an earlier install or run). Delete that role definition, or use a different \
+                 resource prefix."
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })
     }
 
     fn resource_custom_role_definition_uuid(
@@ -957,7 +1018,7 @@ impl AzurePermissionsHelper {
             }
 
             let operation = format!(
-                "assign role '{}' to principal '{principal_id}'",
+                "assign role '{}' to principal '{principal_id}' at '{scope}'",
                 role_definition_id
                     .rsplit('/')
                     .next()
@@ -1655,6 +1716,31 @@ fn management_self_assignment_refs(
     })
 }
 
+/// The id of a Build's role assignment. It names the grant (who gets which role where), not the
+/// Build: every Build of a stack shares one profile, so two Builds ask for equal assignments, and
+/// ids numbered per Build made the second Build's write replace the first's. With one id per
+/// grant the second write finds the assignment already there, and
+/// [`build_assignments_still_needed`] keeps it until the last Build is gone.
+pub(crate) fn build_role_assignment_id(
+    resource_prefix: &str,
+    principal_id: &str,
+    role_definition_id: &str,
+    scope: &str,
+) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!(
+            "deployment:azure:build-role-assign:{}:{}:{}:{}",
+            resource_prefix,
+            principal_id.to_ascii_lowercase(),
+            role_definition_id.to_ascii_lowercase(),
+            scope.trim_matches('/').to_ascii_lowercase()
+        )
+        .as_bytes(),
+    )
+    .to_string()
+}
+
 fn is_worker_command_transport_permission(resource_type: &str, permission_set_id: &str) -> bool {
     resource_type == "worker" && permission_set_id == "worker/dispatch-command"
 }
@@ -2006,6 +2092,197 @@ mod tests {
                 result.unwrap();
             }
         }
+    }
+
+    /// A role whose name another definition holds under a different id is not retried: the
+    /// failure names the role and the id and says what to do.
+    #[tokio::test]
+    async fn a_role_name_held_under_another_id_fails_clearly_and_is_not_retried() {
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_definition()
+            .times(1)
+            .returning(|_, id, _| {
+                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+                    resource_type: "Resource".to_string(),
+                    resource_name: id,
+                    message: "A custom role with the same name already exists in this directory."
+                        .to_string(),
+                }))
+            });
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+        let custom_role = AzureCustomRole {
+            key: "identity-x".to_string(),
+            role_definition: alien_permissions::generators::AzureRoleDefinition {
+                name: "Identity x".to_string(),
+                id: None,
+                is_custom: true,
+                description: String::new(),
+                actions: vec!["a/b/c".to_string()],
+                not_actions: vec![],
+                data_actions: vec![],
+                not_data_actions: vec![],
+                assignable_scopes: vec![],
+            },
+        };
+        let error = AzurePermissionsHelper::create_or_update_custom_role_definition(
+            &authorization,
+            &azure_config(),
+            &Scope::ResourceGroup {
+                resource_group_name: "rg-123".to_string(),
+            },
+            "11111111-1111-1111-1111-111111111111",
+            "p-Identity x [execution]".to_string(),
+            custom_role,
+            "build/execute",
+        )
+        .await
+        .expect_err("a name held under another id fails");
+        assert!(!error.retryable, "{error:?}");
+        let text = format!("{error:?}");
+        assert!(text.contains("p-Identity x [execution]"), "{text}");
+        assert!(text.contains("11111111-1111-1111-1111-111111111111"), "{text}");
+        assert!(text.contains("resourceGroups/rg-123"), "names the scope: {text}");
+    }
+
+    /// The stack-wide path (service account controller) uses the same conflict error: not
+    /// retryable, and it names the role, its id and the scopes.
+    #[test]
+    fn the_shared_conflict_error_names_the_role_id_and_scopes_and_is_not_retryable() {
+        let error = AzurePermissionsHelper::role_name_conflict(
+            AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+                resource_type: "Resource".to_string(),
+                resource_name: "id".to_string(),
+                message: "same name".to_string(),
+            }),
+            "p-Identity x [execution]",
+            "22222222-2222-2222-2222-222222222222",
+            "/subscriptions/s/resourceGroups/a, /subscriptions/s/resourceGroups/b",
+            "execution-sa",
+        );
+        assert!(!error.retryable, "{error:?}");
+        let text = format!("{error:?}");
+        for part in [
+            "p-Identity x [execution]",
+            "22222222-2222-2222-2222-222222222222",
+            "resourceGroups/a",
+            "resourceGroups/b",
+        ] {
+            assert!(text.contains(part), "{part}: {text}");
+        }
+    }
+
+    /// A build's role is written in the stack's group and, for the join grant on an environment
+    /// in another group, also assignable there. A role from any other set, or a build role bound
+    /// in the stack's own group, is assignable only where it is written.
+    #[tokio::test]
+    async fn a_join_role_is_assignable_in_the_shared_environments_group_only() {
+        let home = "/subscriptions/sub-123/resourceGroups/rg-123";
+        let shared = "/subscriptions/sub-123/resourceGroups/rg-shared";
+        let scope = Scope::ResourceGroup {
+            resource_group_name: "rg-123".to_string(),
+        };
+        let role = |assignable: &str| AzureCustomRole {
+            key: "environment".to_string(),
+            role_definition: alien_permissions::generators::AzureRoleDefinition {
+                name: "Join".to_string(),
+                id: None,
+                is_custom: true,
+                description: "join".to_string(),
+                actions: vec!["Microsoft.App/managedEnvironments/join/action".to_string()],
+                not_actions: vec![],
+                data_actions: vec![],
+                not_data_actions: vec![],
+                assignable_scopes: vec![assignable.to_string()],
+            },
+        };
+        for (set, assignable, expected) in [
+            ("build/execute", home, vec![home]),
+            ("build/execute", shared, vec![home, shared]),
+            ("storage/data-read", shared, vec![home]),
+        ] {
+            let written = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let recorded = written.clone();
+            let mut authorization = MockAuthorizationApi::new();
+            authorization
+                .expect_create_or_update_role_definition()
+                .returning(move |_, _, definition| {
+                    recorded.lock().unwrap().extend(
+                        definition
+                            .properties
+                            .as_ref()
+                            .unwrap()
+                            .assignable_scopes
+                            .clone(),
+                    );
+                    Ok(definition.clone())
+                });
+            let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+            AzurePermissionsHelper::create_or_update_custom_role_definition(
+                &authorization,
+                &azure_config(),
+                &scope,
+                "role-id",
+                "role".to_string(),
+                role(assignable),
+                set,
+            )
+            .await
+            .unwrap();
+            assert_eq!(*written.lock().unwrap(), expected, "{set} {assignable}");
+        }
+    }
+
+    /// Setup lacking rights in the shared environment's group fails with a message that names the
+    /// group and the right, and waits for setup to run with them.
+    #[tokio::test]
+    async fn missing_rights_in_the_shared_group_name_the_group_and_the_right() {
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_definition()
+            .returning(|_, id, _| {
+                Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                    resource_type: "Role definition".to_string(),
+                    resource_name: id,
+                }))
+            });
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+        let custom_role = AzureCustomRole {
+            key: "environment".to_string(),
+            role_definition: alien_permissions::generators::AzureRoleDefinition {
+                name: "Join".to_string(),
+                id: None,
+                is_custom: true,
+                description: "join".to_string(),
+                actions: vec!["Microsoft.App/managedEnvironments/join/action".to_string()],
+                not_actions: vec![],
+                data_actions: vec![],
+                not_data_actions: vec![],
+                assignable_scopes: vec![
+                    "/subscriptions/sub-123/resourceGroups/rg-shared".to_string()
+                ],
+            },
+        };
+        let error = AzurePermissionsHelper::create_or_update_custom_role_definition(
+            &authorization,
+            &azure_config(),
+            &Scope::ResourceGroup {
+                resource_group_name: "rg-123".to_string(),
+            },
+            "role-id",
+            "role".to_string(),
+            custom_role,
+            "build/execute",
+        )
+        .await
+        .expect_err("refused");
+        assert!(crate::requires_setup_rerun(&error), "{error:?}");
+        let text = format!("{error:?}");
+        assert!(text.contains("rg-shared"), "{text}");
+        assert!(
+            text.contains("Microsoft.Authorization/roleDefinitions/write"),
+            "{text}"
+        );
     }
 
     /// A refused role assignment waits for setup to run again; other failures do not.
