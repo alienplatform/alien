@@ -302,6 +302,7 @@ fn sandbox_only_stack() -> Stack {
         .lifecycle(alien_core::SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let mut stack = test_stack(Platform::Aws);
@@ -434,6 +435,7 @@ async fn state_keeps_a_sandbox(fixture: &Fixture, binding: serde_json::Value) {
                     .lifecycle(alien_core::SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
+                        ..Default::default()
                     })
                     .build(),
             ))
@@ -602,6 +604,7 @@ async fn a_sandbox_sharing_the_release_with_another_remote_resource_refuses_a_da
         .lifecycle(alien_core::SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let mut stack = test_stack(Platform::Aws);

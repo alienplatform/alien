@@ -554,6 +554,7 @@ mod direct_setup_planning_tests {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build();
             let stack = Stack::new("example".into())
@@ -657,6 +658,7 @@ mod direct_setup_planning_tests {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build();
             let stack = Stack::new("example".into())

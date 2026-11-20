@@ -41,6 +41,7 @@ docker create --name "$container" --privileged --cgroupns=private \
       image_command::tests::legacy_egress_refuses_root_image_before_spawn \
       peer::tests::socket_mark_separates_provider_from_every_guest_uid \
       protected_files::tests::root_image_cannot_replace_bootstrap_files \
+      protected_files::tests::protect_refuses_without_procfs \
       gateway_egress::guest_network_tests::root_and_child_uids_keep_redirects_and_cannot_escape
     do
       /agent-tests --list --ignored --exact "$name" | grep -Fx "$name: test"
@@ -49,6 +50,43 @@ docker create --name "$container" --privileged --cgroupns=private \
          test "$name" = gateway_egress::guest_network_tests::device_allowlist_denies_raw_commands_and_preserves_terminals; then
         rmdir /sys/fs/cgroup/alien-guest
       fi
+    done
+    # The previous test left its cgroups (with the child its escape attempt made) and, in this
+    # network namespace, its firewall behind: this one gets a network namespace of its own.
+    find /sys/fs/cgroup/alien-guest -depth -type d -exec rmdir {} +
+    # Each in a network namespace of its own (the second: the IPv6 policy rules alone, as on a
+    # kernel without IPv6 netfilter).
+    for name in \
+      gateway_egress::guest_network_tests::image_nfs_leaves_only_through_its_mark_and_declared_connections \
+      gateway_egress::guest_network_tests::without_ip6_netfilter_policy_rules_refuse_ipv6_nfs_ports
+    do
+    /agent-tests --list --ignored --exact "$name" | grep -Fx "$name: test"
+    # The namespace file an earlier run left (its mount went with its mount namespace).
+    rm -f /run/netns/remote
+    unshare --mount --net bash -euo pipefail -c "
+      ip link set lo up
+      for knob in all default lo; do echo 0 > /proc/sys/net/ipv6/conf/\$knob/disable_ipv6; done
+      # Off-VM servers: another network namespace behind a veth pair.
+      ip netns add remote
+      ip link add veth0 type veth peer name veth1 netns remote
+      ip addr add 192.168.77.1/24 dev veth0
+      ip -6 addr add fd01::1/64 dev veth0 nodad
+      ip link set veth0 up
+      for knob in all default lo; do
+        echo 0 | ip netns exec remote tee /proc/sys/net/ipv6/conf/\$knob/disable_ipv6 >/dev/null
+      done
+      ip -n remote link set lo up
+      ip -n remote addr add 10.0.1.5/32 dev lo
+      ip -n remote addr add 10.0.2.5/32 dev lo
+      ip -n remote -6 addr add fd00::5/128 dev lo nodad
+      ip -n remote addr add 192.168.77.2/24 dev veth1
+      ip -n remote -6 addr add fd01::2/64 dev veth1 nodad
+      ip -n remote link set veth1 up
+      ip route add 10.0.0.0/16 via 192.168.77.2
+      ip -6 route add fd00::/64 via fd01::2
+      export ALIEN_TEST_REMOTE_NETNS=/run/netns/remote
+      exec /agent-tests --ignored --exact $name --nocapture
+    "
     done
   ' >/dev/null
 trap cleanup EXIT

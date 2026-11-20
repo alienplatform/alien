@@ -301,10 +301,10 @@ impl AwsSandboxController {
             &bundle_uri,
             tier.baseline_memory_mib,
         )
-        .with_agent_environment(alien_core::sandbox_egress::aws_sandbox_agent_environment(
-            ctx.desired_stack,
-            config,
-        ))
+        .with_agent_environment(
+            agent_environment(ctx, config)?,
+            alien_core::sandbox_image_permissions::aws_microvm_session_hooks(config),
+        )
         .with_receipt()
         .into_alien_error()
         .context(ErrorData::ResourceConfigInvalid {
@@ -430,8 +430,7 @@ impl AwsSandboxController {
         self.image_arn = Some(image_arn);
         self.pending_version = Some(image_version);
         self.pending_bundle_uri = Some(bundle_uri);
-        self.pending_supervisor_environment =
-            alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.desired_stack, config);
+        self.pending_supervisor_environment = agent_environment(ctx, config)?;
         self.region = Some(aws_config.region.clone());
 
         info!(sandbox_id = %config.id, image = %image_name, "MicroVM image build started");
@@ -832,11 +831,7 @@ impl AwsSandboxController {
         let desired_bundle = self.bundle_to_build(ctx, config, &aws_config.region)?.uri();
 
         if self.bundle_uri.as_deref() == Some(desired_bundle.as_str())
-            && self.supervisor_environment
-                == alien_core::sandbox_egress::aws_sandbox_agent_environment(
-                    ctx.desired_stack,
-                    config,
-                )
+            && self.supervisor_environment == agent_environment(ctx, config)?
         {
             info!(sandbox_id = %config.id, "Updated AWS sandbox configuration");
             return Ok(HandlerAction::Continue {
@@ -916,10 +911,10 @@ impl AwsSandboxController {
             &desired_bundle,
             tier.baseline_memory_mib,
         )
-        .with_agent_environment(alien_core::sandbox_egress::aws_sandbox_agent_environment(
-            ctx.desired_stack,
-            config,
-        ))
+        .with_agent_environment(
+            agent_environment(ctx, config)?,
+            alien_core::sandbox_image_permissions::aws_microvm_session_hooks(config),
+        )
         .for_roll(self.active_version.as_deref())
         .for_retry(self.build_retry_generation)
         .with_receipt()
@@ -977,8 +972,7 @@ impl AwsSandboxController {
         // ACTIVE, so the binding keeps naming the bundle sessions can actually start from.
         self.pending_version = Some(image_version);
         self.pending_bundle_uri = Some(desired_bundle);
-        self.pending_supervisor_environment =
-            alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.desired_stack, config);
+        self.pending_supervisor_environment = agent_environment(ctx, config)?;
         if let Some(arn) = rolled.image_arn {
             self.image_arn = Some(arn);
         }
@@ -1333,6 +1327,24 @@ impl AwsSandboxController {
         state = RefreshFailed,
         status = ResourceStatus::RefreshFailed
     );
+
+    /// A connection target that publishes new addresses changes the image's contract with no
+    /// change to any config, so the update that rolls the image is asked for here: until it runs,
+    /// new sessions still reach only the old addresses. A target that published nothing usable
+    /// asks for nothing; the roll could not be built.
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        let connects = config
+            .image_permissions
+            .as_ref()
+            .is_some_and(|permissions| !permissions.connections.is_empty());
+        if !connects || self.image_identifier.is_none() || !self.owns_image_builds(ctx, &config.id)
+        {
+            return Ok(false);
+        }
+        Ok(agent_environment(ctx, config)
+            .is_ok_and(|environment| environment != self.supervisor_environment))
+    }
 
     // ─────────────── HELPER METHODS ──────────────────────────────────────
 
@@ -2080,6 +2092,52 @@ fn is_remote_resource_absent(error: &AlienError<CloudClientErrorData>) -> bool {
     )
 }
 
+/// The agent's environment for this sandbox's image: the egress contract and, when the sandbox
+/// declares them, its image permissions, with each connection narrowed to the addresses its
+/// target published (a dependency, so it exists before this image is built).
+fn agent_environment(
+    ctx: &ResourceControllerContext<'_>,
+    config: &Sandbox,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut environment =
+        alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.desired_stack, config);
+    if !config.declares_image_permissions() {
+        return Ok(environment);
+    }
+    if config
+        .image_permissions
+        .as_ref()
+        .is_some_and(|permissions| !permissions.connections.is_empty())
+    {
+        alien_core::sandbox_image_permissions::validate_connections(ctx.desired_stack, config)
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "sandbox image connections do not resolve".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+    }
+    let published = |connection: &alien_core::SandboxImageConnection| {
+        let outputs = ctx
+            .state
+            .resources
+            .get(&connection.to.id)
+            .and_then(|state| state.outputs.as_ref())
+            .and_then(|outputs| serde_json::to_value(outputs).ok());
+        alien_core::sandbox_image_permissions::published_connection_addresses(
+            config,
+            connection,
+            outputs.as_ref(),
+        )
+    };
+    environment.extend(
+        alien_core::sandbox_image_permissions::image_permissions_environment(config, published)
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "cannot build the sandbox image permissions".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?,
+    );
+    Ok(environment)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2564,6 +2622,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
                 idle_pause_seconds: Some(600),
+                ..Default::default()
             })
             .build()
     }
@@ -2582,6 +2641,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
                 idle_pause_seconds: Some(600),
+                ..Default::default()
             })
             .build()
     }
@@ -3773,6 +3833,195 @@ mod tests {
         assert_eq!(binding["previewPorts"][0], 8080);
         assert_eq!(binding["idlePauseSeconds"], 600);
         assert_eq!(binding["maxLifetimeSeconds"], 1800);
+    }
+
+    /// A Live sandbox that declares image permissions builds its image with the agent's
+    /// contract: each connection resolved to the address range of the network setup created,
+    /// and the image-command value a released agent refuses, so an older agent fails the
+    /// image build instead of running without the limits.
+    #[tokio::test]
+    async fn a_live_sandbox_with_image_permissions_builds_with_the_agent_contract() {
+        use crate::{AwsNetworkController, AwsNetworkState};
+        use alien_core::{
+            CustomResource, Network, NetworkSettings, ResourceType, SandboxImageConnection,
+            SandboxImageMount, SandboxImageMountType, SandboxImagePermissions,
+        };
+
+        let manifest: alien_core::ExtensionManifest = serde_json::from_value(serde_json::json!({
+            "name": "acme",
+            "version": "0.1.0",
+            "digest": "sha256:00",
+            "resourceTypes": {
+                "acme/files": {
+                    "lifecycles": ["live"],
+                    "holdsData": true,
+                    "setup": { "cloudformation": [], "terraform": [], "helm": [], "importers": [] },
+                    "controllerPlatforms": ["aws"],
+                    "permissionSets": [],
+                    "link": { "permissionSets": [] },
+                    "schemas": { "config": {}, "outputs": {} },
+                    "requiresNetwork": true,
+                    "privateNetworkEndpoints": "stackNetwork"
+                }
+            }
+        }))
+        .expect("extension manifest");
+        let mut subject = sandbox();
+        subject.image_user = Some(0);
+        subject.lifecycle.on_pause = Some(vec!["/usr/local/bin/app".into(), "pause".into()]);
+        subject.image_permissions = Some(SandboxImagePermissions {
+            mounts: vec![SandboxImageMount {
+                mount_type: SandboxImageMountType::Nfs,
+                path: "/workspace".into(),
+                size: None,
+                from: None,
+            }],
+            connections: vec![SandboxImageConnection {
+                to: ResourceRef::new(ResourceType::from("acme/files"), "workspace-files"),
+                port: 2049,
+            }],
+        });
+
+        let environment = Arc::new(Mutex::new(None));
+        let captured = environment.clone();
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .withf(|identifier| identifier == IMAGE_ARN)
+            .times(1)
+            .returning(|_| Err(not_found()));
+        client
+            .expect_create_microvm_image()
+            .times(1)
+            .returning(move |request| {
+                *captured.lock().unwrap() = Some(request.environment_variables.clone());
+                Ok(created_response())
+            });
+        client
+            .expect_get_microvm_image_version()
+            .returning(|_, _| Ok(active_version()));
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                description: None,
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(subject)
+            .controller(runtime_seeded_controller())
+            .platform(Platform::Aws)
+            .service_provider(provider(client))
+            .extension(manifest)
+            .with_stack_resource(
+                CustomResource::from_untagged(
+                    "acme/files",
+                    serde_json::json!({ "id": "workspace-files" }),
+                )
+                .unwrap(),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .stack_resource_outputs(
+                "workspace-files",
+                alien_core::ResourceOutputs::new(
+                    alien_core::CustomResourceOutputs::from_untagged(
+                        "acme/files",
+                        serde_json::json!({ "privateIpv4Addresses": ["10.42.3.9", "10.42.1.4"] }),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .with_dependency(
+                Network::new("default-network".to_string())
+                    .settings(NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    })
+                    .build(),
+                AwsNetworkController {
+                    state: AwsNetworkState::Ready,
+                    vpc_id: Some("vpc-0123".to_string()),
+                    cidr_block: Some("10.42.0.0/16".to_string()),
+                    ..Default::default()
+                },
+            )
+            .build()
+            .await
+            .expect("executor should build");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("create flow should succeed");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let environment = environment.lock().unwrap().clone().expect("image created");
+        assert_eq!(
+            environment
+                .get(alien_core::sandbox_image::ENV_IMAGE_COMMAND)
+                .map(String::as_str),
+            Some(alien_core::sandbox_image::IMAGE_COMMAND_WITH_IMAGE_PERMISSIONS)
+        );
+        assert_eq!(
+            environment
+                .get(alien_core::sandbox_image::ENV_IMAGE_PERMISSIONS_VERSION)
+                .map(String::as_str),
+            Some(alien_core::sandbox_image::IMAGE_PERMISSIONS_VERSION)
+        );
+        let contract: serde_json::Value = serde_json::from_str(
+            environment
+                .get(alien_core::sandbox_image::ENV_IMAGE_PERMISSIONS)
+                .expect("the contract is set"),
+        )
+        .expect("the contract is JSON");
+        assert_eq!(
+            contract,
+            serde_json::json!({
+                "mounts": [{ "type": "nfs", "path": "/workspace" }],
+                "connections": [
+                    { "cidr": "10.42.1.4/32", "port": 2049 },
+                    { "cidr": "10.42.3.9/32", "port": 2049 }
+                ],
+                "onPause": ["/usr/local/bin/app", "pause"]
+            })
+        );
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(
+            controller
+                .supervisor_environment
+                .get(alien_core::sandbox_image::ENV_IMAGE_PERMISSIONS),
+            environment.get(alien_core::sandbox_image::ENV_IMAGE_PERMISSIONS),
+            "the recorded environment matches, so the next pass does not roll"
+        );
+        assert!(
+            !executor.needs_update().expect("update check"),
+            "nothing moved, so no update is asked for"
+        );
+
+        // The target publishes new addresses with its own config unchanged: the image's contract
+        // is stale, so the sandbox asks for the update that rolls it.
+        let mut target = executor.stack_state().resources["workspace-files"].clone();
+        target.outputs = Some(alien_core::ResourceOutputs::new(
+            alien_core::CustomResourceOutputs::from_untagged(
+                "acme/files",
+                serde_json::json!({ "privateIpv4Addresses": ["10.42.3.9", "10.42.2.7"] }),
+            )
+            .unwrap(),
+        ));
+        executor.insert_saved_resource("workspace-files", target.clone());
+        assert!(
+            executor.needs_update().expect("update check"),
+            "a moved address asks for the update that rolls the image"
+        );
+
+        // A target that published nothing (yet) cannot be rolled onto; no update is asked for.
+        target.outputs = None;
+        executor.insert_saved_resource("workspace-files", target);
+        assert!(!executor.needs_update().expect("update check"));
     }
 
     /// A Worker creates sessions under its profile's role, so a direct setup that builds a Frozen

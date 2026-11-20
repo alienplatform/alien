@@ -36,6 +36,7 @@ async fn render_the_azure_internet_live_module() {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     sandbox.image_user = Some(0);

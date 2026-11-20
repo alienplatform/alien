@@ -252,6 +252,7 @@ fn fixture(
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             // Only AWS itself provisions a sandbox at runtime.

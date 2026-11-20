@@ -1,14 +1,16 @@
 import {
   type EgressPolicy,
+  type ResourceRef,
   type ResourceType,
   type SandboxCode,
   type Sandbox as SandboxConfig,
   type SandboxEgress,
+  type SandboxImageMount,
   type SandboxLifecyclePolicy,
   type SandboxLimits,
   SandboxSchema,
 } from "./generated/index.js"
-import { type Resource, ResourceBuilder } from "./resource.js"
+import { Resource, ResourceBuilder } from "./resource.js"
 
 export type {
   EgressPolicy,
@@ -17,12 +19,36 @@ export type {
   SandboxCapabilities,
   SandboxCode,
   SandboxEgress,
+  SandboxImageConnection,
+  SandboxImageMount,
+  SandboxImageMountType,
+  SandboxImagePermissions,
   SandboxLifecyclePolicy,
   SandboxLimits,
   SandboxOutputs,
   SandboxPrivilegedSupervisor,
 } from "./generated/index.js"
 export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
+
+/**
+ * A private service a sandbox image may reach directly: a stack resource, never a raw address.
+ */
+export interface SandboxImageConnectionDeclaration {
+  /** The resource whose private network endpoints the image connects to. */
+  to: Resource | ResourceRef
+  /** TCP port. Never 53. */
+  port: number
+}
+
+/**
+ * What a sandbox's own image may do beyond the bounded root image grant.
+ */
+export interface SandboxImagePermissionsDeclaration {
+  /** Mounts the image may ask Alien's agent for: `nfs`, or `tmpfs` with a `size`. */
+  mounts?: SandboxImageMount[]
+  /** Private services the image's own sockets may reach without the egress gateway. */
+  connections?: SandboxImageConnectionDeclaration[]
+}
 
 /**
  * An isolated environment for running untrusted code.
@@ -95,9 +121,36 @@ export class Sandbox extends ResourceBuilder {
 
   /**
    * Sets the sandbox lifetime ceiling and idle behaviour.
+   *
+   * `onPause` and `onResume` are programs (argv, absolute path first) Alien's agent runs inside
+   * the image, with the image's own grant, around a pause that keeps memory. They are best effort
+   * and killed at a deadline: the image must also survive a stop with no warning. The program
+   * must be one of the image's own files, not on a mount `imagePermissions` declares. AWS only.
    */
   public lifecycle(lifecycle: SandboxLifecyclePolicy): this {
     this._config.lifecycle = lifecycle
+    return this
+  }
+
+  /**
+   * Lets the sandbox's own image mount file systems and reach private services directly.
+   *
+   * Mounts (`nfs`, `tmpfs`, and `bind` to place a declared mount again) are performed by Alien's
+   * agent on the image's behalf at the declared absolute paths; the image never gets `SYS_ADMIN`.
+   * Each connection names a stack resource with private network endpoints and is narrowed to the
+   * private addresses that resource publishes, on the declared TCP port. Connections bypass the egress gateway and its connection log, and isolation between
+   * workloads inside the image is the image's own responsibility; setup tells the customer both.
+   *
+   * AWS Lambda MicroVM sandboxes only. Other platforms refuse it when the stack is planned.
+   */
+  public imagePermissions(permissions: SandboxImagePermissionsDeclaration): this {
+    this._config.imagePermissions = {
+      mounts: permissions.mounts,
+      connections: permissions.connections?.map(connection => ({
+        to: connection.to instanceof Resource ? connection.to.ref() : connection.to,
+        port: connection.port,
+      })),
+    }
     return this
   }
 

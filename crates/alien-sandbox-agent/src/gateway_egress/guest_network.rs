@@ -30,18 +30,33 @@ pub(super) fn install(mark_sockets: bool) -> io::Result<()> {
         }
     })?;
     let cgroup = File::open(CGROUP)?;
+    // An image with declared permissions gets a marker of its own on its cgroup below this one,
+    // which replaces the guest marker there only. Nothing below can attach another: BPF is
+    // denied to the guest.
+    let image = mark_sockets && crate::image_permissions::declared().is_some();
     if mark_sockets {
-        attach(&cgroup, &load_socket_marker()?, 2)?; // BPF_CGROUP_INET_SOCK_CREATE
+        let flags = if image { 1 } else { 0 }; // BPF_F_ALLOW_OVERRIDE
+        attach(&cgroup, &load_socket_marker(GUEST_MARK)?, 2, flags)?; // BPF_CGROUP_INET_SOCK_CREATE
     }
     // Provider VMs can expose raw disks without Docker's device controller. A
     // read-only bind mount does not protect its backing device. Permit only ordinary
     // character devices: raw SCSI/NVMe character nodes can also write backing disks.
     // This covers every path without changing provider device access or snapshot restore.
-    attach(&cgroup, &load_device_filter()?, 6)?; // BPF_CGROUP_DEVICE
+    attach(&cgroup, &load_device_filter()?, 6, 0)?; // BPF_CGROUP_DEVICE
     fs::write(
         format!("{CGROUP}/cgroup.procs"),
         std::process::id().to_string(),
     )?;
+    // The image's cgroup, made while the mount is writable. The broker moves the image into it.
+    if image {
+        fs::create_dir(crate::mount_broker::IMAGE_CGROUP)?;
+        attach(
+            &File::open(crate::mount_broker::IMAGE_CGROUP)?,
+            &load_socket_marker(crate::mount_broker::IMAGE_MARK)?,
+            2,
+            0,
+        )?;
+    }
     // Read-only on this mount, not just file modes: guest root retains DAC_OVERRIDE
     // and could otherwise leave via cgroup.procs. Keep the filesystem writable
     // through provider mounts so AWS can freeze processes during suspend.
@@ -67,7 +82,7 @@ pub(super) fn install(mark_sockets: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn attach(cgroup: &File, program: &OwnedFd, attach_type: u32) -> io::Result<()> {
+fn attach(cgroup: &File, program: &OwnedFd, attach_type: u32, flags: u32) -> io::Result<()> {
     #[repr(C)]
     struct Attach {
         target_fd: u32,
@@ -80,7 +95,7 @@ fn attach(cgroup: &File, program: &OwnedFd, attach_type: u32) -> io::Result<()> 
         target_fd: cgroup.as_raw_fd() as u32,
         program_fd: program.as_raw_fd() as u32,
         attach_type,
-        flags: 0,
+        flags,
         replace_fd: 0,
     };
     // A non-override attachment applies to every descendant cgroup as well.
@@ -147,7 +162,7 @@ fn load_device_filter() -> io::Result<OwnedFd> {
     load_program(15, &instructions)
 }
 
-fn load_socket_marker() -> io::Result<OwnedFd> {
+fn load_socket_marker(mark: u32) -> io::Result<OwnedFd> {
     // Linux UAPI bpf_sock.mark is at byte 16. Four fixed instructions, no maps,
     // helpers, compiler, userspace daemon or external BPF artifact required.
     let instructions = [
@@ -155,7 +170,7 @@ fn load_socket_marker() -> io::Result<OwnedFd> {
             opcode: 0xb7,
             registers: 2,
             offset: 0,
-            immediate: GUEST_MARK as i32,
+            immediate: mark as i32,
         }, // r2 = mark
         Instruction {
             opcode: 0x63,

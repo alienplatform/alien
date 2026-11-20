@@ -19,7 +19,7 @@ use alien_core::sandbox_build_role::sandbox_build_role_name;
 use alien_core::sandbox_egress::{
     sandbox_egress_network, sandbox_needs_connector, SandboxEgressVpc, LOOPBACK_ONLY_CIDR,
 };
-use alien_core::sandbox_image::AWS_MICROVM;
+use alien_core::sandbox_image::{AWS_MICROVM, ENV_IMAGE_PERMISSIONS};
 use alien_core::sandbox_setup_inputs::aws_sandbox_renders_bundle;
 use alien_core::{
     import::EmitContext, BundleUri, ErrorData, RemoteBindings, ResourceLifecycle, Result, Sandbox,
@@ -31,6 +31,7 @@ use alien_permissions::{
     generators::{AwsCloudFormationPermissionsGenerator, AwsRuntimePermissionsGenerator},
     BindingTarget,
 };
+use serde_json::json;
 
 /// The only architecture MicroVM images accept — the schema's enum has one member, so the agent
 /// in the image has to be an aarch64 Linux binary.
@@ -59,6 +60,8 @@ impl CfEmitter for AwsSandboxEmitter {
             Some(artifact_uri(sandbox)?)
         };
         let egress = egress_network(ctx, sandbox)?;
+        alien_core::sandbox_image_permissions::validate_connections(ctx.stack, sandbox)?;
+        let connection_rules = image_connection_rules(ctx, sandbox)?;
         // The size whose peak stays inside the declared ceilings. A MicroVM bursts to four times
         // its baseline with no way to opt out, so the baseline is a quarter of what was declared.
         let tier = sandbox.microvm_tier()?;
@@ -132,9 +135,16 @@ impl CfEmitter for AwsSandboxEmitter {
             } else {
                 super::network::gateway_egress_rules(ctx)?
             };
-            security_group
-                .properties
-                .insert("SecurityGroupEgress".to_string(), egress_rules);
+            security_group.properties.insert(
+                "SecurityGroupEgress".to_string(),
+                with_rules(egress_rules, &connection_rules),
+            );
+            let statements = alien_core::sandbox_image_permissions::approval_statements(sandbox);
+            if !statements.is_empty() {
+                security_group
+                    .metadata
+                    .insert(IMAGE_PERMISSIONS_METADATA.to_string(), json!(statements));
+            }
             security_group
                 .properties
                 .insert("Tags".to_string(), tags(ctx));
@@ -256,10 +266,10 @@ impl CfEmitter for AwsSandboxEmitter {
                 },
             ),
         );
-        properties.insert("Hooks".to_string(), hooks());
+        properties.insert("Hooks".to_string(), hooks(sandbox));
         properties.insert(
             "EnvironmentVariables".to_string(),
-            environment_variables(ctx.stack, sandbox),
+            environment_variables(ctx, sandbox)?,
         );
         properties.insert("Tags".to_string(), tags(ctx));
 
@@ -815,9 +825,32 @@ fn image_pull_build_policies() -> CfExpression {
 /// it is what defers the snapshot until the agent is serving. `Validate` runs on a
 /// MicroVM restored from the snapshot and fails the build when a command or a file write cannot
 /// work on it; 30s is AWS's default and far above the probe's sub-second work. `Run` and
-/// `Resume` are acknowledged by the agent and nothing more: entropy separation between MicroVMs
-/// comes from the MicroVM service.
-fn hooks() -> CfExpression {
+/// `Resume` are acknowledged by the agent unless the image declares lifecycle steps, which enable
+/// `Suspend` and lengthen `Resume` as
+/// [`alien_core::sandbox_image_permissions::aws_microvm_session_hooks`] says; without them the
+/// hooks are key for key the earlier ones. Entropy separation between MicroVMs comes from the
+/// MicroVM service.
+fn hooks(sandbox: &Sandbox) -> CfExpression {
+    let session = alien_core::sandbox_image_permissions::aws_microvm_session_hooks(sandbox);
+    let mut microvm_hooks = vec![
+        ("Run", CfExpression::from("ENABLED")),
+        (
+            "RunTimeoutInSeconds",
+            CfExpression::Integer(session.run_timeout_in_seconds.into()),
+        ),
+        ("Resume", CfExpression::from("ENABLED")),
+        (
+            "ResumeTimeoutInSeconds",
+            CfExpression::Integer(session.resume_timeout_in_seconds.into()),
+        ),
+    ];
+    if let Some(timeout) = session.suspend_timeout_in_seconds {
+        microvm_hooks.push(("Suspend", CfExpression::from("ENABLED")));
+        microvm_hooks.push((
+            "SuspendTimeoutInSeconds",
+            CfExpression::Integer(timeout.into()),
+        ));
+    }
     CfExpression::object([
         ("Port", CfExpression::Integer(AGENT_PORT)),
         (
@@ -829,15 +862,7 @@ fn hooks() -> CfExpression {
                 ("ValidateTimeoutInSeconds", CfExpression::Integer(30)),
             ]),
         ),
-        (
-            "MicrovmHooks",
-            CfExpression::object([
-                ("Run", CfExpression::from("ENABLED")),
-                ("RunTimeoutInSeconds", CfExpression::Integer(30)),
-                ("Resume", CfExpression::from("ENABLED")),
-                ("ResumeTimeoutInSeconds", CfExpression::Integer(30)),
-            ]),
-        ),
+        ("MicrovmHooks", CfExpression::object(microvm_hooks)),
     ])
 }
 
@@ -845,7 +870,8 @@ fn hooks() -> CfExpression {
 ///
 /// `transport` authorization on AWS: the proxy validates a token scoped to one MicroVM before a
 /// request arrives, and one MicroVM is one session.
-fn environment_variables(stack: &alien_core::Stack, sandbox: &Sandbox) -> CfExpression {
+fn environment_variables(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<CfExpression> {
+    let stack = ctx.stack;
     let pairs = [
         ("ALIEN_SANDBOX_ROOT", AWS_MICROVM.session_root.to_string()),
         ("ALIEN_SANDBOX_PORT", AWS_MICROVM.port.to_string()),
@@ -866,12 +892,162 @@ fn environment_variables(stack: &alien_core::Stack, sandbox: &Sandbox) -> CfExpr
         }
     }
     pairs.extend(overrides);
-    CfExpression::list(pairs.into_iter().map(|(key, value)| {
-        CfExpression::object([
-            ("Key", CfExpression::from(key.as_str())),
-            ("Value", CfExpression::from(value.as_str())),
-        ])
-    }))
+    let mut variables: Vec<CfExpression> = pairs
+        .into_iter()
+        .map(|(key, value)| {
+            CfExpression::object([
+                ("Key", CfExpression::from(key.as_str())),
+                ("Value", CfExpression::from(value.as_str())),
+            ])
+        })
+        .collect();
+    // A sandbox provisioned at runtime gets its contract from its controller, once the targets
+    // of its connections have published their addresses; this image is not emitted for it.
+    if provisioned_at_runtime(ctx) {
+        return Ok(CfExpression::list(variables));
+    }
+    if let Some(contract) = image_permissions_value(sandbox)? {
+        variables.push(CfExpression::object([
+            ("Key", CfExpression::from(ENV_IMAGE_PERMISSIONS)),
+            ("Value", contract),
+        ]));
+    }
+    Ok(CfExpression::list(variables))
+}
+
+/// Metadata key on the connector's security group listing, in plain language, what the
+/// sandbox's image may do beyond the default grant. The generator gathers it for the template.
+pub(crate) const IMAGE_PERMISSIONS_METADATA: &str = "AlienSandboxImagePermissions";
+
+/// The address range every connection resolves to: the VPC setup creates. A template rule refuses
+/// any other network mode for a stack that declares connections; the other branch names loopback,
+/// which the agent refuses as a connection range, so it could not open anything either way.
+fn image_connection_cidr(ctx: &EmitContext<'_>) -> Result<CfExpression> {
+    let network = sandbox_egress_network(ctx.stack).map_err(|error| {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "sandbox image connections".into(),
+            reason: error.to_string(),
+        })
+    })?;
+    if network.vpc != SandboxEgressVpc::Created {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "sandbox image connections".into(),
+            reason: "direct connections need a network setup creates".into(),
+        }));
+    }
+    let prefix = ctx.name_for(network.id).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!("network '{}' has no generated name", network.id),
+        })
+    })?;
+    Ok(CfExpression::if_(
+        CONDITION_NETWORK_MODE_CREATE,
+        CfExpression::get_att(format!("{prefix}Vpc"), "CidrBlock"),
+        CfExpression::from(LOOPBACK_ONLY_CIDR),
+    ))
+}
+
+/// One connector egress rule per declared port. Every connection's rule is the network's range,
+/// so connections on one port share a rule (AWS refuses a group whose rules repeat a protocol,
+/// port and range); its description names each target.
+fn image_connection_rules(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Vec<CfExpression>> {
+    let Some(permissions) = &sandbox.image_permissions else {
+        return Ok(Vec::new());
+    };
+    if permissions.connections.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cidr = image_connection_cidr(ctx)?;
+    let mut ports: Vec<(u16, Vec<&str>)> = Vec::new();
+    for connection in &permissions.connections {
+        match ports.iter_mut().find(|(port, _)| *port == connection.port) {
+            Some((_, targets)) => targets.push(&connection.to.id),
+            None => ports.push((connection.port, vec![&connection.to.id])),
+        }
+    }
+    Ok(ports
+        .into_iter()
+        .map(|(port, targets)| {
+            let mut description = format!(
+                "Sandbox image direct connection to {}, outside the egress gateway and its \
+                 connection log",
+                targets.join(", ")
+            );
+            // AWS caps a rule description at 255 characters.
+            if description.len() > 255 {
+                description = format!(
+                    "Sandbox image direct connections on TCP port {port}, outside the egress \
+                     gateway and its connection log"
+                );
+            }
+            CfExpression::object([
+                ("IpProtocol", CfExpression::from("tcp")),
+                ("FromPort", CfExpression::Integer(i64::from(port))),
+                ("ToPort", CfExpression::Integer(i64::from(port))),
+                ("CidrIp", cidr.clone()),
+                ("Description", CfExpression::from(description.as_str())),
+            ])
+        })
+        .collect())
+}
+
+/// Appends `rules` to an egress rule list, or to both branches of an `Fn::If` choosing one.
+fn with_rules(rules: CfExpression, extra: &[CfExpression]) -> CfExpression {
+    if extra.is_empty() {
+        return rules;
+    }
+    match rules {
+        CfExpression::List(mut items) => {
+            items.extend(extra.iter().cloned());
+            CfExpression::List(items)
+        }
+        CfExpression::Object(mut object) if object.len() == 1 && object.contains_key("Fn::If") => {
+            if let Some(CfExpression::List(branches)) = object.get_mut("Fn::If") {
+                for branch in branches.iter_mut().skip(1) {
+                    let taken = std::mem::replace(branch, CfExpression::Null);
+                    *branch = with_rules(taken, extra);
+                }
+            }
+            CfExpression::Object(object)
+        }
+        other => other,
+    }
+}
+
+/// `ALIEN_SANDBOX_IMAGE_PERMISSIONS` for an image setup builds. Such a sandbox declares no
+/// connections (refused at plan time: the target's addresses exist only after setup), so the
+/// contract is fixed text.
+fn image_permissions_value(sandbox: &Sandbox) -> Result<Option<CfExpression>> {
+    let Some(contract) =
+        alien_core::sandbox_image_permissions::image_permissions_contract(sandbox, |connection| {
+            Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox image connections".into(),
+                reason: format!(
+                    "sandbox '{}' connects to '{}', which needs a sandbox provisioned at runtime",
+                    sandbox.id(),
+                    connection.to.id
+                ),
+            }))
+        })?
+    else {
+        return Ok(None);
+    };
+    if sandbox.image_user.is_none() {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "sandbox image permissions".into(),
+            reason: format!(
+                "sandbox '{}' was not built by an `alien build` that inspects its image; rebuild \
+                 the release",
+                sandbox.id()
+            ),
+        }));
+    }
+    let text = serde_json::to_string(&contract)
+        .into_alien_error()
+        .context(ErrorData::GenericError {
+            message: "serializing the sandbox image permissions".into(),
+        })?;
+    Ok(Some(CfExpression::from(text.as_str())))
 }
 
 /// Resolves the S3 bundle the MicroVM image is built from.
@@ -1154,6 +1330,7 @@ mod tests {
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
                     max_lifetime_seconds: lifetime,
                     idle_pause_seconds: idle,
+                    ..Default::default()
                 })
                 .build();
             lifecycle_fields(&sandbox)
@@ -1249,6 +1426,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build()
     }
@@ -1321,6 +1499,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
 

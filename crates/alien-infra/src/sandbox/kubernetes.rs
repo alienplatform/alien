@@ -1749,6 +1749,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(3600),
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
 
@@ -1842,6 +1843,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(3600),
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
 
@@ -1949,6 +1951,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(3600),
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let mut provider = crate::MockPlatformServiceProvider::new();
@@ -2003,6 +2006,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(3600),
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let mut provider = crate::MockPlatformServiceProvider::new();
@@ -2334,6 +2338,7 @@ mod tests {
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(3600),
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
         let mut pod =

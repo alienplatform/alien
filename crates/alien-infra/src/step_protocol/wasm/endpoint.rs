@@ -781,6 +781,27 @@ mod tests {
         }
     }
 
+    /// A service AWS defines only by its endpoint rules (no entry in the older endpoint list)
+    /// resolves to the host those rules name, signed for its region and the model's name.
+    #[test]
+    fn a_service_defined_only_by_endpoint_rules_resolves() {
+        for (region, expected) in [
+            (None, "s3files.us-east-1.api.aws"),
+            (Some("eu-west-1"), "s3files.eu-west-1.api.aws"),
+        ] {
+            let resolved = resolved(&aws("s3files", region, "/file-systems")).unwrap();
+            assert_eq!(resolved.url.scheme(), "https");
+            assert_eq!(resolved.url.host_str(), Some(expected));
+            assert_eq!(
+                resolved.aws_signing,
+                Some((
+                    region.unwrap_or("us-east-1").to_string(),
+                    "s3files".to_string()
+                ))
+            );
+        }
+    }
+
     #[test]
     fn known_services_resolve_to_their_api_endpoints() {
         for (service, region, expected, signing) in [

@@ -2861,6 +2861,10 @@
           "description": "A prebuilt image to run, instead of `build`.",
           "type": "string"
         },
+        "image-permissions": {
+          "$ref": "#/definitions/SandboxImagePermissions",
+          "description": "What the sandbox's own image may do beyond the bounded root image grant: mounts it may ask\nthe agent for, and private services its sockets may reach without the gateway. AWS Lambda\nMicroVM only; refused elsewhere at plan time."
+        },
         "lifecycle": {
           "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
           "enum": [
@@ -2971,6 +2975,83 @@
         }
       ]
     },
+    "SandboxImageConnection": {
+      "additionalProperties": false,
+      "description": "A private service the image's own sockets may reach without the gateway.",
+      "properties": {
+        "port": {
+          "description": "TCP port. Never 53.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "to": {
+          "$ref": "#/definitions/ResourceRef",
+          "description": "The stack resource whose private network endpoints the connection reaches. Never a raw\naddress: deployment resolves it from the resource."
+        }
+      },
+      "required": [
+        "to",
+        "port"
+      ],
+      "type": "object"
+    },
+    "SandboxImageMount": {
+      "additionalProperties": false,
+      "description": "One mount an image may ask for.",
+      "properties": {
+        "from": {
+          "description": "Source of a bind mount: the path of a declared `tmpfs` mount. The\nbind's own path must be inside a declared `nfs` mount. Required for bind and refused for\nother types.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute, normalized path the mount is placed at. It may not be or contain a system path\n(`/`, `/opt/alien`, `/proc`, `/sys`, `/dev`, `/run`, `/etc`, `/usr`, `/bin`, `/sbin`,\n`/boot`, `/lib*`).",
+          "type": "string"
+        },
+        "size": {
+          "description": "Size of a tmpfs, as a whole quantity such as `8Gi` or `512Mi`. Required for tmpfs and\nrefused for other types.",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/SandboxImageMountType",
+          "description": "File system type."
+        }
+      },
+      "required": [
+        "type",
+        "path"
+      ],
+      "type": "object"
+    },
+    "SandboxImageMountType": {
+      "description": "A file system type an image may ask the agent to mount.",
+      "enum": [
+        "nfs",
+        "tmpfs",
+        "bind"
+      ],
+      "type": "string"
+    },
+    "SandboxImagePermissions": {
+      "additionalProperties": false,
+      "description": "What a sandbox's image may do beyond the default root image grant.\n\nConnections bypass the deployment gateway and its connection log, and isolation between the\nworkloads inside the image stays the image's responsibility; setup says both to the customer.",
+      "properties": {
+        "connections": {
+          "description": "Private services the image's sockets may reach directly.",
+          "items": {
+            "$ref": "#/definitions/SandboxImageConnection"
+          },
+          "type": "array"
+        },
+        "mounts": {
+          "description": "Mounts the image may ask the agent for.",
+          "items": {
+            "$ref": "#/definitions/SandboxImageMount"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "SandboxLifecyclePolicy": {
       "additionalProperties": false,
       "description": "How long a sandbox may live and when it is paused.\n\nDeclaration-time ceilings, not per-request values: every sandbox created through this\ndeclaration's binding is held to them, whatever a caller asks for at runtime.",
@@ -3000,6 +3081,20 @@
             }
           ],
           "description": "Wall-clock ceiling on a single sandbox, after which the platform terminates it.\n\nOptional because not every backend has the primitive: Kubernetes has\n`activeDeadlineSeconds` and AWS `maximumDurationInSeconds`, while neither Azure nor Local\nexpose one, so declaring a ceiling there is refused at plan time rather than accepted and\nnever applied. AWS caps it at 8 hours."
+        },
+        "on-pause": {
+          "description": "A program the agent runs inside the image, with the image's own grant, before the\nplatform pauses the sandbox with its memory kept. Killed by process group at a deadline.\nBest effort: the image must also survive a stop with no warning. The program must be one\nof the image's own files, not on a declared image-permissions mount. AWS only.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "on-resume": {
+          "description": "A program the agent runs inside the image after such a pause resumes. Best effort, with a\ndeadline. The same rule for the program applies. AWS only.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"

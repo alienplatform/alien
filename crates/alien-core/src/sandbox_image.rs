@@ -79,6 +79,21 @@ pub const STAGED_AGENT_FILE: &str = "alien-sandbox-agent";
 /// Where the staged agent runs from on Kubernetes (inside the read-only `/opt/alien` mount).
 pub const STAGED_AGENT_PATH: &str = "/opt/alien/alien-sandbox-agent";
 
+/// Turns on the image's own command under the root boot contract. Released agents accept only
+/// `true` and refuse to start on anything else.
+pub const ENV_IMAGE_COMMAND: &str = "ALIEN_SANDBOX_IMAGE_COMMAND";
+/// The [`ENV_IMAGE_COMMAND`] value deployment sets when the sandbox declares image permissions
+/// or lifecycle steps. A released agent refuses it and so fails the image build's validate hook;
+/// a current one reads it as `true` plus a requirement to enforce [`ENV_IMAGE_PERMISSIONS`].
+pub const IMAGE_COMMAND_WITH_IMAGE_PERMISSIONS: &str = "image-permissions-v1";
+/// JSON [`crate::sandbox_image_permissions::ImagePermissionsContract`]: the mounts the agent
+/// performs for the image, the connections it exempts from the gateway, and the lifecycle steps.
+pub const ENV_IMAGE_PERMISSIONS: &str = "ALIEN_SANDBOX_IMAGE_PERMISSIONS";
+/// Version of the [`ENV_IMAGE_PERMISSIONS`] contract.
+pub const ENV_IMAGE_PERMISSIONS_VERSION: &str = "ALIEN_SANDBOX_IMAGE_PERMISSIONS_V";
+/// The only [`ENV_IMAGE_PERMISSIONS_VERSION`] value.
+pub const IMAGE_PERMISSIONS_VERSION: &str = "1";
+
 /// Mode of the agent binary, owned by `0:0` so the exec uid cannot rewrite its supervisor.
 pub const AGENT_MODE: u32 = 0o755;
 

@@ -9,6 +9,11 @@
 
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
+use crate::resources::sandbox_image_permissions;
+pub use crate::resources::sandbox_image_permissions::{
+    tmpfs_size_bytes, PrivateEndpointPlacement, PrivateNetworkEndpoints, SandboxImageConnection,
+    SandboxImageMount, SandboxImageMountType, SandboxImagePermissions,
+};
 use crate::resources::ToolchainConfig;
 use crate::Platform;
 use alien_error::AlienError;
@@ -296,7 +301,7 @@ pub const AZURE_GATEWAY_MAX_LIFETIME_SECONDS: u32 = 24 * 60 * 60;
 ///
 /// Declaration-time ceilings, not per-request values: every sandbox created through this
 /// declaration's binding is held to them, whatever a caller asks for at runtime.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxLifecyclePolicy {
@@ -313,6 +318,16 @@ pub struct SandboxLifecyclePolicy {
     /// Stored state written before the rename calls this `idleSuspendSeconds`.
     #[serde(alias = "idleSuspendSeconds", skip_serializing_if = "Option::is_none")]
     pub idle_pause_seconds: Option<u32>,
+    /// A program the agent runs inside the image, with the image's own grant, before the
+    /// platform pauses the sandbox with its memory kept. Killed by process group at a deadline.
+    /// Best effort: the image must also survive a stop with no warning. The program must be one
+    /// of the image's own files, not on a declared image-permissions mount. AWS only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_pause: Option<Vec<String>>,
+    /// A program the agent runs inside the image after such a pause resumes. Best effort, with a
+    /// deadline. The same rule for the program applies. AWS only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_resume: Option<Vec<String>>,
 }
 
 /// What a GCP preview is, in the words every refusal and the docs use. The edge credential is
@@ -724,6 +739,11 @@ pub struct Sandbox {
     #[builder(skip)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub privileged_supervisor: Option<SandboxPrivilegedSupervisor>,
+    /// What the sandbox's own image may do beyond the bounded root image grant: mounts it may ask
+    /// the agent for, and private services its sockets may reach without the gateway. AWS Lambda
+    /// MicroVM only; refused elsewhere at plan time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_permissions: Option<SandboxImagePermissions>,
     /// Sandbox lifetime ceiling and idle behaviour.
     ///
     /// Stored state written before the rename calls this `session`. A stack state or release
@@ -855,6 +875,7 @@ impl Sandbox {
             }));
         }
         let mut capabilities = SandboxCapabilities::for_platform(platform)?;
+        self.validate_image_permissions(platform)?;
         if let Some(supervisor) = &self.privileged_supervisor {
             if platform != Platform::Aws {
                 return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
@@ -1014,6 +1035,82 @@ impl Sandbox {
         }
 
         self.validate_capabilities(&capabilities, platform)
+    }
+
+    /// Whether the image declares anything the image-permissions contract carries: mounts,
+    /// connections or lifecycle steps.
+    pub fn declares_image_permissions(&self) -> bool {
+        self.image_permissions.is_some()
+            || self.lifecycle.on_pause.is_some()
+            || self.lifecycle.on_resume.is_some()
+    }
+
+    /// Refuses image permissions and lifecycle steps where they cannot run, and a malformed
+    /// declaration anywhere. Whether connections resolve is a stack question, answered by
+    /// [`crate::sandbox_image_permissions::validate_connections`].
+    fn validate_image_permissions(&self, platform: Platform) -> Result<()> {
+        if let Some(permissions) = &self.image_permissions {
+            sandbox_image_permissions::require_image_permissions_platform(
+                "imagePermissions",
+                platform,
+            )?;
+            permissions.validate(&self.id)?;
+        }
+        for (field, argv) in [
+            ("onPause", &self.lifecycle.on_pause),
+            ("onResume", &self.lifecycle.on_resume),
+        ] {
+            if let Some(argv) = argv {
+                sandbox_image_permissions::require_image_permissions_platform(field, platform)?;
+                sandbox_image_permissions::validate_lifecycle_argv(
+                    &self.id,
+                    field,
+                    argv,
+                    self.image_permissions
+                        .as_ref()
+                        .map(|permissions| &permissions.mounts[..])
+                        .unwrap_or_default(),
+                )?;
+            }
+        }
+        if self.declares_image_permissions() && self.privileged_supervisor.is_some() {
+            return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "imagePermissions".to_string(),
+                value: "privilegedSupervisor".to_string(),
+                reason: "image permissions and lifecycle steps need the root image boot, not the \
+                         released privileged supervisor"
+                    .to_string(),
+            }));
+        }
+        // The agent serves them only on the guest network it runs for `internet` and `none`,
+        // and only to an image whose command starts as root.
+        if self.declares_image_permissions()
+            && !matches!(self.egress, SandboxEgress::Internet | SandboxEgress::None)
+        {
+            return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "egress".to_string(),
+                value: match self.egress {
+                    SandboxEgress::Allow => "allow",
+                    _ => "allowDomains",
+                }
+                .to_string(),
+                reason: "image permissions and lifecycle steps need egress `internet` or `none`"
+                    .to_string(),
+            }));
+        }
+        if self.declares_image_permissions() && self.image_user.is_some_and(|uid| uid != 0) {
+            return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "imagePermissions".to_string(),
+                value: "image USER".to_string(),
+                reason: "image permissions and lifecycle steps need an image whose command \
+                         starts as root (USER root or no USER)"
+                    .to_string(),
+            }));
+        }
+        Ok(())
     }
 
     /// What Azure creates this sandbox from: a catalog name or a registry image, told apart by
@@ -1483,8 +1580,14 @@ impl ResourceDefinition for Sandbox {
         false
     }
 
+    /// The resources the image connects to directly: their published addresses decide the
+    /// connection, so they exist first. None for a sandbox without connections.
     fn get_dependencies(&self) -> Vec<ResourceRef> {
-        Vec::new()
+        self.image_permissions
+            .iter()
+            .flat_map(|permissions| &permissions.connections)
+            .map(|connection| connection.to.clone())
+            .collect()
     }
 
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()> {
@@ -1927,6 +2030,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .preview_ports(preview_ports)
             .build()
@@ -1978,6 +2082,7 @@ mod tests {
         let refused = with_policy(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: Some(900),
+            ..Default::default()
         })
         .expect_err("no idle policy exists on GCP");
         assert_eq!(refused.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
@@ -1985,6 +2090,7 @@ mod tests {
         with_policy(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(3600),
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .expect("a lifetime is a TTL on GCP");
     }
@@ -2297,6 +2403,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
 
@@ -2319,6 +2426,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
 
@@ -2950,6 +3058,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
 
@@ -3078,6 +3187,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build();
 
@@ -3109,12 +3219,14 @@ mod tests {
         with_policy(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: Some(900),
+            ..Default::default()
         })
         .expect("Azure pauses a sandbox on idle");
 
         with_policy(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(3600),
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .expect("the reaper enforces a wall-clock ceiling");
     }
@@ -3136,6 +3248,7 @@ mod tests {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build()
                 .validate_for_platform(Platform::Azure)
@@ -3205,6 +3318,7 @@ mod tests {
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(28_800),
                 idle_pause_seconds: Some(600),
+                ..Default::default()
             })
             .build();
         assert_eq!(stored.config.downcast_ref::<Sandbox>(), Some(&expected));

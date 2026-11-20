@@ -46,7 +46,210 @@ pub fn protect(binary: &Path, metadata: &Path) -> io::Result<()> {
         bind(&parent, false)?;
     }
     bind(binary, true)?;
-    bind(metadata, true)
+    bind(metadata, true)?;
+    // A missing entry below may be skipped only when procfs itself is there: without it nothing
+    // under `/proc` would be made read-only, and that must not pass for "the kernel has none".
+    require_procfs(Path::new("/proc"))?;
+    for path in READ_ONLY_KERNEL_PATHS {
+        match read_only_tree(Path::new(path)) {
+            // Not every kernel has every entry (no IRQ or bus directories, no /sys). The kernel
+            // settings always exist where procfs is mounted.
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound && !path.starts_with("/proc/sys") => {}
+            result => {
+                result.map_err(|error| io::Error::new(error.kind(), format!("{path}: {error}")))?
+            }
+        }
+    }
+    for path in MASKED_KERNEL_PATHS {
+        mask(Path::new(path))
+            .map_err(|error| io::Error::new(error.kind(), format!("mask {path}: {error}")))?;
+    }
+    Ok(())
+}
+
+const PROC_SUPER_MAGIC: i64 = 0x9fa0;
+
+/// `proc` is procfs, mounted, and shows this process (`self/stat` reads): what is missing below it
+/// is missing from the kernel, not hidden by an absent or foreign mount.
+pub fn require_procfs(proc: &Path) -> io::Result<()> {
+    let refused = |reason: String| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} is not this process's procfs: {reason}", proc.display()),
+        )
+    };
+    let name = CString::new(proc.as_os_str().as_bytes())?;
+    // SAFETY: a zeroed statfs for statfs to fill, and a valid path.
+    let mut fs: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(name.as_ptr(), &mut fs) } != 0 {
+        return Err(refused(io::Error::last_os_error().to_string()));
+    }
+    if fs.f_type as i64 != PROC_SUPER_MAGIC {
+        return Err(refused(format!("filesystem type {:#x}", fs.f_type)));
+    }
+    let stat = fs::read_to_string(proc.join("self/stat"))
+        .map_err(|error| refused(format!("self/stat: {error}")))?;
+    let pid = stat.split(' ').next().unwrap_or_default();
+    if pid != std::process::id().to_string() {
+        return Err(refused(format!("self/stat names process {pid}")));
+    }
+    Ok(())
+}
+
+/// Kernel information the image has no use for and container runtimes hide: memory (`kcore`), the
+/// key list, timer and scheduler internals, and hardware tables. A file is covered by `/dev/null`,
+/// a directory by an empty read-only tmpfs; one the kernel does not have is skipped.
+const MASKED_KERNEL_PATHS: [&str; 10] = [
+    "/proc/kcore",
+    "/proc/keys",
+    "/proc/timer_list",
+    "/proc/latency_stats",
+    "/proc/sched_debug",
+    "/proc/acpi",
+    "/proc/scsi",
+    "/proc/asound",
+    "/sys/firmware",
+    "/sys/devices/virtual/powercap",
+];
+
+fn mask(path: &Path) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let target = CString::new(path.as_os_str().as_bytes())?;
+    let result = if metadata.is_dir() {
+        // SAFETY: valid NUL-terminated strings.
+        unsafe {
+            libc::mount(
+                c"tmpfs".as_ptr(),
+                target.as_ptr(),
+                c"tmpfs".as_ptr(),
+                libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+                c"size=0,mode=555".as_ptr().cast(),
+            )
+        }
+    } else {
+        // SAFETY: valid NUL-terminated strings.
+        unsafe {
+            libc::mount(
+                c"/dev/null".as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                libc::MS_BIND,
+                std::ptr::null(),
+            )
+        }
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Kernel settings the image could otherwise write as root without any capability: `/proc/sys`
+/// files are root-writable by mode, and so is `/proc/sysrq-trigger`. Both act on the whole VM (a
+/// `kernel.core_pattern` pipe helper runs as root in the VM's own namespaces). They are bound
+/// read-only in this private mount namespace, as container runtimes do; reading still works. The
+/// image never holds `SYS_ADMIN`, so it cannot undo the binds. Processes outside this namespace
+/// (the provider's, and the mount broker, which writes its own settings) keep their view.
+///
+/// `/sys` too: root-writable files there act on the whole VM as well (`kernel/uevent_helper` names
+/// a program the kernel runs as root on every device event; module parameters, memory settings).
+/// The agent writes nothing below `/sys` after this point (the guest cgroup is set up before).
+/// And the other `/proc` entries runtimes make read-only: bus, filesystem and IRQ settings.
+const READ_ONLY_KERNEL_PATHS: [&str; 6] = [
+    "/proc/sys",
+    "/proc/sysrq-trigger",
+    "/sys",
+    "/proc/bus",
+    "/proc/fs",
+    "/proc/irq",
+];
+
+/// Binds `path` over itself with every mount below it, then makes each of those mounts read-only.
+/// Recursive, because a user namespace refuses a plain bind that would uncover locked mounts
+/// below (such as `fs/binfmt_misc`), and those must not stay writable either. The flags each
+/// mount already has are kept (proc is `noexec`): a user namespace refuses a remount that clears
+/// a flag its parent locked. They are read from the mount table rather than by `statvfs`, which
+/// would trigger an automount point below.
+fn read_only_tree(path: &Path) -> io::Result<()> {
+    let target = CString::new(path.as_os_str().as_bytes())?;
+    if unsafe {
+        libc::mount(
+            target.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND | libc::MS_REC,
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // This thread's namespace: `self` would name the thread-group leader's.
+    let table = fs::read_to_string("/proc/thread-self/mountinfo")?;
+    for (point, flags) in mounts_within(&table, path.as_os_str().as_bytes()) {
+        let point = CString::new(point)?;
+        if unsafe {
+            libc::mount(
+                std::ptr::null(),
+                point.as_ptr(),
+                std::ptr::null(),
+                libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | flags,
+                std::ptr::null(),
+            )
+        } != 0
+        {
+            let error = io::Error::last_os_error();
+            return Err(io::Error::new(
+                error.kind(),
+                format!(
+                    "read-only remount of {}: {error}",
+                    String::from_utf8_lossy(point.as_bytes())
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The mount points at or below `root`, each once, parents first, with the remount flags to keep
+/// (always `nosuid` and `nodev`).
+fn mounts_within(table: &str, root: &[u8]) -> Vec<(Vec<u8>, libc::c_ulong)> {
+    let mut found: Vec<(Vec<u8>, libc::c_ulong)> = Vec::new();
+    for line in table.lines() {
+        let mut fields = line.split(' ');
+        let (Some(point), Some(options)) = (fields.nth(4), fields.next()) else {
+            continue;
+        };
+        let point = crate::read_only_mounts::unescape(point);
+        let below =
+            point.len() > root.len() && point.starts_with(root) && point[root.len()] == b'/';
+        if point != root && !below {
+            continue;
+        }
+        let mut flags = libc::MS_NOSUID | libc::MS_NODEV;
+        for option in options.split(',') {
+            flags |= match option {
+                "noexec" => libc::MS_NOEXEC,
+                "noatime" => libc::MS_NOATIME,
+                "nodiratime" => libc::MS_NODIRATIME,
+                "relatime" => libc::MS_RELATIME,
+                _ => 0,
+            };
+        }
+        // A later entry at the same point covers the earlier one: only it can be remounted.
+        if let Some(entry) = found.iter_mut().find(|(seen, _)| *seen == point) {
+            entry.1 = flags;
+        } else {
+            found.push((point, flags));
+        }
+    }
+    found.sort_by_key(|(point, _)| point.len());
+    found
 }
 
 fn bind(path: &Path, readonly: bool) -> io::Result<()> {
@@ -165,13 +368,132 @@ fn private_mount_namespace() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn procfs_is_required_where_it_should_be() {
+        super::require_procfs(std::path::Path::new("/proc")).expect("/proc is procfs");
+        let empty = tempfile::tempdir().unwrap();
+        let error = super::require_procfs(empty.path()).unwrap_err();
+        assert!(error.to_string().contains("filesystem type"), "{error}");
+        let error = super::require_procfs(&empty.path().join("absent")).unwrap_err();
+        assert!(
+            error.to_string().contains("is not this process's procfs"),
+            "{error}"
+        );
+        // A copy of procfs files on another filesystem is not procfs.
+        std::fs::create_dir(empty.path().join("self")).unwrap();
+        std::fs::write(
+            empty.path().join("self/stat"),
+            format!("{} (x) R", std::process::id()),
+        )
+        .unwrap();
+        assert!(super::require_procfs(empty.path()).is_err());
+    }
+
     use super::*;
+
+    #[test]
+    fn mounts_within_lists_each_point_below_once_with_its_flags() {
+        let table = "\
+25 1 0:23 / /proc rw,nosuid,nodev,noexec,relatime shared:12 - proc proc rw
+37 25 0:31 / /proc/sys/fs/binfmt_misc rw,relatime shared:13 - autofs systemd-1 rw,fd=32
+36 37 0:39 / /proc/sys/fs/binfmt_misc rw,nosuid,nodev,noexec,relatime shared:45 - binfmt_misc binfmt_misc rw
+90 25 0:23 /sys /proc/sys rw,nosuid,nodev,noexec,relatime - proc proc rw
+91 25 0:23 /sysrq-trigger /proc/sysrq-trigger rw,nosuid,nodev,noexec,relatime - proc proc rw
+92 25 0:40 / /proc/sys\\040x rw,noatime - tmpfs tmpfs rw
+";
+        let keep = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC | libc::MS_RELATIME;
+        assert_eq!(
+            mounts_within(table, b"/proc/sys"),
+            vec![
+                (b"/proc/sys".to_vec(), keep),
+                (b"/proc/sys/fs/binfmt_misc".to_vec(), keep),
+            ]
+        );
+        assert_eq!(
+            mounts_within(table, b"/proc/sysrq-trigger"),
+            vec![(b"/proc/sysrq-trigger".to_vec(), keep)]
+        );
+    }
     use crate::{exec::ExecIdentity, privilege};
     use std::{
         io::{Read, Seek, SeekFrom, Write},
         os::unix::process::CommandExt,
         process::Command,
     };
+
+    /// A `/proc` that is not procfs (here an empty tmpfs holding only a copy of `self/status`)
+    /// must not read as "the kernel has no `/proc/sys`": nothing would be made read-only.
+    #[test]
+    #[ignore = "requires root and SYS_ADMIN"]
+    fn protect_refuses_without_procfs() {
+        const CHILD: &str = "ALIEN_PROTECTION_NO_PROCFS_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let status = fs::read_to_string("/proc/self/status").unwrap();
+            // SAFETY: valid NUL-terminated strings; this process's private mount namespace.
+            let mounted = unsafe {
+                libc::mount(
+                    c"tmpfs".as_ptr(),
+                    c"/proc".as_ptr(),
+                    c"tmpfs".as_ptr(),
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            assert_eq!(mounted, 0, "{}", io::Error::last_os_error());
+            fs::create_dir("/proc/self").unwrap();
+            fs::write("/proc/self/status", status).unwrap();
+            let root = tempfile::tempdir().unwrap();
+            let binary = root.path().join("usr/local/bin/agent");
+            let metadata = root.path().join("opt/alien");
+            fs::create_dir_all(binary.parent().unwrap()).unwrap();
+            fs::create_dir_all(&metadata).unwrap();
+            fs::write(&binary, b"binary").unwrap();
+            let error = protect(&binary, &metadata).expect_err("protect without procfs");
+            println!("protect without procfs: {error}");
+            assert!(
+                error
+                    .to_string()
+                    .contains("/proc is not this process's procfs: filesystem type"),
+                "{error}"
+            );
+            return;
+        }
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "protected_files::tests::protect_refuses_without_procfs",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(CHILD, "1");
+        // SAFETY: only unshare and mount between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::unshare(libc::CLONE_NEWNS) != 0
+                    || libc::mount(
+                        std::ptr::null(),
+                        c"/".as_ptr(),
+                        std::ptr::null(),
+                        libc::MS_REC | libc::MS_PRIVATE,
+                        std::ptr::null(),
+                    ) != 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let output = command.output().unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        println!("{text}");
+        assert!(
+            output.status.success(),
+            "{text}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(text.contains("protect without procfs: "), "{text}");
+    }
 
     #[test]
     #[ignore = "requires root, SYS_ADMIN and Python 3"]
@@ -213,6 +535,56 @@ for path in [binary, metadata, ancestor]:
     except OSError as e: assert e.errno in [errno.EBUSY, errno.EROFS, errno.EPERM], e
     else: raise AssertionError(f'root renamed {path}')
 assert (metadata / 'ca.pem').read_bytes() == b'new'
+# VM-wide kernel settings: opening for writing is refused, so nothing is ever written even when
+# the protection is missing (a write to sysrq-trigger would act at once).
+for path in ['/proc/sys/kernel/core_pattern', '/proc/sys/net/core/somaxconn', '/proc/sysrq-trigger']:
+    try: fd = os.open(path, os.O_WRONLY)
+    except OSError as e: assert e.errno == errno.EROFS, (path, e)
+    else:
+        os.close(fd)
+        raise AssertionError(f'root opened {path} for writing')
+# Mounts below /proc/sys are read-only too (binfmt_misc registers interpreters for every exec).
+# Only the last entry at a mount point is reachable; earlier ones are covered.
+visible = {}
+for line in open('/proc/self/mountinfo'):
+    fields = line.split()
+    visible[fields[4]] = fields[5].split(',')
+for point, options in visible.items():
+    if point.startswith('/proc/sys/'):
+        assert 'ro' in options, (point, options)
+# Reading still works.
+for path in ['kernel/osrelease', 'net/core/somaxconn', 'vm/overcommit_memory']:
+    assert pathlib.Path('/proc/sys', path).read_text().strip(), path
+# /sys likewise, every mount below it included.
+for path in ['/sys/kernel/uevent_helper', '/sys/kernel/mm/transparent_hugepage/enabled', '/sys/kernel/profiling']:
+    if not os.path.exists(path): continue
+    try: fd = os.open(path, os.O_WRONLY)
+    except OSError as e: assert e.errno == errno.EROFS, (path, e)
+    else:
+        os.close(fd)
+        raise AssertionError(f'root opened {path} for writing')
+for point, options in visible.items():
+    if point == '/sys' or point.startswith('/sys/'):
+        assert 'ro' in options, (point, options)
+assert pathlib.Path('/sys/class/net/lo/mtu').read_text().strip()
+# The other runtime read-only entries, where the kernel has them, and the masked ones.
+for path in ['/proc/irq/default_smp_affinity', '/proc/fs/nfsd/threads', '/proc/bus/pci/devices']:
+    if not os.path.exists(path): continue
+    try: fd = os.open(path, os.O_WRONLY)
+    except OSError as e: assert e.errno == errno.EROFS, (path, e)
+    else:
+        os.close(fd)
+        raise AssertionError(f'root opened {path} for writing')
+for path in ['/proc/kcore', '/proc/keys', '/proc/timer_list', '/proc/sched_debug']:
+    if not os.path.exists(path): continue
+    assert os.stat(path).st_rdev == os.stat('/dev/null').st_rdev, (path, 'not masked')
+    assert open(path, 'rb').read() == b'', path
+for path in ['/proc/acpi', '/proc/scsi', '/sys/firmware']:
+    if not os.path.isdir(path): continue
+    assert os.listdir(path) == [], (path, os.listdir(path))
+    try: os.mkdir(path + '/x')
+    except OSError as e: assert e.errno in [errno.EROFS, errno.EACCES], (path, e)
+    else: raise AssertionError(f'root wrote into masked {path}')
 # The inherited descriptor is CLOEXEC, and root cannot reopen the agent's FD.
 try: os.open(f'/proc/{sys.argv[4]}/fd/{sys.argv[5]}', os.O_WRONLY)
 except OSError as e: assert e.errno in [errno.EACCES, errno.EPERM], e

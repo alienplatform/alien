@@ -223,6 +223,17 @@ impl<'a, T: AlienResource> ResourceRegistration<'a, T> {
         self
     }
 
+    /// The type serves at private addresses inside the stack's network, so a sandbox image may
+    /// declare a direct connection to it (`imagePermissions.connections`). Implies
+    /// [`Self::requires_network`].
+    pub fn private_network_endpoints(mut self) -> Self {
+        let declarations = self.declarations();
+        declarations.requires_network = true;
+        declarations.private_network_endpoints =
+            Some(alien_core::PrivateEndpointPlacement::StackNetwork);
+        self
+    }
+
     /// What a workload gets when it links the resource, from the resource's outputs. The
     /// permission sets it grants and the names of the variables it sets go into the type's
     /// descriptor: setup grants the sets before the resource has outputs, and a release checks the
@@ -299,6 +310,7 @@ pub(crate) struct ResourceDeclarations {
     pub(crate) link_env: Vec<String>,
     services: IndexMap<Platform, Vec<String>>,
     requires_network: bool,
+    private_network_endpoints: Option<alien_core::PrivateEndpointPlacement>,
 }
 
 impl ResourceDeclarations {
@@ -316,12 +328,14 @@ impl ResourceDeclarations {
             link_env: Vec::new(),
             services: IndexMap::new(),
             requires_network: false,
+            private_network_endpoints: None,
         }
     }
 
     pub(crate) fn write(&self, descriptor: &mut ResourceTypeDescriptor) {
         descriptor.services = self.services.clone();
         descriptor.requires_network = self.requires_network;
+        descriptor.private_network_endpoints = self.private_network_endpoints;
     }
 }
 

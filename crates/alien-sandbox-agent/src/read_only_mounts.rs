@@ -71,7 +71,7 @@ fn check(table: &str, binary: &Path, metadata: &Path) -> Result<(), String> {
 }
 
 /// Decodes the `\040`-style octal escapes `mountinfo` uses for spaces and the like.
-fn unescape(field: &str) -> Vec<u8> {
+pub(crate) fn unescape(field: &str) -> Vec<u8> {
     let bytes = field.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;

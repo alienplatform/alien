@@ -7,6 +7,7 @@ import * as z from "zod";
 import { EgressPolicySchema } from "./egress-policy-schema.js";
 import { SandboxCodeSchema } from "./sandbox-code-schema.js";
 import { SandboxEgressSchema } from "./sandbox-egress-schema.js";
+import { SandboxImagePermissionsSchema } from "./sandbox-image-permissions-schema.js";
 import { SandboxLifecyclePolicySchema } from "./sandbox-lifecycle-policy-schema.js";
 import { SandboxLimitsSchema } from "./sandbox-limits-schema.js";
 import { SandboxPrivilegedSupervisorSchema } from "./sandbox-privileged-supervisor-schema.js";
@@ -25,6 +26,9 @@ get "egress"(){
                 return SandboxEgressSchema.describe("Outbound network policy")
               },
 "id": z.string().describe("Identifier for the sandbox. Must be DNS-compatible: lowercase letters, digits and hyphens,\nstarting and ending with a letter or digit, with no consecutive hyphens."),
+get "imagePermissions"(){
+                return z.union([SandboxImagePermissionsSchema, z.null()]).optional()
+              },
 get "lifecycle"(){
                 return SandboxLifecyclePolicySchema.describe("How long a sandbox may live and when it is paused.\n\nDeclaration-time ceilings, not per-request values: every sandbox created through this\ndeclaration's binding is held to them, whatever a caller asks for at runtime.")
               },

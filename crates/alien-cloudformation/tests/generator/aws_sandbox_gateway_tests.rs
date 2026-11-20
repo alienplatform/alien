@@ -90,6 +90,7 @@ fn stack(shape: Shape, egress: SandboxEgress) -> Stack {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let mut stack = Stack::new("acme".to_string())
@@ -226,7 +227,10 @@ async fn an_internet_sandbox_setup_template_carries_the_gateway_network() {
         let mut proxy_rules = 0;
         let document: serde_json::Value = serde_yaml::from_str(&yaml).expect("template parses");
         collect_ports(&document, &mut proxy_rules);
-        assert!(proxy_rules > 0, "{description}: no gateway proxy rule found");
+        assert!(
+            proxy_rules > 0,
+            "{description}: no gateway proxy rule found"
+        );
         cfn_lint(&yaml).assert_ok(&description);
         for (kind, name) in [
             ("resource", "SandboxGatewaySubnet1"),
@@ -263,6 +267,7 @@ fn an_internet_sandbox_without_its_gateway_is_refused() {
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
+                    ..Default::default()
                 })
                 .build(),
             ResourceLifecycle::Live,
@@ -313,6 +318,7 @@ async fn a_profile_granted_an_internet_sandbox_renders_without_a_dependency_cycl
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
+                ..Default::default()
             })
             .build()
     };
@@ -555,6 +561,7 @@ async fn the_management_role_cannot_decrypt_or_read_the_deployments_secrets() {
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
+            ..Default::default()
         })
         .build();
     let stack = Stack::new("acme".to_string())
@@ -791,7 +798,9 @@ fn collect_ports(value: &serde_json::Value, rules: &mut usize) {
             }
             map.values().for_each(|inner| collect_ports(inner, rules));
         }
-        serde_json::Value::Array(items) => items.iter().for_each(|inner| collect_ports(inner, rules)),
+        serde_json::Value::Array(items) => {
+            items.iter().for_each(|inner| collect_ports(inner, rules))
+        }
         _ => {}
     }
 }
