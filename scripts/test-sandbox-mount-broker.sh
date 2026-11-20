@@ -35,7 +35,19 @@ docker run --rm --privileged --cgroupns=private \
     # with "writing fd to kernel failed: errno 111".
     rpcbind -w
     rpc.mountd -N 2 -N 3
-    rpc.nfsd -N 3 -V 4.1 -V 4.2 2
+    # The kernel enables every NFSv4 minor version by default; only NFSv3 is turned off. Newer
+    # kernels keep the versions per network namespace, so print what this one serves.
+    rpc.nfsd -N 3 2
+    echo "nfsd versions: $(cat /proc/fs/nfsd/versions) (kernel $(uname -r))"
+    grep -qw "+4.2" /proc/fs/nfsd/versions || { echo "the test NFS server does not serve NFSv4.2" >&2; exit 1; }
+    # The kernel client against the server directly: a failure here is the fixture, not the broker.
+    mkdir -p /tmp/nfs-probe
+    if ! mount -t nfs4 -o vers=4.2,soft,timeo=20,retrans=1 127.0.0.1:/ /tmp/nfs-probe; then
+      echo "the kernel NFS client cannot mount the test server directly" >&2
+      dmesg 2>/dev/null | tail -20 >&2 || true
+      exit 1
+    fi
+    umount /tmp/nfs-probe
     /agent-tests --list --ignored --exact "'"$name"'" | grep -Fx "'"$name"': test"
     unshare --mount --propagation private /agent-tests --ignored --exact "'"$name"'" --nocapture --test-threads=1
   '
