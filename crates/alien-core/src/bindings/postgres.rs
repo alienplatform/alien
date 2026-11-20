@@ -116,6 +116,11 @@ pub struct ExternalPostgresBinding {
     /// Explicit TLS policy. Missing legacy configuration defaults to verified TLS.
     #[serde(default)]
     pub ssl_mode: ExternalPostgresSslMode,
+    /// PEM root certificates that sign the server's certificate, for servers whose CA is not
+    /// in the runtime's trust store (for example a managed database's regional CA).
+    /// Used by `verify-full`; when missing or empty the runtime's system trust store is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_ca_certificates: Option<BindingValue<Vec<String>>>,
 }
 
 // Password references extend the old string contract without accepting numeric,
@@ -202,6 +207,7 @@ impl std::fmt::Debug for ExternalPostgresBinding {
             .field("username", &self.username)
             .field("password", &"<redacted>")
             .field("ssl_mode", &self.ssl_mode)
+            .field("server_ca_certificates", &self.server_ca_certificates)
             .finish()
     }
 }
@@ -251,6 +257,7 @@ impl PostgresBinding {
             username: username.into(),
             password: BindingValue::value(password.into()),
             ssl_mode: ExternalPostgresSslMode::default(),
+            server_ca_certificates: None,
         })
     }
 }
@@ -330,6 +337,20 @@ mod tests {
             .expect("external binding accepts a Kubernetes password reference");
         assert_eq!(serde_json::to_value(&binding).unwrap(), json);
         assert!(!format!("{binding:?}").contains("database-credentials"));
+    }
+
+    #[test]
+    fn external_binding_round_trips_server_ca_certificates() {
+        let json = serde_json::json!({
+            "service": "external", "host": "db.internal", "port": 5432,
+            "database": "app", "username": "alien", "password": "secret",
+            "serverCaCertificates": ["-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"]
+        });
+        let binding: PostgresBinding = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&binding).unwrap()["serverCaCertificates"],
+            json["serverCaCertificates"]
+        );
     }
 
     #[test]

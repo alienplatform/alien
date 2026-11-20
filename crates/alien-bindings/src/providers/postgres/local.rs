@@ -42,9 +42,24 @@ impl ResolvedPostgres {
                         "Postgres password reference must be resolved before loading the binding",
                     ))?;
                 let tls = match b.ssl_mode {
-                    ExternalPostgresSslMode::VerifyFull => {
-                        PostgresTlsPolicy::verify_full_with_system_roots()
-                    }
+                    ExternalPostgresSslMode::VerifyFull => match &b.server_ca_certificates {
+                        None => PostgresTlsPolicy::verify_full_with_system_roots(),
+                        Some(certificates) => {
+                            let certificates = certificates
+                                .clone()
+                                .into_value(binding_name, "serverCaCertificates")
+                                .context(ErrorData::config_invalid(
+                                    binding_name,
+                                    "Failed to extract 'serverCaCertificates' from Postgres binding",
+                                ))?;
+                            PostgresTlsPolicy::verify_full(certificates).map_err(|_| {
+                                AlienError::new(ErrorData::config_invalid(
+                                    binding_name,
+                                    "Postgres serverCaCertificates must contain valid PEM certificates",
+                                ))
+                            })?
+                        }
+                    },
                     ExternalPostgresSslMode::Disable => PostgresTlsPolicy::disabled(),
                 };
                 resolve_params(
@@ -109,6 +124,24 @@ mod tests {
             pg.connection_string(),
             "postgres://alien:p%40ss%2Fword@db.internal:5432/app?sslmode=verify-full"
         );
+    }
+
+    #[test]
+    fn external_binding_verifies_against_the_configured_server_ca() {
+        let pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+        let mut binding = serde_json::json!({
+            "service": "external", "host": "db.internal", "port": 5432,
+            "database": "app", "username": "alien", "password": "secret",
+            "serverCaCertificates": [pem]
+        });
+        let parsed: PostgresBinding = serde_json::from_value(binding.clone()).unwrap();
+        let pg = ResolvedPostgres::from_binding("db", &parsed).expect("resolves");
+        assert_eq!(pg.connection_params().sslmode(), SslMode::VerifyFull);
+        assert_eq!(pg.connection_params().ca_certificates(), &[pem.to_string()]);
+
+        binding["serverCaCertificates"] = serde_json::json!(["not a certificate"]);
+        let parsed: PostgresBinding = serde_json::from_value(binding).unwrap();
+        assert!(ResolvedPostgres::from_binding("db", &parsed).is_err());
     }
 
     #[test]
