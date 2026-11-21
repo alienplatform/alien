@@ -4406,10 +4406,9 @@ mod tests {
                 }));
             });
             // A not-ready period is active, as after a failed health check.
-            controller.not_ready =
-                crate::kubernetes_workload_heartbeat::NotReadyObservations::since(
-                    chrono::Utc::now().timestamp() - 5,
-                );
+            controller.not_ready = crate::kubernetes_workload_heartbeat::NotReadyObservations::since(
+                chrono::Utc::now().timestamp() - 5,
+            );
             let result = controller.step(&ctx).await;
             assert!(result.is_ok(), "{result:?}");
             assert_eq!(
