@@ -457,18 +457,13 @@ async fn load_source_stack_for_release(
 
     // The extensions the stack lists build first, so the stack pins the bundles the release
     // ships. A stack without extensions evaluates once and builds nothing.
-    crate::commands::extensions::release::evaluate_building_extensions(
-        current_dir,
-        &[],
-        crate::commands::extensions::ControllerProfile::Release,
-        || async {
-            crate::config::load_configuration_and_extension_modules(current_dir.to_path_buf())
-                .await
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to load configuration".to_string(),
-                })
-        },
-    )
+    crate::commands::extensions::release::evaluate_building_extensions(current_dir, &[], || async {
+        crate::config::load_configuration_and_extension_modules(current_dir.to_path_buf())
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to load configuration".to_string(),
+            })
+    })
     .await
     .map(Some)
 }

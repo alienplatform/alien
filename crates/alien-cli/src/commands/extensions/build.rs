@@ -35,7 +35,7 @@ pub(crate) const HOOKS_PROTOCOL: u32 = 1;
 
 pub async fn build_task(directory: &Path, targets: &[BinaryTarget]) -> Result<()> {
     let workspace = read_workspace(directory)?;
-    let bundle = build(&workspace, targets, ControllerProfile::Release).await?;
+    let bundle = build(&workspace, targets).await?;
 
     println!("{}", success_line("Extension built."));
     println!(
@@ -68,23 +68,9 @@ pub(crate) struct Bundle {
     index_ts: PathBuf,
 }
 
-/// How a build makes the controller binary for this machine.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ControllerProfile {
-    /// Every target in Cargo's release profile: the bundle `alien extensions build` and `alien
-    /// release` write. This machine's binary is built once and is also the one `--controllers`
-    /// runs.
-    Release,
-    /// This machine's binary in Cargo's dev profile, for its own target triple, so an edit
-    /// rebuilds incrementally: the bundle `alien dev` writes and its manager runs. Any other
-    /// target is built as in `Release`. `alien release` rebuilds every bundle it ships.
-    Dev,
-}
-
 pub(crate) async fn build(
     workspace: &ExtensionWorkspace,
     targets: &[BinaryTarget],
-    profile: ControllerProfile,
 ) -> Result<Bundle> {
     let module = build_hooks_module(workspace)?;
     let name = module.manifest.extension.clone();
@@ -117,19 +103,16 @@ pub(crate) async fn build(
     if let Some((controller, bin)) = bin {
         let host =
             alien_infra::extension_bundle::host_target().filter(|host| targets.contains(host));
-        let listing = match (host, profile) {
-            (Some(host), ControllerProfile::Release) => {
+        // The bundle's binary for this machine runs here: on Linux it is static (musl), and on
+        // macOS and Windows its target is this machine's. A bundle without one gets a binary
+        // built only to list them.
+        let listing = match host {
+            Some(host) => {
                 let path = build_controller(workspace, controller, bin, host).await?;
                 built.insert(host, path.clone());
                 path
             }
-            (Some(host), ControllerProfile::Dev) => {
-                let path = build_host_controller(workspace, controller, bin)?;
-                built.insert(host, path.clone());
-                path
-            }
-            // The bundle has no binary for this machine, so one is built only to list them.
-            (None, _) => build_host_controller(workspace, controller, bin)?,
+            None => build_host_controller(workspace, controller, bin)?,
         };
         add_controller_platforms(&mut resource_types, local_controller_platforms(&listing)?)?;
     }
