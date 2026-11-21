@@ -421,6 +421,7 @@ impl LocalSandboxManager {
                 host: format!("{}.svc", link.id),
                 ports: link.ports.clone(),
                 ranges: vec![range],
+                addresses: Vec::new(),
             })
             .collect();
         let mut gateways = self.gateways.lock().await;

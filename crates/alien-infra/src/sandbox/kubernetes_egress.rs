@@ -299,6 +299,7 @@ async fn linked_service(
         host: link_host(ctx, namespace, id)?,
         ports,
         ranges,
+        addresses: Vec::new(),
     }))
 }
 

@@ -52,7 +52,10 @@ A connection reaches a link only when it names `host` exactly on one of `ports`;
 an address never matches a link, even one inside its ranges. Every DNS answer for
 the name must fall in `ranges`, and `ranges` must lie inside 10/8, 100.64/10,
 172.16/12 or 192.168/16 and be no wider than a /8, so loopback, link-local and
-metadata addresses stay refused for linked names too. The sandbox's policy can only
+metadata addresses stay refused for linked names too. A link may also carry
+`addresses`, fixed IPv4 addresses the deployment owns for the name (such as an
+internal load balancer's static frontend IP); the gateway then dials those without a
+lookup, and each must lie in `ranges`. The sandbox's policy can only
 narrow its links: `internet` keeps them all, an allowlist keeps those it names as
 `link:<id>`, and `allow: []` keeps none. The 30-second sweep closes a linked
 tunnel when the link is removed, the policy no longer keeps it, or the peer is

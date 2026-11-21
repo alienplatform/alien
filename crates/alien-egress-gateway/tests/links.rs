@@ -203,3 +203,31 @@ async fn invalid_links_refuse_the_whole_configuration() {
     config.as_object_mut().unwrap().remove("links");
     assert!(gateway(&config).await.unwrap().config.links.is_empty());
 }
+
+#[tokio::test]
+async fn fixed_link_addresses_must_lie_in_the_link_ranges() {
+    let key = KeyPair::from_seed(Seed::new([42; 32]));
+    let link = |addresses: Value| {
+        json!({AUD:[{"id":"api","host":"api.svc","ports":[8080],
+        "ranges":["10.244.0.0/16"],"addresses":addresses}]})
+    };
+    for addresses in [
+        json!(["127.0.0.1"]),
+        json!(["169.254.169.254"]),
+        json!(["10.245.0.4"]),
+        json!(["10.244.0.4", "8.8.8.8"]),
+        json!(["fd00:ec2::254"]),
+    ] {
+        let mut config = config(&key);
+        config["links"] = link(addresses.clone());
+        assert!(gateway(&config).await.is_err(), "{addresses}");
+    }
+    let mut config = config(&key);
+    config["links"] = link(json!(["10.244.7.9"]));
+    let gateway = gateway(&config).await.unwrap();
+    let link = gateway.config.link(AUD, "api.svc", 8080).unwrap();
+    assert_eq!(
+        link.addresses,
+        ["10.244.7.9".parse::<std::net::Ipv4Addr>().unwrap()]
+    );
+}

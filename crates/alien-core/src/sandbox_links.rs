@@ -25,6 +25,9 @@ const LINK_ADDRESS_SPACES: &[(Ipv4Addr, u8)] = &[
     (Ipv4Addr::new(192, 168, 0, 0), 16),
 ];
 
+/// Most fixed addresses one link may carry.
+const MAX_LINK_ADDRESSES: usize = 16;
+
 /// Narrowest prefix length a link range may have: no range wider than a /8.
 const WIDEST_LINK_PREFIX: u8 = 8;
 
@@ -42,6 +45,11 @@ pub struct GatewayLink {
     pub ports: Vec<u16>,
     /// Address ranges the hostname may resolve into, such as the cluster's Service range.
     pub ranges: Vec<Ipv4Net>,
+    /// Fixed addresses the deployment owns for this hostname, such as an internal load
+    /// balancer's static frontend IP. When present the gateway connects to these instead of
+    /// resolving the name; each must lie in `ranges`. Empty means resolve the name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<Ipv4Addr>,
 }
 
 impl GatewayLink {
@@ -86,6 +94,22 @@ impl GatewayLink {
                     self.id
                 ));
             }
+        }
+        if self.addresses.len() > MAX_LINK_ADDRESSES {
+            return Err(format!(
+                "link '{}': at most {MAX_LINK_ADDRESSES} fixed addresses",
+                self.id
+            ));
+        }
+        if let Some(address) = self
+            .addresses
+            .iter()
+            .find(|address| !self.admits(IpAddr::V4(**address)))
+        {
+            return Err(format!(
+                "link '{}': address {address} must lie in the link's ranges",
+                self.id
+            ));
         }
         Ok(())
     }
@@ -247,6 +271,7 @@ pub fn cluster_gateway_link(stack: &crate::Stack, id: &str) -> Option<GatewayLin
         host: format!("{}.svc", id.to_ascii_lowercase()),
         ports,
         ranges: vec![range],
+        addresses: Vec::new(),
     })
 }
 
@@ -310,6 +335,7 @@ mod tests {
             id: "api".into(),
             host: "api.svc".into(),
             ports: vec![8080],
+            addresses: Vec::new(),
             ranges: vec!["10.244.0.0/16".parse().unwrap()],
         }
     }
@@ -486,6 +512,7 @@ mod builder_tests {
                 host: "api.svc".into(),
                 ports: vec![8080],
                 ranges: vec!["10.244.0.0/16".parse().unwrap()],
+                addresses: Vec::new(),
             }]
         );
         links["p/agents"][0].validate().unwrap();

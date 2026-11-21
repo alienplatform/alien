@@ -654,6 +654,7 @@ mod tests {
             host: "api.svc".into(),
             ports: vec![8080],
             ranges: vec!["172.30.0.0/16".parse().unwrap()],
+            addresses: Vec::new(),
         }
     }
 

@@ -85,7 +85,8 @@ impl Gateway {
 
     /// Resolve once, validate every returned address, then dial a validated socket address.
     /// The connect operation cannot resolve the name a second time. A linked target's answers
-    /// must all fall in the link's ranges; every other target's must all be public.
+    /// must all fall in the link's ranges; every other target's must all be public. A link with
+    /// fixed addresses is dialed at those addresses without a lookup.
     pub async fn connect(
         &self,
         target: &Target,
@@ -98,6 +99,8 @@ impl Gateway {
             .map_err(|_| crate::connections::capacity())?;
         let addresses: Vec<_> = if let Ok(ip) = target.host.parse::<std::net::Ipv4Addr>() {
             vec![SocketAddr::new(ip.into(), target.port)]
+        } else if let Some(addresses) = fixed_link_addresses(link, target.port) {
+            addresses
         } else {
             let _timer = self.connections.dns_latency.start();
             // An absolute DNS name never applies deployment search domains.
@@ -223,6 +226,18 @@ struct Audit {
     allowed: bool,
     /// The declared link the connection reached, if any.
     link: Option<String>,
+}
+
+/// The addresses the deployment owns for a linked name, dialed without a lookup; `None` when
+/// the target is not a link or its link resolves by name.
+fn fixed_link_addresses(link: Option<&GatewayLink>, port: u16) -> Option<Vec<SocketAddr>> {
+    let link = link.filter(|link| !link.addresses.is_empty())?;
+    Some(
+        link.addresses
+            .iter()
+            .map(|ip| SocketAddr::new((*ip).into(), port))
+            .collect(),
+    )
 }
 
 async fn connection(stream: TcpStream, gateway: Arc<Gateway>, source: SourcePermit) {
@@ -694,5 +709,33 @@ mod audit_log_tests {
         let capacity = lognorm::parse(lines[2]);
         assert_eq!(capacity.fields()["reason"], "global connection capacity");
         assert_eq!(capacity.fields()["max_connections"], 64);
+    }
+}
+
+#[cfg(test)]
+mod fixed_link_address_tests {
+    use super::{fixed_link_addresses, GatewayLink};
+
+    fn link(addresses: &[&str]) -> GatewayLink {
+        GatewayLink {
+            id: "api".into(),
+            host: "api.svc".into(),
+            ports: vec![8080],
+            ranges: vec!["10.1.0.0/24".parse().unwrap()],
+            addresses: addresses.iter().map(|a| a.parse().unwrap()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_link_with_fixed_addresses_is_dialed_there_and_others_resolve() {
+        assert_eq!(
+            fixed_link_addresses(Some(&link(&["10.1.0.4", "10.1.0.5"])), 8080).unwrap(),
+            vec![
+                "10.1.0.4:8080".parse().unwrap(),
+                "10.1.0.5:8080".parse().unwrap()
+            ]
+        );
+        assert!(fixed_link_addresses(Some(&link(&[])), 8080).is_none());
+        assert!(fixed_link_addresses(None, 8080).is_none());
     }
 }
