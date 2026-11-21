@@ -698,6 +698,7 @@ resource "google_artifact_registry_repository" "agents_image" {
   depends_on = [
     google_project_service.enable_artifact_registry,
     google_vertex_ai_reasoning_engine.agents_engine,
+    google_project_iam_member.secretmanager_secretaccessor_operator_sa_secrets_vault_sandbox_egress_signing_key_read_binding_0,
     google_project_iam_custom_role.gcp_role_create_secret_manager_secrets,
     google_project_iam_custom_role.gcp_role_write_secret_manager_values,
     google_project_iam_member.gcp_role_create_secret_manager_secrets_management_secrets_vault_data_write_binding_0,
@@ -707,6 +708,7 @@ resource "google_artifact_registry_repository" "agents_image" {
     google_service_account.operator_sa,
     google_project_iam_custom_role.gcp_role_sandbox_execute,
     google_project_iam_member.gcp_role_sandbox_execute_operator_sa_binding_0,
+    google_project_iam_member.gcp_role_sandbox_management_operator_sa_binding_0,
     google_compute_network.default_network,
     google_compute_subnetwork.default_network_workload,
     google_compute_router.default_network_router,
@@ -811,6 +813,7 @@ resource "google_service_account" "agents_preview" {
   description  = "Signs the short-lived credential the Agent Platform edge checks for preview. Holds the execute verb on this deployment's engine and nothing else."
   depends_on = [
     google_vertex_ai_reasoning_engine.agents_engine,
+    google_project_iam_member.secretmanager_secretaccessor_operator_sa_secrets_vault_sandbox_egress_signing_key_read_binding_0,
     google_project_iam_custom_role.gcp_role_create_secret_manager_secrets,
     google_project_iam_custom_role.gcp_role_write_secret_manager_values,
     google_project_iam_member.gcp_role_create_secret_manager_secrets_management_secrets_vault_data_write_binding_0,
@@ -820,6 +823,7 @@ resource "google_service_account" "agents_preview" {
     google_service_account.operator_sa,
     google_project_iam_custom_role.gcp_role_sandbox_execute,
     google_project_iam_member.gcp_role_sandbox_execute_operator_sa_binding_0,
+    google_project_iam_member.gcp_role_sandbox_management_operator_sa_binding_0,
     google_compute_network.default_network,
     google_compute_subnetwork.default_network_workload,
     google_compute_router.default_network_router,
@@ -1640,6 +1644,18 @@ resource "google_service_account_iam_member" "management_manager" {
 }
 
 === secrets.tf ===
+resource "google_project_iam_member" "secretmanager_secretaccessor_operator_sa_secrets_vault_sandbox_egress_signing_key_read_binding_0" {
+  project = var.gcp_project
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.operator_sa.email}"
+
+  condition {
+    title       = "SandboxEgressSigningKeyRead"
+    description = "Limit to SandboxEgressSigningKeyRead"
+    expression  = "resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-secrets-sandbox-egress-signing-key/\")"
+  }
+}
+
 resource "google_project_iam_custom_role" "gcp_role_create_secret_manager_secrets" {
   count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
@@ -1730,6 +1746,12 @@ resource "google_project_iam_custom_role" "gcp_role_sandbox_execute" {
 resource "google_project_iam_member" "gcp_role_sandbox_execute_operator_sa_binding_0" {
   project = var.gcp_project
   role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sandbox_execute[0].name : format("projects/%s/roles/role_%s_sandbox_execute", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.operator_sa.email}"
+}
+
+resource "google_project_iam_member" "gcp_role_sandbox_management_operator_sa_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sandbox_management[0].name : format("projects/%s/roles/role_%s_sandbox_management", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.operator_sa.email}"
 }
 
@@ -1869,11 +1891,13 @@ resource "time_sleep" "gcp_iam_propagation" {
     google_project_iam_member.serviceusage_serviceusageviewer_management_binding_0,
     google_project_iam_member.secretmanager_viewer_management_binding_0,
     google_service_account_iam_member.management_manager,
+    google_project_iam_member.secretmanager_secretaccessor_operator_sa_secrets_vault_sandbox_egress_signing_key_read_binding_0,
     google_project_iam_member.gcp_role_create_secret_manager_secrets_management_secrets_vault_data_write_binding_0,
     google_project_iam_member.secretmanager_secretversionadder_management_secrets_vault_data_write_binding_1,
     google_project_iam_member.gcp_role_write_secret_manager_values_management_secrets_vault_data_write_binding_2,
     google_project_iam_member.secretmanager_viewer_management_secrets_vault_heartbeat_binding_0,
-    google_project_iam_member.gcp_role_sandbox_execute_operator_sa_binding_0
+    google_project_iam_member.gcp_role_sandbox_execute_operator_sa_binding_0,
+    google_project_iam_member.gcp_role_sandbox_management_operator_sa_binding_0
   ]
 }
 
@@ -1951,6 +1975,7 @@ resource "terraform_data" "deployment_registration" {
     google_iam_workload_identity_pool.management_manager,
     google_iam_workload_identity_pool_provider.management_manager,
     google_service_account_iam_member.management_manager,
+    google_project_iam_member.secretmanager_secretaccessor_operator_sa_secrets_vault_sandbox_egress_signing_key_read_binding_0,
     google_project_iam_custom_role.gcp_role_create_secret_manager_secrets,
     google_project_iam_custom_role.gcp_role_write_secret_manager_values,
     google_project_iam_member.gcp_role_create_secret_manager_secrets_management_secrets_vault_data_write_binding_0,
@@ -1960,6 +1985,7 @@ resource "terraform_data" "deployment_registration" {
     google_service_account.operator_sa,
     google_project_iam_custom_role.gcp_role_sandbox_execute,
     google_project_iam_member.gcp_role_sandbox_execute_operator_sa_binding_0,
+    google_project_iam_member.gcp_role_sandbox_management_operator_sa_binding_0,
     google_vertex_ai_reasoning_engine.agents_engine,
     google_project_service.enable_aiplatform,
     google_project_service.enable_artifact_registry,
@@ -2055,8 +2081,8 @@ Names and purpose are authored documentation. Setup components below are derived
 | Network | default-network | Provides the network and subnet connections used by application resources. | Frozen | google\_compute\_network.default\_network, google\_compute\_subnetwork.default\_network\_workload, google\_compute\_router.default\_network\_router, google\_compute\_router\_nat.default\_network\_nat, google\_compute\_firewall.default\_network\_internal, google\_compute\_subnetwork.default\_network\_sbx\_attachment, google\_compute\_network\_attachment.default\_network\_sbx\_attachment, google\_project\_service\_identity.default\_network\_sbx\_aiplatform\_agent, google\_project\_iam\_custom\_role.default\_network\_sbx\_attachment, google\_project\_iam\_member.default\_network\_sbx\_attachment\_agent, time\_sleep.default\_network\_sbx\_role\_propagation, google\_compute\_subnetwork.default\_network\_sbx\_gateway, google\_compute\_router.default\_network\_sbx\_gateway\_router, google\_compute\_router\_nat.default\_network\_sbx\_gateway\_nat, google\_compute\_firewall.default\_network\_sbx\_allow\_proxy, google\_compute\_firewall.default\_network\_sbx\_allow\_admin, google\_compute\_firewall.default\_network\_sbx\_deny\_attachment, google\_service\_account.default\_network\_sbx\_gateway, google\_project\_iam\_member.default\_network\_sbx\_gateway\_secrets, google\_compute\_instance.default\_network\_sbx\_gateway\_0, google\_compute\_instance.default\_network\_sbx\_gateway\_1 |
 | Sandbox egress gateway | sandbox-egress-gateway | Routes sandbox internet traffic through the configured egress policy. | Live |  |
 | Management identity | management | Grants ongoing management access within the deployment boundary. | Frozen | google\_service\_account.management, google\_project\_iam\_custom\_role.gcp\_role\_container\_heartbeat, google\_project\_iam\_member.gcp\_role\_container\_heartbeat\_management\_binding\_0, google\_project\_iam\_custom\_role.gcp\_role\_container\_provision\_inspect\_clo\_810962d4, google\_project\_iam\_custom\_role.gcp\_role\_container\_provision\_inspect\_clo\_57427f21, google\_project\_iam\_custom\_role.gcp\_role\_container\_provision\_inspect\_clo\_931128e1, google\_project\_iam\_member.gcp\_role\_container\_provision\_inspect\_clo\_810962d4\_management\_binding\_0, google\_project\_iam\_member.gcp\_role\_container\_provision\_inspect\_clo\_57427f21\_management\_binding\_1, google\_project\_iam\_member.gcp\_role\_container\_provision\_inspect\_clo\_931128e1\_management\_binding\_2, google\_project\_iam\_custom\_role.gcp\_role\_network\_heartbeat, google\_project\_iam\_member.gcp\_role\_network\_heartbeat\_management\_binding\_0, google\_project\_iam\_custom\_role.gcp\_role\_sandbox\_heartbeat, google\_project\_iam\_member.gcp\_role\_sandbox\_heartbeat\_management\_binding\_0, google\_project\_iam\_custom\_role.gcp\_role\_sandbox\_management, google\_project\_iam\_member.gcp\_role\_sandbox\_management\_management\_binding\_0, google\_project\_iam\_custom\_role.gcp\_role\_manage\_sandbox\_private\_endpoint, google\_project\_iam\_member.gcp\_role\_manage\_sandbox\_private\_endpoint\_management\_binding\_0, google\_project\_iam\_custom\_role.gcp\_role\_service\_account\_quota\_metadata, google\_project\_iam\_member.gcp\_role\_service\_account\_quota\_metadata\_management\_binding\_0, google\_project\_iam\_member.iam\_serviceaccountviewer\_management\_binding\_1, google\_project\_iam\_member.iam\_roleviewer\_management\_binding\_2, google\_project\_iam\_member.serviceusage\_serviceusageviewer\_management\_binding\_0, google\_project\_iam\_member.secretmanager\_viewer\_management\_binding\_0, google\_iam\_workload\_identity\_pool.management\_manager, google\_iam\_workload\_identity\_pool\_provider.management\_manager, google\_service\_account\_iam\_member.management\_manager |
-| Application secrets | secrets | Stores secrets delivered to application workloads. | Frozen | google\_project\_iam\_custom\_role.gcp\_role\_create\_secret\_manager\_secrets, google\_project\_iam\_custom\_role.gcp\_role\_write\_secret\_manager\_values, google\_project\_iam\_member.gcp\_role\_create\_secret\_manager\_secrets\_management\_secrets\_vault\_data\_write\_binding\_0, google\_project\_iam\_member.secretmanager\_secretversionadder\_management\_secrets\_vault\_data\_write\_binding\_1, google\_project\_iam\_member.gcp\_role\_write\_secret\_manager\_values\_management\_secrets\_vault\_data\_write\_binding\_2, google\_project\_iam\_member.secretmanager\_viewer\_management\_secrets\_vault\_heartbeat\_binding\_0 |
-| Service account (operator) | operator-sa | Grants application workloads the permissions declared by their permission profile. | Frozen | google\_service\_account.operator\_sa, google\_project\_iam\_custom\_role.gcp\_role\_sandbox\_execute, google\_project\_iam\_member.gcp\_role\_sandbox\_execute\_operator\_sa\_binding\_0 |
+| Application secrets | secrets | Stores secrets delivered to application workloads. | Frozen | google\_project\_iam\_member.secretmanager\_secretaccessor\_operator\_sa\_secrets\_vault\_sandbox\_egress\_signing\_key\_read\_binding\_0, google\_project\_iam\_custom\_role.gcp\_role\_create\_secret\_manager\_secrets, google\_project\_iam\_custom\_role.gcp\_role\_write\_secret\_manager\_values, google\_project\_iam\_member.gcp\_role\_create\_secret\_manager\_secrets\_management\_secrets\_vault\_data\_write\_binding\_0, google\_project\_iam\_member.secretmanager\_secretversionadder\_management\_secrets\_vault\_data\_write\_binding\_1, google\_project\_iam\_member.gcp\_role\_write\_secret\_manager\_values\_management\_secrets\_vault\_data\_write\_binding\_2, google\_project\_iam\_member.secretmanager\_viewer\_management\_secrets\_vault\_heartbeat\_binding\_0 |
+| Service account (operator) | operator-sa | Grants application workloads the permissions declared by their permission profile. | Frozen | google\_service\_account.operator\_sa, google\_project\_iam\_custom\_role.gcp\_role\_sandbox\_execute, google\_project\_iam\_member.gcp\_role\_sandbox\_execute\_operator\_sa\_binding\_0, google\_project\_iam\_member.gcp\_role\_sandbox\_management\_operator\_sa\_binding\_0 |
 | Agent Platform engine (agents) | agents-engine | Hosts this sandbox in Google Cloud Agent Platform. | Frozen | google\_vertex\_ai\_reasoning\_engine.agents\_engine |
 | Vertex AI API | enable-aiplatform | Enables Vertex AI API for this deployment. | Frozen | google\_project\_service.enable\_aiplatform |
 | Artifact Registry API | enable-artifact-registry | Enables Artifact Registry API for this deployment. | Frozen | google\_project\_service.enable\_artifact\_registry |

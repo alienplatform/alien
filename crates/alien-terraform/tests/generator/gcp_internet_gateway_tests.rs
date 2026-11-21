@@ -34,7 +34,7 @@ async fn module(egress: SandboxEgress) -> (Body, String) {
     let stack = Stack::new("gcpint".to_string())
         .add(sandbox, ResourceLifecycle::Frozen)
         .build();
-    let stack = with_execute_holder(stack, &sandbox_id, &egress);
+    let stack = with_sandbox_operator(stack, &sandbox_id, &egress);
     let prepared = prepare_for_target(stack, TerraformTarget::Gcp).await;
     let image = prepared
         .resources()
@@ -76,17 +76,45 @@ fn attribute(block: &hcl::Block, key: &str) -> String {
 }
 
 /// A Google Cloud internet sandbox needs a profile that holds `sandbox/execute` on it (its private
-/// ingress answers only to a credential signed for such an identity); other stacks get none, so
-/// their rendering is unchanged.
-fn with_execute_holder(mut stack: Stack, sandbox_id: &str, egress: &SandboxEgress) -> Stack {
+/// ingress answers only to a credential signed for such an identity). The same operator creates
+/// sandboxes (`sandbox/management`), so it also reads the egress signing key. Other stacks get no
+/// profile, so their rendering is unchanged.
+fn with_sandbox_operator(mut stack: Stack, sandbox_id: &str, egress: &SandboxEgress) -> Stack {
     if *egress == SandboxEgress::Internet {
         stack.permissions.profiles.insert(
             "operator".to_string(),
             alien_core::permissions::PermissionProfile::new()
-                .resource(sandbox_id, ["sandbox/execute"]),
+                .resource(sandbox_id, ["sandbox/execute", "sandbox/management"]),
         );
     }
     stack
+}
+
+/// The operator that creates internet sandboxes reads the egress signing key's versions, and no
+/// other secret of the vault.
+#[tokio::test]
+async fn the_sandbox_operator_reads_only_the_signing_key() {
+    let body = module_body(SandboxEgress::Internet).await;
+    let reads: Vec<_> = resources(&body, "google_project_iam_member")
+        .into_iter()
+        .filter(|b| {
+            attribute(b, "role").contains("roles/secretmanager.secretAccessor")
+                && attribute(b, "member").contains("operator")
+        })
+        .collect();
+    assert_eq!(reads.len(), 1, "one secret read for the operator");
+    let condition = reads[0]
+        .body()
+        .blocks()
+        .find(|x| x.identifier() == "condition")
+        .expect("the read is conditioned");
+    let expression = attribute(condition, "expression");
+    assert!(
+        expression.contains("-sandbox-egress-signing-key/")
+            && !expression.contains("||")
+            && !expression.contains("gateway-config"),
+        "{expression}"
+    );
 }
 
 #[tokio::test]
@@ -269,7 +297,7 @@ async fn snapshot_stack(egress: SandboxEgress, lifecycle: ResourceLifecycle, nam
     let stack = Stack::new("gcpint".to_string())
         .add(sandbox, lifecycle)
         .build();
-    let stack = with_execute_holder(stack, "agents", &egress);
+    let stack = with_sandbox_operator(stack, "agents", &egress);
     let prepared = prepare_for_target(stack, TerraformTarget::Gcp).await;
     let module = render(&prepared, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module(name, &module);
