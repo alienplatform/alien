@@ -783,3 +783,16 @@ if (!modelIndex.includes(resourceExport)) {
   await readFile(new URL("deploymentresource.ts", models));
   await writeFile(modelIndexUrl, `${modelIndex.trimEnd()}\n${resourceExport}\n`);
 }
+
+// The generated build script type-checks the whole client, which takes about 14 GB of
+// heap. Emit without type-checking instead (declarations are still produced) and keep
+// the full check as a separate script.
+const packageJsonUrl = new URL("../typescript/package.json", import.meta.url);
+const packageJsonSource = await readFile(packageJsonUrl, "utf8");
+const generatedScripts = '"build": "tsc",\n    "prepublishOnly": "npm run build"';
+if (packageJsonSource.includes(generatedScripts)) {
+  await writeFile(packageJsonUrl, packageJsonSource.replace(generatedScripts,
+    '"build": "tsc --noCheck",\n    "prepublishOnly": "npm run build",\n    "typecheck": "tsc --noEmit"'));
+} else if (!packageJsonSource.includes('"typecheck": "tsc --noEmit"')) {
+  throw new Error("Review the generated build script before replacing it");
+}

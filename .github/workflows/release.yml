@@ -17,6 +17,11 @@ on:
         type: string
         required: false
         default: ""
+      qualified_commit:
+        description: Commit the reused qualification run tested (default the release commit)
+        type: string
+        required: false
+        default: ""
       dry_run:
         type: boolean
         required: false
@@ -61,10 +66,15 @@ permissions:
   id-token: write
   # Build provenance for the verifier image (actions/attest-build-provenance).
   attestations: write
+  # The full test suites that qualification calls (full-suite.yml) declare these.
+  actions: read
+  pull-requests: read
+  issues: write
+  checks: write
 
 env:
   # Fall back to local compilation when the shared sccache backend returns a
-  # transient error (e.g. webdav 403) instead of failing the whole build.
+  # transient error (e.g. an HTTP 403) instead of failing the whole build.
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
 
 jobs:
@@ -78,7 +88,7 @@ jobs:
 
   prepare:
     if: inputs.mode == 'stable'
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     outputs:
       version: ${{ steps.bump.outputs.version || steps.qualification_version.outputs.version || steps.merged_version.outputs.version }}
@@ -435,7 +445,7 @@ jobs:
         id: qualification
         if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
         env:
-          RELEASE_COMMIT: ${{ steps.merged_version.outputs.commit }}
+          RELEASE_COMMIT: ${{ inputs.qualified_commit || steps.merged_version.outputs.commit }}
           QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
         run: |
           if ! grep -qE '^[0-9]+$' <<< "$QUALIFICATION_RUN_ID"; then
@@ -466,10 +476,22 @@ jobs:
 
   # ─── Registry publishing (crates.io + npm) ──────────────────────────
 
+  # The suites that do not run on pull requests: the whole workspace's tests, Worker integration,
+  # the TypeScript suite, the Node addon portability builds, the Python bindings (all OS and
+  # wheels) and the TPM device key and the Kind lifecycle tests (full-suite.yml).
+  # Release qualification includes them, so a release publishes only what they passed on.
+  full-suite:
+    needs: prepare
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
+    uses: ./.github/workflows/full-suite.yml
+    with:
+      ref: ${{ needs.prepare.outputs.source_ref }}
+    secrets: inherit
+
   publish-crates:
     needs: [prepare]
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' }}
-    runs-on: depot-ubuntu-24.04-arm-4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
@@ -498,12 +520,8 @@ jobs:
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-      - uses: depot/setup-action@v1
-
-      - uses: mozilla-actions/sccache-action@v0.0.11
-        continue-on-error: true
-        with:
-          version: v0.16.0
+      - name: Install sccache
+        uses: ./.github/actions/setup-sccache
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -626,12 +644,12 @@ jobs:
           for crate in $publish_order; do
             if [ "${{ inputs.stable_action }}" = "qualification" ]; then
               echo "Recording package inputs for $crate..."
-              depot cargo package -p "$crate" --list --allow-dirty |
+              cargo package -p "$crate" --list --allow-dirty |
                 LC_ALL=C sort > "qualified/crates/${crate}-${VERSION}.files"
               continue
             fi
 
-            depot cargo package -p "$crate" --list --allow-dirty |
+            cargo package -p "$crate" --list --allow-dirty |
               LC_ALL=C sort > "${crate}-${VERSION}.files"
             if ! cmp -s \
               "${crate}-${VERSION}.files" \
@@ -648,7 +666,7 @@ jobs:
             # qualified prerequisite version exists in crates.io, so final
             # assembly happens here in dependency order.
             echo "Packaging $crate..."
-            depot cargo package -p "$crate" --no-verify --allow-dirty
+            cargo package -p "$crate" --no-verify --allow-dirty
             package="target/package/${crate}-${VERSION}.crate"
             checksum=$(sha256sum "$package" | awk '{print $1}')
             metadata_response="crates-io-metadata-${crate}.json"
@@ -684,7 +702,7 @@ jobs:
             fi
 
             echo "Publishing $crate..."
-            depot cargo publish -p "$crate" --no-verify --allow-dirty
+            cargo publish -p "$crate" --no-verify --allow-dirty
             wait_for_crates_io_index "$crate" "$checksum"
           done
 
@@ -700,7 +718,7 @@ jobs:
   publish-npm:
     needs: [prepare]
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' }}
-    runs-on: depot-ubuntu-24.04-arm-4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -757,7 +775,7 @@ jobs:
 
       - name: Build
         if: ${{ inputs.stable_action == 'qualification' }}
-        run: pnpm build
+        run: pnpm turbo build
         env:
           NODE_OPTIONS: "--max-old-space-size=12288"
 
@@ -817,7 +835,7 @@ jobs:
   publish-client-sdks:
     needs: [prepare]
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' }}
-    runs-on: depot-ubuntu-24.04-arm-16
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -933,22 +951,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: depot-ubuntu-24.04-16
+          - runner: ubuntu-24.04
             target: x86_64
             manylinux: "2014"
             artifact: linux-x86_64
             smoke: true
-          - runner: depot-ubuntu-24.04-arm-16
+          - runner: ubuntu-24.04-arm
             target: aarch64
             manylinux: "2_28"
             artifact: linux-aarch64
             smoke: true
-          - runner: depot-macos-15
+          - runner: macos-15
             target: aarch64
             manylinux: "off"
             artifact: macos-aarch64
             smoke: true
-          - runner: depot-macos-15
+          - runner: macos-15
             target: x86_64
             manylinux: "off"
             artifact: macos-x86_64
@@ -1056,28 +1074,28 @@ jobs:
           # binary built alongside the addon: darwin legs share the addon's
           # target; linux legs build it statically against musl, so one binary
           # (per arch) serves both the glibc and Alpine prebuild packages.
-          - runner: depot-macos-15
+          - runner: macos-15
             os: macos
             target: aarch64-apple-darwin
             triple: darwin-arm64
             expect_arch: arm64
             gateway_target: aarch64-apple-darwin
             gateway_artifact: darwin-arm64
-          - runner: depot-macos-15
+          - runner: macos-15
             os: macos
             target: x86_64-apple-darwin
             triple: darwin-x64
             expect_arch: x86_64
             gateway_target: x86_64-apple-darwin
             gateway_artifact: darwin-x64
-          - runner: depot-ubuntu-24.04-16
+          - runner: ubuntu-24.04
             os: linux
             target: x86_64-unknown-linux-gnu
             triple: linux-x64-gnu
             expect_arch: x86-64
             gateway_target: x86_64-unknown-linux-musl
             gateway_artifact: linux-x64
-          - runner: depot-ubuntu-24.04-arm-16
+          - runner: ubuntu-24.04-arm
             os: linux
             target: aarch64-unknown-linux-gnu
             triple: linux-arm64-gnu
@@ -1117,14 +1135,13 @@ jobs:
         run: node packages/ai-gateway/scripts/validate-release-version.mjs "$VERSION"
 
       # Rust toolchain: Linux via the shared composite; macOS uses mise +
-      # brew protoc directly (plain `napi build`, not `depot cargo`, so no
-      # Depot/sccache setup here). The addon depends on alien-bindings, whose
+      # brew protoc directly (plain `napi build`, so no
+      # sccache setup here). The addon depends on alien-bindings, whose
       # build.rs needs protoc.
       - name: Setup Rust (linux)
         if: matrix.os == 'linux'
         uses: ./.ci-tool-versions/.github/actions/setup-rust
         with:
-          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
           repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
           install-protoc: "true"
 
@@ -1246,16 +1263,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: depot-macos-15
+          - runner: macos-15
             triple: darwin-arm64
             execute: true
-          - runner: depot-macos-15
+          - runner: macos-15
             triple: darwin-x64
             execute: false
-          - runner: depot-ubuntu-24.04-16
+          - runner: ubuntu-24.04
             triple: linux-x64-gnu
             execute: true
-          - runner: depot-ubuntu-24.04-arm-16
+          - runner: ubuntu-24.04-arm
             triple: linux-arm64-gnu
             execute: true
     runs-on: ${{ matrix.runner }}
@@ -1346,7 +1363,7 @@ jobs:
     # The wrapper pins @alienplatform/core, so qualify it only after the core
     # package has been packed successfully and every native smoke test passes.
     if: inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' && always() && needs.smoke-addon.result == 'success' && needs.publish-npm.result == 'success'
-    runs-on: depot-ubuntu-24.04-arm-4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1446,7 +1463,7 @@ jobs:
   publish-bindings:
     needs: [prepare, publish-npm]
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -1519,7 +1536,7 @@ jobs:
     # Same ordering rules as qualify-bindings: the wrapper pins
     # `@alienplatform/core: ^<release>`, so it is qualified only after core packs.
     if: inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' && always() && needs.build-addon.result == 'success' && needs.publish-npm.result == 'success'
-    runs-on: depot-ubuntu-24.04-arm-4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1628,7 +1645,7 @@ jobs:
     needs: [prepare, publish-npm]
     # Skipped on a dry run: publishing is permanent and there is no qualification run to download from.
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' && !inputs.dry_run }}
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -1703,7 +1720,7 @@ jobs:
   build-binaries-linux-x86_64:
     needs: prepare
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
@@ -1746,7 +1763,6 @@ jobs:
       - uses: ./.ci-tool-versions/.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
         with:
-          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
           repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
           targets: x86_64-unknown-linux-musl
           install-protoc: "true"
@@ -1756,7 +1772,7 @@ jobs:
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
-          depot cargo build --release \
+          cargo build --release \
             -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent -p alien-egress-gateway \
             -p alien-verifier \
             --features alien-egress-gateway/cloud,alien-egress-gateway/local \
@@ -1782,7 +1798,7 @@ jobs:
   build-binaries-linux-aarch64:
     needs: prepare
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
-    runs-on: depot-ubuntu-24.04-arm-16
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
@@ -1814,7 +1830,6 @@ jobs:
       - uses: ./.ci-tool-versions/.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
         with:
-          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
           repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
           targets: aarch64-unknown-linux-musl
           install-protoc: "true"
@@ -1824,7 +1839,7 @@ jobs:
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
-          depot cargo build --release \
+          cargo build --release \
             -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent -p alien-egress-gateway \
             --features alien-egress-gateway/cloud,alien-egress-gateway/local \
             --target aarch64-unknown-linux-musl
@@ -1848,7 +1863,7 @@ jobs:
   build-binaries-darwin:
     needs: prepare
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
-    runs-on: depot-macos-15
+    runs-on: macos-15
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
@@ -1889,16 +1904,9 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-      - name: Setup Depot
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: depot/setup-action@v1
-
       - name: Install sccache
         if: steps.binary-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@v0.0.11
-        with:
-          version: v0.16.0
+        uses: ./.github/actions/setup-sccache
 
       - name: Install protoc
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1909,7 +1917,7 @@ jobs:
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
-          depot cargo build --release \
+          cargo build --release \
             -p alien-deploy-cli -p alien-operator \
             --target aarch64-apple-darwin
 
@@ -1932,7 +1940,7 @@ jobs:
   build-binaries-windows:
     needs: prepare
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
-    runs-on: depot-windows-2025-16
+    runs-on: windows-2025
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
@@ -1974,13 +1982,10 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-      # depot cargo is Linux/macOS only — use sccache directly on Windows
+      # cargo is Linux/macOS only — use sccache directly on Windows
       - name: Install sccache
         if: steps.binary-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
-        uses: mozilla-actions/sccache-action@v0.0.11
-        with:
-          version: v0.16.0
+        uses: ./.github/actions/setup-sccache
 
       - name: Install build tools (protoc, nasm, cmake)
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -2018,7 +2023,7 @@ jobs:
   upload-binaries:
     needs: prepare
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
       - name: Download all artifacts
@@ -2099,7 +2104,7 @@ jobs:
   qualify-images:
     needs: [prepare, build-addon, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
-    runs-on: depot-ubuntu-24.04-arm-16
+    runs-on: ubuntu-24.04-arm
     # Wide enough that a hung probe hits the smoke script's own budget first: it
     # names which probe hung, where a job timeout names only the job.
     timeout-minutes: 45
@@ -2170,12 +2175,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Depot
-        uses: depot/setup-action@v1
-
       # The runner is arm, so running the amd64 half of a published manifest needs emulation.
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
 
       - name: Metadata (alien-base)
         id: meta_base
@@ -2185,11 +2187,12 @@ jobs:
           tags: |
             type=raw,value=qualification-${{ inputs.source_ref }}
 
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
       - name: Publish alien-base
         id: publish_base
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-base
           platforms: linux/amd64,linux/arm64
@@ -2209,9 +2212,8 @@ jobs:
 
       - name: Publish alien-worker-typescript
         id: publish_worker_typescript
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-worker-typescript
           build-args: |
@@ -2242,9 +2244,8 @@ jobs:
             type=raw,value=qualification-${{ inputs.source_ref }}
 
       - name: Publish alien-builder
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-builder
           platforms: linux/amd64,linux/arm64
@@ -2263,9 +2264,8 @@ jobs:
             type=raw,value=qualification-${{ inputs.source_ref }}
 
       - name: Publish alien-operator
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-operator
           platforms: linux/amd64,linux/arm64
@@ -2288,9 +2288,8 @@ jobs:
       # is attached by the attestation below instead of inside the image.
       - name: Publish alien-verifier
         id: publish_verifier
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-verifier
           platforms: linux/amd64
@@ -2316,9 +2315,8 @@ jobs:
             type=raw,value=qualification-${{ inputs.source_ref }}
 
       - name: Publish alien-manager
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-manager
           platforms: linux/amd64,linux/arm64
@@ -2338,9 +2336,8 @@ jobs:
 
       - name: Publish alien-egress-gateway
         id: publish_egress_gateway
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-egress-gateway
           platforms: linux/amd64,linux/arm64
@@ -2360,9 +2357,8 @@ jobs:
 
       - name: Publish alien-sandbox-agent
         id: publish_sandbox_agent
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-sandbox-agent
           platforms: linux/amd64,linux/arm64
@@ -2440,7 +2436,7 @@ jobs:
   publish-images:
     needs: prepare
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     # Includes waiting up to 10 minutes for ECR to replicate the verifier image.
     timeout-minutes: 25
     steps:
@@ -2613,7 +2609,7 @@ jobs:
       - upload-binaries
       - publish-images
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 5
     steps:
       - name: Require immutable release protections

@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   prepare:
-    runs-on: depot-ubuntu-24.04-arm-4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     outputs:
       git_sha: ${{ steps.identity.outputs.git_sha }}
@@ -85,28 +85,28 @@ jobs:
           # binary built alongside the addon: darwin legs share the addon's
           # target; linux legs build it statically against musl, so one binary
           # (per arch) serves both the glibc and Alpine prebuild packages.
-          - runner: depot-macos-15
+          - runner: macos-15
             os: macos
             target: aarch64-apple-darwin
             triple: darwin-arm64
             expect_arch: arm64
             gateway_target: aarch64-apple-darwin
             gateway_artifact: darwin-arm64
-          - runner: depot-macos-15
+          - runner: macos-15
             os: macos
             target: x86_64-apple-darwin
             triple: darwin-x64
             expect_arch: x86_64
             gateway_target: x86_64-apple-darwin
             gateway_artifact: darwin-x64
-          - runner: depot-ubuntu-24.04-16
+          - runner: ubuntu-24.04
             os: linux
             target: x86_64-unknown-linux-gnu
             triple: linux-x64-gnu
             expect_arch: x86-64
             gateway_target: x86_64-unknown-linux-musl
             gateway_artifact: linux-x64
-          - runner: depot-ubuntu-24.04-arm-16
+          - runner: ubuntu-24.04-arm
             os: linux
             target: aarch64-unknown-linux-gnu
             triple: linux-arm64-gnu
@@ -132,7 +132,6 @@ jobs:
         if: matrix.os == 'linux'
         uses: ./.npm-dev-tools/.github/actions/setup-rust
         with:
-          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
           repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
           install-protoc: "true"
 
@@ -253,7 +252,7 @@ jobs:
 
   pack-and-publish:
     needs: [prepare, build-addon]
-    runs-on: depot-ubuntu-24.04-arm-4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7

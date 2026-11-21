@@ -27,6 +27,7 @@ fn run() {
     let full_spec: serde_json::Value = serde_json::from_str(include_str!("openapi.json")).unwrap();
     let spec = if cfg!(feature = "full-api") {
         let normalized_spec = openapi_filter::normalize_openapi(&full_spec).unwrap();
+        let normalized_spec = openapi_filter::merge_repeated_schemas(&normalized_spec).unwrap();
         serde_json::from_value(normalized_spec).unwrap()
     } else {
         let filtered_spec =

@@ -165,35 +165,35 @@ HAS_PUSH=$([ "$(echo "$PUSH_ENTRIES" | jq 'length')" -gt 0 ] && echo true || ech
 LOCAL_ENTRIES='[]'
 if [ "$LOCAL_LINUX_AGENT" = "true" ]; then
   if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
-    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-comprehensive-rust","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_comprehensive_rust"}]')
+    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-comprehensive-rust","os":"ubuntu-24.04-arm","test_filter":"pull_local_comprehensive_rust"}]')
   fi
   if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
-    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-comprehensive-ts","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_comprehensive_ts"}]')
+    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-comprehensive-ts","os":"ubuntu-24.04-arm","test_filter":"pull_local_comprehensive_ts"}]')
   fi
   if [ "$APP" = "All" ] || [ "$APP" = "command-routing-ts" ]; then
-    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-command-routing-ts","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_command_routing_ts"}]')
+    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-command-routing-ts","os":"ubuntu-24.04-arm","test_filter":"pull_local_command_routing_ts"}]')
   fi
   if [ "$APP" = "All" ] || [ "$APP" = "container-rust" ]; then
-    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-container-rust","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_container_rust"}]')
+    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-container-rust","os":"ubuntu-24.04-arm","test_filter":"pull_local_container_rust"}]')
   fi
   if [ "$APP" = "All" ] || [ "$APP" = "runtime-less-mixed" ]; then
-    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-runtime-less-mixed","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_runtime_less_mixed"}]')
+    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-runtime-less-mixed","os":"ubuntu-24.04-arm","test_filter":"pull_local_runtime_less_mixed"}]')
   fi
 fi
 if [ "$LOCAL_MACOS_AGENT" = "true" ]; then
   if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
-    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-comprehensive-rust","os":"depot-macos-latest","test_filter":"pull_local_comprehensive_rust"}]')
+    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-comprehensive-rust","os":"macos-15","test_filter":"pull_local_comprehensive_rust"}]')
   fi
   if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
-    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-comprehensive-ts","os":"depot-macos-latest","test_filter":"pull_local_comprehensive_ts"}]')
+    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-comprehensive-ts","os":"macos-15","test_filter":"pull_local_comprehensive_ts"}]')
   fi
 fi
 if [ "$LOCAL_WINDOWS_AGENT" = "true" ]; then
   if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
-    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-comprehensive-rust","os":"depot-windows-2025-8","test_filter":"pull_local_comprehensive_rust"}]')
+    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-comprehensive-rust","os":"windows-2025","test_filter":"pull_local_comprehensive_rust"}]')
   fi
   if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
-    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-comprehensive-ts","os":"depot-windows-2025-8","test_filter":"pull_local_comprehensive_ts"}]')
+    LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-comprehensive-ts","os":"windows-2025","test_filter":"pull_local_comprehensive_ts"}]')
   fi
 fi
 

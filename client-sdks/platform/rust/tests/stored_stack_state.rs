@@ -1,4 +1,8 @@
+#[cfg(not(feature = "full-api"))]
 use alien_platform_api::types::DeploymentStackState;
+// The full SDK shares one generated type for the stored stack state.
+#[cfg(feature = "full-api")]
+use alien_platform_api::types::DeploymentStateStackState as DeploymentStackState;
 use serde_json::{json, Value};
 
 fn stored_state(lifecycle: Value, controller_platform: Value) -> Value {

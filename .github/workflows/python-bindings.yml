@@ -6,11 +6,13 @@ name: Python bindings
 on:
   workflow_call:
     inputs:
+      ref:
+        description: Commit to test (default the triggering commit)
+        type: string
+        default: ""
       linux_only:
         type: boolean
         default: false
-  schedule:
-    - cron: "37 2 * * *"
   workflow_dispatch:
 
 permissions:
@@ -46,6 +48,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - name: Install Rust toolchain
         uses: jdx/mise-action@v5
         env:
@@ -101,6 +105,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - name: Install Rust toolchain
         uses: jdx/mise-action@v5
         env:

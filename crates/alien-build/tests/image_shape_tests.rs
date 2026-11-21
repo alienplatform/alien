@@ -243,7 +243,7 @@ async fn typescript_source_image_shapes_per_compute_type() {
         .build();
 
     let output_dir = tempdir().expect("temp output dir");
-    // Match the host architecture (Depot CI runners and dev macs are arm64;
+    // Match the host architecture (CI runners and dev macs are arm64;
     // x64 hosts stay x64): the staged addon is the HOST-built dev addon, so a
     // hardcoded x64 target can never be satisfied on an arm64 machine.
     let target = BinaryTarget::linux_container_target();

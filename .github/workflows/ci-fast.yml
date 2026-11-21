@@ -2,45 +2,66 @@ name: Tests
 
 # Two tiers share one required check, `All tests passed`:
 #
-# - Draft pull requests (every push) run the fast tier: format, lint, typecheck,
-#   generated-file drift, `cargo check` of the whole workspace, and the tests of only the
-#   crates the pull request changed. `All tests passed` fails on a draft on purpose ("full tier
-#   not run: draft PR"): a draft cannot merge, and its result can never satisfy the check later.
-# - Pull requests that are ready for review run the fast and full tiers: the tests of every
-#   crate the change can affect (changed crates and what depends on them), Worker integration,
-#   the whole TypeScript suite and the Node addon portability builds. Marking a draft ready
-#   (`ready_for_review`) starts a new run that replaces the draft's. `merge_group` and pushes of
-#   release commits run both tiers too.
-# - `workflow_dispatch` runs both tiers on the whole workspace, for an on-demand full run.
+# - Pull requests (draft or ready) and the merge queue run the fast tier: format, lint,
+#   typecheck, generated-file drift, `cargo check` of the whole workspace and its tests, and
+#   the tests of only the crates the change touches. It runs on GitHub-hosted runners and is
+#   meant to finish in a few minutes.
+# - The full tier runs nightly (only when main changed since the last green nightly run), at
+#   release qualification (`workflow_call` with `full: true`) and on demand
+#   (`workflow_dispatch`): every crate's tests, Worker integration, the whole TypeScript suite,
+#   the Node addon portability builds, and the Python bindings and TPM suites.
+# - Pushes to main do not run this workflow: the nightly run covers main.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
-  push:
-    branches: [main]
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to test (default the triggering commit)
+        type: string
+        default: ""
+      full:
+        description: Run the full tier on the whole workspace
+        type: boolean
+        default: true
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A new push to a PR makes the previous run's result useless.
+# A new push to a PR makes the previous run's result useless. Any other run (a merge group, or a
+# call from the nightly run, release qualification or a deploy gate) gets a group of its own: the
+# commit it tests plus the run, so overlapping calls never cancel each other's pending run.
 concurrency:
-  group: ci-fast-${{ github.event.pull_request.number || github.ref }}
+  group: ci-fast-${{ github.workflow }}-${{ github.event.pull_request.number || format('{0}-{1}', inputs.ref || github.sha, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  # Fall back to local compilation when the shared sccache backend returns a
-  # transient error (e.g. webdav 403) instead of failing the whole build.
-  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
-
 jobs:
+  # Skips the scheduled run when main has not changed since this workflow last passed on it.
+  gate:
+    name: Main changed since the last green run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      changed: ${{ steps.gate.outputs.changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: gate
+        uses: ./.github/actions/changed-since-last-success
+
   pr-conventions:
     name: PR conventions
+    needs: gate
     if: >-
+      needs.gate.outputs.changed == 'true' &&
       (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.fork != true) &&
-      (github.event_name != 'push' ||
-      startsWith(github.event.head_commit.message, 'chore: release '))
+      github.event.pull_request.head.repo.fork != true)
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository with its tags
@@ -96,37 +117,35 @@ jobs:
       rust_core: ${{ steps.rust_selection.outputs.core }}
       rust_agent: ${{ steps.rust_selection.outputs.agent }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Select the test tier
         id: tier
         env:
-          GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          FULL_INPUT: ${{ inputs.full }}
         run: |
-          full_tier=true
+          # Pull requests and the merge queue run the fast tier. The nightly run, manual runs
+          # and callers that ask for `full` run both tiers on the whole workspace.
+          full_tier=false
           run_all=false
           case "$EVENT" in
-            pull_request)
-              # Read the draft state now, not from the event, so a re-run after marking
-              # the PR ready sees it.
-              draft=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.draft')
-              if [[ "$draft" == "true" ]]; then
-                full_tier=false
-              fi
-              ;;
-            workflow_dispatch) run_all=true ;;
+            workflow_dispatch) full_tier=true; run_all=true ;;
           esac
+          if [[ "$FULL_INPUT" == "true" ]]; then
+            full_tier=true
+            run_all=true
+          fi
           echo "full_tier=$full_tier" >> "$GITHUB_OUTPUT"
           echo "run_all=$run_all" >> "$GITHUB_OUTPUT"
           echo "Tier: full=$full_tier, whole workspace=$run_all ($EVENT)"
 
-      # Draft pull requests test only the crates they changed (and compile the whole workspace
-      # in `Rust check`). Ready pull requests and the merge queue test the changed crates and
-      # everything that depends on them, against the base. Any change outside the packages
-      # (other than docs) is only checked on a draft and fully tested on a ready pull request. Pushes of release
-      # commits and manual runs test the whole workspace.
+      # Pull requests and the merge queue test only the crates they changed (and compile the
+      # whole workspace in `Rust check`). Any change outside the packages (other than docs) is
+      # only checked there. The nightly run, release qualification and manual runs test the
+      # whole workspace.
       - name: Select Rust packages to test
         id: rust_selection
         env:
@@ -134,19 +153,17 @@ jobs:
           QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           EVENT: ${{ github.event_name }}
           RUN_ALL: ${{ steps.tier.outputs.run_all }}
-          FULL_TIER: ${{ steps.tier.outputs.full_tier }}
           # The repo pins a nightly; stable cargo reads the metadata without installing it.
           RUSTUP_TOOLCHAIN: stable
         run: |
-          if [[ "$EVENT" != "pull_request" && "$EVENT" != "merge_group" ]] || [[ "$RUN_ALL" == "true" ]]; then
+          if [[ "$RUN_ALL" == "true" ]] || [[ "$EVENT" != "pull_request" && "$EVENT" != "merge_group" ]]; then
             echo "mode=full" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          flags=()
+          flags=(--own-only)
           BASE_SHA="$QUEUE_BASE_SHA"
           if [[ "$EVENT" == "pull_request" ]]; then
             BASE_SHA="$PR_BASE_SHA"
-            [[ "$FULL_TIER" == "true" ]] || flags+=(--own-only)
           fi
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
           python3 scripts/affected-rust-packages.py "$BASE_SHA" HEAD "${flags[@]}" >> "$GITHUB_OUTPUT"
@@ -279,16 +296,16 @@ jobs:
       needs.changes.outputs.run_all == 'true' ||
       (needs.changes.outputs.rust == 'true' &&
       (needs.changes.outputs.rust_mode == 'affected' || needs.changes.outputs.rust_mode == 'full'))
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       # Bound peak compiler memory so the runner agent remains responsive
-      # while the workspace's large test binaries compile and link. Six jobs
-      # fit the 8-vCPU runner with debug info off.
-      CARGO_BUILD_JOBS: "6"
-      NEXTEST_TEST_THREADS: "8"
+      # while the workspace's large test binaries compile and link. Four jobs
+      # fit the 16 GB runner with debug info off.
+      CARGO_BUILD_JOBS: "4"
+      NEXTEST_TEST_THREADS: "4"
       # Debug info makes linking ~120 test binaries much slower and nothing in CI reads it.
       CARGO_PROFILE_DEV_DEBUG: "0"
       # The packages and features to build and test (see `Select Rust packages to test`).
@@ -299,7 +316,9 @@ jobs:
         || '--workspace --features alien-manager/openapi,alien-bindings/platform-sdk,alien-client-core/no-retry-delay' }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Install development tools
         id: mise
@@ -335,7 +354,8 @@ jobs:
         # alien-hooks-runtime's tests build their hooks module for wasm32-wasip1.
         run: rustup target add wasm32-wasip1
 
-      - uses: ./.github/actions/setup-sccache
+      - name: Install sccache
+        uses: ./.github/actions/setup-sccache
 
       - uses: taiki-e/install-action@nextest
 
@@ -399,6 +419,13 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+
+      # The tests build Linux musl images in parallel. Without cargo-zigbuild installed the
+      # builder runs `cargo install` in each of them, and one install replaces the binary
+      # another build is running ("cargo-zigbuild (deleted)", exit 127).
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
+        with:
+          tool: cargo-zigbuild@0.24.1
 
       - name: Configure git credentials for cargo
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
@@ -541,6 +568,14 @@ jobs:
           binary=$(cargo test "${SELECTION[@]}" --no-run --message-format=json \
             | sed -n 's/.*"executable":"\([^"]*privileged-[^"]*\)".*/\1/p' | head -1)
           test -x "$binary"
+          # The tests re-execute the agent binary as an unprivileged uid, which
+          # needs search permission on every directory above it. The hosted
+          # runner's home directory is not world-searchable by default.
+          dir=$(dirname "$binary")
+          while [ "$dir" != / ]; do
+            case "$dir" in /home/*) chmod o+x "$dir" ;; esac
+            dir=$(dirname "$dir")
+          done
           sudo "$binary" --ignored
           library=$(cargo test --locked -p alien-sandbox-agent --lib --no-run --message-format=json \
             | python3 -c 'import json,sys; print(next(item["executable"] for line in sys.stdin if (item := json.loads(line)).get("executable") and item.get("target", {}).get("kind") == ["lib"]))')
@@ -580,7 +615,7 @@ jobs:
         run: sccache --show-stats || true
 
   cli-extensions:
-    name: CLI extensions (${{ matrix.partition }}/3)
+    name: CLI extensions (${{ matrix.part }})
     needs: [pr-conventions, changes]
     # The `alien-cli::extensions` tests, which the Rust crates job skips. They run whenever Rust
     # crates would test alien-cli.
@@ -590,21 +625,33 @@ jobs:
       (needs.changes.outputs.rust_mode == 'full' ||
       (needs.changes.outputs.rust_mode == 'affected' &&
       contains(format(' {0} ', needs.changes.outputs.rust_packages), ' -p alien-cli '))))
-    # The 19 tests add up to about 95 minutes (2-17 min each) and run two at a time on a
-    # runner, so one runner takes about 50 min. Three runners take about 20.
+    # The 19 tests take 1-28 min each and run one at a time on a 4-vCPU hosted runner (each
+    # reserves 4 threads; see .config/nextest.toml), after about 8 min of setup. The two longest
+    # get a runner each, so neither waits behind other tests; the controller module test alone
+    # takes about 36 min with setup. The other 17 (about 46 min) split four ways, about 22 min each.
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3]
-    runs-on: depot-ubuntu-24.04-arm-8
+        include:
+          - part: dev zone
+            filter: test(=dev_runs_the_zone_with_the_extensions_local_controller_as_a_process)
+          - part: controller module
+            filter: test(=the_controller_module_is_built_into_the_bundle_and_test_loads_each_import_into_it)
+          - { part: 1/4, partition: count:1/4 }
+          - { part: 2/4, partition: count:2/4 }
+          - { part: 3/4, partition: count:3/4 }
+          - { part: 4/4, partition: count:4/4 }
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      CARGO_BUILD_JOBS: "6"
+      CARGO_BUILD_JOBS: "4"
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Install development tools
         id: mise
@@ -692,6 +739,13 @@ jobs:
         with:
           version: 0.16.0
 
+      # The tests build Linux musl images in parallel. Without cargo-zigbuild installed the
+      # builder runs `cargo install` in each of them, and one install replaces the binary
+      # another build is running ("cargo-zigbuild (deleted)", exit 127).
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
+        with:
+          tool: cargo-zigbuild@0.24.1
+
       - name: Configure git credentials for cargo
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
@@ -702,21 +756,28 @@ jobs:
         run: pnpm exec turbo run build --filter=@alienplatform/sdk --filter=@alienplatform/commands
 
       - name: CLI extension tests
-        run: cargo nextest run --locked -p alien-cli --test extensions --no-fail-fast --partition count:${{ matrix.partition }}/3
+        env:
+          FILTER: ${{ matrix.filter || 'not (test(=dev_runs_the_zone_with_the_extensions_local_controller_as_a_process) | test(=the_controller_module_is_built_into_the_bundle_and_test_loads_each_import_into_it))' }}
+          PARTITION: ${{ matrix.partition }}
+        run: |
+          cargo nextest run --locked -p alien-cli --test extensions --no-fail-fast \
+            -E "$FILTER" ${PARTITION:+--partition "$PARTITION"}
 
   typescript:
     name: TypeScript packages and CLIs
     needs: [pr-conventions, changes]
     if: needs.changes.outputs.run_all == 'true' || needs.changes.outputs.typescript == 'true'
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      CARGO_BUILD_JOBS: "6"
+      CARGO_BUILD_JOBS: "4"
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: dorny/paths-filter@v4
         id: changes
@@ -776,7 +837,8 @@ jobs:
         with:
           mold-version: 2.42.1
 
-      - uses: ./.github/actions/setup-sccache
+      - name: Install sccache
+        uses: ./.github/actions/setup-sccache
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -820,8 +882,8 @@ jobs:
 
       - name: TypeScript typecheck
         env:
-          NODE_OPTIONS: "--max-old-space-size=12288"
-        run: pnpm test:ts
+          NODE_OPTIONS: "--max-old-space-size=8192"
+        run: pnpm turbo test:ts --concurrency 3
 
       # One cargo invocation, so the addon and the CLIs share their dependency builds.
       # `napi build --platform` would only add a generated index.js/index.d.ts, which this
@@ -858,7 +920,23 @@ jobs:
         if: needs.changes.outputs.full_tier == 'true' && (steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || needs.changes.outputs.run_all == 'true')
         env:
           NODE_OPTIONS: "--max-old-space-size=12288"
-        run: pnpm build && pnpm -C packages/package-layout check
+        run: pnpm turbo build && pnpm -C packages/package-layout check
+
+      # The client's build emits without type-checking; this is its one full type-check
+      # (about 14 GB of heap, so it runs alone).
+      - name: Type-check the generated platform API client
+        if: needs.changes.outputs.full_tier == 'true'
+        env:
+          NODE_OPTIONS: "--max-old-space-size=14336"
+        run: pnpm -C client-sdks/platform/typescript typecheck
+
+      # packages/core/tsconfig.json leaves out the one test that imports the generated client
+      # (it pulls the client's types into core's check). Type-check it on its own here.
+      - name: Type-check the binding serialization test
+        if: needs.changes.outputs.full_tier == 'true'
+        env:
+          NODE_OPTIONS: "--max-old-space-size=14336"
+        run: pnpm -C packages/core typecheck:binding-test
 
       - name: Rust and TypeScript command integration
         if: needs.changes.outputs.full_tier == 'true' && (steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || needs.changes.outputs.run_all == 'true')
@@ -906,14 +984,16 @@ jobs:
     if: >-
       needs.changes.outputs.rust == 'true' &&
       (needs.changes.outputs.rust_mode == 'affected' || needs.changes.outputs.rust_mode == 'check-only')
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      CARGO_BUILD_JOBS: "6"
+      CARGO_BUILD_JOBS: "4"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Install development tools
         uses: jdx/mise-action@v5
@@ -944,6 +1024,9 @@ jobs:
           install_args: rust
           cache: false
 
+      - name: Install sccache
+        uses: ./.github/actions/setup-sccache
+
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -968,15 +1051,17 @@ jobs:
     # Extension hooks are wasm32-wasip1 modules built against these crates, and
     # nothing else in CI compiles them for that target.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.run_all == 'true' ||
       (needs.changes.outputs.rust == 'true' && needs.changes.outputs.rust_mode != 'none')
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Install Rust toolchain
         uses: jdx/mise-action@v5
@@ -1008,13 +1093,15 @@ jobs:
   workspace-hack:
     name: Workspace-hack up to date
     needs: [pr-conventions, changes]
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: depot-ubuntu-24.04-arm-4
+    if: needs.changes.outputs.run_all == 'true' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Install Rust toolchain
         uses: jdx/mise-action@v5
@@ -1053,15 +1140,17 @@ jobs:
       (needs.changes.outputs.run_all == 'true' ||
       needs.changes.outputs.rust == 'true' ||
       needs.changes.outputs.worker_integration == 'true')
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      CARGO_BUILD_JOBS: "6"
+      CARGO_BUILD_JOBS: "4"
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Install development tools
         uses: jdx/mise-action@v5
@@ -1152,10 +1241,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: depot-ubuntu-24.04-16
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             triple: linux-x64-gnu
-          - runner: depot-ubuntu-24.04-arm-16
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             triple: linux-arm64-gnu
     runs-on: ${{ matrix.runner }}
@@ -1164,7 +1253,9 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Install development tools
         uses: jdx/mise-action@v5
@@ -1208,8 +1299,8 @@ jobs:
       - name: Verify glibc floor and load on older base images
         run: packages/bindings/scripts/verify-addon-portability.sh "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node"
 
-  # Reusable workflows that also run nightly. Full tier only, and only when the change touches
-  # their inputs, so `All tests passed` covers them.
+  # Full tier only (full-suite.yml and release qualification), so `All tests passed` covers
+  # them there.
   python-bindings:
     name: Python bindings
     needs: [pr-conventions, changes]
@@ -1222,7 +1313,9 @@ jobs:
     uses: ./.github/workflows/python-bindings.yml
     secrets: inherit
     with:
-      linux_only: true
+      ref: ${{ inputs.ref }}
+      # Release qualification (`full`) adds macOS and the wheels.
+      linux_only: ${{ inputs.full != true }}
 
   tpm-device-key:
     name: TPM device key
@@ -1235,16 +1328,16 @@ jobs:
       actions: read
     uses: ./.github/workflows/tpm-device-key.yml
     secrets: inherit
+    with:
+      ref: ${{ inputs.ref }}
 
   all-tests-passed:
     name: All tests passed
     if: >-
       always() &&
       (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.fork != true) &&
-      (github.event_name != 'push' ||
-      startsWith(github.event.head_commit.message, 'chore: release '))
-    needs: [pr-conventions, changes, rust, cli-extensions, rust-check, wasm32, workspace-hack, typescript, worker-integration, node-addon-portability, python-bindings, tpm-device-key]
+      github.event.pull_request.head.repo.fork != true)
+    needs: [gate, pr-conventions, changes, rust, cli-extensions, rust-check, wasm32, workspace-hack, typescript, worker-integration, node-addon-portability, python-bindings, tpm-device-key]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area
@@ -1263,6 +1356,10 @@ jobs:
           RUST_TESTS: ${{ needs.rust.result }}
           CLI_EXTENSIONS: ${{ needs.cli-extensions.result }}
           RUST_PACKAGES: ${{ needs.changes.outputs.rust_packages }}
+          RUST_CHECK: ${{ needs.rust-check.result }}
+          WORKSPACE_HACK: ${{ needs.workspace-hack.result }}
+          GATE: ${{ needs.gate.outputs.changed }}
+          EVENT: ${{ github.event_name }}
           TYPESCRIPT_TESTS: ${{ needs.typescript.result }}
           WORKER_RESULT: ${{ needs.worker-integration.result }}
           ADDON_RESULT: ${{ needs.node-addon-portability.result }}
@@ -1272,31 +1369,38 @@ jobs:
           for result in $RESULTS; do
             [[ "$result" == "success" || "$result" == "skipped" ]] || exit 1
           done
-          # A skipped job is fine only when its path filter says nothing it covers changed.
-          # Without this, a failed or skipped `Detect test areas` run, or a draft's fast tier,
-          # would pass as if the full suites had run.
-          [[ "$CHANGES" == "success" ]] || { echo "::error::Detect test areas did not succeed"; exit 1; }
-          # A draft pull request runs the fast tier only. Red on purpose: a draft cannot merge, and a
-          # draft's result must never satisfy the required check.
-          if [[ "$FULL_TIER" != "true" ]]; then
-            echo "::error::full tier not run: draft PR"
-            exit 1
+          if [[ "$GATE" != "true" ]]; then
+            echo "main has not changed since the last green nightly run; nothing to check"
+            exit 0
           fi
+          # A skipped job is fine only when its path filter says nothing it covers changed.
+          # Without this, a failed or skipped `Detect test areas` run would pass as if the
+          # suites had run.
+          [[ "$CHANGES" == "success" ]] || { echo "::error::Detect test areas did not succeed"; exit 1; }
           need() {
             if [[ "$2" != "success" ]]; then
-              echo "::error::$1 was required by the full tier but its result is '$2'"
+              echo "::error::$1 was required but its result is '$2'"
               exit 1
             fi
           }
+          # Fast tier: every run.
           if [[ "$RUN_ALL" == "true" || ( "$RUST" == "true" && ( "$RUST_MODE" == "affected" || "$RUST_MODE" == "full" ) ) ]]; then
             need "Rust crates" "$RUST_TESTS"
             if [[ "$RUN_ALL" == "true" || "$RUST_MODE" == "full" || " $RUST_PACKAGES " == *" -p alien-cli "* ]]; then
               need "CLI extensions" "$CLI_EXTENSIONS"
             fi
           fi
+          if [[ "$RUST" == "true" && ( "$RUST_MODE" == "affected" || "$RUST_MODE" == "check-only" ) ]]; then
+            need "Rust check" "$RUST_CHECK"
+          fi
+          if [[ "$RUN_ALL" == "true" || "$RUST" == "true" ]]; then
+            need "Workspace-hack up to date" "$WORKSPACE_HACK"
+          fi
           if [[ "$RUN_ALL" == "true" || "$TYPESCRIPT" == "true" ]]; then
             need "TypeScript packages and CLIs" "$TYPESCRIPT_TESTS"
           fi
+          # Full tier: nightly, release qualification and manual runs.
+          [[ "$FULL_TIER" == "true" ]] || exit 0
           if [[ "$RUN_ALL" == "true" || "$RUST" == "true" || "$WORKER_INTEGRATION" == "true" ]]; then
             need "Worker integration" "$WORKER_RESULT"
           fi

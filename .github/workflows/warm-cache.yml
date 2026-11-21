@@ -1,0 +1,86 @@
+name: Warm build cache
+
+# Compiles the workspace on every push to main so pull requests restore a warm sccache
+# (GitHub's Actions cache is readable from a pull request only for its base branch).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    name: Warm Rust cache
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install development tools
+        uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
+        with:
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            examples/pnpm-lock.yaml
+
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
+
+      - name: Install sccache
+        uses: ./.github/actions/setup-sccache
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          version: "35.x"
+          repo-token: ${{ github.token }}
+
+      - name: Configure git credentials for cargo
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build TypeScript dependencies for Rust tests
+        run: pnpm exec turbo run build --filter=@alienplatform/sdk --filter=@alienplatform/commands
+
+      - name: Check every package and target
+        run: cargo check --workspace --all-targets --features alien-manager/openapi,alien-bindings/platform-sdk --locked
+
+      - name: Build the test binaries
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: cargo test --workspace --no-run --features alien-manager/openapi,alien-bindings/platform-sdk,alien-client-core/no-retry-delay --locked
+
+      - name: Cache statistics
+        if: always()
+        run: sccache --show-stats || true
