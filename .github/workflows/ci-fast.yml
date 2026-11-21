@@ -640,7 +640,15 @@ jobs:
         # alien-hooks-runtime's tests build their hooks module for wasm32-wasip1.
         run: rustup target add wasm32-wasip1
 
-      - uses: ./.github/actions/setup-sccache
+      # No RUSTC_WRAPPER here, unlike the other Rust jobs. The dev zone test runs
+      # `alien dev`, which builds the extension controller inside its 1200 s
+      # deadline and then waits about 15 more minutes before the zone runs
+      # (ALIEN-3134). With the wrapper, that nested build is slow enough to pass
+      # the deadline. Put the wrapper back once ALIEN-3134 is fixed.
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        continue-on-error: true
+        with:
+          version: v0.16.0
 
       - uses: taiki-e/install-action@nextest
 
@@ -695,10 +703,6 @@ jobs:
 
       - name: CLI extension tests
         run: cargo nextest run --locked -p alien-cli --test extensions --no-fail-fast --partition count:${{ matrix.partition }}/3
-
-      - name: Compiler cache statistics
-        if: always()
-        run: sccache --show-stats || true
 
   typescript:
     name: TypeScript packages and CLIs
