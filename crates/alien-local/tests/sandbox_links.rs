@@ -209,6 +209,62 @@ async fn a_linked_session_reaches_its_link_through_the_gateway_and_nothing_else_
     .await;
     assert_eq!((code, body.trim()), (0, "api-ok"), "{body}");
 
+    // Removing the link from the stack reaches the running sessions: their gateway is replaced
+    // and refuses the service, while the sessions keep their proxy. Replacing the container
+    // also ends every tunnel the old one held open.
+    let before = docker(&["inspect", "-f", "{{.Id}}", "alien-sbx-gw-links-a"]);
+    manager
+        .apply_links(sandbox, &[])
+        .await
+        .expect("the links change applies");
+    let after = docker(&["inspect", "-f", "{{.Id}}", "alien-sbx-gw-links-a"]);
+    assert_ne!(
+        before, after,
+        "the gateway holding the link's tunnels is gone"
+    );
+    let (code, body) = fetch(
+        &manager,
+        &second.container_id,
+        "wget -q -T 10 -O- http://api.svc:8080/",
+    )
+    .await;
+    eprintln!(
+        "after unlink: http://api.svc:8080/ -> exit {code}: {}",
+        body.trim()
+    );
+    assert_ne!(code, 0, "an unlinked service must be refused: {body}");
+    assert!(
+        !body.contains("-ok"),
+        "the unlinked service answered: {body}"
+    );
+    let logs = docker(&["logs", "alien-sbx-gw-links-a"]);
+    assert!(
+        logs.contains(r#""host":"api.svc","port":8080,"decision":"deny""#),
+        "the replaced gateway refused the unlinked service: {logs}"
+    );
+    // And linking it again restores it for the same session.
+    manager
+        .apply_links(
+            sandbox,
+            &[SandboxLink {
+                id: "api".into(),
+                ports: vec![8080],
+            }],
+        )
+        .await
+        .expect("the links change applies");
+    let (code, body) = fetch(
+        &manager,
+        &second.container_id,
+        "wget -q -T 10 -O- http://api.svc:8080/",
+    )
+    .await;
+    eprintln!(
+        "after relink: http://api.svc:8080/ -> exit {code}: {}",
+        body.trim()
+    );
+    assert_eq!((code, body.trim()), (0, "api-ok"), "{body}");
+
     manager.terminate(sandbox, "s1").await.expect("terminate");
     assert!(!docker_ok(&[
         "network",
@@ -222,6 +278,12 @@ async fn a_linked_session_reaches_its_link_through_the_gateway_and_nothing_else_
     ]));
 
     manager.reap(sandbox).await.expect("reap");
+    assert!(!docker_ok(&["inspect", "alien-sbx-gw-links-a"]));
+    // A sandbox without a running gateway has nothing to change.
+    manager
+        .apply_links(sandbox, &[])
+        .await
+        .expect("nothing to apply");
     assert!(!docker_ok(&["inspect", "alien-sbx-gw-links-a"]));
     assert!(!docker_ok(&[
         "network",

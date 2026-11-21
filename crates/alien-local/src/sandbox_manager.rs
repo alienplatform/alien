@@ -413,6 +413,31 @@ impl LocalSandboxManager {
 
     /// The sandbox's gateway, started or replaced for these links.
     async fn gateway(&self, sandbox: &str, links: &[SandboxLink]) -> Result<Arc<LocalGateway>> {
+        let mut gateways = self.gateways.lock().await;
+        self.ensure_gateway(&mut gateways, sandbox, links).await
+    }
+
+    /// Applies the sandbox's current links to its running gateway, if it has one: a link
+    /// added or removed in the stack takes effect for the sessions already running, not only
+    /// for the next one. With no links left, the gateway keeps proxying those sessions'
+    /// internet egress and reaches nothing private. A sandbox without a running gateway is
+    /// left alone; its next linked session starts one with these links.
+    pub async fn apply_links(&self, sandbox: &str, links: &[SandboxLink]) -> Result<()> {
+        let mut gateways = self.gateways.lock().await;
+        if !gateways.contains_key(sandbox) {
+            return Ok(());
+        }
+        self.ensure_gateway(&mut gateways, sandbox, links)
+            .await
+            .map(drop)
+    }
+
+    async fn ensure_gateway(
+        &self,
+        gateways: &mut HashMap<String, Arc<LocalGateway>>,
+        sandbox: &str,
+        links: &[SandboxLink],
+    ) -> Result<Arc<LocalGateway>> {
         let range = crate::sandbox_gateway::deployment_network_range(&self.docker).await?;
         let links: Vec<alien_core::sandbox_links::GatewayLink> = links
             .iter()
@@ -424,7 +449,6 @@ impl LocalSandboxManager {
                 addresses: Vec::new(),
             })
             .collect();
-        let mut gateways = self.gateways.lock().await;
         let gateway = crate::sandbox_gateway::ensure_gateway(
             &self.docker,
             &self.gateway_key,
