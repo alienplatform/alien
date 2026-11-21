@@ -66,17 +66,6 @@ export type LocalOverride = {
   workloadName: string;
 };
 
-/**
- * The machine's last plan check. Absent for machines that don't verify releases or haven't reported one.
- */
-export type PlanCheck = {
-  observedAt: string;
-  /**
-   * Why the machine refused the last plan it checked; absent when it accepted it.
-   */
-  refusal?: string | null | undefined;
-};
-
 export type DeploymentMachine = {
   clusterResourceId: string;
   machineId: string;
@@ -100,10 +89,6 @@ export type DeploymentMachine = {
   wireguardMeshObservedAt?: string | null | undefined;
   localOverrides: Array<LocalOverride>;
   localOverridesObservedAt?: string | null | undefined;
-  /**
-   * The machine's last plan check. Absent for machines that don't verify releases or haven't reported one.
-   */
-  planCheck?: PlanCheck | null | undefined;
   replicaCount: number;
 };
 
@@ -240,22 +225,6 @@ export function localOverrideFromJSON(
 }
 
 /** @internal */
-export const PlanCheck$inboundSchema: z.ZodType<PlanCheck, unknown> = z.object({
-  observedAt: z.string(),
-  refusal: z.nullable(z.string()).optional(),
-});
-
-export function planCheckFromJSON(
-  jsonString: string,
-): SafeParseResult<PlanCheck, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => PlanCheck$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'PlanCheck' from JSON`,
-  );
-}
-
-/** @internal */
 export const DeploymentMachine$inboundSchema: z.ZodType<
   DeploymentMachine,
   unknown
@@ -285,7 +254,6 @@ export const DeploymentMachine$inboundSchema: z.ZodType<
   wireguardMeshObservedAt: z.nullable(z.string()).optional(),
   localOverrides: z.array(z.lazy(() => LocalOverride$inboundSchema)),
   localOverridesObservedAt: z.nullable(z.string()).optional(),
-  planCheck: z.nullable(z.lazy(() => PlanCheck$inboundSchema)).optional(),
   replicaCount: z.int(),
 });
 

@@ -6,7 +6,7 @@
 import { GetExternalAIModelCheckRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetExternalAIModelCheckRequest = {
-  id: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
+  id: "dg_r27ict8c7vcgsumpj90ackf7b",
   checkId: "<id>",
 };
 ```
@@ -15,5 +15,5 @@ let value: GetExternalAIModelCheckRequest = {
 
 | Field                                       | Type                                        | Required                                    | Description                                 | Example                                     |
 | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
-| `id`                                        | *string*                                    | :heavy_check_mark:                          | Unique identifier for the deployment group. | dg_r27ict8c7vcgsumpj90ackf7bnwt             |
+| `id`                                        | *string*                                    | :heavy_check_mark:                          | Unique identifier for the deployment group. | dg_r27ict8c7vcgsumpj90ackf7b                |
 | `checkId`                                   | *string*                                    | :heavy_check_mark:                          | N/A                                         |                                             |

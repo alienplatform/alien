@@ -3,109 +3,106 @@
 
 ## Supported Types
 
-### `operations.DataAwsEcr`
+### `operations.DataAwsCodeBuild`
 
 ```typescript
-const value: operations.DataAwsEcr = {
-  region: "<value>",
-  registryId: "<id>",
-  registryUri: "https://mindless-bench.com",
-  repositories: [
-    {
-      createdAt: 8040.15,
-      kmsKeyPresent: true,
-      registryId: "<id>",
-      repositoryArn: "<value>",
-      repositoryName: "<value>",
-      repositoryUri: "https://glossy-disclosure.info",
-    },
-  ],
-  repositoriesTruncated: true,
-  repositoryCount: 980949,
-  repositoryPrefix: "<value>",
+const value: operations.DataAwsCodeBuild = {
+  encryptionKeyPresent: true,
+  environmentVariableCount: 879452,
+  projectName: "<value>",
+  serviceRolePresent: true,
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "stopped",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "timed-out",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "failed",
     partial: false,
-    stale: false,
+    stale: true,
   },
-  backend: "awsEcr",
+  backend: "awsCodeBuild",
 };
 ```
 
-### `operations.DataGcpArtifactRegistry`
+### `operations.DataGcpCloudBuild`
 
 ```typescript
-const value: operations.DataGcpArtifactRegistry = {
-  cleanupPolicyCount: 150101,
-  iamBindingCount: 410292,
-  iamPolicyEtagPresent: true,
-  iamRoles: [],
-  kmsKeyNamePresent: true,
-  labelCount: 560331,
+const value: operations.DataGcpCloudBuild = {
+  buildConfigId: "<id>",
+  environmentVariableCount: 982514,
   location: "<value>",
   projectId: "<id>",
-  repositoryId: "<id>",
   status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "stopped",
-    partial: false,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "not-installed",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
+    health: "unknown",
+    lifecycle: "deleting",
+    partial: true,
+    stale: true,
   },
-  backend: "gcpArtifactRegistry",
+  backend: "gcpCloudBuild",
 };
 ```
 
-### `operations.DataAzureContainerRegistry`
+### `operations.DataAzureContainerApps2`
 
 ```typescript
-const value: operations.DataAzureContainerRegistry = {
-  adminUserEnabled: false,
-  anonymousPullEnabled: true,
-  dataEndpointHostNames: [
-    "<value 1>",
-    "<value 2>",
-  ],
-  encryptionKeyIdentifierPresent: false,
-  encryptionKeyVaultUriPresent: false,
-  ipRuleCount: 806238,
-  location: "<value>",
-  managedTagCount: 395726,
-  name: "<value>",
-  networkRuleBypassOptions: "<value>",
-  policiesPresent: true,
-  policyCount: 284832,
-  privateEndpointConnectionCount: 849232,
-  publicNetworkAccess: "<value>",
-  resourceGroup: "<value>",
-  skuName: "<value>",
+const value: operations.DataAzureContainerApps2 = {
+  environmentVariableCount: 246098,
+  managedEnvironmentId: "<id>",
+  resourceGroupName: "<value>",
   status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "updating",
+    partial: false,
+    stale: false,
+  },
+  backend: "azureContainerApps",
+};
+```
+
+### `operations.DataKubernetesJob`
+
+```typescript
+const value: operations.DataKubernetesJob = {
+  conditionCount: 902553,
+  events: [],
+  jobName: "<value>",
+  namespace: "<value>",
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "collection-failed",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
     health: "unhealthy",
-    lifecycle: "failed",
+    lifecycle: "updating",
     partial: true,
     stale: false,
   },
-  zoneRedundancy: "<value>",
-  backend: "azureContainerRegistry",
+  backend: "kubernetesJob",
 };
 ```
 
-### `operations.DataLocal12`
-
-```typescript
-const value: operations.DataLocal12 = {
-  reachable: true,
-  registryUrl: "https://instructive-scratch.org/",
-  status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "creating",
-    partial: false,
-    stale: false,
-  },
-  backend: "local",
-};
-```

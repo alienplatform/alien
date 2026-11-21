@@ -20,11 +20,11 @@ export type CreateSetupLinkResponse = {
    * Formatted deployment link
    */
   deploymentLink: string;
-  /**
-   * When the setup link and its API key expire
-   */
-  expiresAt: Date;
   deploymentGroup: DeploymentGroup;
+  /**
+   * The persisted expiration date for the setup link
+   */
+  expiresAt: Date | null;
 };
 
 /** @internal */
@@ -34,8 +34,10 @@ export const CreateSetupLinkResponse$inboundSchema: z.ZodType<
 > = z.object({
   token: z.string(),
   deploymentLink: z.string(),
-  expiresAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   deploymentGroup: DeploymentGroup$inboundSchema,
+  expiresAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
 });
 
 export function createSetupLinkResponseFromJSON(

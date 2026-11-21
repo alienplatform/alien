@@ -4,19 +4,12 @@
 
 import { deploymentsCancelVolumeRestore } from "../funcs/deploymentsCancelVolumeRestore.js";
 import { deploymentsCreate } from "../funcs/deploymentsCreate.js";
-import { deploymentsCreateDeploymentValueAccess } from "../funcs/deploymentsCreateDeploymentValueAccess.js";
-import { deploymentsCreateSetupEnrollment } from "../funcs/deploymentsCreateSetupEnrollment.js";
 import { deploymentsCreateSetupRegistrationOperation } from "../funcs/deploymentsCreateSetupRegistrationOperation.js";
 import { deploymentsCreateToken } from "../funcs/deploymentsCreateToken.js";
 import { deploymentsDelete } from "../funcs/deploymentsDelete.js";
 import { deploymentsGet } from "../funcs/deploymentsGet.js";
-import { deploymentsGetComputePlan } from "../funcs/deploymentsGetComputePlan.js";
-import { deploymentsGetEnvironmentVariables } from "../funcs/deploymentsGetEnvironmentVariables.js";
 import { deploymentsGetInfo } from "../funcs/deploymentsGetInfo.js";
 import { deploymentsGetInputs } from "../funcs/deploymentsGetInputs.js";
-import { deploymentsGetMap } from "../funcs/deploymentsGetMap.js";
-import { deploymentsGetPulse } from "../funcs/deploymentsGetPulse.js";
-import { deploymentsGetSetupEnrollment } from "../funcs/deploymentsGetSetupEnrollment.js";
 import { deploymentsGetSetupRegistrationOperation } from "../funcs/deploymentsGetSetupRegistrationOperation.js";
 import { deploymentsGetStats } from "../funcs/deploymentsGetStats.js";
 import { deploymentsGetUpdateOperation } from "../funcs/deploymentsGetUpdateOperation.js";
@@ -35,7 +28,6 @@ import { deploymentsRetry } from "../funcs/deploymentsRetry.js";
 import { deploymentsSetFirstPartyDeploymentInputs } from "../funcs/deploymentsSetFirstPartyDeploymentInputs.js";
 import { deploymentsSetReleaseChannel } from "../funcs/deploymentsSetReleaseChannel.js";
 import { deploymentsUpdateCompute } from "../funcs/deploymentsUpdateCompute.js";
-import { deploymentsUpdateDomains } from "../funcs/deploymentsUpdateDomains.js";
 import { deploymentsUpdateEnvironmentVariables } from "../funcs/deploymentsUpdateEnvironmentVariables.js";
 import { deploymentsUpdateInputs } from "../funcs/deploymentsUpdateInputs.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -44,25 +36,6 @@ import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class Deployments extends ClientSDK {
-  /**
-   * Get a short-lived token to read or write this deployment's values in Alien Cloud or its Private Alien Instance
-   *
-   * @remarks
-   * Values are stored where the deployment is managed: Alien Cloud, or its Private Alien Instance. The token is valid for 5 minutes and names the scope and slots it may touch. Writing needs update rights; reading needs read rights and covers plain slots only.
-   */
-  async createDeploymentValueAccess(
-    id: string,
-    valueAccessRequest?: models.ValueAccessRequest | undefined,
-    options?: RequestOptions,
-  ): Promise<models.ValueAccessResponse> {
-    return unwrapAsync(deploymentsCreateDeploymentValueAccess(
-      this,
-      id,
-      valueAccessRequest,
-      options,
-    ));
-  }
-
   /**
    * Reassign a deployment to another group within its project
    */
@@ -75,36 +48,6 @@ export class Deployments extends ClientSDK {
       this,
       id,
       moveDeploymentRequest,
-      options,
-    ));
-  }
-
-  /**
-   * Reserve one cloud setup location and issue a one-hour, one-use enrollment. Requires deployment update authority. An explicit matching revision may replace a pending, unapplied attempt; active installs cannot be replaced.
-   */
-  async createSetupEnrollment(
-    deploymentId: string,
-    requestBody?: operations.CreateSetupEnrollmentRequestBody | undefined,
-    options?: RequestOptions,
-  ): Promise<operations.CreateSetupEnrollmentResponse> {
-    return unwrapAsync(deploymentsCreateSetupEnrollment(
-      this,
-      deploymentId,
-      requestBody,
-      options,
-    ));
-  }
-
-  /**
-   * Read setup progress and its revision for an authorized recovery. Never returns an enrollment code or its hash.
-   */
-  async getSetupEnrollment(
-    request: operations.GetSetupEnrollmentRequest,
-    options?: RequestOptions,
-  ): Promise<operations.GetSetupEnrollmentResponse> {
-    return unwrapAsync(deploymentsGetSetupEnrollment(
-      this,
-      request,
       options,
     ));
   }
@@ -145,34 +88,6 @@ export class Deployments extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.DeploymentStats> {
     return unwrapAsync(deploymentsGetStats(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * List every deployment of a project, the application's and each feature's, with its group, purpose and a one-word state, for the project overview. Capped at 5000 rows; `total` counts all of them.
-   */
-  async getMap(
-    request: operations.GetDeploymentMapRequest,
-    options?: RequestOptions,
-  ): Promise<models.DeploymentMap> {
-    return unwrapAsync(deploymentsGetMap(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * How many of a project's application deployments report heartbeats now, and per 5-minute bucket over 24 hours how many reported and the request and 5xx rates summed over those that measured requests. Sums never include deployments that did not report.
-   */
-  async getPulse(
-    request: operations.GetDeploymentPulseRequest,
-    options?: RequestOptions,
-  ): Promise<models.DeploymentPulse> {
-    return unwrapAsync(deploymentsGetPulse(
       this,
       request,
       options,
@@ -427,36 +342,6 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Set managed custom endpoint hostnames for a resource. An empty endpoints map restores generated hostnames.
-   */
-  async updateDomains(
-    id: string,
-    requestBody?: operations.UpdateDeploymentDomainsRequestBody | undefined,
-    options?: RequestOptions,
-  ): Promise<operations.UpdateDeploymentDomainsResponse> {
-    return unwrapAsync(deploymentsUpdateDomains(
-      this,
-      id,
-      requestBody,
-      options,
-    ));
-  }
-
-  /**
-   * Plan the deployment's current compute on its target release in its manager: each pool's machine choices (same CPU architecture as its current machine), scale ranges and container choices. Requires the same permission as updating compute.
-   */
-  async getComputePlan(
-    request: operations.GetDeploymentComputePlanRequest,
-    options?: RequestOptions,
-  ): Promise<operations.GetDeploymentComputePlanResponse> {
-    return unwrapAsync(deploymentsGetComputePlan(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Update deployment-time compute selections or quota warning overrides and request reconciliation by the hosted manager.
    */
   async updateCompute(
@@ -470,20 +355,6 @@ export class Deployments extends ClientSDK {
       this,
       id,
       updateDeploymentComputeRequest,
-      options,
-    ));
-  }
-
-  /**
-   * Read editable environment override names and types. Stored values are never returned.
-   */
-  async getEnvironmentVariables(
-    request: operations.GetDeploymentEnvironmentVariablesRequest,
-    options?: RequestOptions,
-  ): Promise<operations.GetDeploymentEnvironmentVariablesResponse> {
-    return unwrapAsync(deploymentsGetEnvironmentVariables(
-      this,
-      request,
       options,
     ));
   }

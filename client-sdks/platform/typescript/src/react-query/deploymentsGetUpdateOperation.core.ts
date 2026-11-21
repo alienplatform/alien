@@ -76,7 +76,7 @@ export function queryKeyDeploymentsGetUpdateOperation(
 ): QueryKey {
   return [
     "@alienplatform/platform-api",
-    "Deployments",
+    "deployments",
     "getUpdateOperation",
     id,
     operationId,

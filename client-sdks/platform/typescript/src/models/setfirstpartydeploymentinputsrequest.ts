@@ -35,9 +35,6 @@ export type SetFirstPartyDeploymentInputsRequest = {
    */
   platform: SetFirstPartyDeploymentInputsRequestPlatform;
   inputValues?: { [k: string]: StackInputValueRequest } | undefined;
-  /**
-   * Channel the release was signed for
-   */
   releaseChannel?: string | undefined;
 };
 

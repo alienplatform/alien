@@ -33,7 +33,7 @@ let value: DataComputeCluster = {
 
 ## Fields
 
-| Field                                                                        | Type                                                                         | Required                                                                     | Description                                                                  |
-| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `data`                                                                       | *models.SyncReconcileRequestDataUnion5*                                      | :heavy_check_mark:                                                           | N/A                                                                          |
-| `resourceType`                                                               | [models.ResourceTypeComputeCluster](../models/resourcetypecomputecluster.md) | :heavy_check_mark:                                                           | N/A                                                                          |
+| Field                                   | Type                                    | Required                                | Description                             |
+| --------------------------------------- | --------------------------------------- | --------------------------------------- | --------------------------------------- |
+| `data`                                  | *models.SyncReconcileRequestDataUnion5* | :heavy_check_mark:                      | N/A                                     |
+| `resourceType`                          | *"compute-cluster"*                     | :heavy_check_mark:                      | N/A                                     |

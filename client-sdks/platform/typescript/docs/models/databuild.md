@@ -15,13 +15,13 @@ let value: DataBuild = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
-          severity: "error",
+          reason: "not-installed",
+          severity: "info",
           source: "<value>",
         },
       ],
-      health: "degraded",
-      lifecycle: "unknown",
+      health: "healthy",
+      lifecycle: "failed",
       partial: false,
       stale: true,
     },
@@ -33,7 +33,7 @@ let value: DataBuild = {
 
 ## Fields
 
-| Field                                                      | Type                                                       | Required                                                   | Description                                                |
-| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `data`                                                     | *models.SyncReconcileRequestDataUnion15*                   | :heavy_check_mark:                                         | N/A                                                        |
-| `resourceType`                                             | [models.ResourceTypeBuild](../models/resourcetypebuild.md) | :heavy_check_mark:                                         | N/A                                                        |
+| Field                                    | Type                                     | Required                                 | Description                              |
+| ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
+| `data`                                   | *models.SyncReconcileRequestDataUnion14* | :heavy_check_mark:                       | N/A                                      |
+| `resourceType`                           | *"build"*                                | :heavy_check_mark:                       | N/A                                      |

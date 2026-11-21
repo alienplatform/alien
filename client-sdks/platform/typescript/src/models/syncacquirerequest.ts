@@ -144,10 +144,6 @@ export type SyncAcquireRequest = {
    */
   supportsExecutionClaims?: true | undefined;
   /**
-   * Capabilities of the manager replica making this request, in the same form as the heartbeat. A replica that does not send `values: 1` is refused (503) a deployment that has values stored in the manager, because it cannot load them.
-   */
-  capabilities?: { [k: string]: number } | undefined;
-  /**
    * Maximum number of deployments to acquire (default: 10)
    */
   limit?: number | undefined;
@@ -186,7 +182,6 @@ export type SyncAcquireRequest$Outbound = {
   acquireMode?: string | undefined;
   deploymentModel: string;
   supportsExecutionClaims?: true | undefined;
-  capabilities?: { [k: string]: number } | undefined;
   limit?: number | undefined;
 };
 
@@ -206,7 +201,6 @@ export const SyncAcquireRequest$outboundSchema: z.ZodType<
   acquireMode: AcquireMode$outboundSchema.optional(),
   deploymentModel: SyncAcquireRequestDeploymentModel$outboundSchema,
   supportsExecutionClaims: z.literal(true).optional(),
-  capabilities: z.record(z.string(), z.int()).optional(),
   limit: z.int().optional(),
 });
 

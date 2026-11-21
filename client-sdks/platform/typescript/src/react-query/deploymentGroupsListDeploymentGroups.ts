@@ -105,8 +105,6 @@ export function setDeploymentGroupsListDeploymentGroupsData(
   queryKeyBase: [
     parameters: {
       project?: string | undefined;
-      pendingInvites?: operations.PendingInvites | undefined;
-      empty?: operations.Empty | undefined;
       search?: string | undefined;
       include?: Array<operations.ListDeploymentGroupsInclude> | undefined;
       limit?: number | undefined;
@@ -128,8 +126,6 @@ export function invalidateDeploymentGroupsListDeploymentGroups(
   queryKeyBase: TupleToPrefixes<
     [parameters: {
       project?: string | undefined;
-      pendingInvites?: operations.PendingInvites | undefined;
-      empty?: operations.Empty | undefined;
       search?: string | undefined;
       include?: Array<operations.ListDeploymentGroupsInclude> | undefined;
       limit?: number | undefined;

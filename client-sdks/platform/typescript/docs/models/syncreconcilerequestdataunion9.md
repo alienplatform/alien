@@ -1,78 +1,83 @@
 # SyncReconcileRequestDataUnion9
 
-Heartbeat data for a Redis resource. Everything comes from the cloud's
-management and metrics APIs; the manager never opens a Redis connection.
-
 
 ## Supported Types
 
-### `models.DataElasticache`
+### `models.DataAwsParameterStore`
 
 ```typescript
-const value: models.DataElasticache = {
-  config: {},
-  metrics: {},
-  replicationGroupId: "<id>",
+const value: models.DataAwsParameterStore = {
+  accountId: "<id>",
+  parameterMetadataSampled: true,
+  prefix: "<value>",
+  region: "<value>",
   status: {
     collectionIssues: [],
-    health: "degraded",
-    lifecycle: "running",
+    health: "unknown",
+    lifecycle: "unknown",
     partial: true,
     stale: false,
   },
-  backend: "elasticache",
+  backend: "awsParameterStore",
 };
 ```
 
-### `models.DataMemorystore`
+### `models.DataGcpSecretManager`
 
 ```typescript
-const value: models.DataMemorystore = {
-  config: {},
-  instanceName: "<value>",
-  metrics: {},
+const value: models.DataGcpSecretManager = {
+  location: "<value>",
+  prefix: "<value>",
+  projectId: "<id>",
+  secretMetadataListed: true,
+  status: {
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "stopping",
+    partial: true,
+    stale: false,
+  },
+  backend: "gcpSecretManager",
+};
+```
+
+### `models.DataAzureKeyVault1`
+
+```typescript
+const value: models.DataAzureKeyVault1 = {
+  accessPolicyCount: 582917,
+  name: "<value>",
+  privateEndpointConnectionCount: 112234,
+  publicNetworkAccess: "<value>",
+  rbacAuthorizationEnabled: true,
+  secretMetadataListed: false,
+  softDeleteEnabled: true,
+  softDeleteRetentionDays: 457442,
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "timed-out",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "stopped",
-    partial: true,
-    stale: true,
-  },
-  backend: "memorystore",
-};
-```
-
-### `models.DataAzureManagedRedis`
-
-```typescript
-const value: models.DataAzureManagedRedis = {
-  clusterName: "<value>",
-  config: {},
-  metrics: {},
-  status: {
-    collectionIssues: [],
     health: "unknown",
-    lifecycle: "running",
-    partial: true,
-    stale: true,
+    lifecycle: "updating",
+    partial: false,
+    stale: false,
   },
-  backend: "azureManagedRedis",
+  backend: "azureKeyVault",
 };
 ```
 
-### `models.DataLocal9`
+### `models.DataKubernetesSecret`
 
 ```typescript
-const value: models.DataLocal9 = {
-  name: "<value>",
-  processRunning: false,
+const value: models.DataKubernetesSecret = {
+  namespace: "<value>",
+  prefix: "<value>",
+  secretMetadataListed: false,
   status: {
     collectionIssues: [
       {
@@ -82,12 +87,37 @@ const value: models.DataLocal9 = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "stopped",
+    health: "unknown",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
-  version: "<value>",
+  backend: "kubernetesSecret",
+};
+```
+
+### `models.DataLocal9`
+
+```typescript
+const value: models.DataLocal9 = {
+  path: "/usr/include",
+  pathExists: false,
+  secretMetadataListed: false,
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "timed-out",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unknown",
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
+  },
   backend: "local",
 };
 ```
+

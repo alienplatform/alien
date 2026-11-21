@@ -16,23 +16,12 @@ export type ReleaseChannel = {
    * Unique identifier for the project.
    */
   projectId: string;
-  /**
-   * Channel the release was signed for
-   */
   name: string;
   /**
    * Unique identifier for the release.
    */
   currentReleaseId: string | null;
   deploymentCount?: number | undefined;
-  /**
-   * Of the deployments following this channel, how many run its current release
-   */
-  currentReleaseCount?: number | undefined;
-  /**
-   * Of the deployments following this channel, how many are pinned to a release
-   */
-  pinnedCount?: number | undefined;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -45,8 +34,6 @@ export const ReleaseChannel$inboundSchema: z.ZodType<ReleaseChannel, unknown> =
     name: z.string(),
     currentReleaseId: z.nullable(z.string()),
     deploymentCount: z.int().optional(),
-    currentReleaseCount: z.int().optional(),
-    pinnedCount: z.int().optional(),
     createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
     updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   });

@@ -48,7 +48,7 @@ export type OperationsDenyAccessRequestMutationError =
   | SDKValidationError;
 
 /**
- * Deny a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester.
+ * Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
  */
 export function useOperationsDenyAccessRequestMutation(
   options?: MutationHookOptions<

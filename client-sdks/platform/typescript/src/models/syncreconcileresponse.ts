@@ -4,7 +4,6 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
-import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
   DeploymentState,
@@ -19,23 +18,6 @@ import {
   TargetOperationsBundleSet,
   TargetOperationsBundleSet$inboundSchema,
 } from "./targetoperationsbundleset.js";
-
-export const SyncReconcileResponseKind = {
-  Secret: "secret",
-} as const;
-export type SyncReconcileResponseKind = ClosedEnum<
-  typeof SyncReconcileResponseKind
->;
-
-export type SyncReconcileResponseValueSlot = {
-  /**
-   * Slot name of a dynamic container's secret environment variable.
-   */
-  slot: string;
-  kind: SyncReconcileResponseKind;
-  digest: string;
-  envName: string;
-};
 
 export type SyncReconcileResponseHealthCheck = {
   path: string;
@@ -53,7 +35,6 @@ export type TargetDynamicContainer = {
   deleted: boolean;
   env: { [k: string]: string };
   secretEnv: { [k: string]: string };
-  valueSlots?: Array<SyncReconcileResponseValueSlot> | undefined;
   healthCheck?: SyncReconcileResponseHealthCheck | undefined;
   suspendedReason?: string | undefined;
 };
@@ -79,37 +60,7 @@ export type SyncReconcileResponse = {
    * Complete release-independent dynamic container target set for a Kubernetes Operator.
    */
   targetDynamicContainers?: Array<TargetDynamicContainer> | undefined;
-  /**
-   * Immutable Operator image the project currently installs. Sent only when the reported operatorVersion is older than the release that enrolls with the deployment token, so the Operator can update itself.
-   */
-  targetOperatorImage?: string | undefined;
 };
-
-/** @internal */
-export const SyncReconcileResponseKind$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseKind
-> = z.enum(SyncReconcileResponseKind);
-
-/** @internal */
-export const SyncReconcileResponseValueSlot$inboundSchema: z.ZodType<
-  SyncReconcileResponseValueSlot,
-  unknown
-> = z.object({
-  slot: z.string(),
-  kind: SyncReconcileResponseKind$inboundSchema,
-  digest: z.string(),
-  envName: z.string(),
-});
-
-export function syncReconcileResponseValueSlotFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncReconcileResponseValueSlot, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncReconcileResponseValueSlot$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncReconcileResponseValueSlot' from JSON`,
-  );
-}
 
 /** @internal */
 export const SyncReconcileResponseHealthCheck$inboundSchema: z.ZodType<
@@ -145,9 +96,6 @@ export const TargetDynamicContainer$inboundSchema: z.ZodType<
   deleted: z.boolean(),
   env: z.record(z.string(), z.string()),
   secretEnv: z.record(z.string(), z.string()),
-  valueSlots: z.array(
-    z.lazy(() => SyncReconcileResponseValueSlot$inboundSchema),
-  ).optional(),
   healthCheck: z.lazy(() => SyncReconcileResponseHealthCheck$inboundSchema)
     .optional(),
   suspendedReason: z.string().optional(),
@@ -175,7 +123,6 @@ export const SyncReconcileResponse$inboundSchema: z.ZodType<
   targetDynamicContainers: z.array(
     z.lazy(() => TargetDynamicContainer$inboundSchema),
   ).optional(),
-  targetOperatorImage: z.string().optional(),
 });
 
 export function syncReconcileResponseFromJSON(

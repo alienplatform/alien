@@ -600,28 +600,6 @@ export type PackageModules = {
    * Filename of the module archive
    */
   filename: string;
-  /**
-   * Set when the module declares the output `helm_values`, the chart values of a chart that
-   *
-   * @remarks
-   * Helm installs separately from Terraform. Absent for packages built before the output.
-   */
-  helmValuesOutput?: boolean | undefined;
-  /**
-   * Values the module's `network_mode` variable accepts (`create-new`, `use-existing`,
-   *
-   * @remarks
-   * `use-default`). Absent when the module has no network input, and for legacy artifacts.
-   */
-  networkModes?: Array<string> | undefined;
-  /**
-   * Set on Kubernetes modules built with the provider that never writes a short-lived key to
-   *
-   * @remarks
-   * state and keeps its recorded state when a refresh is refused. Only such a module may be
-   * installed with a one-use, two-hour setup key; absent for older packages.
-   */
-  oneUseSetupKey?: boolean | undefined;
   operationalDefaults?:
     | PackageOperationalDefaultsModules
     | string
@@ -728,16 +706,6 @@ export type OutputsTerraform = {
    * Terraform provider registry outputs.
    */
   provider: PackageProvider;
-  /**
-   * What this build's modules render with besides the release: `{"supportedAwsRegions": [..]}`
-   *
-   * @remarks
-   * when the modules accept only some AWS regions, else `{}` (the part of alien-cli-common
-   * `SetupHostingOptions` a module uses). A vendor's CLI renders protected Terraform modules
-   * with it. Absent on builds made before it was recorded; builds from before protected
-   * modules stopped self-registering hold a `terraformRegistration` nothing reads.
-   */
-  setupHosting?: { [k: string]: any | null } | undefined;
   type: OutputsTypeTerraform;
 };
 
@@ -883,13 +851,6 @@ export type PackageTargets = {
    * AWS Console quick-launch URL
    */
   launchStackUrl: string;
-  /**
-   * Values the template's `NetworkMode` parameter accepts (`create-new`, `use-existing`,
-   *
-   * @remarks
-   * `use-default`). Absent when the template has no network input, and for legacy artifacts.
-   */
-  networkModes?: Array<string> | undefined;
   operationalDefaults?:
     | PackageOperationalDefaultsTargets
     | string
@@ -933,16 +894,6 @@ export type OutputsTypeCloudformation = ClosedEnum<
  */
 export type OutputsCloudformation = {
   /**
-   * What this build rendered the `aws` template with besides the stack: registration,
-   *
-   * @remarks
-   * description, management trust and supported regions (alien-cli-common
-   * `SetupHostingOptions` without the per-release setup fingerprint). A vendor's CLI renders
-   * protected setup templates with these, so they register and are managed the same way.
-   * Absent on builds made before it was recorded.
-   */
-  setupHosting?: { [k: string]: any | null } | undefined;
-  /**
    * Template artifacts by CloudFormation target.
    */
   targets: { [k: string]: PackageTargets };
@@ -966,17 +917,6 @@ export type OutputsHelm = {
    * Default management endpoint embedded in this chart, if available.
    */
   managerUrl?: string | undefined;
-  /**
-   * Whether this chart accepts a one-use operator enrollment code
-   *
-   * @remarks
-   * (`management.enrollmentCode`). Charts built before codes take a token.
-   */
-  supportsEnrollmentCode?: boolean | undefined;
-  /**
-   * Whether this chart accepts explicit in-cluster Postgres opt-in values.
-   */
-  supportsPostgres?: boolean | undefined;
   /**
    * Chart version (e.g., "1.2.3")
    */
@@ -1676,9 +1616,6 @@ export const PackageModules$inboundSchema: z.ZodType<PackageModules, unknown> =
   z.object({
     downloadUrl: z.string(),
     filename: z.string(),
-    helmValuesOutput: z.boolean().optional(),
-    networkModes: z.array(z.string()).optional(),
-    oneUseSetupKey: z.boolean().optional(),
     operationalDefaults: z.nullable(
       z.union([
         z.lazy(() => PackageOperationalDefaultsModules$inboundSchema),
@@ -1776,7 +1713,6 @@ export const OutputsTerraform$inboundSchema: z.ZodType<
 > = z.object({
   modules: z.record(z.string(), z.lazy(() => PackageModules$inboundSchema)),
   provider: z.lazy(() => PackageProvider$inboundSchema),
-  setupHosting: z.record(z.string(), z.nullable(z.any())).optional(),
   type: OutputsTypeTerraform$inboundSchema,
 });
 
@@ -1905,7 +1841,6 @@ export function packageTargetsOperationalDefaultsUnionFromJSON(
 export const PackageTargets$inboundSchema: z.ZodType<PackageTargets, unknown> =
   z.object({
     launchStackUrl: z.string(),
-    networkModes: z.array(z.string()).optional(),
     operationalDefaults: z.nullable(
       z.union([
         z.lazy(() => PackageOperationalDefaultsTargets$inboundSchema),
@@ -1940,7 +1875,6 @@ export const OutputsCloudformation$inboundSchema: z.ZodType<
   OutputsCloudformation,
   unknown
 > = z.object({
-  setupHosting: z.record(z.string(), z.nullable(z.any())).optional(),
   targets: z.record(z.string(), z.lazy(() => PackageTargets$inboundSchema)),
   type: OutputsTypeCloudformation$inboundSchema,
 });
@@ -1964,8 +1898,6 @@ export const OutputsHelm$inboundSchema: z.ZodType<OutputsHelm, unknown> = z
   .object({
     chart: z.string(),
     managerUrl: z.string().optional(),
-    supportsEnrollmentCode: z.boolean().optional(),
-    supportsPostgres: z.boolean().optional(),
     version: z.string(),
     type: OutputsTypeHelm$inboundSchema,
   });

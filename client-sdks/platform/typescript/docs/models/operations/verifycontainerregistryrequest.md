@@ -6,7 +6,7 @@
 import { VerifyContainerRegistryRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: VerifyContainerRegistryRequest = {
-  id: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
+  id: "dg_r27ict8c7vcgsumpj90ackf7b",
 };
 ```
 
@@ -14,4 +14,4 @@ let value: VerifyContainerRegistryRequest = {
 
 | Field                                       | Type                                        | Required                                    | Description                                 | Example                                     |
 | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
-| `id`                                        | *string*                                    | :heavy_check_mark:                          | Unique identifier for the deployment group. | dg_r27ict8c7vcgsumpj90ackf7bnwt             |
+| `id`                                        | *string*                                    | :heavy_check_mark:                          | Unique identifier for the deployment group. | dg_r27ict8c7vcgsumpj90ackf7b                |

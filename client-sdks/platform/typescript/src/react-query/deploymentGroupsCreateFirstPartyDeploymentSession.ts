@@ -23,16 +23,14 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
+import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type DeploymentGroupsCreateFirstPartyDeploymentSessionMutationVariables =
   {
-    id: string;
-    createFirstPartyDeploymentSessionRequest?:
-      | models.CreateFirstPartyDeploymentSessionRequest
-      | undefined;
+    request: operations.CreateFirstPartyDeploymentSessionRequest;
     options?: RequestOptions;
   };
 
@@ -99,8 +97,7 @@ export function buildDeploymentGroupsCreateFirstPartyDeploymentSessionMutation(
     mutationKey: mutationKeyDeploymentGroupsCreateFirstPartyDeploymentSession(),
     mutationFn:
       function deploymentGroupsCreateFirstPartyDeploymentSessionMutationFn({
-        id,
-        createFirstPartyDeploymentSessionRequest,
+        request,
         options,
       }): Promise<
         DeploymentGroupsCreateFirstPartyDeploymentSessionMutationData
@@ -119,8 +116,7 @@ export function buildDeploymentGroupsCreateFirstPartyDeploymentSessionMutation(
         };
         return unwrapAsync(deploymentGroupsCreateFirstPartyDeploymentSession(
           client$,
-          id,
-          createFirstPartyDeploymentSessionRequest,
+          request,
           mergedOptions,
         ));
       },

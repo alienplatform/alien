@@ -72,7 +72,7 @@ export function useDeploymentsUpdateComputeMutation(
 }
 
 export function mutationKeyDeploymentsUpdateCompute(): MutationKey {
-  return ["@alienplatform/platform-api", "Deployments", "updateCompute"];
+  return ["@alienplatform/platform-api", "deployments", "updateCompute"];
 }
 
 export function buildDeploymentsUpdateComputeMutation(

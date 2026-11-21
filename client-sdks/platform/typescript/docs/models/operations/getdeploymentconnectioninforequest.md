@@ -6,7 +6,7 @@
 import { GetDeploymentConnectionInfoRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentConnectionInfoRequest = {
-  id: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+  id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
 };
 ```
 
@@ -14,4 +14,4 @@ let value: GetDeploymentConnectionInfoRequest = {
 
 | Field                                 | Type                                  | Required                              | Description                           | Example                               |
 | ------------------------------------- | ------------------------------------- | ------------------------------------- | ------------------------------------- | ------------------------------------- |
-| `id`                                  | *string*                              | :heavy_check_mark:                    | Unique identifier for the deployment. | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f      |
+| `id`                                  | *string*                              | :heavy_check_mark:                    | Unique identifier for the deployment. | dep_0c29fq4a2yjb7kx3smwdgxlc          |

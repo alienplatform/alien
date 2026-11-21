@@ -6,7 +6,7 @@
 import { ReportManagerHeartbeatRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: ReportManagerHeartbeatRequest = {
-  id: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
+  id: "mgr_enxscjrqiiu2lrc672hwwuc5",
 };
 ```
 
@@ -14,5 +14,5 @@ let value: ReportManagerHeartbeatRequest = {
 
 | Field                                                                     | Type                                                                      | Required                                                                  | Description                                                               | Example                                                                   |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `id`                                                                      | *string*                                                                  | :heavy_check_mark:                                                        | Unique identifier for a manager.                                          | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                          |
+| `id`                                                                      | *string*                                                                  | :heavy_check_mark:                                                        | Unique identifier for a manager.                                          | mgr_enxscjrqiiu2lrc672hwwuc5                                              |
 | `managerHeartbeatRequest`                                                 | [models.ManagerHeartbeatRequest](../../models/managerheartbeatrequest.md) | :heavy_minus_sign:                                                        | N/A                                                                       |                                                                           |

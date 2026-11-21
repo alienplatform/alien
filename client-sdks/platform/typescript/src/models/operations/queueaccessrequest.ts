@@ -75,27 +75,22 @@ export type QueueAccessRequestMaxRisk = ClosedEnum<
 >;
 
 /**
- * How, when and by whom the request was approved. Null until approved.
+ * How and when the customer gate was passed. Null until approved.
  */
 export type QueueAccessRequestApprovedBy = {
   /**
-   * `kubectl` (in the customer's cluster), `slack`, or the surface of a dashboard or API approval (`dashboard`, `cli`).
+   * `kubectl` for the in-cluster path, else the direct caller's method such as `slack`.
    */
   method: string | null;
   /**
-   * The Alien user who approved in the dashboard or API. Null for kubectl (the approver is only in the customer's cluster audit log) and for Slack.
+   * The approving user. Null for the kubectl path: the approver is only in the customer's cluster audit log.
    */
   actorId: string | null;
-  slack: models.AccessRequestSlackDecider | null;
   at: string;
 };
 
 export type QueueAccessRequestDeniedBy = {
-  /**
-   * The Alien user who denied in the dashboard or API. Null for Slack.
-   */
   actorId: string | null;
-  slack: models.AccessRequestSlackDecider | null;
   at: string;
 };
 
@@ -146,9 +141,8 @@ export type QueueAccessRequestResponse = {
    */
   queuedBy: string | null;
   queuedAt: string | null;
-  approver: models.AccessApprover;
   /**
-   * How, when and by whom the request was approved. Null until approved.
+   * How and when the customer gate was passed. Null until approved.
    */
   approvedBy: QueueAccessRequestApprovedBy | null;
   deniedBy: QueueAccessRequestDeniedBy | null;
@@ -243,7 +237,6 @@ export const QueueAccessRequestApprovedBy$inboundSchema: z.ZodType<
 > = z.object({
   method: z.nullable(z.string()),
   actorId: z.nullable(z.string()),
-  slack: z.nullable(models.AccessRequestSlackDecider$inboundSchema),
   at: z.string(),
 });
 
@@ -263,7 +256,6 @@ export const QueueAccessRequestDeniedBy$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   actorId: z.nullable(z.string()),
-  slack: z.nullable(models.AccessRequestSlackDecider$inboundSchema),
   at: z.string(),
 });
 
@@ -328,7 +320,6 @@ export const QueueAccessRequestResponse$inboundSchema: z.ZodType<
   createdAt: z.string(),
   queuedBy: z.nullable(z.string()),
   queuedAt: z.nullable(z.string()),
-  approver: models.AccessApprover$inboundSchema,
   approvedBy: z.nullable(
     z.lazy(() => QueueAccessRequestApprovedBy$inboundSchema),
   ),

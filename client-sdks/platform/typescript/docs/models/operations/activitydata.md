@@ -33,8 +33,7 @@ let value: ActivityData = {
       kind: "requireConfirmation",
     },
     resultAvailable: true,
-    resultKeptInInstance: false,
-    completedAt: new Date("2025-05-11T13:29:01.680Z"),
+    completedAt: new Date("2025-05-08T17:12:42.798Z"),
   },
 };
 ```

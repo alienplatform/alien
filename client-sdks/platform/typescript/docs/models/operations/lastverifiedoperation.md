@@ -34,8 +34,7 @@ let value: LastVerifiedOperation = {
     ],
   },
   resultAvailable: true,
-  resultKeptInInstance: false,
-  completedAt: new Date("2024-06-06T01:06:45.282Z"),
+  completedAt: new Date("2026-08-13T12:41:44.762Z"),
 };
 ```
 
@@ -59,5 +58,4 @@ let value: LastVerifiedOperation = {
 | `sensitiveOutput`                                                                                                                | *operations.SensitiveOutput*                                                                                                     | :heavy_check_mark:                                                                                                               | N/A                                                                                                                              |
 | `resultAvailable`                                                                                                                | *boolean*                                                                                                                        | :heavy_check_mark:                                                                                                               | N/A                                                                                                                              |
 | `result`                                                                                                                         | *any*                                                                                                                            | :heavy_minus_sign:                                                                                                               | N/A                                                                                                                              |
-| `resultKeptInInstance`                                                                                                           | *boolean*                                                                                                                        | :heavy_check_mark:                                                                                                               | True when the deployment runs on a Private Alien Instance. The result stays there and is never read by Alien.                    |
 | `completedAt`                                                                                                                    | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date)                                    | :heavy_check_mark:                                                                                                               | N/A                                                                                                                              |

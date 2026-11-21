@@ -45,8 +45,6 @@ export function buildDeploymentsGetStatsQuery(
     queryKey: queryKeyDeploymentsGetStats({
       project: request?.project,
       deploymentGroup: request?.deploymentGroup,
-      listState: request?.listState,
-      includeListCounts: request?.includeListCounts,
       managerId: request?.managerId,
       purpose: request?.purpose,
       environment: request?.environment,
@@ -80,8 +78,6 @@ export function queryKeyDeploymentsGetStats(
   parameters: {
     project?: string | undefined;
     deploymentGroup?: string | undefined;
-    listState?: operations.GetDeploymentStatsListState | undefined;
-    includeListCounts?: operations.IncludeListCounts | undefined;
     managerId?: string | undefined;
     purpose?: models.DeploymentPurpose | undefined;
     environment?: Array<operations.GetDeploymentStatsEnvironment> | undefined;
@@ -89,5 +85,5 @@ export function queryKeyDeploymentsGetStats(
     search?: string | undefined;
   },
 ): QueryKey {
-  return ["@alienplatform/platform-api", "Deployments", "getStats", parameters];
+  return ["@alienplatform/platform-api", "deployments", "getStats", parameters];
 }

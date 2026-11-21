@@ -70,7 +70,7 @@ export function buildDeploymentsListVolumeRestoresQuery(
 export function queryKeyDeploymentsListVolumeRestores(id: string): QueryKey {
   return [
     "@alienplatform/platform-api",
-    "Deployments",
+    "deployments",
     "listVolumeRestores",
     id,
   ];

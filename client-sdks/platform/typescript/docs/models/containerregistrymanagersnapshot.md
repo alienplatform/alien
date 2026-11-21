@@ -9,7 +9,7 @@ let value: ContainerRegistryManagerSnapshot = {
   generatedAt: new Date("2024-05-29T08:29:14.011Z"),
   routes: [
     {
-      id: "crroute_c9t4xoy7fmiq7equtu209zyjuoe9",
+      id: "crroute_c9t4xoy7fmiq7equtu20",
       deploymentId: "<id>",
       resourceId: "<id>",
       resourceRevision: "<value>",
@@ -19,7 +19,7 @@ let value: ContainerRegistryManagerSnapshot = {
       repositories: [],
       credentials: [
         {
-          id: "crcred_oz1xjr82f37j17g4gtmyu5w0eaem",
+          id: "crcred_oz1xjr82f37j17g4gtmyu",
           secretPrefix: "<value>",
           secretDigest: "<value>",
           scope: "pushPull",

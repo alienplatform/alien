@@ -3,45 +3,112 @@
 
 ## Supported Types
 
-### `models.DataGcpServiceUsage`
+### `models.DataAwsBedrock`
 
 ```typescript
-const value: models.DataGcpServiceUsage = {
-  enabled: true,
-  projectId: "<id>",
-  serviceName: "<value>",
+const value: models.DataAwsBedrock = {
+  availability: {
+    catalogRevision: "<value>",
+    models: [],
+    source: "aws-bedrock",
+  },
+  region: "<value>",
   status: {
     collectionIssues: [
       {
         message: "<value>",
         reason: "timed-out",
-        severity: "error",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "deleted",
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
     stale: false,
   },
-  backend: "gcpServiceUsage",
+  backend: "awsBedrock",
 };
 ```
 
-### `models.DataAzureResourceProvider`
+### `models.DataGcpVertex`
 
 ```typescript
-const value: models.DataAzureResourceProvider = {
-  namespace: "<value>",
-  registered: true,
-  resourceTypeCount: 563831,
+const value: models.DataGcpVertex = {
+  availability: {
+    catalogRevision: "<value>",
+    models: [
+      {
+        accessTest: "failed",
+        availability: "blocked",
+        blockers: [],
+        clientApis: [
+          "open-ai-chat-completions",
+        ],
+        publicModelId: "<id>",
+      },
+    ],
+    source: "anthropic",
+  },
+  location: "<value>",
+  project: "<value>",
   status: {
     collectionIssues: [],
     health: "degraded",
-    lifecycle: "scaling",
-    partial: true,
-    stale: true,
+    lifecycle: "unknown",
+    partial: false,
+    stale: false,
   },
-  backend: "azureResourceProvider",
+  backend: "gcpVertex",
 };
 ```
+
+### `models.DataAzureFoundry`
+
+```typescript
+const value: models.DataAzureFoundry = {
+  accountName: "<value>",
+  availability: {
+    catalogRevision: "<value>",
+    models: [
+      {
+        accessTest: "verified",
+        availability: "available",
+        blockers: [
+          "quota-configuration-required",
+        ],
+        clientApis: [
+          "open-ai-responses",
+        ],
+        publicModelId: "<id>",
+      },
+    ],
+    source: "aws-bedrock",
+  },
+  status: {
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "stopped",
+    partial: false,
+    stale: false,
+  },
+  backend: "azureFoundry",
+};
+```
+
+### `models.DataExternal`
+
+```typescript
+const value: models.DataExternal = {
+  provider: "<value>",
+  status: {
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "running",
+    partial: true,
+    stale: false,
+  },
+  backend: "external",
+};
+```
+

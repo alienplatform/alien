@@ -7,96 +7,74 @@ import { CreateDeploymentResponse } from "@alienplatform/platform-api/models";
 
 let value: CreateDeploymentResponse = {
   deployment: {
-    id: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     name: "acme-prod",
     status: "refresh-failed",
-    projectId: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
+    projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
     platform: "kubernetes",
     deploymentProtocolVersion: 883690,
-    deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
+    deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
     purpose: "encryption",
     stackSettings: {},
-    currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
-    desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
-    pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+    currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     releaseChannel: "<value>",
     retryRequested: false,
     updateState: {
       active: {
-        id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
+        id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
         status: "queued",
         reasons: [],
-        targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+        targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         changedKeys: [],
-        blocker: {
-          kind: "other",
-          message: "<value>",
-          signedSetupUpdate: {
-            releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
-            templateDigest: "<value>",
-          },
-        },
         cause: {
-          kind: "promotion",
-          at: new Date("2026-12-01T10:04:11.187Z"),
-          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+          kind: "volume-restore",
+          at: new Date("2024-04-20T16:58:36.345Z"),
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         },
-        requestedAt: new Date("2025-05-23T02:17:08.731Z"),
+        requestedAt: new Date("2024-05-03T02:14:14.983Z"),
       },
       next: {
-        id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
-        status: "superseded",
-        reasons: [
-          "redeploy",
-        ],
-        targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+        id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
+        status: "applying",
+        reasons: [],
+        targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         changedKeys: [
           "<value 1>",
           "<value 2>",
           "<value 3>",
         ],
-        blocker: {
-          kind: "other",
-          message: "<value>",
-          signedSetupUpdate: {
-            releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
-            templateDigest: "<value>",
-          },
+        cause: {
+          kind: "volume-restore",
+          at: new Date("2024-04-20T16:58:36.345Z"),
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         },
-        cause: null,
-        requestedAt: new Date("2025-07-14T02:26:55.487Z"),
+        requestedAt: new Date("2025-07-21T11:59:25.062Z"),
       },
       latest: {
-        id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
-        status: "failed",
+        id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
+        status: "queued",
         reasons: [],
-        targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+        targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         changedKeys: [
           "<value 1>",
           "<value 2>",
         ],
-        blocker: {
-          kind: "other",
-          message: "<value>",
-          signedSetupUpdate: {
-            releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
-            templateDigest: "<value>",
-          },
-        },
         cause: {
-          kind: "promotion",
-          at: new Date("2026-12-01T10:04:11.187Z"),
-          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+          kind: "volume-restore",
+          at: new Date("2024-04-20T16:58:36.345Z"),
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         },
-        requestedAt: new Date("2026-04-09T17:19:50.603Z"),
+        requestedAt: new Date("2026-06-26T04:52:21.740Z"),
       },
     },
-    createdAt: new Date("2025-03-12T21:42:58.399Z"),
-    updatedAt: new Date("2024-04-20T21:24:33.999Z"),
-    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
-    workspaceId: "ws_It13CUaGEhLLAB87simX07Xb",
+    createdAt: new Date("2024-01-13T13:20:22.491Z"),
+    updatedAt: new Date("2025-07-24T15:47:13.039Z"),
+    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    workspaceId: "ws_It13CUaGEhLLAB87simX0",
   },
-  deploymentModel: "push",
+  deploymentModel: "pull",
 };
 ```
 
@@ -110,4 +88,3 @@ let value: CreateDeploymentResponse = {
 | `managementExternalId`                                                                                 | *string*                                                                                               | :heavy_minus_sign:                                                                                     | N/A                                                                                                    |
 | `runtimeEncryptionKey`                                                                                 | *string*                                                                                               | :heavy_minus_sign:                                                                                     | N/A                                                                                                    |
 | `token`                                                                                                | *string*                                                                                               | :heavy_minus_sign:                                                                                     | Deployment token (returned for deployment-group creation and await-registration reservations)          |
-| `airgapped`                                                                                            | [models.Airgapped](../models/airgapped.md)                                                             | :heavy_minus_sign:                                                                                     | N/A                                                                                                    |

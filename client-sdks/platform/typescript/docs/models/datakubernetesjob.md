@@ -14,7 +14,7 @@ let value: DataKubernetesJob = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
+        reason: "forbidden",
         severity: "warning",
         source: "<value>",
       },
@@ -41,6 +41,6 @@ let value: DataKubernetesJob = {
 | `jobName`                                                                                     | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `namespace`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `startTime`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | N/A                                                                                           |
-| `status`                                                                                      | [models.ResourceHeartbeatStatus63](../models/resourceheartbeatstatus63.md)                    | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `status`                                                                                      | [models.ResourceHeartbeatStatus59](../models/resourceheartbeatstatus59.md)                    | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `succeeded`                                                                                   | *number*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |
 | `backend`                                                                                     | *"kubernetesJob"*                                                                             | :heavy_check_mark:                                                                            | N/A                                                                                           |

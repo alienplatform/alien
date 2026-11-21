@@ -3,11 +3,10 @@
 
 ## Supported Types
 
-### `models.DeploymentStateStackStateControllerPlatformEnum`
+### `models.DeploymentStateControllerPlatformEnum`
 
 ```typescript
-const value: models.DeploymentStateStackStateControllerPlatformEnum =
-  "machines";
+const value: models.DeploymentStateControllerPlatformEnum = "test";
 ```
 
 ### `string`
@@ -15,3 +14,4 @@ const value: models.DeploymentStateStackStateControllerPlatformEnum =
 ```typescript
 const value: string = "<value>";
 ```
+
