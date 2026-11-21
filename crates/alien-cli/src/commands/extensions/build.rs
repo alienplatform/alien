@@ -92,26 +92,47 @@ pub(crate) async fn build(
     if let Some(module) = &controller_module {
         add_controller_platforms(&mut resource_types, module.controllers.clone())?;
     }
+    let targets = match bin {
+        Some(_) if targets.is_empty() => buildable_targets(&workspace.root)?,
+        Some(_) => targets.to_vec(),
+        None => Vec::new(),
+    };
+    // The binaries built so far, by target. The controller binary is built once per target: the
+    // one for this machine also lists its controllers with `--controllers`.
+    let mut built: IndexMap<BinaryTarget, PathBuf> = IndexMap::new();
     if let Some((controller, bin)) = bin {
-        let host = build_host_controller(workspace, controller, bin)?;
-        add_controller_platforms(&mut resource_types, local_controller_platforms(&host)?)?;
+        let host =
+            alien_infra::extension_bundle::host_target().filter(|host| targets.contains(host));
+        // The bundle's binary for this machine runs here: on Linux it is static (musl), and on
+        // macOS and Windows its target is this machine's. A bundle without one gets a binary
+        // built only to list them.
+        let listing = match host {
+            Some(host) => {
+                let path = build_controller(workspace, controller, bin, host).await?;
+                built.insert(host, path.clone());
+                path
+            }
+            None => build_host_controller(workspace, controller, bin)?,
+        };
+        add_controller_platforms(&mut resource_types, local_controller_platforms(&listing)?)?;
     }
     check_lifecycles(&resource_types)?;
 
     let mut controllers = IndexMap::new();
     let mut binaries = Vec::new();
     if let Some((controller, bin)) = bin {
-        let targets = if targets.is_empty() {
-            buildable_targets(&workspace.root)?
-        } else {
-            targets.to_vec()
-        };
         for target in BinaryTarget::ALL {
             if !targets.contains(target) {
                 controllers.insert(*target, None);
                 continue;
             }
-            let bytes = build_controller(workspace, controller, bin, *target).await?;
+            let path = match built.get(target) {
+                Some(path) => path.clone(),
+                None => build_controller(workspace, controller, bin, *target).await?,
+            };
+            let bytes = std::fs::read(&path)
+                .into_alien_error()
+                .context(file_error("read", &path))?;
             controllers.insert(
                 *target,
                 Some(ControllerBinary {
@@ -281,12 +302,13 @@ fn cannot_list_targets(reason: String) -> AlienError<ErrorData> {
     })
 }
 
+/// Builds the controller binary for `target` in Cargo's release profile and returns its path.
 async fn build_controller(
     workspace: &ExtensionWorkspace,
     controller: &Member,
     bin: &str,
     target: BinaryTarget,
-) -> Result<Vec<u8>> {
+) -> Result<PathBuf> {
     let context = ToolchainContext {
         src_dir: controller.dir.clone(),
         build_dir: workspace.target_dir.join("alien-extension-controller"),
@@ -301,12 +323,24 @@ async fn build_controller(
     let toolchain = RustToolchain {
         binary_name: bin.to_string(),
     };
+    // The toolchain keeps cargo's output unless the build fails, so the build says what it is
+    // doing: a first release build takes minutes.
+    eprintln!(
+        "{} the controller {bin} for {target} (release)",
+        dim_label("Building")
+    );
+    let started = std::time::Instant::now();
     toolchain
         .build(&context)
         .await
         .context(ErrorData::ExtensionBuildFailed {
             message: format!("the controller {bin} did not build for {target}"),
         })?;
+    eprintln!(
+        "{} the controller {bin} for {target} in {}s",
+        dim_label("Built   "),
+        started.elapsed().as_secs()
+    );
     // Where the toolchain built it: Cargo runs from the controller's folder, so a target
     // directory its own `.cargo/config.toml` sets wins over the workspace's.
     let target_dir = toolchain
@@ -315,13 +349,10 @@ async fn build_controller(
         .context(ErrorData::ExtensionBuildFailed {
             message: format!("the controller {bin}'s target directory is unknown"),
         })?;
-    let path = target_dir
+    Ok(target_dir
         .join(target.rust_target_triple())
         .join("release")
-        .join(format!("{bin}{}", target.binary_extension()));
-    std::fs::read(&path)
-        .into_alien_error()
-        .context(file_error("read", &path))
+        .join(format!("{bin}{}", target.binary_extension())))
 }
 
 /// Adds the platforms a module or a binary lists for each type to the type's descriptor, in one
