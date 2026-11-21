@@ -220,10 +220,11 @@ async fn azure_internet_needs_an_agent_image_not_a_catalog_entry() {
     assert!(!rendered.contains("Alien sandbox agent"), "{rendered}");
 }
 
-/// Google Cloud's `internet` plans like every cloud's: through the gateway, so a default policy
-/// that names hosts is accepted at plan time too.
+/// With the switch flipped, Google Cloud's `internet` plans like every cloud's: through the
+/// gateway, so a default policy that names hosts is accepted at plan time too.
 #[tokio::test]
 async fn gcp_plans_internet_and_an_allowlist_default() {
+    let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
     let mut declared = sandbox(None);
     declared.egress = SandboxEgress::Internet;
     let result = PreflightRunner::new()

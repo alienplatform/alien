@@ -8,6 +8,73 @@
 //! description in this file (names, ranges, ports, role permissions and firewall rules), and a
 //! differential test compares the two, so the two setup surfaces cannot drift apart.
 
+/// The one switch for Google Cloud internet egress through the gateway. While it is `false`,
+/// every plan-time path (build, release, the Terraform and CloudFormation render, deployment
+/// preparation) refuses a Google Cloud sandbox with egress `internet`, so no setup creates the
+/// network attachment, the gateway VMs or Private Service Connect resources, and no template
+/// pins a project to Private Service Connect. Flipping it to `true` is the whole release step,
+/// once the on-demand live test (`alien-test`, `gcp_sandbox_internet_live`) passes.
+pub const INTERNET_EGRESS_AVAILABLE: bool = false;
+
+/// The refusal while [`INTERNET_EGRESS_AVAILABLE`] is off. Build, render and deployment checks
+/// all give this text.
+pub const INTERNET_SANDBOX_UNAVAILABLE: &str = "Google Cloud internet egress through the egress \
+     gateway is not available yet. Use egress none, or deploy the sandbox on another cloud.";
+
+/// Said at plan time for a Google Cloud sandbox on Google's default network. The first sandbox a
+/// project runs fixes its networking for good, so a project that started on the default network
+/// can never host a gateway-backed `internet` sandbox.
+pub const DEFAULT_PLACEMENT_IS_PERMANENT: &str = "this sandbox uses Google's default network. \
+     A Google Cloud project whose first sandbox used the default network can never run sandboxes \
+     with egress `internet` through the deployment's egress gateway, even after every sandbox is \
+     deleted. To use egress `internet` later, deploy to a new project.";
+
+/// Whether Google Cloud sandboxes may declare egress `internet`: the switch, or a test that
+/// turned it on for its own thread.
+pub fn internet_egress_available() -> bool {
+    INTERNET_EGRESS_AVAILABLE || test_switch::forced()
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+mod test_switch {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FORCED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(super) fn forced() -> bool {
+        FORCED.with(Cell::get)
+    }
+
+    /// Keeps the switch on for the current thread until it is dropped.
+    #[must_use = "the switch turns off again when the guard is dropped"]
+    pub struct InternetEgressForTest(());
+
+    impl Drop for InternetEgressForTest {
+        fn drop(&mut self) {
+            FORCED.with(|forced| forced.set(false));
+        }
+    }
+
+    /// Turns Google Cloud internet egress on for the current thread, as the flipped switch
+    /// would. Tests only; production code never reaches this.
+    pub fn enable_internet_egress_for_test() -> InternetEgressForTest {
+        FORCED.with(|forced| forced.set(true));
+        InternetEgressForTest(())
+    }
+}
+
+#[cfg(not(any(test, feature = "test-utils")))]
+mod test_switch {
+    pub(super) fn forced() -> bool {
+        false
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub use test_switch::{enable_internet_egress_for_test, InternetEgressForTest};
+
 /// Range of the attachment's own subnet. Sandbox traffic enters the VPC from addresses in it. A
 /// regular subnet of at least /28 that is not 100.64.0.0/20 or 240.0.0.0/4.
 pub const ATTACHMENT_CIDR: &str = "192.168.250.0/28";
@@ -309,6 +376,22 @@ pub fn startup_script(image: &str, project: &str, region: &str, vault_prefix: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The switch ships off; a test can turn it on for its own thread only, and the guard
+    /// turns it off again.
+    #[test]
+    fn internet_egress_is_off_until_the_switch_flips() {
+        assert!(!INTERNET_EGRESS_AVAILABLE);
+        assert!(!internet_egress_available());
+        {
+            let _on = enable_internet_egress_for_test();
+            assert!(internet_egress_available());
+            std::thread::spawn(|| assert!(!internet_egress_available()))
+                .join()
+                .unwrap();
+        }
+        assert!(!internet_egress_available());
+    }
 
     #[test]
     fn the_boot_script_fills_its_three_values_and_names_the_port_from_the_constant() {

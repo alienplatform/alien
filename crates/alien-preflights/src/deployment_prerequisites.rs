@@ -273,6 +273,42 @@ impl DeploymentPrerequisiteCheck for AzureInternetSandboxGatewayProtocolCheck {
     }
 }
 
+/// Google Cloud internet egress through the gateway is behind one switch
+/// ([`alien_core::gcp_sandbox_gateway::INTERNET_EGRESS_AVAILABLE`]). The compile-time check
+/// already refuses it at build and render; this is the backstop for a deployment prepared from a
+/// stack that skipped those, so setup never creates the gateway wiring while the switch is off.
+pub struct GcpInternetSandboxUnavailableCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for GcpInternetSandboxUnavailableCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("GCP_INTERNET_SANDBOX_UNAVAILABLE")
+    }
+
+    fn description(&self) -> &'static str {
+        "Google Cloud internet sandboxes go through the egress gateway, which is not available yet"
+    }
+
+    fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
+        state.platform == Platform::Gcp && alien_core::sandbox_egress::has_internet_sandbox(stack)
+    }
+
+    async fn check(
+        &self,
+        _stack: &Stack,
+        _state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        if alien_core::gcp_sandbox_gateway::internet_egress_available() {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(vec![
+                alien_core::gcp_sandbox_gateway::INTERNET_SANDBOX_UNAVAILABLE.into(),
+            ]))
+        }
+    }
+}
+
 /// Private endpoints must never silently become internet-facing on unsupported targets.
 pub struct PrivateEndpointAccessCheck;
 
@@ -1785,6 +1821,42 @@ mod tests {
         } else {
             stack
         }
+    }
+
+    /// The deployment backstop of the Google Cloud switch: a prepared internet stack is refused
+    /// with the message while the switch is off, and with it on the full gateway path (the
+    /// gateway Container) is planned and passes. Other modes and clouds are not looked at.
+    #[tokio::test]
+    async fn gcp_internet_deploys_only_once_the_switch_flips() {
+        let check = GcpInternetSandboxUnavailableCheck;
+        let config = deployment_config();
+        let gcp = stack_state(Platform::Gcp);
+        let internet = prepared(
+            sandbox_stack(alien_core::SandboxEgress::Internet),
+            Platform::Gcp,
+        )
+        .await;
+        assert!(check.should_run(&internet, &gcp, &config));
+        let refused = check.check(&internet, &gcp, &config).await.unwrap();
+        assert!(!refused.success);
+        assert_eq!(
+            refused.errors,
+            vec![alien_core::gcp_sandbox_gateway::INTERNET_SANDBOX_UNAVAILABLE.to_string()]
+        );
+        for egress in [
+            alien_core::SandboxEgress::None,
+            alien_core::SandboxEgress::Allow,
+        ] {
+            let stack = prepared(sandbox_stack(egress), Platform::Gcp).await;
+            assert!(!check.should_run(&stack, &gcp, &config));
+        }
+        for platform in [Platform::Aws, Platform::Azure, Platform::Kubernetes] {
+            assert!(!check.should_run(&internet, &stack_state(platform), &config));
+        }
+
+        let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
+        assert!(alien_core::sandbox_egress::has_sandbox_gateway(&internet));
+        assert!(check.check(&internet, &gcp, &config).await.unwrap().success);
     }
 
     async fn azure_protocol_check(stack: &Stack, platform: Platform) -> Option<CheckResult> {

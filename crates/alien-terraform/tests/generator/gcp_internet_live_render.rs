@@ -16,6 +16,9 @@ use std::path::PathBuf;
 #[tokio::test]
 #[ignore = "writes files for the live proof; see the module docs"]
 async fn render_the_gcp_internet_live_module() {
+    // The live proof is what decides the switch, so it renders the module the flipped release
+    // would ship.
+    let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
     let out =
         PathBuf::from(std::env::var("GCP_INTERNET_OUT").expect("GCP_INTERNET_OUT must be set"));
     let image = std::env::var("GCP_INTERNET_IMAGE").expect("GCP_INTERNET_IMAGE must be set");

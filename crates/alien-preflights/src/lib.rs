@@ -456,6 +456,9 @@ impl PreflightRegistry {
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::AzureSandboxGroupFromSetupCheck,
         ));
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::GcpInternetSandboxUnavailableCheck,
+        ));
 
         // Add deployment prerequisite checks. These validate the concrete
         // deployment target/config, so they run only after deployment-time

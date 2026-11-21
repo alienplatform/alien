@@ -9,6 +9,9 @@ use alien_terraform::TerraformTarget;
 use hcl::Body;
 
 async fn module_body(egress: SandboxEgress) -> Body {
+    // The render runs the template preflights, which refuse Google Cloud `internet` until the
+    // switch flips; these tests check the module the flipped release renders.
+    let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
     let sandbox = Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
             image: "us-central1-docker.pkg.dev/p/r/agents:1".to_string(),
