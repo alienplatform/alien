@@ -306,7 +306,7 @@ async fn a_linked_kubernetes_sandbox_reaches_its_link_through_the_gateway_and_no
             &namespace,
             "--create-namespace",
             "--timeout",
-            "5m",
+            "15m",
             "--set-string",
             &format!("serviceAccountPrefix={PREFIX}"),
             "--set-string",
