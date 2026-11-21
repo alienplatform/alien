@@ -1,4 +1,4 @@
-//! `test-gcp-internet-egress` compiles in the per-thread override of the Google Cloud internet
+//! `test-gcp-internet-egress` compiles in the test overrides of the Google Cloud internet
 //! switch. A shipped build must never carry it, so no manifest in the workspace may enable it
 //! outside `[dev-dependencies]` (where Cargo never builds it into a binary or a library a binary
 //! uses). This reads every manifest and fails on any other place the feature is named.
