@@ -242,6 +242,14 @@ fn gke_overlay_emits_workload_identity_binding() {
         .build();
     let module = render(&stack, TerraformTarget::Gke, StackSettings::default());
     snapshot_module("gke_overlay_workload_identity", &module);
+    // This module has no `helm_install_enabled` variable, so its README must not name it.
+    let readme = module.get("README.md").expect("README.md");
+    assert!(!module
+        .get("variables.tf")
+        .is_some_and(|v| v.contains("helm_install_enabled")));
+    assert!(!readme.contains("helm_install_enabled"));
+    assert!(readme.contains("Follow these steps in order:"));
+    assert!(readme.contains("the same values you used for the original install"));
     assert_terraform_valid(&module, "gke_overlay_workload_identity");
 }
 
@@ -1198,6 +1206,14 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
         false,
     )
     .expect("module should render");
+
+    // The module has the `helm_values` output, so the README's recovery step reads it.
+    let readme = module.get("README.md").expect("README.md");
+    assert!(readme.contains(
+        "Install the chart again with the values from `terraform output -raw helm_values`"
+    ));
+    assert!(!readme.contains("the same values you used for the original install"));
+    snapshot_module("eks_registered_helm_values_output", &module);
 
     let locals = module
         .get("locals.tf")
