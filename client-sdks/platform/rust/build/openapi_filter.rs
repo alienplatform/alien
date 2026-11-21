@@ -232,7 +232,7 @@ pub fn filter_openapi(document: &Value, required_operation_ids: &[&str]) -> Resu
 fn deduplicate_anonymous_schemas(
     document: &mut Map<String, Value>,
     protect_consumer_names: bool,
-) -> Result<(), String> {
+) -> Result<BTreeMap<String, String>, String> {
     let mut occurrences = BTreeMap::<String, (usize, Value)>::new();
     let document_value = Value::Object(document.clone());
     let mut protected_shapes = BTreeSet::new();
@@ -311,7 +311,7 @@ fn deduplicate_anonymous_schemas(
         schemas.insert(name, schema);
     }
 
-    Ok(())
+    Ok(replacements)
 }
 
 fn is_shareable_anonymous_schema(schema: &Value) -> bool {
@@ -319,7 +319,18 @@ fn is_shareable_anonymous_schema(schema: &Value) -> bool {
         return false;
     }
     match schema.get("type").and_then(Value::as_str) {
-        Some("object") => true,
+        // Inline, a nullable object is `Option<Type>` and an object without named properties is
+        // a map, but shared they become a wrapper type around `Option<Type>` or the map, which
+        // changes the field types of every use. The default client keeps sharing them, as it
+        // always has.
+        Some("object") => {
+            !MERGE_REPEATED_SCHEMAS.load(Ordering::Relaxed)
+                || (schema.get("nullable").is_none()
+                    && schema
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .is_some_and(|properties| !properties.is_empty()))
+        }
         // A string with a pattern becomes its own validated Rust type at every use. Enums
         // are left alone: they are nullable in places, and merging them changes the argument
         // types of the generated builders.
@@ -383,8 +394,8 @@ fn collect_schema_occurrences(
             .and_modify(|(count, _)| *count += 1)
             .or_insert((1, schema));
     }
-    for_schema_children(value, |child| {
-        collect_schema_occurrences(child, occurrences, true);
+    for_schema_children_in_position(value, |child, in_union| {
+        collect_schema_occurrences(child, occurrences, may_share_in_position(in_union));
         Ok::<(), ()>(())
     })
     .expect("schema occurrence collection is infallible");
@@ -442,8 +453,8 @@ fn replace_schema_occurrences(
         }
     }
 
-    for_schema_children_mut(value, |child| {
-        replace_schema_occurrences(child, replacements, true)
+    for_schema_children_in_position_mut(value, |child, in_union| {
+        replace_schema_occurrences(child, replacements, may_share_in_position(in_union))
     })?;
     Ok(())
 }
@@ -452,44 +463,57 @@ fn for_schema_children<E>(
     schema: &Value,
     mut visit: impl FnMut(&Value) -> Result<(), E>,
 ) -> Result<(), E> {
+    for_schema_children_in_position(schema, |child, _| visit(child))
+}
+
+fn for_schema_children_mut<E>(
+    schema: &mut Value,
+    mut visit: impl FnMut(&mut Value) -> Result<(), E>,
+) -> Result<(), E> {
+    for_schema_children_in_position_mut(schema, |child, _| visit(child))
+}
+
+// A variant of `oneOf`/`anyOf`/`allOf` that becomes a reference changes the generated parent
+// from an enum with inline variants to a struct of flattened optional parts, so the full client
+// keeps variants inline (their own children are still shared). The default client keeps sharing
+// them, as it always has.
+fn may_share_in_position(in_union: bool) -> bool {
+    !(in_union && MERGE_REPEATED_SCHEMAS.load(Ordering::Relaxed))
+}
+
+/// Visits every child schema with whether it is a variant of `allOf`, `anyOf` or `oneOf`.
+fn for_schema_children_in_position<E>(
+    schema: &Value,
+    mut visit: impl FnMut(&Value, bool) -> Result<(), E>,
+) -> Result<(), E> {
     let Some(object) = schema.as_object() else {
         return Ok(());
     };
     for key in ["properties", "patternProperties", "dependentSchemas"] {
         if let Some(children) = object.get(key).and_then(Value::as_object) {
             for child in children.values() {
-                visit(child)?;
+                visit(child, false)?;
             }
         }
     }
-    for key in [
-        "items",
-        "additionalProperties",
-        "unevaluatedProperties",
-        "propertyNames",
-        "contains",
-        "not",
-        "if",
-        "then",
-        "else",
-    ] {
-        if let Some(child) = object.get(key).filter(|value| value.is_object()) {
-            visit(child)?;
+    for key in SINGLE_CHILD_KEYS {
+        if let Some(child) = object.get(*key).filter(|value| value.is_object()) {
+            visit(child, false)?;
         }
     }
     for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
         if let Some(children) = object.get(key).and_then(Value::as_array) {
             for child in children {
-                visit(child)?;
+                visit(child, key != "prefixItems")?;
             }
         }
     }
     Ok(())
 }
 
-fn for_schema_children_mut<E>(
+fn for_schema_children_in_position_mut<E>(
     schema: &mut Value,
-    mut visit: impl FnMut(&mut Value) -> Result<(), E>,
+    mut visit: impl FnMut(&mut Value, bool) -> Result<(), E>,
 ) -> Result<(), E> {
     let Some(object) = schema.as_object_mut() else {
         return Ok(());
@@ -497,34 +521,36 @@ fn for_schema_children_mut<E>(
     for key in ["properties", "patternProperties", "dependentSchemas"] {
         if let Some(children) = object.get_mut(key).and_then(Value::as_object_mut) {
             for child in children.values_mut() {
-                visit(child)?;
+                visit(child, false)?;
             }
         }
     }
-    for key in [
-        "items",
-        "additionalProperties",
-        "unevaluatedProperties",
-        "propertyNames",
-        "contains",
-        "not",
-        "if",
-        "then",
-        "else",
-    ] {
-        if let Some(child) = object.get_mut(key).filter(|value| value.is_object()) {
-            visit(child)?;
+    for key in SINGLE_CHILD_KEYS {
+        if let Some(child) = object.get_mut(*key).filter(|value| value.is_object()) {
+            visit(child, false)?;
         }
     }
     for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
         if let Some(children) = object.get_mut(key).and_then(Value::as_array_mut) {
             for child in children {
-                visit(child)?;
+                visit(child, key != "prefixItems")?;
             }
         }
     }
     Ok(())
 }
+
+const SINGLE_CHILD_KEYS: &[&str] = &[
+    "items",
+    "additionalProperties",
+    "unevaluatedProperties",
+    "propertyNames",
+    "contains",
+    "not",
+    "if",
+    "then",
+    "else",
+];
 
 // Two schemas with the same structure but different documentation text are one Rust type.
 // The API spec repeats shared object schemas inline with a per-use description, which
@@ -570,17 +596,242 @@ fn without_documentation(schema: &Value) -> Value {
     }
 }
 
-// Full client only: share repeated schemas so the generated client stays small enough to
-// compile in under 8 GB. Run after `normalize_openapi`.
+/// Precedes a schema position (`<component>#<path>`) at the end of a description in the two
+/// throwaway copies `merge_repeated_schemas_with_positions` returns. The build script reads it
+/// back from the generated docs to learn which merged type each removed type became.
+pub const POSITION_MARKER: &str = "alien-position:";
+
+/// Full client only: shares repeated schemas so the generated client stays small enough to
+/// compile in under 8 GB. Run after `normalize_openapi`. Returns the merged document and two
+/// copies the build script uses to keep the type names merging removes:
+/// - `document` where every schema inside a replaced schema ends its description with the
+///   position it has in the merged document (references followed);
+/// - the merged document where every schema of a component ends its description with its
+///   own position.
 #[allow(dead_code)] // the tests include this file but only the build script merges
-pub fn merge_repeated_schemas(document: &Value) -> Result<Value, String> {
+pub fn merge_repeated_schemas_with_positions(
+    document: &Value,
+) -> Result<(Value, Value, Value), String> {
     let mut root = document
         .as_object()
         .ok_or_else(|| "OpenAPI document must be a JSON object".to_string())?
         .clone();
     MERGE_REPEATED_SCHEMAS.store(true, Ordering::Relaxed);
-    deduplicate_anonymous_schemas(&mut root, false)?;
-    Ok(Value::Object(root))
+    let replacements = deduplicate_anonymous_schemas(&mut root, false)?;
+    let merged = Value::Object(root);
+    let merged_schemas = merged
+        .pointer("/components/schemas")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "merged document has no component schemas".to_string())?;
+
+    let mut unmerged = document.clone();
+    let marker = SourceMarker {
+        replacements: &replacements,
+        merged_schemas,
+    };
+    if let Some(paths) = unmerged.get_mut("paths") {
+        marker.mark_openapi(paths)?;
+    }
+    if let Some(schemas) = unmerged
+        .pointer_mut("/components/schemas")
+        .and_then(Value::as_object_mut)
+    {
+        for schema in schemas.values_mut() {
+            marker.mark_occurrences(schema, false)?;
+        }
+    }
+
+    let mut positioned = merged.clone();
+    if let Some(schemas) = positioned
+        .pointer_mut("/components/schemas")
+        .and_then(Value::as_object_mut)
+    {
+        for (name, schema) in schemas.iter_mut() {
+            mark_positions(schema, name, &mut Vec::new());
+        }
+    }
+    Ok((merged, unmerged, positioned))
+}
+
+struct SourceMarker<'a> {
+    replacements: &'a BTreeMap<String, String>,
+    merged_schemas: &'a Map<String, Value>,
+}
+
+impl SourceMarker<'_> {
+    // Walks the same positions as `replace_openapi_schema_occurrences`.
+    fn mark_openapi(&self, value: &mut Value) -> Result<(), String> {
+        match value {
+            Value::Array(values) => {
+                for value in values {
+                    self.mark_openapi(value)?;
+                }
+            }
+            Value::Object(object) => {
+                for (key, value) in object {
+                    if key == "schema" {
+                        self.mark_occurrences(value, true)?;
+                    } else if matches!(key.as_str(), "example" | "examples" | "default" | "enum")
+                        || key.starts_with("x-")
+                    {
+                        continue;
+                    } else {
+                        self.mark_openapi(value)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    // Walks the same positions as `replace_schema_occurrences`. A replaced schema and all it
+    // contains get the position they have under the component that replaces it.
+    fn mark_occurrences(&self, value: &mut Value, replace_current: bool) -> Result<(), String> {
+        if replace_current && is_shareable_anonymous_schema(value) {
+            let key = canonical_schema_key(value)?;
+            if let Some(name) = self.replacements.get(&key) {
+                return self.mark_replaced(value, name, &mut Vec::new());
+            }
+        }
+        for_schema_children_in_position_mut(value, |child, in_union| {
+            self.mark_occurrences(child, may_share_in_position(in_union))
+        })
+    }
+
+    fn mark_replaced(
+        &self,
+        value: &mut Value,
+        component: &str,
+        path: &mut Vec<String>,
+    ) -> Result<(), String> {
+        if !is_positioned_schema(value) {
+            return Ok(());
+        }
+        let (owner, owner_path) = resolve_position(self.merged_schemas, component, path)
+            .ok_or_else(|| {
+                format!(
+                    "position `{}` of a replaced schema is missing from the merged document",
+                    position_text(component, path)
+                )
+            })?;
+        append_position(value, &position_text(&owner, &owner_path));
+        for_schema_children_with_path_mut(value, |segments, child| {
+            path.extend(segments.iter().cloned());
+            let result = self.mark_replaced(child, component, path);
+            path.truncate(path.len() - segments.len());
+            result
+        })
+    }
+}
+
+// Every schema of a merged component, by its own position; references are not followed.
+fn mark_positions(value: &mut Value, component: &str, path: &mut Vec<String>) {
+    if !is_positioned_schema(value) {
+        return;
+    }
+    append_position(value, &position_text(component, path));
+    for_schema_children_with_path_mut(value, |segments, child| {
+        path.extend(segments.iter().cloned());
+        mark_positions(child, component, path);
+        path.truncate(path.len() - segments.len());
+        Ok::<(), ()>(())
+    })
+    .expect("marking positions is infallible");
+}
+
+// A reference keeps no description (its siblings are ignored and could change the generated
+// type), and only objects are schemas.
+fn is_positioned_schema(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| !object.contains_key("$ref"))
+}
+
+/// The component and path a position ends at in the merged document, following references.
+fn resolve_position(
+    schemas: &Map<String, Value>,
+    component: &str,
+    path: &[String],
+) -> Option<(String, Vec<String>)> {
+    let mut owner = component.to_string();
+    let mut owner_path = Vec::new();
+    let mut node = follow_references(schemas, schemas.get(&owner)?, &mut owner, &mut owner_path)?;
+    for segment in path {
+        node = match node {
+            Value::Object(object) => object.get(segment)?,
+            Value::Array(items) => items.get(segment.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+        owner_path.push(segment.clone());
+        // Also runs on a `properties` map, which is harmless: no property is called `$ref`.
+        node = follow_references(schemas, node, &mut owner, &mut owner_path)?;
+    }
+    Some((owner, owner_path))
+}
+
+fn follow_references<'a>(
+    schemas: &'a Map<String, Value>,
+    mut node: &'a Value,
+    owner: &mut String,
+    owner_path: &mut Vec<String>,
+) -> Option<&'a Value> {
+    while let Some(reference) = node.get("$ref").and_then(Value::as_str) {
+        let name = reference.strip_prefix("#/components/schemas/")?;
+        *owner = name.to_string();
+        owner_path.clear();
+        node = schemas.get(name)?;
+    }
+    Some(node)
+}
+
+fn position_text(component: &str, path: &[String]) -> String {
+    let path: Vec<String> = path
+        .iter()
+        .map(|segment| segment.replace('~', "~0").replace('/', "~1"))
+        .collect();
+    format!("{component}#/{}", path.join("/"))
+}
+
+fn append_position(value: &mut Value, position: &str) {
+    let object = value
+        .as_object_mut()
+        .expect("positioned schemas are objects");
+    let description = match object.get("description").and_then(Value::as_str) {
+        Some(text) => format!("{text}\n\n{POSITION_MARKER}{position}"),
+        None => format!("{POSITION_MARKER}{position}"),
+    };
+    object.insert("description".to_string(), Value::String(description));
+}
+
+/// Visits every child schema with the path segments that lead to it from its parent.
+fn for_schema_children_with_path_mut<E>(
+    schema: &mut Value,
+    mut visit: impl FnMut(&[String], &mut Value) -> Result<(), E>,
+) -> Result<(), E> {
+    let Some(object) = schema.as_object_mut() else {
+        return Ok(());
+    };
+    for key in ["properties", "patternProperties", "dependentSchemas"] {
+        if let Some(children) = object.get_mut(key).and_then(Value::as_object_mut) {
+            for (name, child) in children.iter_mut() {
+                visit(&[key.to_string(), name.clone()], child)?;
+            }
+        }
+    }
+    for key in SINGLE_CHILD_KEYS {
+        if let Some(child) = object.get_mut(*key).filter(|value| value.is_object()) {
+            visit(&[key.to_string()], child)?;
+        }
+    }
+    for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+        if let Some(children) = object.get_mut(key).and_then(Value::as_array_mut) {
+            for (index, child) in children.iter_mut().enumerate() {
+                visit(&[key.to_string(), index.to_string()], child)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn normalize_openapi(document: &Value) -> Result<Value, String> {
