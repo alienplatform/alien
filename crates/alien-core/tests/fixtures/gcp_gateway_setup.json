@@ -1,0 +1,55 @@
+{
+  "subnets": [
+    {"name": "acme-sbx-attachment", "network": "vpc", "cidr": "192.168.250.0/28", "private_google_access": false},
+    {"name": "acme-sbx-gateway", "network": "vpc", "cidr": "192.168.251.0/27", "private_google_access": true}
+  ],
+  "attachment": {"name": "acme-sbx-attachment", "connection_preference": "ACCEPT_AUTOMATIC", "subnets": ["acme-sbx-attachment"]},
+  "router": {
+    "name": "acme-sbx-gateway-router",
+    "network": "vpc",
+    "nat": {
+      "name": "acme-sbx-gateway-nat",
+      "ip_allocate": "AUTO_ONLY",
+      "source": "LIST_OF_SUBNETWORKS",
+      "subnets": [{"subnet": "acme-sbx-gateway", "ranges": ["ALL_IP_RANGES"]}]
+    }
+  },
+  "service_identity": "aiplatform.googleapis.com",
+  "role": {
+    "id": "acme_sandbox_attachment",
+    "title": "Alien sandbox network attachment",
+    "description": "Lets Agent Platform connect sandboxes to the network attachment",
+    "permissions": ["compute.networkAttachments.get", "compute.networkAttachments.update"]
+  },
+  "role_binding": {
+    "role": "projects/proj/roles/acme_sandbox_attachment",
+    "member": "serviceAccount:service-123@gcp-sa-aiplatform.iam.gserviceaccount.com"
+  },
+  "gateway_account": {"id": "sbx-gw-acme", "display_name": "Alien sandbox egress gateway"},
+  "secret_binding": {
+    "role": "roles/secretmanager.secretAccessor",
+    "member": "serviceAccount:sbx-gw-acme@proj.iam.gserviceaccount.com",
+    "title": "gateway secrets only",
+    "expression": "resource.name.startsWith(\"projects/123/secrets/acme-secrets-sandbox-egress-gateway-config/\") || resource.name.startsWith(\"projects/123/secrets/acme-secrets-sandbox-egress-replica-secret/\")"
+  },
+  "vms": [
+    {
+      "name": "acme-sbx-gateway-0", "zone": 0, "machine_type": "e2-standard-2", "tags": ["alien-sandbox-gateway"],
+      "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64", "disk_gb": 20,
+      "subnet": "acme-sbx-gateway", "ip": "192.168.251.10",
+      "service_account": "sbx-gw-acme@proj.iam.gserviceaccount.com", "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+      "shielded": {"secure_boot": true, "vtpm": true, "integrity_monitoring": true},
+      "metadata": {"block-project-ssh-keys": "true", "enable-oslogin": "TRUE"},
+      "startup_script": "the shared script for project proj, region us-central1, vault prefix acme-secrets"
+    },
+    {
+      "name": "acme-sbx-gateway-1", "zone": 1, "machine_type": "e2-standard-2", "tags": ["alien-sandbox-gateway"],
+      "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64", "disk_gb": 20,
+      "subnet": "acme-sbx-gateway", "ip": "192.168.251.11",
+      "service_account": "sbx-gw-acme@proj.iam.gserviceaccount.com", "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+      "shielded": {"secure_boot": true, "vtpm": true, "integrity_monitoring": true},
+      "metadata": {"block-project-ssh-keys": "true", "enable-oslogin": "TRUE"},
+      "startup_script": "the shared script for project proj, region us-central1, vault prefix acme-secrets"
+    }
+  ]
+}
