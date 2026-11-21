@@ -269,7 +269,7 @@ fn allow(hosts: &[&str]) -> EgressPolicy {
 // ---- The deployment, as the cloud and the stack state describe it -----------------------------
 
 struct Deployed {
-    /// The sandbox binding the manager published for remote access.
+    /// The sandbox binding, as a same-stack consumer receives it.
     binding: serde_json::Value,
     resource_prefix: String,
     gateway_ips: Vec<String>,
@@ -300,11 +300,19 @@ async fn deployed(
             .context("deployment is missing stack_state")?,
     )
     .context("parse stack_state")?;
-    let binding = state
+    // An internet sandbox is never published for remote access (its policy administration is
+    // private to the deployment), so the binding comes from the template controller's state:
+    // the same binding a same-stack consumer receives.
+    let internal_state = state
         .resources
         .get(SANDBOX)
-        .and_then(|resource| resource.remote_binding_params.clone())
-        .context("the sandbox published no binding")?;
+        .and_then(|resource| resource.internal_state.clone())
+        .context("the sandbox has no controller state")?;
+    let binding = alien_infra::deserialize_controller(internal_state)
+        .context("read the sandbox controller state")?
+        .get_binding_params()
+        .map_err(|error| anyhow::anyhow!("sandbox binding: {error}"))?
+        .context("the sandbox controller has no binding")?;
     let private_endpoint = binding
         .pointer("/privateEndpoint")
         .and_then(|value| value.as_str())
