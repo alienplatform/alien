@@ -147,6 +147,17 @@ impl EgressPolicy {
         }
     }
 
+    /// Whether this policy has a `link:<resource-id>` entry, which releases before links cannot
+    /// read.
+    pub fn names_links(&self) -> bool {
+        match self {
+            Self::Internet => false,
+            Self::Allow { allow } => allow
+                .iter()
+                .any(|entry| entry.starts_with(LINK_TARGET_PREFIX)),
+        }
+    }
+
     /// Whether a concrete public destination and port match this policy.
     pub fn allows(&self, host: &str, port: u16) -> Result<bool> {
         let destination = format!("{host}:{port}");
