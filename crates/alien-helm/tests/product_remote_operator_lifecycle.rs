@@ -426,6 +426,9 @@ rules:
             "--kube-as-user=product-installer",
             "--wait",
             "--timeout=2m",
+            // An installer limited to its namespace cannot list StorageClasses, so it turns
+            // off the chart's StorageClass check, as the chart README tells such installers.
+            "--set=runtime.data.persistence.storageClassCheck=false",
             "--set=heartbeat.collection.nodes.enabled=false",
             &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
             &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
@@ -445,6 +448,9 @@ rules:
             "--kube-as-user=product-installer",
             "--wait",
             "--timeout=2m",
+            // An installer limited to its namespace cannot list StorageClasses, so it turns
+            // off the chart's StorageClass check, as the chart README tells such installers.
+            "--set=runtime.data.persistence.storageClassCheck=false",
             "--set=heartbeat.collection.nodes.enabled=false",
             &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
             &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
@@ -1524,6 +1530,9 @@ spec:
             "--kube-as-user=product-installer",
             "--wait",
             "--timeout=2m",
+            // An installer limited to its namespace cannot list StorageClasses, so it turns
+            // off the chart's StorageClass check, as the chart README tells such installers.
+            "--set=runtime.data.persistence.storageClassCheck=false",
             "--set=heartbeat.collection.nodes.enabled=false",
             &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
             &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
@@ -1696,6 +1705,9 @@ spec:
             "--kube-as-user=product-installer",
             "--wait",
             "--timeout=2m",
+            // An installer limited to its namespace cannot list StorageClasses, so it turns
+            // off the chart's StorageClass check, as the chart README tells such installers.
+            "--set=runtime.data.persistence.storageClassCheck=false",
             "--set=heartbeat.collection.nodes.enabled=false",
             &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
             &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
