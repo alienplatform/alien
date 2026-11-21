@@ -615,7 +615,7 @@ jobs:
         run: sccache --show-stats || true
 
   cli-extensions:
-    name: CLI extensions (${{ matrix.partition }}/3)
+    name: CLI extensions (${{ matrix.part }})
     needs: [pr-conventions, changes]
     # The `alien-cli::extensions` tests, which the Rust crates job skips. They run whenever Rust
     # crates would test alien-cli.
@@ -625,12 +625,22 @@ jobs:
       (needs.changes.outputs.rust_mode == 'full' ||
       (needs.changes.outputs.rust_mode == 'affected' &&
       contains(format(' {0} ', needs.changes.outputs.rust_packages), ' -p alien-cli '))))
-    # The 19 tests add up to about 95 minutes (2-17 min each) and run two at a time on a
-    # runner, so one runner takes about 50 min. Three runners take about 20.
+    # The 19 tests take 1-28 min each and run one at a time on a 4-vCPU hosted runner (each
+    # reserves 4 threads; see .config/nextest.toml), after about 8 min of setup. The two longest
+    # get a runner each, so neither waits behind other tests; the controller module test alone
+    # takes about 36 min with setup. The other 17 (about 46 min) split four ways, about 22 min each.
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3]
+        include:
+          - part: dev zone
+            filter: test(=dev_runs_the_zone_with_the_extensions_local_controller_as_a_process)
+          - part: controller module
+            filter: test(=the_controller_module_is_built_into_the_bundle_and_test_loads_each_import_into_it)
+          - { part: 1/4, partition: count:1/4 }
+          - { part: 2/4, partition: count:2/4 }
+          - { part: 3/4, partition: count:3/4 }
+          - { part: 4/4, partition: count:4/4 }
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
@@ -746,7 +756,12 @@ jobs:
         run: pnpm exec turbo run build --filter=@alienplatform/sdk --filter=@alienplatform/commands
 
       - name: CLI extension tests
-        run: cargo nextest run --locked -p alien-cli --test extensions --no-fail-fast --partition count:${{ matrix.partition }}/3
+        env:
+          FILTER: ${{ matrix.filter || 'not (test(=dev_runs_the_zone_with_the_extensions_local_controller_as_a_process) | test(=the_controller_module_is_built_into_the_bundle_and_test_loads_each_import_into_it))' }}
+          PARTITION: ${{ matrix.partition }}
+        run: |
+          cargo nextest run --locked -p alien-cli --test extensions --no-fail-fast \
+            -E "$FILTER" ${PARTITION:+--partition "$PARTITION"}
 
   typescript:
     name: TypeScript packages and CLIs
