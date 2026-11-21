@@ -58,6 +58,12 @@ jobs:
       - name: Install sccache
         uses: ./.github/actions/setup-sccache
 
+      # The same linker as the Rust crates job in ci-fast.yml. With GNU ld, the aarch64 runner
+      # was killed (exit 143) while the large test binaries linked.
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # main
+        with:
+          mold-version: 2.42.1
+
       - name: Install protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
