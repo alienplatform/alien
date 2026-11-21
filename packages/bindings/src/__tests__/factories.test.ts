@@ -168,6 +168,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
       callerAuthorizationHeader: "Authorization",
       subprotocols: [],
     }),
+    linkUrl: (id, port) => (id === "api" && port === 8080 ? "http://api.internal:8080" : null),
     pause: async () => {},
     resume: async () => {},
     terminate: async () => {},
@@ -704,6 +705,18 @@ describe("sandbox create", () => {
 
     await handle.getOrCreate({ timeoutMs: 2_000 })
     expect(getOrCreate).toHaveBeenNthCalledWith(2, null, null, null, 2_000, null)
+  })
+})
+
+describe("sandbox links", () => {
+  it("reads a linked service's URL by id and port, and null for anything not linked", async () => {
+    const { addon } = fakeAddon()
+    const { sandbox } = createFactories(() => addon)
+    const handle = sandbox("sbx")
+
+    await expect(handle.linkUrl("api", 8080)).resolves.toBe("http://api.internal:8080")
+    await expect(handle.linkUrl("api", 9090)).resolves.toBeNull()
+    await expect(handle.linkUrl("other", 8080)).resolves.toBeNull()
   })
 })
 

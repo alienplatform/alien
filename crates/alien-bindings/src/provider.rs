@@ -2084,8 +2084,15 @@ impl BindingsProviderApi for BindingsProvider {
         } else {
             None
         };
+        // A local sandbox's gateway runs in the local manager, so its binding carries the links
+        // itself.
+        let links = match (&binding, gateway) {
+            (SandboxBinding::Local(local), _) => local.links.clone(),
+            (_, Some(config)) => config.links.clone(),
+            (_, None) => Default::default(),
+        };
 
-        match binding {
+        let sandbox = match binding {
             #[cfg(feature = "local")]
             SandboxBinding::Local(local_binding) => {
                 use crate::providers::sandbox::local::LocalSandbox;
@@ -2259,7 +2266,8 @@ impl BindingsProviderApi for BindingsProvider {
                     );
                 }
 
-                Ok(Arc::new(sandbox))
+                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(sandbox);
+                Ok(sandbox)
             }
             #[cfg(feature = "aws")]
             SandboxBinding::Aws(aws_binding) => {
@@ -2401,7 +2409,8 @@ impl BindingsProviderApi for BindingsProvider {
             SandboxBinding::Kubernetes(_) => Err(not_built("kubernetes")),
             #[cfg(not(feature = "local"))]
             SandboxBinding::Local(_) => Err(not_built("local")),
-        }
+        }?;
+        crate::providers::sandbox::links::with_links(sandbox, &links)
     }
 }
 

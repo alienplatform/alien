@@ -112,13 +112,18 @@ pub(super) async fn configure(
             .iter()
             .map(|id| format!("{}/{id}", ctx.resource_prefix))
             .collect();
-        let value = serde_json::json!({
+        let mut value = serde_json::json!({
             "listen": "0.0.0.0:3128", "admin": "0.0.0.0:3129",
             "audiences": audiences, "defaultPolicies": {}, "keys": [&key],
             "deniedRanges": denied,
             "peers": gateway_peers(ctx, namespace)?,
             "credentials": []
         });
+        // Omitted without links, so a stack without them publishes the same configuration.
+        let links = gateway_links(ctx, namespace).await?;
+        if !links.is_empty() {
+            value["links"] = serde_json::to_value(links).expect("links serialize");
+        }
         let vault = egress::deployment_vault(ctx).await?;
         // Once on the source, always on it: a later gateway update must not send the owner
         // back to the embedded path, which the replicas would refuse.
@@ -144,6 +149,7 @@ pub(super) async fn configure(
         }
     }
     Ok(SandboxEgressBinding::Gateway(SandboxEgressGateway {
+        links: link_bindings(ctx, sandbox, namespace)?,
         container: SANDBOX_EGRESS_GATEWAY_ID.into(),
         audience: format!("{}/{}", ctx.resource_prefix, sandbox.id),
         signing_key: SandboxEgressSigningKey {
@@ -161,6 +167,139 @@ pub(super) async fn configure(
             count: gateway_replicas(ctx),
             min_protocol: 0,
         }),
+    }))
+}
+
+/// The internal hostname of linked Container `id`: its Service in the release namespace, as an
+/// absolute name, since the gateway applies no search domains.
+pub(super) fn link_host(
+    ctx: &ResourceControllerContext<'_>,
+    namespace: &str,
+    id: &str,
+) -> Result<String> {
+    let domain = cluster_domain(
+        std::env::var(CLUSTER_DOMAIN_ENV).ok().as_deref(),
+        std::fs::read_to_string("/etc/resolv.conf").ok().as_deref(),
+    )?;
+    Ok(format!(
+        "{}.{namespace}.svc.{domain}",
+        kubernetes_resource_name(&ctx.resource_prefix, id)
+    ))
+}
+
+/// The bindings `sandbox`'s commands receive for its links: each linked Container's internal
+/// URLs under the name the gateway accepts. Derived from the stack, never from the target's
+/// outputs, so a sandbox does not wait on a service that may itself link it.
+fn link_bindings(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+    namespace: &str,
+) -> Result<BTreeMap<String, alien_core::bindings::ContainerBinding>> {
+    use alien_core::bindings::{BindingValue, ContainerBinding, KubernetesContainerBinding};
+    let mut bindings = BTreeMap::new();
+    for link in &sandbox.gateway_links {
+        let Ok(ports) = alien_core::sandbox_links::internal_ports(ctx.desired_stack, &link.id)
+        else {
+            continue;
+        };
+        let host = link_host(ctx, namespace, &link.id)?;
+        bindings.insert(
+            link.id.clone(),
+            ContainerBinding::Kubernetes(KubernetesContainerBinding {
+                name: BindingValue::value(link.id.clone()),
+                namespace: BindingValue::value(namespace.to_string()),
+                service_name: BindingValue::value(kubernetes_resource_name(
+                    &ctx.resource_prefix,
+                    &link.id,
+                )),
+                service_port: BindingValue::value(ports[0]),
+                public_url: None,
+                internal_urls: ports
+                    .iter()
+                    .map(|&port| (port, BindingValue::value(format!("http://{host}:{port}"))))
+                    .collect(),
+            }),
+        );
+    }
+    Ok(bindings)
+}
+
+/// Each internet sandbox's links, keyed by its audience. A linked Service's name may resolve
+/// into the cluster's private Service ranges. A cluster without the ServiceCIDR API bounds it
+/// to the Service's own ClusterIP instead; until that Service exists the link is left out, and
+/// a later publish adds it.
+async fn gateway_links(
+    ctx: &ResourceControllerContext<'_>,
+    namespace: &str,
+) -> Result<BTreeMap<String, Vec<alien_core::sandbox_links::GatewayLink>>> {
+    let linking: Vec<&Sandbox> = ctx
+        .desired_stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+        .filter(|sandbox| {
+            sandbox.egress == SandboxEgress::Internet && !sandbox.gateway_links.is_empty()
+        })
+        .collect();
+    let mut links = BTreeMap::new();
+    if linking.is_empty() {
+        return Ok(links);
+    }
+    let listed: Option<Vec<ipnet::Ipv4Net>> = crate::core::k8s_network::listed_service_ranges(ctx)
+        .await?
+        .map(|ranges| {
+            ranges
+                .into_iter()
+                .filter(|range| alien_core::sandbox_links::is_link_range(*range))
+                .collect()
+        });
+    let mut resolved: BTreeMap<String, Option<alien_core::sandbox_links::GatewayLink>> =
+        BTreeMap::new();
+    for sandbox in linking {
+        let mut entries = Vec::new();
+        for target in &sandbox.gateway_links {
+            if !resolved.contains_key(&target.id) {
+                let link = linked_service(ctx, namespace, &target.id, listed.as_deref()).await?;
+                resolved.insert(target.id.clone(), link);
+            }
+            if let Some(Some(link)) = resolved.get(&target.id) {
+                entries.push(link.clone());
+            }
+        }
+        if !entries.is_empty() {
+            links.insert(format!("{}/{}", ctx.resource_prefix, sandbox.id), entries);
+        }
+    }
+    Ok(links)
+}
+
+async fn linked_service(
+    ctx: &ResourceControllerContext<'_>,
+    namespace: &str,
+    id: &str,
+    listed: Option<&[ipnet::Ipv4Net]>,
+) -> Result<Option<alien_core::sandbox_links::GatewayLink>> {
+    // Planning checked the link; a target that stopped being linkable is left out.
+    let Ok(ports) = alien_core::sandbox_links::internal_ports(ctx.desired_stack, id) else {
+        return Ok(None);
+    };
+    let ranges = match listed {
+        Some(ranges) if !ranges.is_empty() => ranges.to_vec(),
+        _ => {
+            let service = kubernetes_resource_name(&ctx.resource_prefix, id);
+            match crate::core::k8s_network::service_cluster_ip(ctx, namespace, &service).await? {
+                Some(address) if alien_core::sandbox_links::is_link_address(address) => {
+                    vec![ipnet::Ipv4Net::from(address)]
+                }
+                _ => return Ok(None),
+            }
+        }
+    };
+    Ok(Some(alien_core::sandbox_links::GatewayLink {
+        id: id.to_string(),
+        host: link_host(ctx, namespace, id)?,
+        ports,
+        ranges,
+        addresses: Vec::new(),
     }))
 }
 
@@ -786,6 +925,8 @@ mod tests {
             config["deniedRanges"],
             json!(["11.128.0.0/16", "11.96.0.0/12", "8.9.10.11/32"])
         );
+        // A stack without links publishes no `links` field at all.
+        assert!(config.get("links").is_none());
         assert!(!serde_json::to_string(&first)
             .unwrap()
             .contains(config["replicaSecret"].as_str().unwrap()));
@@ -938,6 +1079,130 @@ mod tests {
     /// The pinned image from before gateways mounted their configuration.
     const ENV_GATEWAY: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:8538880f99141888e54bedc7d290194dfee5bfe11910266b309dde53de2601b0";
     const SECRETS: &str = "/api/v1/namespaces/test-ns/secrets";
+
+    fn linking_stack() -> (Sandbox, Stack) {
+        let api = alien_core::Container::new("api".into())
+            .code(alien_core::ContainerCode::Image {
+                image: "example.invalid/api:1".into(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.25".into(),
+                desired: "0.25".into(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".into(),
+                desired: "512Mi".into(),
+            })
+            .permissions("default".into())
+            .port(8080)
+            .port(9090)
+            .build();
+        let mut linking = internet_sandbox("subject");
+        linking.gateway_links = vec![alien_core::ResourceRef::new(
+            alien_core::Container::RESOURCE_TYPE,
+            "api",
+        )];
+        let stack = Stack::new("test".into())
+            .add(api, ResourceLifecycle::Live)
+            .add(linking.clone(), ResourceLifecycle::Live)
+            .add(internet_sandbox("other"), ResourceLifecycle::Live)
+            .build();
+        (linking, stack)
+    }
+
+    #[tokio::test]
+    async fn the_owner_publishes_each_link_with_the_private_service_ranges() {
+        let (_, stack) = linking_stack();
+        let harness =
+            KubernetesManifestTestHarness::new(Resource::new(internet_sandbox("other")), vec![]);
+        let mut ctx = harness.ctx();
+        ctx.desired_stack = &stack;
+        let server = MockServer::start_async().await;
+        point_at(&mut ctx, &server);
+        // A public Service range is never a link range.
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/apis/networking.k8s.io/v1/servicecidrs");
+                then.status(200).json_body(json!({
+                    "apiVersion":"networking.k8s.io/v1","kind":"ServiceCIDRList","metadata":{},
+                    "items":[{"metadata":{"name":"kubernetes"},"spec":{"cidrs":["10.96.0.0/12","11.96.0.0/12","fd00:10::/108"]}}]
+                }));
+            })
+            .await;
+        unsafe { std::env::set_var(CLUSTER_DOMAIN_ENV, "corp.example") };
+        let links = gateway_links(&ctx, "test-ns").await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&links).unwrap(),
+            json!({"test/subject": [{
+                "id": "api", "host": "api.test-ns.svc.corp.example",
+                "ports": [8080, 9090], "ranges": ["10.96.0.0/12"]
+            }]})
+        );
+        for link in links.values().flatten() {
+            link.validate().unwrap();
+        }
+        // The sandbox's commands get the same name the gateway accepts.
+        let (linking, _) = linking_stack();
+        let bindings = link_bindings(&ctx, &linking, "test-ns").unwrap();
+        let alien_core::bindings::ContainerBinding::Kubernetes(api) = &bindings["api"] else {
+            panic!("Kubernetes binding")
+        };
+        assert_eq!(
+            api.internal_urls[&9090],
+            alien_core::bindings::BindingValue::value(
+                "http://api.test-ns.svc.corp.example:9090".to_string()
+            )
+        );
+        assert!(api.public_url.is_none());
+        assert!(link_bindings(&ctx, &internet_sandbox("other"), "test-ns")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn without_the_service_range_api_a_link_waits_for_its_service_address() {
+        let (_, stack) = linking_stack();
+        let harness =
+            KubernetesManifestTestHarness::new(Resource::new(internet_sandbox("other")), vec![]);
+        let mut ctx = harness.ctx();
+        ctx.desired_stack = &stack;
+        let server = MockServer::start_async().await;
+        point_at(&mut ctx, &server);
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/apis/networking.k8s.io/v1/servicecidrs");
+                then.status(404)
+                    .json_body(json!({"kind":"Status","code":404}));
+            })
+            .await;
+        let mut missing = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/api/v1/namespaces/test-ns/services/api");
+                then.status(404)
+                    .json_body(json!({"kind":"Status","code":404}));
+            })
+            .await;
+        unsafe { std::env::set_var(CLUSTER_DOMAIN_ENV, "corp.example") };
+        assert!(gateway_links(&ctx, "test-ns").await.unwrap().is_empty());
+        missing.delete_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/api/v1/namespaces/test-ns/services/api");
+                then.status(200).json_body(json!({
+                    "apiVersion":"v1","kind":"Service","metadata":{"name":"api","namespace":"test-ns"},
+                    "spec":{"clusterIP":"10.0.0.5","ports":[{"port":8080}]}
+                }));
+            })
+            .await;
+        let links = gateway_links(&ctx, "test-ns").await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&links).unwrap()["test/subject"][0]["ranges"],
+            json!(["10.0.0.5/32"])
+        );
+    }
 
     fn internet_sandbox(id: &str) -> Sandbox {
         Sandbox::new(id.into())

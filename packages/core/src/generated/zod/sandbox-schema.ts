@@ -5,6 +5,7 @@
 
 import * as z from "zod";
 import { EgressPolicySchema } from "./egress-policy-schema.js";
+import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { SandboxCodeSchema } from "./sandbox-code-schema.js";
 import { SandboxEgressSchema } from "./sandbox-egress-schema.js";
 import { SandboxImagePermissionsSchema } from "./sandbox-image-permissions-schema.js";
@@ -24,6 +25,9 @@ get "defaultPolicy"(){
               },
 get "egress"(){
                 return SandboxEgressSchema.describe("Outbound network policy")
+              },
+get "gatewayLinks"(){
+                return z.array(ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")).describe("Services of this deployment that every sandbox of this resource reaches through the\negress gateway, on their declared ports. A declared ceiling: a runtime policy can narrow\nit with `link:<resource-id>` entries but never add to it. Not a lifecycle dependency, so\na linked service may itself link this sandbox.").optional()
               },
 "id": z.string().describe("Identifier for the sandbox. Must be DNS-compatible: lowercase letters, digits and hyphens,\nstarting and ending with a letter or digit, with no consecutive hyphens."),
 get "imagePermissions"(){

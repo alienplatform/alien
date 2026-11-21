@@ -708,6 +708,13 @@ pub struct Sandbox {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "openapi", schema(ignore))]
     pub links: Vec<ResourceRef>,
+    /// Services of this deployment that every sandbox of this resource reaches through the
+    /// egress gateway, on their declared ports. A declared ceiling: a runtime policy can narrow
+    /// it with `link:<resource-id>` entries but never add to it. Not a lifecycle dependency, so
+    /// a linked service may itself link this sandbox.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gateway_links: Vec<ResourceRef>,
     /// Where the sandbox's root filesystem comes from
     pub code: SandboxCode,
     /// Original image uid resolved from the built OCI archives. Absent on released artifacts
@@ -756,6 +763,21 @@ pub struct Sandbox {
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_ports: Vec<u16>,
+}
+
+impl<S: sandbox_builder::State> SandboxBuilder<S> {
+    /// Lets every sandbox of this resource reach `resource`'s internal endpoint on its
+    /// declared ports, through the deployment's egress gateway.
+    pub fn link<R: ?Sized>(mut self, resource: &R) -> Self
+    where
+        for<'a> &'a R: Into<ResourceRef>,
+    {
+        let resource_ref: ResourceRef = resource.into();
+        if !self.gateway_links.contains(&resource_ref) {
+            self.gateway_links.push(resource_ref);
+        }
+        self
+    }
 }
 
 /// Whether the artifact being rendered restricts which network modes it accepts.

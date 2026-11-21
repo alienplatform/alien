@@ -238,6 +238,7 @@ impl Harness {
             axum::serve(listener, router).await.unwrap();
         });
         let config = SandboxEgressGateway {
+            links: Default::default(),
             container: "sandbox-egress-gateway".into(),
             audience: "prefix/box".into(),
             signing_key: SandboxEgressSigningKey {

@@ -391,6 +391,7 @@ const sandboxMembers: Record<keyof RawSandboxHandle, true> = {
   create: true,
   get: true,
   getOrCreate: true,
+  linkUrl: true,
   list: true,
   pause: true,
   pollJob: true,

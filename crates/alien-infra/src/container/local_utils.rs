@@ -553,6 +553,7 @@ mod tests {
             manager_url: BindingValue::value("http://127.0.0.1:40205".to_string()),
             sandbox_key: BindingValue::value("code-key".to_string()),
             token_path: BindingValue::value(token_path.display().to_string()),
+            links: Default::default(),
         })
     }
 

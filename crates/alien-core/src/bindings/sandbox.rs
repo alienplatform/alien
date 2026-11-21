@@ -131,6 +131,11 @@ pub struct SandboxEgressGateway {
     /// replicates writes itself behind one admin address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replicas: Option<SandboxEgressReplicas>,
+    /// Bindings of the services this sandbox resource links, by resource id. Each carries the
+    /// service's internal URLs only, which the gateway reaches inside the deployment. Every
+    /// command a sandbox runs receives them as `ALIEN_<ID>_BINDING`. Omitted without links.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub links: std::collections::BTreeMap<String, super::ContainerBinding>,
 }
 
 /// Ready gateway replicas a policy write must reach.
@@ -365,6 +370,11 @@ pub struct LocalSandboxBinding {
     /// File holding the route's bearer token. A locator, not the token: a binding is
     /// serialized into the workload's environment, and a secret there is a secret in state.
     pub token_path: BindingValue<String>,
+    /// Bindings of the services this sandbox links, by resource id, with their internal URLs,
+    /// which the sandbox's egress gateway reaches on `deployment-network`. Every command a
+    /// sandbox runs receives them as `ALIEN_<ID>_BINDING`. Omitted without links.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub links: std::collections::BTreeMap<String, super::ContainerBinding>,
 }
 
 impl SandboxBinding {
@@ -505,6 +515,7 @@ impl SandboxBinding {
             manager_url: manager_url.into(),
             sandbox_key: sandbox_key.into(),
             token_path: token_path.into(),
+            links: Default::default(),
         })
     }
 }

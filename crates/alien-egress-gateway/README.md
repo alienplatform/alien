@@ -35,6 +35,35 @@ periodic refresh. The config is:
 }
 ```
 
+### Links
+
+`links` (optional, omitted when empty) lists, per audience, the services of the
+deployment that the stack links to that sandbox resource:
+
+```json
+"links": {
+  "deployment/box": [
+    {"id": "api", "host": "api.svc", "ports": [8080], "ranges": ["10.244.0.0/16"]}
+  ]
+}
+```
+
+A connection reaches a link only when it names `host` exactly on one of `ports`;
+an address never matches a link, even one inside its ranges. Every DNS answer for
+the name must fall in `ranges`, and `ranges` must lie inside 10/8, 100.64/10,
+172.16/12 or 192.168/16 and be no wider than a /8, so loopback, link-local and
+metadata addresses stay refused for linked names too. A link may also carry
+`addresses`, fixed IPv4 addresses the deployment owns for the name (such as an
+internal load balancer's static frontend IP); the gateway then dials those without a
+lookup, and each must lie in `ranges`. The sandbox's policy can only
+narrow its links: `internet` keeps them all, an allowlist keeps those it names as
+`link:<id>`, and `allow: []` keeps none. The 30-second sweep closes a linked
+tunnel when the link is removed, the policy no longer keeps it, or the peer is
+outside its ranges. Every other destination is checked exactly as before. Audit
+records of a linked connection carry `link: <id>`. A configuration with an invalid
+`links` entry is refused as a whole; gateways that predate `links` refuse any
+configuration containing it.
+
 The image runs as UID/GID 65532, needs no capabilities, and supports a read-only
 root filesystem. No policy KV, writable volume or policy-store permission is
 required. Policy storage uses half the finite cgroup v2 `memory.max` limit; a

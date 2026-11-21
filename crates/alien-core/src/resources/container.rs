@@ -867,6 +867,13 @@ pub struct ContainerOutputs {
     /// Internal URLs keyed by port for cluster members and linking resources.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub internal_urls: HashMap<u16, String>,
+    /// Private address the deployment's sandbox egress gateway dials when a sandbox links this
+    /// container and the platform puts a load balancer in front of it (on Azure, the internal
+    /// load balancer's static frontend IP). Absent when no sandbox links it, and on platforms
+    /// whose gateway resolves the container by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub link_address: Option<std::net::Ipv4Addr>,
     /// Status of each replica
     pub replicas: Vec<ReplicaStatus>,
     /// Persistent volumes, one per replica ordinal, with their latest snapshot.

@@ -32,7 +32,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 /// Default Docker network name for Alien containers.
-const NETWORK_NAME: &str = "deployment-network";
+pub(crate) const NETWORK_NAME: &str = "deployment-network";
 
 /// Alien-injected dev-server URLs whose `localhost` must be rewritten to
 /// `host.docker.internal` so a container running inside Docker can reach the
@@ -492,52 +492,7 @@ impl LocalContainerManager {
     /// Creates `deployment-network` if it doesn't exist. This network is used
     /// for DNS-based service discovery between containers.
     pub async fn ensure_network(&self) -> Result<()> {
-        // Check if network exists
-        match self.docker.inspect_network(NETWORK_NAME, None).await {
-            Ok(_) => {
-                debug!("Docker network '{}' already exists", NETWORK_NAME);
-                return Ok(());
-            }
-            Err(bollard::errors::Error::DockerResponseServerError {
-                status_code: 404, ..
-            }) => {
-                // Network doesn't exist, create it
-            }
-            Err(e) => {
-                return Err(e)
-                    .into_alien_error()
-                    .context(ErrorData::DockerNetworkError {
-                        network: NETWORK_NAME.to_string(),
-                        operation: "inspect".to_string(),
-                        reason: "Failed to inspect Docker network".to_string(),
-                    });
-            }
-        }
-
-        info!("Creating Docker network '{}'", NETWORK_NAME);
-
-        let create_opts = NetworkCreateRequest {
-            name: NETWORK_NAME.to_string(),
-            driver: Some("bridge".to_string()),
-            internal: Some(false),
-            attachable: Some(true),
-            ingress: Some(false),
-            enable_ipv6: Some(false),
-            ..Default::default()
-        };
-
-        self.docker
-            .create_network(create_opts)
-            .await
-            .into_alien_error()
-            .context(ErrorData::DockerNetworkError {
-                network: NETWORK_NAME.to_string(),
-                operation: "create".to_string(),
-                reason: "Failed to create Docker network".to_string(),
-            })?;
-
-        info!("✓ Docker network '{}' created", NETWORK_NAME);
-        Ok(())
+        ensure_deployment_network(&self.docker).await
     }
 
     /// Reads cheap Docker runtime metadata without inspecting logs or host files.
@@ -1878,6 +1833,57 @@ fn oci_archive_identity(tarball_path: &Path) -> std::io::Result<(String, Vec<Str
         return Ok((digest, references));
     }
     Err(std::io::Error::other("archive has no index.json"))
+}
+
+/// Creates `deployment-network` if it doesn't exist. The sandbox manager calls it too: a
+/// sandbox's egress gateway joins the network its linked services run on.
+pub(crate) async fn ensure_deployment_network(docker: &Docker) -> Result<()> {
+    // Check if network exists
+    match docker.inspect_network(NETWORK_NAME, None).await {
+        Ok(_) => {
+            debug!("Docker network '{}' already exists", NETWORK_NAME);
+            return Ok(());
+        }
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => {
+            // Network doesn't exist, create it
+        }
+        Err(e) => {
+            return Err(e)
+                .into_alien_error()
+                .context(ErrorData::DockerNetworkError {
+                    network: NETWORK_NAME.to_string(),
+                    operation: "inspect".to_string(),
+                    reason: "Failed to inspect Docker network".to_string(),
+                });
+        }
+    }
+
+    info!("Creating Docker network '{}'", NETWORK_NAME);
+
+    let create_opts = NetworkCreateRequest {
+        name: NETWORK_NAME.to_string(),
+        driver: Some("bridge".to_string()),
+        internal: Some(false),
+        attachable: Some(true),
+        ingress: Some(false),
+        enable_ipv6: Some(false),
+        ..Default::default()
+    };
+
+    docker
+        .create_network(create_opts)
+        .await
+        .into_alien_error()
+        .context(ErrorData::DockerNetworkError {
+            network: NETWORK_NAME.to_string(),
+            operation: "create".to_string(),
+            reason: "Failed to create Docker network".to_string(),
+        })?;
+
+    info!("✓ Docker network '{}' created", NETWORK_NAME);
+    Ok(())
 }
 
 #[cfg(test)]
