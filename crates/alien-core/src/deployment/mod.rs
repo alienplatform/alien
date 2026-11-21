@@ -16,6 +16,9 @@ pub use environment::*;
 mod state;
 pub use state::*;
 
+mod setup_drift;
+pub use setup_drift::*;
+
 mod domain;
 pub use domain::*;
 

@@ -181,13 +181,19 @@ impl AwsNetworkController {
             ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
                 && ctx.deployment_config.setup_run
                 && matches!(config.settings, NetworkSettings::Create { .. })
-                && !self.is_byo_vpc
-                && self.vpc_id.is_some()
-                && !self
-                    .flow_logs
-                    .as_ref()
-                    .is_some_and(FlowLogSetup::is_complete),
+                && self.flow_log_absent(),
         )
+    }
+
+    /// Whether this network's VPC is one Alien created and has no complete flow log. What setup
+    /// drift reports; a setup run adds the flow log.
+    pub(crate) fn flow_log_absent(&self) -> bool {
+        !self.is_byo_vpc
+            && self.vpc_id.is_some()
+            && !self
+                .flow_logs
+                .as_ref()
+                .is_some_and(FlowLogSetup::is_complete)
     }
 
     /// Whether this run may look for and delete flow log objects. Direct setup's authority
