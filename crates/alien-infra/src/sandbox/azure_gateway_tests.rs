@@ -556,4 +556,18 @@ async fn a_linked_container_is_published_at_its_load_balancer_address_once_it_ha
             "ranges": ["10.0.2.9/32"], "addresses": ["10.0.2.9"]
         }]})
     );
+    // Removing the link reaches no update of the owner when another sandbox held it; here the
+    // owner's own declaration drops it, and the next heartbeat removes it from the gateway.
+    run.desired_resource_config_mut("sandbox")
+        .unwrap()
+        .downcast_mut::<Sandbox>()
+        .unwrap()
+        .gateway_links
+        .clear();
+    run.step().await.unwrap();
+    assert!(
+        stored().await.get("links").is_none(),
+        "an unlinked container stays reachable: {}",
+        stored().await
+    );
 }
