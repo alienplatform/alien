@@ -10,14 +10,14 @@ import { ListPackagesResponse } from "@alienplatform/platform-api/models/operati
 let value: ListPackagesResponse = {
   items: [
     {
-      id: "pkg_jebo2o5jmm7raefl2m1pe3cz",
-      projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-      workspaceId: "ws_It13CUaGEhLLAB87simX0",
+      id: "pkg_jebo2o5jmm7raefl2m1pe3czjjq4",
+      projectId: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
+      workspaceId: "ws_It13CUaGEhLLAB87simX07Xb",
       type: "operator-image",
       status: "failed",
       version: "<value>",
-      sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-      dependsOnPackageId: "pkg_jebo2o5jmm7raefl2m1pe3cz",
+      sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+      dependsOnPackageId: "pkg_jebo2o5jmm7raefl2m1pe3czjjq4",
       setupFingerprints: {},
       packageBuildInputHash: "<value>",
       config: {

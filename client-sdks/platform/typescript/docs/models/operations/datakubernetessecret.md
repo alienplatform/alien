@@ -13,13 +13,13 @@ let value: DataKubernetesSecret = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "error",
+        reason: "not-installed",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "stopped",
+    health: "unknown",
+    lifecycle: "deleting",
     partial: false,
     stale: false,
   },
@@ -34,5 +34,5 @@ let value: DataKubernetesSecret = {
 | `namespace`                                                                                                              | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `prefix`                                                                                                                 | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `secretMetadataListed`                                                                                                   | *boolean*                                                                                                                | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
-| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus40](../../models/operations/getresourcedeploymentdetaildatastatus40.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus44](../../models/operations/getresourcedeploymentdetaildatastatus44.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `backend`                                                                                                                | *"kubernetesSecret"*                                                                                                     | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |

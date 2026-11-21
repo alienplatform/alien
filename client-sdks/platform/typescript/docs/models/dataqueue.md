@@ -36,7 +36,7 @@ let value: DataQueue = {
 
 ## Fields
 
-| Field                                   | Type                                    | Required                                | Description                             |
-| --------------------------------------- | --------------------------------------- | --------------------------------------- | --------------------------------------- |
-| `data`                                  | *models.SyncReconcileRequestDataUnion6* | :heavy_check_mark:                      | N/A                                     |
-| `resourceType`                          | *"queue"*                               | :heavy_check_mark:                      | N/A                                     |
+| Field                                                      | Type                                                       | Required                                                   | Description                                                |
+| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `data`                                                     | *models.SyncReconcileRequestDataUnion6*                    | :heavy_check_mark:                                         | N/A                                                        |
+| `resourceType`                                             | [models.ResourceTypeQueue](../models/resourcetypequeue.md) | :heavy_check_mark:                                         | N/A                                                        |

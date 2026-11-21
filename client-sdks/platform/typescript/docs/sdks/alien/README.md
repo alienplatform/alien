@@ -22,13 +22,17 @@
 * [prepareDeploymentInstallation](#preparedeploymentinstallation)
 * [getDeploymentPreparation](#getdeploymentpreparation)
 * [getInstallationDeployment](#getinstallationdeployment)
+* [getDeploymentProtectionUpdate](#getdeploymentprotectionupdate) - The setup update that protects this installed deployment: the signed template of the release it runs, published, and the exact steps for its setup method with the project's fingerprint. Whoever manages the deployment's setup runs them.
+* [getDeploymentSignedSetupUpdate](#getdeploymentsignedsetupupdate) - The newer signed setup of a protected deployment: the signed template of the release it runs or moves to, published, when its digest isn't the one the install registered with, and the exact steps for its setup method. The fingerprint and the install's values stay. Whoever manages the deployment's setup runs them.
+* [issueDeploymentSetupKey](#issuedeploymentsetupkey)
 * [resumeDeploymentInstallation](#resumedeploymentinstallation)
 * [requestDeploymentCheck](#requestdeploymentcheck)
-* [getDeploymentMetricsHistory](#getdeploymentmetricshistory) - Metrics Horizon reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
+* [getDeploymentMetricsHistory](#getdeploymentmetricshistory) - Metrics the machine agent reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
 * [getDeploymentCredentialRotation](#getdeploymentcredentialrotation)
 * [prepareDeploymentCredentialRotation](#preparedeploymentcredentialrotation)
 * [cancelDeploymentCredentialRotation](#canceldeploymentcredentialrotation)
 * [getDeploymentCredentialRotationValues](#getdeploymentcredentialrotationvalues)
+* [recordAirgappedBundleSigned](#recordairgappedbundlesigned)
 * [claimAwsXksStoreRetirement](#claimawsxksstoreretirement)
 * [completeAwsXksStoreRetirement](#completeawsxksstoreretirement)
 * [listAwsVirtualKeys](#listawsvirtualkeys)
@@ -348,7 +352,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.getProjectLogExport({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -374,7 +378,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await getProjectLogExport(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -529,7 +533,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.updateProjectLogExport("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.updateProjectLogExport("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -553,7 +557,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await updateProjectLogExport(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await updateProjectLogExport(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -683,7 +687,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.testProjectLogExport({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -709,7 +713,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await testProjectLogExport(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -998,7 +1002,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment.                                                                                                                                          | dep_0c29fq4a2yjb7kx3smwdgxlc                                                                                                                                                   |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment.                                                                                                                                          | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f                                                                                                                                               |
 | `requestBody`                                                                                                                                                                  | [operations.ReportLogExportDeliveryRequestBody](../../models/operations/reportlogexportdeliveryrequestbody.md)                                                                 | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -1196,7 +1200,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the workspace.                                                                                                                                           | ws_It13CUaGEhLLAB87simX0                                                                                                                                                       |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the workspace.                                                                                                                                           | ws_It13CUaGEhLLAB87simX07Xb                                                                                                                                                    |
 | `requestBody`                                                                                                                                                                  | [operations.CreateWorkspaceInvitationRequestBody](../../models/operations/createworkspaceinvitationrequestbody.md)                                                             | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -1580,7 +1584,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the workspace.                                                                                                                                           | ws_It13CUaGEhLLAB87simX0                                                                                                                                                       |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the workspace.                                                                                                                                           | ws_It13CUaGEhLLAB87simX07Xb                                                                                                                                                    |
 | `requestBody`                                                                                                                                                                  | [operations.CreateWorkspaceInviteLinkRequestBody](../../models/operations/createworkspaceinvitelinkrequestbody.md)                                                             | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -1997,6 +2001,308 @@ import {
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## getDeploymentProtectionUpdate
+
+The setup update that protects this installed deployment: the signed template of the release it runs, published, and the exact steps for its setup method with the project's fingerprint. Whoever manages the deployment's setup runs them.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getDeploymentProtectionUpdate" method="get" path="/v1/deployments/{id}/protection-update" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.getDeploymentProtectionUpdate({
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { getDeploymentProtectionUpdate } from "@alienplatform/platform-api/funcs/getDeploymentProtectionUpdate.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await getDeploymentProtectionUpdate(alien, {
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("getDeploymentProtectionUpdate failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useGetDeploymentProtectionUpdate,
+  useGetDeploymentProtectionUpdateSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchGetDeploymentProtectionUpdate,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateGetDeploymentProtectionUpdate,
+  invalidateAllGetDeploymentProtectionUpdate,
+} from "@alienplatform/platform-api/react-query/getDeploymentProtectionUpdate.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetDeploymentProtectionUpdateRequest](../../models/operations/getdeploymentprotectionupdaterequest.md)                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.DeploymentProtectionUpdate](../../models/deploymentprotectionupdate.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 403, 404, 409            | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## getDeploymentSignedSetupUpdate
+
+The newer signed setup of a protected deployment: the signed template of the release it runs or moves to, published, when its digest isn't the one the install registered with, and the exact steps for its setup method. The fingerprint and the install's values stay. Whoever manages the deployment's setup runs them.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getDeploymentSignedSetupUpdate" method="get" path="/v1/deployments/{id}/signed-setup-update" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.getDeploymentSignedSetupUpdate({
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { getDeploymentSignedSetupUpdate } from "@alienplatform/platform-api/funcs/getDeploymentSignedSetupUpdate.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await getDeploymentSignedSetupUpdate(alien, {
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("getDeploymentSignedSetupUpdate failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useGetDeploymentSignedSetupUpdate,
+  useGetDeploymentSignedSetupUpdateSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchGetDeploymentSignedSetupUpdate,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateGetDeploymentSignedSetupUpdate,
+  invalidateAllGetDeploymentSignedSetupUpdate,
+} from "@alienplatform/platform-api/react-query/getDeploymentSignedSetupUpdate.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetDeploymentSignedSetupUpdateRequest](../../models/operations/getdeploymentsignedsetupupdaterequest.md)                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.DeploymentSignedSetupUpdate](../../models/deploymentsignedsetupupdate.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 403, 404, 409            | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## issueDeploymentSetupKey
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="issueDeploymentSetupKey" method="post" path="/v1/deployments/{id}/setup-key" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.issueDeploymentSetupKey({
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { issueDeploymentSetupKey } from "@alienplatform/platform-api/funcs/issueDeploymentSetupKey.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await issueDeploymentSetupKey(alien, {
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("issueDeploymentSetupKey failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useIssueDeploymentSetupKeyMutation
+} from "@alienplatform/platform-api/react-query/issueDeploymentSetupKey.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.IssueDeploymentSetupKeyRequest](../../models/operations/issuedeploymentsetupkeyrequest.md)                                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.IssueDeploymentSetupKeyResponse](../../models/issuedeploymentsetupkeyresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 403, 404, 409            | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## resumeDeploymentInstallation
 
 ### Example Usage
@@ -2183,7 +2489,7 @@ import {
 
 ## getDeploymentMetricsHistory
 
-Metrics Horizon reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
+Metrics the machine agent reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
 
 ### Example Usage
 
@@ -2468,7 +2774,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment.                                                                                                                                          | dep_0c29fq4a2yjb7kx3smwdgxlc                                                                                                                                                   |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment.                                                                                                                                          | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f                                                                                                                                               |
 | `requestBody`                                                                                                                                                                  | [operations.PrepareDeploymentCredentialRotationRequestBody](../../models/operations/preparedeploymentcredentialrotationrequestbody.md)                                         | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -2561,7 +2867,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment.                                                                                                                                          | dep_0c29fq4a2yjb7kx3smwdgxlc                                                                                                                                                   |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment.                                                                                                                                          | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f                                                                                                                                               |
 | `requestBody`                                                                                                                                                                  | [operations.CancelDeploymentCredentialRotationRequestBody](../../models/operations/canceldeploymentcredentialrotationrequestbody.md)                                           | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -2654,7 +2960,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment.                                                                                                                                          | dep_0c29fq4a2yjb7kx3smwdgxlc                                                                                                                                                   |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment.                                                                                                                                          | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f                                                                                                                                               |
 | `requestBody`                                                                                                                                                                  | [operations.GetDeploymentCredentialRotationValuesRequestBody](../../models/operations/getdeploymentcredentialrotationvaluesrequestbody.md)                                     | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -2669,6 +2975,98 @@ import {
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 403, 404, 409            | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## recordAirgappedBundleSigned
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="recordAirgappedBundleSigned" method="post" path="/v1/sync/airgapped-bundle-signed" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.recordAirgappedBundleSigned({
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { recordAirgappedBundleSigned } from "@alienplatform/platform-api/funcs/recordAirgappedBundleSigned.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await recordAirgappedBundleSigned(alien, {
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("recordAirgappedBundleSigned failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useRecordAirgappedBundleSignedMutation
+} from "@alienplatform/platform-api/react-query/recordAirgappedBundleSigned.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.RecordAirgappedBundleSignedRequest](../../models/operations/recordairgappedbundlesignedrequest.md)                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.RecordAirgappedBundleSignedResponse](../../models/operations/recordairgappedbundlesignedresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 403, 404            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -2831,7 +3229,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the aws virtual key.                                                                                                                                     | vkey_0p9nwqgtftugsoey99lqyqq                                                                                                                                                   |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the aws virtual key.                                                                                                                                     | vkey_0p9nwqgtftugsoey99lqyqq8eq8z                                                                                                                                              |
 | `requestBody`                                                                                                                                                                  | [operations.CompleteAwsXksStoreRetirementRequestBody](../../models/operations/completeawsxksstoreretirementrequestbody.md)                                                     | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -2863,7 +3261,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.listAwsVirtualKeys({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -2888,7 +3286,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await listAwsVirtualKeys(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -3195,7 +3593,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the aws virtual key.                                                                                                                                     | vkey_0p9nwqgtftugsoey99lqyqq                                                                                                                                                   |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the aws virtual key.                                                                                                                                     | vkey_0p9nwqgtftugsoey99lqyqq8eq8z                                                                                                                                              |
 | `requestBody`                                                                                                                                                                  | [operations.RotateAwsVirtualKeyCredentialRequestBody](../../models/operations/rotateawsvirtualkeycredentialrequestbody.md)                                                     | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -3210,6 +3608,7 @@ import {
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 401, 404, 409            | application/json         |
+| errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## restoreAwsVirtualKey
@@ -3281,7 +3680,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the aws virtual key.                                                                                                                                     | vkey_0p9nwqgtftugsoey99lqyqq                                                                                                                                                   |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the aws virtual key.                                                                                                                                     | vkey_0p9nwqgtftugsoey99lqyqq8eq8z                                                                                                                                              |
 | `requestBody`                                                                                                                                                                  | [operations.RestoreAwsVirtualKeyRequestBody](../../models/operations/restoreawsvirtualkeyrequestbody.md)                                                                       | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -3367,7 +3766,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the aws virtual key.                                                                                                                                     | vkey_0p9nwqgtftugsoey99lqyqq                                                                                                                                                   |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the aws virtual key.                                                                                                                                     | vkey_0p9nwqgtftugsoey99lqyqq8eq8z                                                                                                                                              |
 | `requestBody`                                                                                                                                                                  | [operations.FinalizeAwsVirtualKeyDeletionRequestBody](../../models/operations/finalizeawsvirtualkeydeletionrequestbody.md)                                                     | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -3453,7 +3852,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the aws virtual key.                                                                                                                                     | vkey_0p9nwqgtftugsoey99lqyqq                                                                                                                                                   |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the aws virtual key.                                                                                                                                     | vkey_0p9nwqgtftugsoey99lqyqq8eq8z                                                                                                                                              |
 | `requestBody`                                                                                                                                                                  | [operations.DecommissionAwsVirtualKeyRequestBody](../../models/operations/decommissionawsvirtualkeyrequestbody.md)                                                             | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -3639,7 +4038,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the aws virtual key.                                                                                                                                     | vkey_0p9nwqgtftugsoey99lqyqq                                                                                                                                                   |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the aws virtual key.                                                                                                                                     | vkey_0p9nwqgtftugsoey99lqyqq8eq8z                                                                                                                                              |
 | `requestBody`                                                                                                                                                                  | [operations.ContinueAwsVirtualKeyRequestBody](../../models/operations/continueawsvirtualkeyrequestbody.md)                                                                     | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |

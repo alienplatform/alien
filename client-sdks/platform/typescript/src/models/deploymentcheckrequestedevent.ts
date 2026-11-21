@@ -4,8 +4,59 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
+import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export const DeploymentCheckRequestedEventKind = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export type DeploymentCheckRequestedEventKind = ClosedEnum<
+  typeof DeploymentCheckRequestedEventKind
+>;
+
+/**
+ * Client channel that carried a principal's request.
+ */
+export const DeploymentCheckRequestedEventViaEnum = {
+  Mcp: "mcp",
+} as const;
+/**
+ * Client channel that carried a principal's request.
+ */
+export type DeploymentCheckRequestedEventViaEnum = ClosedEnum<
+  typeof DeploymentCheckRequestedEventViaEnum
+>;
+
+export type DeploymentCheckRequestedEventViaUnion =
+  | DeploymentCheckRequestedEventViaEnum
+  | string;
+
+/**
+ * Authenticated principal that requested a deployment intent event.
+ */
+export type DeploymentCheckRequestedEventActor = {
+  /**
+   * User email when the principal is a user.
+   */
+  email?: string | null | undefined;
+  /**
+   * Stable user or service-account identifier.
+   */
+  id: string;
+  /**
+   * Type of authenticated principal that requested an event.
+   */
+  kind: DeploymentCheckRequestedEventKind;
+  via?: DeploymentCheckRequestedEventViaEnum | string | null | undefined;
+};
 
 export type DeploymentCheckRequestedEvent = {
   type: "DeploymentCheckRequested";
@@ -13,7 +64,62 @@ export type DeploymentCheckRequestedEvent = {
    * Unique identifier for the deployment.
    */
   deploymentId: string;
+  /**
+   * Authenticated principal that requested a deployment intent event.
+   */
+  actor?: DeploymentCheckRequestedEventActor | undefined;
 };
+
+/** @internal */
+export const DeploymentCheckRequestedEventKind$inboundSchema: z.ZodEnum<
+  typeof DeploymentCheckRequestedEventKind
+> = z.enum(DeploymentCheckRequestedEventKind);
+
+/** @internal */
+export const DeploymentCheckRequestedEventViaEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentCheckRequestedEventViaEnum
+> = z.enum(DeploymentCheckRequestedEventViaEnum);
+
+/** @internal */
+export const DeploymentCheckRequestedEventViaUnion$inboundSchema: z.ZodType<
+  DeploymentCheckRequestedEventViaUnion,
+  unknown
+> = z.union([DeploymentCheckRequestedEventViaEnum$inboundSchema, z.string()]);
+
+export function deploymentCheckRequestedEventViaUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCheckRequestedEventViaUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentCheckRequestedEventViaUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCheckRequestedEventViaUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCheckRequestedEventActor$inboundSchema: z.ZodType<
+  DeploymentCheckRequestedEventActor,
+  unknown
+> = z.object({
+  email: z.nullable(z.string()).optional(),
+  id: z.string(),
+  kind: DeploymentCheckRequestedEventKind$inboundSchema,
+  via: z.nullable(
+    z.union([DeploymentCheckRequestedEventViaEnum$inboundSchema, z.string()]),
+  ).optional(),
+});
+
+export function deploymentCheckRequestedEventActorFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCheckRequestedEventActor, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentCheckRequestedEventActor$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCheckRequestedEventActor' from JSON`,
+  );
+}
 
 /** @internal */
 export const DeploymentCheckRequestedEvent$inboundSchema: z.ZodType<
@@ -22,6 +128,8 @@ export const DeploymentCheckRequestedEvent$inboundSchema: z.ZodType<
 > = z.object({
   type: z.literal("DeploymentCheckRequested"),
   deploymentId: z.string(),
+  actor: z.lazy(() => DeploymentCheckRequestedEventActor$inboundSchema)
+    .optional(),
 });
 
 export function deploymentCheckRequestedEventFromJSON(

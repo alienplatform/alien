@@ -1,6 +1,6 @@
 # TargetDeploymentGcpImages
 
-GCP Horizon machine image entry.
+GCP machine image entry.
 
 ## Example Usage
 

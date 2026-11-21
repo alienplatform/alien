@@ -13,7 +13,7 @@ let value: DataArtifactRegistry = {
       collectionIssues: [],
       health: "unknown",
       lifecycle: "creating",
-      partial: true,
+      partial: false,
       stale: false,
     },
     backend: "local",
@@ -24,7 +24,7 @@ let value: DataArtifactRegistry = {
 
 ## Fields
 
-| Field                    | Type                     | Required                 | Description              |
-| ------------------------ | ------------------------ | ------------------------ | ------------------------ |
-| `data`                   | *operations.DataUnion13* | :heavy_check_mark:       | N/A                      |
-| `resourceType`           | *"artifact-registry"*    | :heavy_check_mark:       | N/A                      |
+| Field                                                                                              | Type                                                                                               | Required                                                                                           | Description                                                                                        |
+| -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `data`                                                                                             | *operations.DataUnion14*                                                                           | :heavy_check_mark:                                                                                 | N/A                                                                                                |
+| `resourceType`                                                                                     | [operations.ResourceTypeArtifactRegistry](../../models/operations/resourcetypeartifactregistry.md) | :heavy_check_mark:                                                                                 | N/A                                                                                                |

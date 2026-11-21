@@ -68,5 +68,5 @@ export function queryKeyDeploymentsGet(
   id: string,
   parameters: { include?: Array<operations.GetDeploymentInclude> | undefined },
 ): QueryKey {
-  return ["@alienplatform/platform-api", "deployments", "get", id, parameters];
+  return ["@alienplatform/platform-api", "Deployments", "get", id, parameters];
 }

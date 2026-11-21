@@ -20,7 +20,11 @@ export type UpdateAPIKeyRequest = {
    */
   deploymentSetupConfig?: UpdateDeploymentSetupPolicy | undefined;
   /**
-   * Optional expiration date for the API key
+   * Who may open this setup link: email addresses (j@acme.com) or whole domains (@acme.com). Only for a setup link that already asks for an email; it cannot become a handoff link or the other way round. A person the list no longer covers loses portal access on their next request. Keys and tokens they already received keep working: installer keys until they expire, at most 24 hours, or until the link is disabled, revoked or expires, and a deployment's own token for as long as the deployment exists.
+   */
+  allowed?: Array<string> | undefined;
+  /**
+   * Expiration date for the API key. Null removes the expiry, except on a setup link, where it sets the default of 7 days from now.
    */
   expiresAt?: Date | null | undefined;
 };
@@ -30,6 +34,7 @@ export type UpdateAPIKeyRequest$Outbound = {
   enabled?: boolean | undefined;
   description?: string | null | undefined;
   deploymentSetupConfig?: UpdateDeploymentSetupPolicy$Outbound | undefined;
+  allowed?: Array<string> | undefined;
   expiresAt?: string | null | undefined;
 };
 
@@ -41,6 +46,7 @@ export const UpdateAPIKeyRequest$outboundSchema: z.ZodType<
   enabled: z.boolean().optional(),
   description: z.nullable(z.string()).optional(),
   deploymentSetupConfig: UpdateDeploymentSetupPolicy$outboundSchema.optional(),
+  allowed: z.array(z.string()).optional(),
   expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
 });
 

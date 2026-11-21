@@ -90,13 +90,16 @@ async function $do(
   const path = pathToFunc("/v1/deployments")();
 
   const query = encodeFormQuery({
+    "cloudAccountId": payload?.cloudAccountId,
     "cursor": payload?.cursor,
     "deploymentGroup": payload?.deploymentGroup,
     "environment": payload?.environment,
     "include": payload?.include,
     "limit": payload?.limit,
+    "listState": payload?.listState,
     "managerId": payload?.managerId,
     "name": payload?.name,
+    "order": payload?.order,
     "project": payload?.project,
     "purpose": payload?.purpose,
     "search": payload?.search,

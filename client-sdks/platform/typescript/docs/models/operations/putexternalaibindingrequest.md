@@ -6,7 +6,7 @@
 import { PutExternalAIBindingRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: PutExternalAIBindingRequest = {
-  id: "dg_r27ict8c7vcgsumpj90ackf7b",
+  id: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
   putExternalAIBindingRequest: {
     provider: "anthropic",
     apiKey: "<value>",
@@ -19,5 +19,5 @@ let value: PutExternalAIBindingRequest = {
 
 | Field                                       | Type                                        | Required                                    | Description                                 | Example                                     |
 | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
-| `id`                                        | *string*                                    | :heavy_check_mark:                          | Unique identifier for the deployment group. | dg_r27ict8c7vcgsumpj90ackf7b                |
+| `id`                                        | *string*                                    | :heavy_check_mark:                          | Unique identifier for the deployment group. | dg_r27ict8c7vcgsumpj90ackf7bnwt             |
 | `putExternalAIBindingRequest`               | *models.PutExternalAIBindingRequestUnion*   | :heavy_check_mark:                          | N/A                                         |                                             |

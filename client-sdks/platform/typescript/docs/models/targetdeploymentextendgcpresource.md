@@ -14,7 +14,7 @@ let value: TargetDeploymentExtendGcpResource = {
 
 ## Fields
 
-| Field                                                 | Type                                                  | Required                                              | Description                                           |
-| ----------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------- |
-| `condition`                                           | *models.TargetDeploymentExtendResourceConditionUnion* | :heavy_minus_sign:                                    | N/A                                                   |
-| `scope`                                               | *string*                                              | :heavy_check_mark:                                    | Scope (project/resource level)                        |
+| Field                                                    | Type                                                     | Required                                                 | Description                                              |
+| -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
+| `condition`                                              | *models.TargetDeploymentExtendGcpResourceConditionUnion* | :heavy_minus_sign:                                       | N/A                                                      |
+| `scope`                                                  | *string*                                                 | :heavy_check_mark:                                       | Scope (project/resource level)                           |

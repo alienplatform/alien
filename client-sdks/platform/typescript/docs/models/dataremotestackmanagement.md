@@ -17,10 +17,10 @@ let value: DataRemoteStackManagement = {
           source: "<value>",
         },
       ],
-      health: "unknown",
+      health: "degraded",
       lifecycle: "stopping",
       partial: true,
-      stale: true,
+      stale: false,
     },
     backend: "awsIamRole",
   },
@@ -30,7 +30,7 @@ let value: DataRemoteStackManagement = {
 
 ## Fields
 
-| Field                                    | Type                                     | Required                                 | Description                              |
-| ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
-| `data`                                   | *models.SyncReconcileRequestDataUnion12* | :heavy_check_mark:                       | N/A                                      |
-| `resourceType`                           | *"remote-stack-management"*              | :heavy_check_mark:                       | N/A                                      |
+| Field                                                                                      | Type                                                                                       | Required                                                                                   | Description                                                                                |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `data`                                                                                     | *models.SyncReconcileRequestDataUnion13*                                                   | :heavy_check_mark:                                                                         | N/A                                                                                        |
+| `resourceType`                                                                             | [models.ResourceTypeRemoteStackManagement](../models/resourcetyperemotestackmanagement.md) | :heavy_check_mark:                                                                         | N/A                                                                                        |

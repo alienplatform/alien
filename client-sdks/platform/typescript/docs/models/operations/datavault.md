@@ -26,7 +26,7 @@ let value: DataVault = {
 
 ## Fields
 
-| Field                   | Type                    | Required                | Description             |
-| ----------------------- | ----------------------- | ----------------------- | ----------------------- |
-| `data`                  | *operations.DataUnion9* | :heavy_check_mark:      | N/A                     |
-| `resourceType`          | *"vault"*               | :heavy_check_mark:      | N/A                     |
+| Field                                                                        | Type                                                                         | Required                                                                     | Description                                                                  |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `data`                                                                       | *operations.DataUnion10*                                                     | :heavy_check_mark:                                                           | N/A                                                                          |
+| `resourceType`                                                               | [operations.ResourceTypeVault](../../models/operations/resourcetypevault.md) | :heavy_check_mark:                                                           | N/A                                                                          |

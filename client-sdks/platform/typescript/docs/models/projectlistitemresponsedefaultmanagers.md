@@ -8,12 +8,12 @@ Project default private managers for new push deployments.
 import { ProjectListItemResponseDefaultManagers } from "@alienplatform/platform-api/models";
 
 let value: ProjectListItemResponseDefaultManagers = {
-  aws: "mgr_enxscjrqiiu2lrc672hwwuc5",
-  gcp: "mgr_enxscjrqiiu2lrc672hwwuc5",
-  azure: "mgr_enxscjrqiiu2lrc672hwwuc5",
-  kubernetes: "mgr_enxscjrqiiu2lrc672hwwuc5",
-  machines: "mgr_enxscjrqiiu2lrc672hwwuc5",
-  local: "mgr_enxscjrqiiu2lrc672hwwuc5",
+  aws: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
+  gcp: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
+  azure: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
+  kubernetes: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
+  machines: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
+  local: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
 };
 ```
 
@@ -21,9 +21,9 @@ let value: ProjectListItemResponseDefaultManagers = {
 
 | Field                                            | Type                                             | Required                                         | Description                                      | Example                                          |
 | ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ |
-| `aws`                                            | *string*                                         | :heavy_minus_sign:                               | Unique identifier for a default private manager. | mgr_enxscjrqiiu2lrc672hwwuc5                     |
-| `gcp`                                            | *string*                                         | :heavy_minus_sign:                               | Unique identifier for a default private manager. | mgr_enxscjrqiiu2lrc672hwwuc5                     |
-| `azure`                                          | *string*                                         | :heavy_minus_sign:                               | Unique identifier for a default private manager. | mgr_enxscjrqiiu2lrc672hwwuc5                     |
-| `kubernetes`                                     | *string*                                         | :heavy_minus_sign:                               | Unique identifier for a default private manager. | mgr_enxscjrqiiu2lrc672hwwuc5                     |
-| `machines`                                       | *string*                                         | :heavy_minus_sign:                               | Unique identifier for a default private manager. | mgr_enxscjrqiiu2lrc672hwwuc5                     |
-| `local`                                          | *string*                                         | :heavy_minus_sign:                               | Unique identifier for a default private manager. | mgr_enxscjrqiiu2lrc672hwwuc5                     |
+| `aws`                                            | *string*                                         | :heavy_minus_sign:                               | Unique identifier for a default private manager. | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                 |
+| `gcp`                                            | *string*                                         | :heavy_minus_sign:                               | Unique identifier for a default private manager. | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                 |
+| `azure`                                          | *string*                                         | :heavy_minus_sign:                               | Unique identifier for a default private manager. | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                 |
+| `kubernetes`                                     | *string*                                         | :heavy_minus_sign:                               | Unique identifier for a default private manager. | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                 |
+| `machines`                                       | *string*                                         | :heavy_minus_sign:                               | Unique identifier for a default private manager. | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                 |
+| `local`                                          | *string*                                         | :heavy_minus_sign:                               | Unique identifier for a default private manager. | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                 |

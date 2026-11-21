@@ -45,9 +45,17 @@ export type ManagerHeartbeatRequest = {
    */
   version?: string | undefined;
   /**
+   * Capabilities the manager serves, by name and version. `values: 1` means it stores deployment values. Omit when there are none.
+   */
+  capabilities?: { [k: string]: number } | undefined;
+  /**
    * Manager public URL (for accessing log ingestion endpoints)
    */
   url: string;
+  /**
+   * URL machines can use to reach the machine control plane through this manager. Omitted when the manager does not relay machine traffic.
+   */
+  machineRelayUrl?: string | undefined;
   managementConfigs: ManagerManagementConfigs;
   /**
    * Optional runtime metrics
@@ -93,7 +101,9 @@ export function managerHeartbeatRequestMetricsToJSON(
 export type ManagerHeartbeatRequest$Outbound = {
   status: string;
   version?: string | undefined;
+  capabilities?: { [k: string]: number } | undefined;
   url: string;
+  machineRelayUrl?: string | undefined;
   managementConfigs: ManagerManagementConfigs$Outbound;
   metrics?: ManagerHeartbeatRequestMetrics$Outbound | undefined;
 };
@@ -105,7 +115,9 @@ export const ManagerHeartbeatRequest$outboundSchema: z.ZodType<
 > = z.object({
   status: ManagerHeartbeatRequestStatus$outboundSchema,
   version: z.string().optional(),
+  capabilities: z.record(z.string(), z.int()).optional(),
   url: z.string(),
+  machineRelayUrl: z.string().optional(),
   managementConfigs: ManagerManagementConfigs$outboundSchema,
   metrics: z.lazy(() => ManagerHeartbeatRequestMetrics$outboundSchema)
     .optional(),

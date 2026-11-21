@@ -654,8 +654,8 @@ resource "aws_subnet" "default_network_private" {
     aws_iam_policy.management_managed_policy_1,
     aws_iam_role_policy_attachment.management_managed_policy_1_attachment,
     aws_iam_role_policy.management_self_read,
-    aws_iam_policy.management_setup_ef8239f2,
-    aws_iam_role_policy_attachment.management_setup_ef8239f2_attachment,
+    aws_iam_policy.management_setup_dfcfe83c,
+    aws_iam_role_policy_attachment.management_setup_dfcfe83c_attachment,
     aws_iam_role_policy.assets_management_storage-heartbeat_0,
     aws_iam_role_policy.management_vault_secrets_set_0,
     aws_iam_role.registry_pull,
@@ -777,8 +777,8 @@ resource "aws_security_group" "default_network_workload" {
     aws_iam_policy.management_managed_policy_1,
     aws_iam_role_policy_attachment.management_managed_policy_1_attachment,
     aws_iam_role_policy.management_self_read,
-    aws_iam_policy.management_setup_ef8239f2,
-    aws_iam_role_policy_attachment.management_setup_ef8239f2_attachment,
+    aws_iam_policy.management_setup_dfcfe83c,
+    aws_iam_role_policy_attachment.management_setup_dfcfe83c_attachment,
     aws_iam_role_policy.assets_management_storage-heartbeat_0,
     aws_iam_role_policy.management_vault_secrets_set_0,
     aws_iam_role.registry_pull,
@@ -982,24 +982,24 @@ resource "aws_iam_role_policy" "management_self_read" {
   role   = aws_iam_role.management.id
   policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
-    aws_iam_role_policy_attachment.management_setup_ef8239f2_attachment
+    aws_iam_role_policy_attachment.management_setup_dfcfe83c_attachment
   ]
 }
 
-resource "aws_iam_policy" "management_setup_ef8239f2" {
-  name   = length(format("%s-%s", local.resource_prefix, "management-setup-ef8239f2")) <= 128 ? format("%s-%s", local.resource_prefix, "management-setup-ef8239f2") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "management-setup-ef8239f2"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "management-setup-ef8239f2")), 0, 8))
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadOwnManagementRole", Effect = "Allow", Action = ["iam:GetRole"], Resource = [aws_iam_role.management.arn] }, { Sid = "CheckS3BucketHealth", Effect = "Allow", Action = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Resource = ["arn:aws:s3:::${aws_s3_bucket.assets.bucket}"] }, { Sid = "WriteSsmParameters", Effect = "Allow", Action = ["ssm:PutParameter", "ssm:DeleteParameter"], Resource = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.resource_prefix}-secrets-*"] }] })
+resource "aws_iam_policy" "management_setup_dfcfe83c" {
+  name   = length(format("%s-%s", local.resource_prefix, "management-setup-dfcfe83c")) <= 128 ? format("%s-%s", local.resource_prefix, "management-setup-dfcfe83c") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "management-setup-dfcfe83c"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "management-setup-dfcfe83c")), 0, 8))
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadOwnManagementRole", Effect = "Allow", Action = ["iam:GetRole"], Resource = [aws_iam_role.management.arn] }, { Sid = "CheckS3BucketHealth", Effect = "Allow", Action = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Resource = ["arn:aws:s3:::${aws_s3_bucket.assets.bucket}"] }, { Sid = "WriteSsmParameters", Effect = "Allow", Action = ["ssm:PutParameter", "ssm:AddTagsToResource", "ssm:DeleteParameter"], Resource = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.resource_prefix}-secrets-*"] }] })
 
   lifecycle {
     create_before_destroy = true
   }
 }
 
-resource "aws_iam_role_policy_attachment" "management_setup_ef8239f2_attachment" {
+resource "aws_iam_role_policy_attachment" "management_setup_dfcfe83c_attachment" {
   role       = aws_iam_role.management.name
-  policy_arn = aws_iam_policy.management_setup_ef8239f2.arn
+  policy_arn = aws_iam_policy.management_setup_dfcfe83c.arn
   depends_on = [
-    aws_iam_policy.management_setup_ef8239f2
+    aws_iam_policy.management_setup_dfcfe83c
   ]
 
   lifecycle {
@@ -1009,7 +1009,7 @@ resource "aws_iam_role_policy_attachment" "management_setup_ef8239f2_attachment"
 
 resource "terraform_data" "management_setup_policies_barrier" {
   triggers_replace = [
-    aws_iam_role_policy_attachment.management_setup_ef8239f2_attachment.id
+    aws_iam_role_policy_attachment.management_setup_dfcfe83c_attachment.id
   ]
 
   lifecycle {
@@ -1094,7 +1094,7 @@ resource "aws_iam_role_policy" "assets_management_storage-heartbeat_0" {
   role   = aws_iam_role.management.id
   policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
-    aws_iam_role_policy_attachment.management_setup_ef8239f2_attachment
+    aws_iam_role_policy_attachment.management_setup_dfcfe83c_attachment
   ]
 }
 
@@ -1160,7 +1160,7 @@ resource "aws_iam_role_policy" "management_vault_secrets_set_0" {
   role   = aws_iam_role.management.id
   policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
-    aws_iam_role_policy_attachment.management_setup_ef8239f2_attachment
+    aws_iam_role_policy_attachment.management_setup_dfcfe83c_attachment
   ]
 }
 
@@ -1345,8 +1345,8 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_policy.management_managed_policy_1,
     aws_iam_role_policy_attachment.management_managed_policy_1_attachment,
     aws_iam_role_policy.management_self_read,
-    aws_iam_policy.management_setup_ef8239f2,
-    aws_iam_role_policy_attachment.management_setup_ef8239f2_attachment,
+    aws_iam_policy.management_setup_dfcfe83c,
+    aws_iam_role_policy_attachment.management_setup_dfcfe83c_attachment,
     terraform_data.management_setup_policies_barrier,
     aws_s3_bucket.assets,
     aws_s3_bucket_server_side_encryption_configuration.assets,

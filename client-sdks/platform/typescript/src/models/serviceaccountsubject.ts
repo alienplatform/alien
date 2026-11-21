@@ -4,10 +4,28 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
+import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
+import {
+  ApplicationRole,
+  ApplicationRole$inboundSchema,
+} from "./applicationrole.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import { Role, Role$inboundSchema } from "./role.js";
 import { SubjectScope, SubjectScope$inboundSchema } from "./subjectscope.js";
+
+/**
+ * Set when the key was minted for one internal purpose, such as a rerun
+ */
+export const Purpose = {
+  SetupCredential: "setup-credential",
+  SetupCredentialImport: "setup-credential-import",
+  SetupEnrollment: "setup-enrollment",
+} as const;
+/**
+ * Set when the key was minted for one internal purpose, such as a rerun
+ */
+export type Purpose = ClosedEnum<typeof Purpose>;
 
 /**
  * Authenticated service account subject with scoped permissions (workspace, project, or deployment level)
@@ -37,7 +55,18 @@ export type ServiceAccountSubject = {
    * Role defining what actions this service account can perform within its scope
    */
   role: Role;
+  /**
+   * Application roles a project key holds beside `role`
+   */
+  additionalRoles?: Array<ApplicationRole> | undefined;
+  /**
+   * Set when the key was minted for one internal purpose, such as a rerun
+   */
+  purpose?: Purpose | undefined;
 };
+
+/** @internal */
+export const Purpose$inboundSchema: z.ZodEnum<typeof Purpose> = z.enum(Purpose);
 
 /** @internal */
 export const ServiceAccountSubject$inboundSchema: z.ZodType<
@@ -50,6 +79,8 @@ export const ServiceAccountSubject$inboundSchema: z.ZodType<
   workspaceName: z.string().optional(),
   scope: SubjectScope$inboundSchema,
   role: Role$inboundSchema,
+  additionalRoles: z.array(ApplicationRole$inboundSchema).optional(),
+  purpose: Purpose$inboundSchema.optional(),
 });
 
 export function serviceAccountSubjectFromJSON(

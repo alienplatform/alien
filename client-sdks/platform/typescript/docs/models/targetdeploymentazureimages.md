@@ -1,6 +1,6 @@
 # TargetDeploymentAzureImages
 
-Azure Horizon machine image entry.
+Azure machine image entry.
 
 ## Example Usage
 

@@ -1,41 +1,41 @@
 # DataLocal9
 
+Local Valkey container.
+
 ## Example Usage
 
 ```typescript
 import { DataLocal9 } from "@alienplatform/platform-api/models";
 
 let value: DataLocal9 = {
-  path: "/usr/include",
-  pathExists: false,
-  secretMetadataListed: false,
+  name: "<value>",
+  processRunning: false,
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
+        reason: "collection-failed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "creating",
-    partial: true,
-    stale: false,
+    health: "degraded",
+    lifecycle: "stopped",
+    partial: false,
+    stale: true,
   },
+  version: "<value>",
   backend: "local",
 };
 ```
 
 ## Fields
 
-| Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   |
-| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `isDirectory`                                                                                 | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
-| `modifiedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | N/A                                                                                           |
-| `path`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `pathExists`                                                                                  | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `readonly`                                                                                    | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
-| `secretMetadataListed`                                                                        | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `status`                                                                                      | [models.ResourceHeartbeatStatus41](../models/resourceheartbeatstatus41.md)                    | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `backend`                                                                                     | *"local"*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `name`                                                                     | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `port`                                                                     | *number*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `processRunning`                                                           | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus40](../models/resourceheartbeatstatus40.md) | :heavy_check_mark:                                                         | Same fields as every other resource heartbeat status.                      |
+| `version`                                                                  | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `backend`                                                                  | *"local"*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |

@@ -3,11 +3,45 @@
  */
 
 import { setupLinksCreate } from "../funcs/setupLinksCreate.js";
+import { setupLinksCreatePortalInstallerKey } from "../funcs/setupLinksCreatePortalInstallerKey.js";
+import { setupLinksCreatePortalSession } from "../funcs/setupLinksCreatePortalSession.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class SetupLinks extends ClientSDK {
+  /**
+   * Open a setup link
+   *
+   * @remarks
+   * Exchanges the code in a setup link URL for a deployment portal session. A link with allowed emails asks for an email, sends a code to it, and opens on the right code. A handoff link opens once, within 5 minutes of creation.
+   */
+  async createPortalSession(
+    request: models.CreatePortalSessionRequest,
+    options?: RequestOptions,
+  ): Promise<models.PortalSession> {
+    return unwrapAsync(setupLinksCreatePortalSession(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Mint an installer key for a portal session
+   *
+   * @remarks
+   * Mints a 24-hour deployer API key for the setup link behind a portal session. The deployment portal shows it to the customer in install and teardown commands and gives it to the manager, so it is a separate key from the session: it stops working when the setup link is disabled, revoked or expires. Minting again never revokes an earlier key, since a command the customer copied may hold it; each key expires after 24 hours, and a session mints at most 10. Only a portal session token is accepted.
+   */
+  async createPortalInstallerKey(
+    options?: RequestOptions,
+  ): Promise<models.PortalInstallerKey> {
+    return unwrapAsync(setupLinksCreatePortalInstallerKey(
+      this,
+      options,
+    ));
+  }
+
   /**
    * Create a customer setup link
    *

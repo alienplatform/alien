@@ -9,7 +9,7 @@ import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
- * verified: success condition met. not-yet: keep polling. failed: the poll operation itself reported failure. skipped: the operation has no verification spec, or the write result carries none of the fields verification needs (the caller never opted in for this invocation).
+ * verified: success condition met. not-yet: keep polling. failed: the poll operation itself reported failure. skipped: the operation has no verification spec, the write result carries none of the fields verification needs (the caller never opted in for this invocation), or the deployment runs on a Private Alien Instance, whose results Alien does not read.
  */
 export const VerifyOperationCheckResponseOutcome = {
   Verified: "verified",
@@ -18,7 +18,7 @@ export const VerifyOperationCheckResponseOutcome = {
   Skipped: "skipped",
 } as const;
 /**
- * verified: success condition met. not-yet: keep polling. failed: the poll operation itself reported failure. skipped: the operation has no verification spec, or the write result carries none of the fields verification needs (the caller never opted in for this invocation).
+ * verified: success condition met. not-yet: keep polling. failed: the poll operation itself reported failure. skipped: the operation has no verification spec, the write result carries none of the fields verification needs (the caller never opted in for this invocation), or the deployment runs on a Private Alien Instance, whose results Alien does not read.
  */
 export type VerifyOperationCheckResponseOutcome = ClosedEnum<
   typeof VerifyOperationCheckResponseOutcome
@@ -34,7 +34,7 @@ export type VerifyOperationCheckResponseRetry = {
 
 export type VerifyOperationCheckResponse = {
   /**
-   * verified: success condition met. not-yet: keep polling. failed: the poll operation itself reported failure. skipped: the operation has no verification spec, or the write result carries none of the fields verification needs (the caller never opted in for this invocation).
+   * verified: success condition met. not-yet: keep polling. failed: the poll operation itself reported failure. skipped: the operation has no verification spec, the write result carries none of the fields verification needs (the caller never opted in for this invocation), or the deployment runs on a Private Alien Instance, whose results Alien does not read.
    */
   outcome: VerifyOperationCheckResponseOutcome;
   /**

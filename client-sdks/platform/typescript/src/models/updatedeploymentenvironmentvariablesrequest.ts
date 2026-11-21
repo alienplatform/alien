@@ -4,6 +4,11 @@
 
 import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
+import {
+  ValueRef,
+  ValueRef$Outbound,
+  ValueRef$outboundSchema,
+} from "./valueref.js";
 
 /**
  * Variable type
@@ -25,9 +30,9 @@ export type UpdateDeploymentEnvironmentVariablesRequestVariable = {
    */
   name: string;
   /**
-   * Variable value
+   * New variable value. Omit to keep the stored value of an existing variable with the same name.
    */
-  value: string;
+  value?: string | undefined;
   /**
    * Variable type
    */
@@ -36,6 +41,7 @@ export type UpdateDeploymentEnvironmentVariablesRequestVariable = {
    * Target resource patterns (null = all resources)
    */
   targetResources?: Array<string> | null | undefined;
+  valueRef?: ValueRef | undefined;
 };
 
 /**
@@ -43,7 +49,7 @@ export type UpdateDeploymentEnvironmentVariablesRequestVariable = {
  */
 export type UpdateDeploymentEnvironmentVariablesRequest = {
   /**
-   * Environment variables for the deployment
+   * Environment variables for the deployment. Replaces the whole list. A row carries either `value` (older clients) or `valueRef` (the client stored the value in the manager); send an unchanged row's current valueRef back as it is.
    */
   variables: Array<UpdateDeploymentEnvironmentVariablesRequestVariable>;
 };
@@ -57,9 +63,10 @@ export const UpdateDeploymentEnvironmentVariablesRequestType$outboundSchema:
 /** @internal */
 export type UpdateDeploymentEnvironmentVariablesRequestVariable$Outbound = {
   name: string;
-  value: string;
+  value?: string | undefined;
   type: string;
   targetResources?: Array<string> | null | undefined;
+  valueRef?: ValueRef$Outbound | undefined;
 };
 
 /** @internal */
@@ -69,9 +76,10 @@ export const UpdateDeploymentEnvironmentVariablesRequestVariable$outboundSchema:
     UpdateDeploymentEnvironmentVariablesRequestVariable
   > = z.object({
     name: z.string(),
-    value: z.string(),
+    value: z.string().optional(),
     type: UpdateDeploymentEnvironmentVariablesRequestType$outboundSchema,
     targetResources: z.nullable(z.array(z.string())).optional(),
+    valueRef: ValueRef$outboundSchema.optional(),
   });
 
 export function updateDeploymentEnvironmentVariablesRequestVariableToJSON(

@@ -134,7 +134,11 @@ test("deployment-group tokens accept an ID and body without changing the HTTP re
       ...body,
       expiresAt: "2027-01-01T00:00:00.000Z",
     });
-    return Response.json({ token: "ax_dg_test", deploymentLink: "https://example.com/setup" });
+    return Response.json({
+      token: "ax_dg_test",
+      deploymentLink: "https://example.com/setup",
+      expiresAt: "2027-01-01T00:00:00.000Z",
+    });
   });
 
   const options = {

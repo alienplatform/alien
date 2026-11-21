@@ -37,7 +37,7 @@ let value: DataAi = {
 
 ## Fields
 
-| Field                    | Type                     | Required                 | Description              |
-| ------------------------ | ------------------------ | ------------------------ | ------------------------ |
-| `data`                   | *operations.DataUnion16* | :heavy_check_mark:       | N/A                      |
-| `resourceType`           | *"ai"*                   | :heavy_check_mark:       | N/A                      |
+| Field                                                                  | Type                                                                   | Required                                                               | Description                                                            |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `data`                                                                 | *operations.DataUnion17*                                               | :heavy_check_mark:                                                     | N/A                                                                    |
+| `resourceType`                                                         | [operations.ResourceTypeAi](../../models/operations/resourcetypeai.md) | :heavy_check_mark:                                                     | N/A                                                                    |

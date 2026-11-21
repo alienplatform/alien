@@ -23,6 +23,10 @@ export type ResumeDeploymentInstallationResponse = {
    */
   managementExternalId?: string | undefined;
   installation: DeploymentInstallation;
+  /**
+   * One-use setup key installs: whether a setup key can still be used. Never the key itself. Issuing a new one stops it working.
+   */
+  hasLiveSetupKey?: boolean | undefined;
 };
 
 /** @internal */
@@ -35,6 +39,7 @@ export const ResumeDeploymentInstallationResponse$inboundSchema: z.ZodType<
   runtimeEncryptionKey: z.string().optional(),
   managementExternalId: z.string().optional(),
   installation: DeploymentInstallation$inboundSchema,
+  hasLiveSetupKey: z.boolean().optional(),
 });
 
 export function resumeDeploymentInstallationResponseFromJSON(

@@ -93,7 +93,10 @@ export function useManagersGetSuspense(
 
 export function setManagersGetData(
   client: QueryClient,
-  queryKeyBase: [id: string],
+  queryKeyBase: [
+    id: string,
+    parameters: { includeCounts?: operations.IncludeCounts | undefined },
+  ],
   data: ManagersGetQueryData,
 ): ManagersGetQueryData | undefined {
   const key = queryKeyManagersGet(...queryKeyBase);
@@ -103,7 +106,12 @@ export function setManagersGetData(
 
 export function invalidateManagersGet(
   client: QueryClient,
-  queryKeyBase: TupleToPrefixes<[id: string]>,
+  queryKeyBase: TupleToPrefixes<
+    [
+      id: string,
+      parameters: { includeCounts?: operations.IncludeCounts | undefined },
+    ]
+  >,
   filters?: Omit<InvalidateQueryFilters, "queryKey" | "predicate" | "exact">,
 ): Promise<void> {
   return client.invalidateQueries({

@@ -14,15 +14,15 @@ let value: DataKubernetesJob = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
+        reason: "not-installed",
         severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "updating",
-    partial: true,
-    stale: false,
+    health: "degraded",
+    lifecycle: "scaling",
+    partial: false,
+    stale: true,
   },
   backend: "kubernetesJob",
 };
@@ -41,6 +41,6 @@ let value: DataKubernetesJob = {
 | `jobName`                                                                                                                | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `namespace`                                                                                                              | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `startTime`                                                                                                              | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date)                            | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
-| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus59](../../models/operations/getresourcedeploymentdetaildatastatus59.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus63](../../models/operations/getresourcedeploymentdetaildatastatus63.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `succeeded`                                                                                                              | *number*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
 | `backend`                                                                                                                | *"kubernetesJob"*                                                                                                        | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |

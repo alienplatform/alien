@@ -34,7 +34,7 @@ export type CompleteCommandRequest = {
    */
   responseSizeBytes?: number | null | undefined;
   /**
-   * Error details if failed
+   * Error details if failed. For a Private Alien Instance, only the error code and the first 500 characters of its message are stored.
    */
   error?: { [k: string]: any | null } | null | undefined;
 };
