@@ -222,12 +222,24 @@ jobs:
 
       - name: Kubernetes sandbox sessions on a real API server
         env:
-          ALIEN_BROKER_KIND_CONTEXT: kind-alien-product-lifecycle
+          ALIEN_BROKER_KIND_CONTEXT: kind-alien-broker
           ALIEN_BROKER_KIND_NAMESPACE: alien-broker-kind-ci
           ALIEN_AGENT_BINARY: ${{ github.workspace }}/target/debug/alien-sandbox-agent
         run: |
+          # A sandbox agent starts only once its NetworkPolicy drops the cluster API. On a one-node
+          # cluster the API server runs on the pod's own node, where the policy does not reach that
+          # traffic; on a real cluster it is another host. So these tests get two nodes: the
+          # control plane is tainted, and the sandbox pods run on the worker.
+          export KUBECONFIG="$RUNNER_TEMP/broker.kubeconfig"
+          trap 'kind delete cluster --name alien-broker; rm -f "$KUBECONFIG"' EXIT
+          kind create cluster --name alien-broker --wait 120s --config - <<'EOF'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+            - role: control-plane
+            - role: worker
+          EOF
           kubectl create namespace "$ALIEN_BROKER_KIND_NAMESPACE"
-          trap 'kubectl delete namespace "$ALIEN_BROKER_KIND_NAMESPACE" --ignore-not-found; kubectl delete runtimeclass alien-kind-runc --ignore-not-found' EXIT
           # The broker functions are driven directly, so the class only has to schedule a pod.
           kubectl apply -f - <<'EOF'
           apiVersion: node.k8s.io/v1
@@ -237,7 +249,7 @@ jobs:
           handler: runc
           EOF
           docker pull alpine:3.20
-          kind load docker-image alpine:3.20 --name alien-product-lifecycle
+          kind load docker-image alpine:3.20 --name alien-broker
           # The preview check runs the real agent in a pod.
           cargo build --locked -p alien-sandbox-agent
           cargo test --locked -p alien-infra --features all-platforms --lib kubernetes_broker_kind -- \

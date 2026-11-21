@@ -1080,7 +1080,7 @@ pub(crate) const ANNOTATION_TEMPLATE_HASH: &str = "alien.dev/pod-template-hash";
 
 /// Digest of the pod the controller would create. The pod is serialized in a fixed field order,
 /// so the same template always gives the same digest.
-fn template_hash(pod: &k8s_openapi::api::core::v1::Pod) -> String {
+pub(crate) fn template_hash(pod: &k8s_openapi::api::core::v1::Pod) -> String {
     use sha2::{Digest, Sha256};
     let bytes = serde_json::to_vec(pod).unwrap_or_default();
     Sha256::digest(bytes)
