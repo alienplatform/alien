@@ -130,12 +130,3 @@ const value: models.ExternalBindingUnion8 = {
   type: "ai",
 };
 ```
-
-### `models.ExternalBinding`
-
-```typescript
-const value: models.ExternalBinding = {
-  service: "<value>",
-  type: "<value>",
-};
-```

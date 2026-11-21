@@ -55,3 +55,5 @@ node "$repo_root/client-sdks/platform/scripts/check-published-exports.mjs" "$pub
 pnpm -C "$repo_root" install --lockfile-only
 node --test "$repo_root/client-sdks/platform/scripts/typescript-sdk.test.mjs"
 node --test "$repo_root/client-sdks/platform/scripts/dynamic-containers-sdk.test.mjs"
+# The core package's tests send requests through the SDK source and check what reaches HTTP.
+pnpm -C "$repo_root" --filter @alienplatform/core test

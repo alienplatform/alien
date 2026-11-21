@@ -24,3 +24,9 @@ actions:
               pattern: "^(?!ws[-_])[a-z0-9](-?[a-z0-9])*$"
             example: my-workspace
             x-speakeasy-globals-hidden: true
+  # A binding to an extension-defined type is told apart from the built-in bindings only by
+  # the pattern on its `type`, which the generated zod schemas do not check. Kept in the union,
+  # it matches every built-in binding first, drops the binding's fields from request bodies
+  # and accepts bindings the API refuses. The SDK sends built-in bindings only.
+  - target: "$['components']['schemas']['ExternalBinding']['anyOf'][?(@.properties.type.pattern)]"
+    remove: true

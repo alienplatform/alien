@@ -3,33 +3,10 @@
  */
 
 import * as z from "zod/v4";
-import { remap as remap$ } from "../lib/primitives.js";
-import {
-  collectExtraKeys as collectExtraKeys$,
-  safeParse,
-} from "../lib/schemas.js";
+import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
-
-/**
- * A binding to an existing resource of a type an extension defines, such as a DNS zone the
- *
- * @remarks
- * customer already has. Its fields are the resource's outputs, as the type's descriptor declares
- * them in `schemas.outputs`.
- */
-export type ExternalBinding = {
-  /**
-   * The service the existing resource lives in, such as `route53`.
-   */
-  service: string;
-  /**
-   * The type of a resource an extension defines, such as `acme/dns-zone`.
-   */
-  type: string;
-  additionalProperties?: { [k: string]: any | null } | undefined;
-};
 
 export const TypeAi2 = {
   Ai: "ai",
@@ -2009,7 +1986,6 @@ export type ExternalBindingUnion1 =
  */
 export type ExternalBindingUnion =
   | ExternalBindingContainerAppsEnvironment
-  | ExternalBinding
   | ExternalBindingS3
   | ExternalBindingBlob
   | ExternalBindingGcs
@@ -2046,57 +2022,6 @@ export type ExternalBindingUnion =
   | ExternalBindingLocalRedis
   | ExternalBindingBedrock
   | ExternalBindingAi;
-
-/** @internal */
-export const ExternalBinding$inboundSchema: z.ZodType<
-  ExternalBinding,
-  unknown
-> = collectExtraKeys$(
-  z.object({
-    service: z.string(),
-    type: z.string(),
-  }).catchall(z.any()),
-  "additionalProperties",
-  true,
-);
-/** @internal */
-export type ExternalBinding$Outbound = {
-  service: string;
-  type: string;
-  [additionalProperties: string]: unknown;
-};
-
-/** @internal */
-export const ExternalBinding$outboundSchema: z.ZodType<
-  ExternalBinding$Outbound,
-  ExternalBinding
-> = z.object({
-  service: z.string(),
-  type: z.string(),
-  additionalProperties: z.record(z.string(), z.nullable(z.any())).optional(),
-}).transform((v) => {
-  return {
-    ...v.additionalProperties,
-    ...remap$(v, {
-      additionalProperties: null,
-    }),
-  };
-});
-
-export function externalBindingToJSON(
-  externalBinding: ExternalBinding,
-): string {
-  return JSON.stringify(ExternalBinding$outboundSchema.parse(externalBinding));
-}
-export function externalBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<ExternalBinding, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ExternalBinding$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ExternalBinding' from JSON`,
-  );
-}
 
 /** @internal */
 export const TypeAi2$inboundSchema: z.ZodEnum<typeof TypeAi2> = z.enum(TypeAi2);
@@ -7486,7 +7411,6 @@ export const ExternalBindingUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => ExternalBindingContainerAppsEnvironment$inboundSchema),
-  z.lazy(() => ExternalBinding$inboundSchema),
   z.union([
     z.lazy(() => ExternalBindingS3$inboundSchema),
     z.lazy(() => ExternalBindingBlob$inboundSchema),
@@ -7543,7 +7467,6 @@ export const ExternalBindingUnion$inboundSchema: z.ZodType<
 /** @internal */
 export type ExternalBindingUnion$Outbound =
   | ExternalBindingContainerAppsEnvironment$Outbound
-  | ExternalBinding$Outbound
   | ExternalBindingS3$Outbound
   | ExternalBindingBlob$Outbound
   | ExternalBindingGcs$Outbound
@@ -7587,7 +7510,6 @@ export const ExternalBindingUnion$outboundSchema: z.ZodType<
   ExternalBindingUnion
 > = z.union([
   z.lazy(() => ExternalBindingContainerAppsEnvironment$outboundSchema),
-  z.lazy(() => ExternalBinding$outboundSchema),
   z.union([
     z.lazy(() => ExternalBindingS3$outboundSchema),
     z.lazy(() => ExternalBindingBlob$outboundSchema),
