@@ -514,7 +514,7 @@ Sandboxes run under gVisor. The image's ENTRYPOINT starts once per boot as the i
 (`start_from_with_env` resolves the saved USER against the image's passwd and group files). It is
 root, with Docker's default capabilities minus NET_RAW, only when the image sets no user or sets
 root; an image with a non-root USER starts as that user with no capabilities. Exec and jobs always
-stay non-root. Sandboxes use the project's
+stay non-root. Sandboxes not declared `internet` use the project's
 default network placement. Alien's own calls go through `:execute`, which Agent Platform sends to
 the FIRST port the template declares, so the template lists the agent's port (8971) first and the
 declared preview ports after it.
@@ -546,8 +546,8 @@ to preview and `sandbox/management` to create sandboxes.
 
 Limits the plan refuses with a message, rather than discovering them at the first session:
 - a disk above the platform's ephemeral-storage cap (8 GiB disk, 10 GiB ephemeral storage);
-- a per-sandbox outbound policy: `defaultPolicy`, a runtime policy at create and `update_egress`
-  are refused with "Google Cloud sandboxes have no outbound allowlist" (see "Egress on GCP");
+- a per-sandbox outbound policy on a sandbox declared `none`: a runtime policy at create and
+  `update_egress` need a sandbox declared `internet` (see "Egress on GCP");
 - a preview port equal to the agent's own (8971);
 - an idle pause policy. Google has no idle policy and Alien does not watch for idleness there;
   pause the sandbox explicitly with `pause()` instead.
@@ -606,6 +606,18 @@ install this starts once setup runs with this version. On signed installs the ve
 the signed digest. Egress changes always need the customer's setup.
 
 ## Egress on GCP
+
+**`internet` on GCP is not available yet.** Today the plan refuses a GCP sandbox declared
+`internet` with "Google Cloud internet egress through the egress gateway is not available yet", at
+build, release, setup render and deployment, so no setup creates the network attachment, the
+gateway VMs or any Private Service Connect resource. `none` works as described below. The rest of
+this section is how `internet` will work once it is available; the code is in place and behind
+one switch (`alien_core::gcp_sandbox_gateway::INTERNET_EGRESS_AVAILABLE`), which is turned on once
+the on-demand live test (`alien-test`, `gcp_sandbox_internet_live`) passes.
+
+The plan warns on every GCP sandbox that uses the default network: a project whose first sandbox
+used the default network can never run gateway-backed `internet` sandboxes, even after every
+sandbox is deleted. To use `internet` later, deploy to a new project.
 
 `internet` sends the sandbox's outbound traffic through the deployment's egress gateway, as on AWS
 and Azure, with the same per-sandbox host:port rules and the same `update_egress`. The template is
