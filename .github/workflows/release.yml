@@ -2101,8 +2101,18 @@ jobs:
 
   # ─── Docker images + Helm chart ─────────────────────────────────────
 
+  # alien-builder runs rustc while it builds, which crashes under QEMU, so each architecture
+  # builds on its own runner (builder-image.yml). qualify-images records its digest.
+  qualify-builder-image:
+    needs: prepare
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
+    uses: ./.github/workflows/builder-image.yml
+    with:
+      ref: ${{ needs.prepare.outputs.source_ref }}
+      tag: qualification-${{ inputs.source_ref }}
+
   qualify-images:
-    needs: [prepare, build-addon, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
+    needs: [prepare, build-addon, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows, qualify-builder-image]
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
     runs-on: ubuntu-24.04-arm
     # Wide enough that a hung probe hits the smoke script's own budget first: it
@@ -2175,7 +2185,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The runner is arm, so running the amd64 half of a published manifest needs emulation.
+      # The runner is arm, so the amd64 halves below build and run under emulation. These
+      # images only copy prebuilt binaries and run shell and apk; alien-builder, which runs
+      # rustc, builds natively in qualify-builder-image.
       - name: Setup QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
 
@@ -2234,26 +2246,6 @@ jobs:
             -c 'test ! -e /usr/local/bin/bun && test -x /app/alien-worker-runtime'
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/bun "$TYPESCRIPT_BASE" \
             -e 'const a=require("/app/alien-bindings.node"); if (!a.version()) throw new Error("native version() returned empty")'
-
-      - name: Metadata (alien-builder)
-        id: meta_builder
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/alienplatform/alien-builder
-          tags: |
-            type=raw,value=qualification-${{ inputs.source_ref }}
-
-      - name: Publish alien-builder
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: .
-          file: docker/Dockerfile.alien-builder
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta_builder.outputs.tags }}
-          labels: ${{ steps.meta_builder.outputs.labels }}
-          provenance: true
-          sbom: true
 
       - name: Metadata (alien-operator)
         id: meta_agent
