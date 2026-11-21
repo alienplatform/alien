@@ -531,6 +531,12 @@ jobs:
         if: needs.changes.outputs.run_all == 'true' || needs.changes.outputs.platform_sdk == 'true'
         run: cargo test --locked -p alien-platform-api --features full-api
 
+      - name: alien-cli with the full-api client
+        # Another crate in a build can turn on `full-api`; alien-cli must still compile
+        # against the complete client's type names.
+        if: needs.changes.outputs.run_all == 'true' || needs.changes.outputs.platform_sdk == 'true'
+        run: cargo check --locked -p alien-cli --features alien-platform-api/full-api
+
       - name: Local Redis integration tests
         if: needs.changes.outputs.rust_mode != 'affected' || needs.changes.outputs.rust_core == 'true'
         # Runs the pinned Valkey image through the runner's Docker engine: start, password,
