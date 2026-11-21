@@ -314,11 +314,13 @@ fn is_core_resolvable(config_dir: &Path) -> bool {
 /// Check if Bun resolves `@alienplatform/core` from the config directory: from a `node_modules`
 /// in that folder or any folder above it, as in a workspace whose packages are installed at its
 /// root. Bun reads these before `NODE_PATH`, so a cached install would never be loaded.
-fn is_core_resolvable_from_ancestors(config_dir: &Path) -> bool {
-    let config_dir = config_dir
-        .canonicalize()
-        .unwrap_or_else(|_| config_dir.to_path_buf());
-    config_dir.ancestors().any(is_core_resolvable)
+///
+/// A relative `config_dir` is read from `working_dir`, and an empty one (the parent of a bare
+/// `alien.ts`) is `working_dir` itself, so the walk starts from a real folder.
+fn is_core_resolvable_from_ancestors(config_dir: &Path, working_dir: &Path) -> bool {
+    let dir = working_dir.join(config_dir);
+    let dir = dir.canonicalize().unwrap_or(dir);
+    dir.ancestors().any(is_core_resolvable)
 }
 
 /// Ensure `@alienplatform/core` is available for config execution.
@@ -345,7 +347,8 @@ async fn ensure_core_available(
                 message: format!("Failed to install dependencies in {}", config_dir.display()),
             })?;
     }
-    if is_core_resolvable_from_ancestors(config_dir) {
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if is_core_resolvable_from_ancestors(config_dir, &working_dir) {
         return Ok(None);
     }
 
@@ -482,7 +485,11 @@ async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<Lo
     );
 
     // Ensure @alienplatform/core is available (either from user's node_modules or cache)
-    let config_dir = config_file.parent().unwrap_or_else(|| Path::new("."));
+    // `-c alien.ts` has the parent "", which names no folder to install into or walk up from.
+    let config_dir = config_file
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     let extra_node_path = ensure_core_available(config_dir, &runtime).await?;
 
     debug!("Creating temporary script file...");
@@ -717,11 +724,31 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let app = root.path().join("apps/my-app");
             std::fs::create_dir_all(&app).unwrap();
-            assert!(!is_core_resolvable_from_ancestors(&app));
+            let elsewhere = tempfile::tempdir().unwrap();
+            assert!(!is_core_resolvable_from_ancestors(&app, elsewhere.path()));
 
             std::fs::create_dir_all(root.path().join("node_modules/@alienplatform/core")).unwrap();
             assert!(!is_core_resolvable(&app));
-            assert!(is_core_resolvable_from_ancestors(&app));
+            assert!(is_core_resolvable_from_ancestors(&app, elsewhere.path()));
+        }
+
+        // `-c alien.ts` run in the project folder: the config directory is "", read from the
+        // working directory.
+        #[test]
+        fn a_bare_config_file_name_walks_up_from_the_working_directory() {
+            let root = tempfile::tempdir().unwrap();
+            let app = root.path().join("apps/my-app");
+            std::fs::create_dir_all(&app).unwrap();
+            let config_dir = std::path::Path::new("alien.ts").parent().unwrap();
+            assert_eq!(config_dir.as_os_str(), "");
+            assert!(!is_core_resolvable_from_ancestors(config_dir, &app));
+
+            std::fs::create_dir_all(root.path().join("node_modules/@alienplatform/core")).unwrap();
+            assert!(is_core_resolvable_from_ancestors(config_dir, &app));
+            assert!(is_core_resolvable_from_ancestors(
+                std::path::Path::new("."),
+                &app
+            ));
         }
     }
 
