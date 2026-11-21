@@ -59,3 +59,5 @@ pub use variables::VariableInterpolator;
 pub fn operation_permissions_json(request: &str) -> String {
     operations::request_json(request)
 }
+
+// CI timing probe: a comment-only change to measure the pull request tier. Not for merge.
