@@ -306,15 +306,26 @@ async fn load_javascript_config(config_file: PathBuf) -> Result<LoadedConfigurat
     load_javascript_or_typescript_config(config_file).await
 }
 
-/// Check if `@alienplatform/core` is resolvable from the config directory.
+/// Check if `@alienplatform/core` is in the config directory's own `node_modules`.
 fn is_core_resolvable(config_dir: &Path) -> bool {
     config_dir.join("node_modules/@alienplatform/core").exists()
+}
+
+/// Check if Bun resolves `@alienplatform/core` from the config directory: from a `node_modules`
+/// in that folder or any folder above it, as in a workspace whose packages are installed at its
+/// root. Bun reads these before `NODE_PATH`, so a cached install would never be loaded.
+fn is_core_resolvable_from_ancestors(config_dir: &Path) -> bool {
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
+    config_dir.ancestors().any(is_core_resolvable)
 }
 
 /// Ensure `@alienplatform/core` is available for config execution.
 ///
 /// If the config directory has a `package.json` and `node_modules`, we assume
-/// the user manages their own dependencies. Otherwise, we create a cached
+/// the user manages their own dependencies. If core resolves from a `node_modules`
+/// above the config directory, Bun loads that one. Otherwise, we create a cached
 /// installation in `~/.cache/alien/core-modules/{version}/` so that standalone
 /// `alien.ts` files work without a package.json.
 async fn ensure_core_available(
@@ -333,9 +344,9 @@ async fn ensure_core_available(
             .context(ErrorData::ConfigurationError {
                 message: format!("Failed to install dependencies in {}", config_dir.display()),
             })?;
-        if is_core_resolvable(config_dir) {
-            return Ok(None);
-        }
+    }
+    if is_core_resolvable_from_ancestors(config_dir) {
+        return Ok(None);
     }
 
     // No package.json or core still not resolvable — use cached install.
@@ -698,6 +709,22 @@ async fn load_toml_config(config_file: PathBuf) -> Result<Stack> {
 
 #[cfg(test)]
 mod tests {
+    mod core_resolution {
+        use super::super::{is_core_resolvable, is_core_resolvable_from_ancestors};
+
+        #[test]
+        fn core_in_a_node_modules_above_the_config_directory_resolves() {
+            let root = tempfile::tempdir().unwrap();
+            let app = root.path().join("apps/my-app");
+            std::fs::create_dir_all(&app).unwrap();
+            assert!(!is_core_resolvable_from_ancestors(&app));
+
+            std::fs::create_dir_all(root.path().join("node_modules/@alienplatform/core")).unwrap();
+            assert!(!is_core_resolvable(&app));
+            assert!(is_core_resolvable_from_ancestors(&app));
+        }
+    }
+
     mod core_cache {
         use super::super::publish_core_cache;
         use std::time::Duration;
