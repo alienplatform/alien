@@ -1319,6 +1319,7 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AWS::StackName}-*
           Sid: CheckDynamodbTableHealth
         - Action:
+          - ssm:AddTagsToResource
           - ssm:DeleteParameter
           - ssm:PutParameter
           Effect: Allow
@@ -2022,6 +2023,7 @@ Resources:
             Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-secrets-*
           Sid: WriteSsmParameters
           Action:
+          - ssm:AddTagsToResource
           - ssm:DeleteParameter
           - ssm:PutParameter
       Roles:

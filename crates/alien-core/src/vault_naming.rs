@@ -5,6 +5,8 @@
 //! with the same functions, so the name a deployer is shown is always the name
 //! the workload reads.
 
+use sha2::{Digest, Sha256};
+
 /// SSM parameter name: `{vault_prefix}-{secret_name}`.
 pub fn parameter_store_parameter_name(vault_prefix: &str, secret_name: &str) -> String {
     format!("{vault_prefix}-{secret_name}")
@@ -13,6 +15,38 @@ pub fn parameter_store_parameter_name(vault_prefix: &str, secret_name: &str) -> 
 /// Secret Manager secret id: `{vault_prefix}-{secret_name}`.
 pub fn secret_manager_secret_id(vault_prefix: &str, secret_name: &str) -> String {
     format!("{vault_prefix}-{secret_name}")
+}
+
+/// Label or tag key that records the vault prefix a value was created under.
+pub const VAULT_PREFIX_MARKER_KEY: &str = "alien-vault-prefix";
+
+/// Label or tag key that records the id of the vault a value was created in.
+pub const VAULT_ID_MARKER_KEY: &str = "alien-vault";
+
+fn sha256_hex(raw: &str) -> String {
+    Sha256::digest(raw.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The value stored under a vault marker key.
+///
+/// Secret Manager label values must be 1 to 63 characters of `[a-z0-9_-]`. A value that meets that
+/// rule is stored as is. Any other value is stored as `h-` followed by the first 40 hex digits of
+/// its SHA-256, so the same input always gives the same marker and the marker still fits. Parameter
+/// Store tags use the same encoding, so one rule reads both. The erase helper in the generated
+/// Terraform module computes the same function.
+pub fn vault_marker_value(raw: &str) -> String {
+    let fits = !raw.is_empty()
+        && raw.len() <= 63
+        && raw
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+    if fits {
+        return raw.to_string();
+    }
+    format!("h-{}", &sha256_hex(raw)[..40])
 }
 
 /// Key Vault secret name. The Key Vault itself is per vault, so the secret
@@ -87,6 +121,33 @@ pub const KUBERNETES_SECRET_VALUE_KEY: &str = "value";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn marker_values_that_fit_are_kept() {
+        assert_eq!(vault_marker_value("acme-1a2b-secrets"), "acme-1a2b-secrets");
+        assert_eq!(vault_marker_value("a_b-9"), "a_b-9");
+        let longest = "a".repeat(63);
+        assert_eq!(vault_marker_value(&longest), longest);
+    }
+
+    #[test]
+    fn marker_values_that_do_not_fit_are_hashed_to_a_valid_label() {
+        let too_long = "a".repeat(64);
+        for raw in [too_long.as_str(), "Upper", "dot.name", "", "ünï"] {
+            let value = vault_marker_value(raw);
+            assert_eq!(value, vault_marker_value(raw), "stable");
+            assert_eq!(value.len(), 42);
+            assert!(value.starts_with("h-"));
+            assert!(value
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-'));
+        }
+        assert_ne!(vault_marker_value("Upper"), vault_marker_value("upper2"));
+        assert_eq!(
+            vault_marker_value("Upper"),
+            "h-".to_string() + &sha256_hex("Upper")[..40]
+        );
+    }
 
     #[test]
     fn azure_deployer_vault_names_fit_and_vary_between_installations() {
