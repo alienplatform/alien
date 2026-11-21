@@ -947,6 +947,15 @@ impl ResourceRegistry {
             >::new()),
         );
 
+        #[cfg(feature = "gcp")]
+        registry.register_controller_factory(
+            Container::RESOURCE_TYPE,
+            Platform::Gcp,
+            Box::new(DefaultControllerFactory::<
+                crate::container::AzureSandboxGatewayDeclarationController,
+            >::new()),
+        );
+
         // Register Kubernetes Container controller
         #[cfg(feature = "kubernetes")]
         registry.register_controller_factory(

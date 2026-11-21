@@ -23,6 +23,7 @@ mod deployer_secrets;
 pub use deployer_secrets::*;
 pub mod aws_naming;
 pub mod gcp_naming;
+pub mod gcp_sandbox_gateway;
 pub mod vault_naming;
 
 pub mod permissions;

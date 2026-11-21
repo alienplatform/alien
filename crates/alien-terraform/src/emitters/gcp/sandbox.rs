@@ -106,10 +106,9 @@ fn agent_platform_fields(
         ("region", expr::raw("var.gcp_region")),
         (
             "allowEgress",
-            Expression::Bool(matches!(
-                sandbox.egress,
-                SandboxEgress::Internet | SandboxEgress::Allow
-            )),
+            // The switch the serving template carries. `internet` goes through the gateway path and
+            // keeps the switch closed; the controller reports the same.
+            Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
         ),
     ];
     if let Some(seconds) = sandbox.lifecycle.max_lifetime_seconds {
@@ -1588,7 +1587,9 @@ mod tests {
         fn allow_egress_renders_the_declared_mode() {
             for (egress, expected) in [
                 (SandboxEgress::None, false),
-                (SandboxEgress::Internet, true),
+                // `internet` goes through the gateway: the template's own switch stays closed.
+                (SandboxEgress::Internet, false),
+                (SandboxEgress::Allow, true),
             ] {
                 let emitted = emit_binding(egress.clone(), None)
                     .expect("the binding renders")
@@ -1635,6 +1636,7 @@ mod tests {
                 allow_egress: false,
                 preview_service_account: None,
                 preview_ports: Vec::new(),
+                private_endpoint: None,
             })
             .expect("the binding type serializes");
             assert_eq!(

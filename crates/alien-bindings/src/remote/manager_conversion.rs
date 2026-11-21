@@ -535,6 +535,7 @@ impl ResolvedRemoteBinding {
                         allow_egress: binding.allow_egress.unwrap_or(false),
                         preview_service_account: None,
                         preview_ports: Vec::new(),
+                        private_endpoint: None,
                     }),
                     client_config: Box::new(alien_core::GcpClientConfig {
                         project_id: client_config.project_id,

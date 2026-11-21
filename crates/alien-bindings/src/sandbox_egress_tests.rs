@@ -283,6 +283,7 @@ impl Harness {
             port: 3129,
             count: addresses.len() as u32,
             min_protocol: 0,
+            proxy_port: 0,
         });
         SandboxEgressManager::with_endpoints(
             config,
@@ -763,6 +764,7 @@ async fn replicated_writes_reach_every_ready_replica_or_fail() {
         port,
         count: 2,
         min_protocol: 0,
+        proxy_port: 0,
     });
     let mut manager = SandboxEgressManager::with_endpoints(
         config,
@@ -820,6 +822,7 @@ fn static_replica_addresses_are_the_write_targets_without_dns() {
             port: 3129,
             count: 2,
             min_protocol: 0,
+            proxy_port: 0,
         });
         let manager = SandboxEgressManager::with_endpoints(
             config,
@@ -847,6 +850,7 @@ async fn a_gateway_older_than_the_binding_needs_is_refused_with_a_rerun_setup_me
             port: h.manager.admin_url.port().unwrap(),
             count: 1,
             min_protocol,
+            proxy_port: 0,
         });
         SandboxEgressManager::with_endpoints(
             config,
@@ -901,6 +905,7 @@ async fn two_replicas(
         port,
         count: 2,
         min_protocol: 1,
+        proxy_port: 0,
     });
     let manager = SandboxEgressManager::with_endpoints(
         config,
@@ -1150,6 +1155,7 @@ async fn three_replicas(
         port,
         count: 3,
         min_protocol: 1,
+        proxy_port: 0,
     });
     let manager = SandboxEgressManager::with_endpoints(
         config,
@@ -1254,6 +1260,7 @@ async fn a_new_grant_with_every_replica_away_fails_fast_and_retryable() {
         port,
         count: 2,
         min_protocol: 1,
+        proxy_port: 0,
     });
     let manager = SandboxEgressManager::with_endpoints(
         config,
@@ -1289,6 +1296,7 @@ async fn a_new_grant_refused_because_the_store_is_full_keeps_that_code() {
         port,
         count: 1,
         min_protocol: 0,
+        proxy_port: 0,
     });
     let manager = SandboxEgressManager::with_endpoints(
         config,
@@ -1334,6 +1342,7 @@ async fn a_revocation_whose_replica_lookup_keeps_failing_is_retryable() {
         port: h.manager.admin_url.port().unwrap(),
         count: 1,
         min_protocol: 0,
+        proxy_port: 0,
     });
     let manager = SandboxEgressManager::with_endpoints(
         config,
@@ -1373,6 +1382,7 @@ async fn a_new_grant_against_a_replica_that_never_answers_stays_inside_the_budge
         port,
         count: 1,
         min_protocol: 0,
+        proxy_port: 0,
     });
     let manager = SandboxEgressManager::with_endpoints(
         config,
@@ -1483,6 +1493,7 @@ async fn a_create_with_a_stopped_real_replica_succeeds_and_the_replica_catches_u
         port: admin_port,
         count: 2,
         min_protocol: 1,
+        proxy_port: 0,
     });
     let manager = SandboxEgressManager::with_endpoints(
         config,

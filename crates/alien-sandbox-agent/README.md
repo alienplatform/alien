@@ -607,32 +607,42 @@ the signed digest. Egress changes always need the customer's setup.
 
 ## Egress on GCP
 
-The template carries one switch, `internetAccess`, and nothing of Alien's sits on Google's
-outbound path. The declarations map onto it directly:
+`internet` sends the sandbox's outbound traffic through the deployment's egress gateway, as on AWS
+and Azure, with the same per-sandbox host:port rules and the same `update_egress`. The template is
+created with `internetAccess: false`, a network attachment (Private Service Connect interface) and
+private ingress, so the only way out of the sandbox is into the deployment's VPC. Setup creates
+what that needs, once: the attachment subnet and attachment, the role that lets Agent Platform's
+service agent use the attachment (bound before any template, with a wait for it to take effect),
+the gateway subnet with its own Cloud NAT, two gateway VMs, and firewall rules that let the
+attachment range reach only the gateways' proxy port and deny and log everything else from it.
 
-| Declaration | `internetAccess` | What the sandbox reaches |
-|---|---|---|
-| `internet` (and the deprecated `allow`) | `true` | Any host and port, DNS included, through Google's shared addresses |
-| `none` | `false` | Nothing: TCP to public addresses, the metadata server and DNS all fail |
+| Declaration | What the sandbox reaches |
+|---|---|
+| `internet` | Only what its gateway rules allow, by host and port, changeable live with `update_egress` |
+| `none` | Nothing: TCP to public addresses, the metadata server and DNS all fail |
 
-What `internet` does **not** give on Google Cloud, unlike AWS and Kubernetes:
-- **No allowlist.** A `defaultPolicy`, a runtime policy at create and `update_egress` are refused
-  with "Google Cloud sandboxes have no outbound allowlist". Use another cloud for per-sandbox
-  host rules.
-- **No fixed egress IP.** Outbound traffic leaves through Google-owned addresses shared with other
-  projects, so a customer who allowlists callers by IP cannot allowlist these sandboxes. The mail
-  ports are not blocked either.
-- **No path through the customer's VPC.** The sandbox runs in Google's tenant, so VPC firewalls
-  and flow logs never see its traffic, and a host in the VPC is unreachable from it.
+The sandbox has no environment variables from its template. The provider sends the gateway
+replicas once over the agent's control channel (the `setEgressProxy` operation) and puts the
+proxy variables in each command's environment. Until then the agent has no proxy and a command gets
+none. The list must be one to four private IPv4 `ip:port` addresses, and cannot change afterwards.
 
-Measured on a default-placement project (`internetAccess: true`): DNS resolves, https and http to
-a public host return 200, TCP to 1.1.1.1:443 and 8.8.8.8:53 connects, the metadata server and a
-host in the project's VPC time out. With `false` every one of these fails, DNS after about 20
-seconds. `reach_matrix_for_both_egress_switches` in `alien-test` repeats it.
-
-Placement: the project's first sandbox pins its network placement. `internet` and `none` need the
-default placement; a project whose placement already uses a private network attachment is outside
-what this backend supports.
+Limits, stated plainly:
+- **Regions.** Agent Platform accepts a network attachment with private ingress only in some
+  regions; setup refuses `internet` elsewhere at plan time and never falls back to open outbound.
+- **Placement.** A project's first sandbox pins its network placement, and Google cannot change
+  it. A project that already ran a sandbox without the deployment network needs a new project for
+  `internet`; `none` is unaffected.
+- **One path per project.** Sandboxes leave through the project's first connected attachment, and a
+  connected attachment cannot be deleted, so removing a deployment leaves that attachment (and its
+  subnet and the VPC that holds it) behind.
+- **Who can drive these sandboxes.** A template with a network attachment must also have private
+  ingress, and its sandboxes have no public host: the public `:execute` call answers 400. Commands
+  go through a Private Service Connect endpoint inside the VPC (an internal address and a
+  forwarding rule to the tenant's sandbox router). The template controller creates it after the
+  template is active, using one short-lived probe sandbox to read the router's service attachment,
+  and removes it on teardown. Callers outside the VPC cannot run commands in these sandboxes.
+- **One port.** Only one TCP port is measured to cross from the sandbox tenant into the VPC, so
+  the gateways answer sandboxes on that port (a setup value) and redirect it to the proxy.
 
 ## Preview on GCP
 

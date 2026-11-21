@@ -1245,6 +1245,15 @@ async fn agent_platform(
             .await?
             .into_response())
         }
+        "setEgressProxy" => {
+            #[derive(Deserialize)]
+            struct Envelope {
+                replicas: Vec<String>,
+            }
+            let envelope: Envelope = reparse(&body)?;
+            set_egress_proxy(&state, peer, &headers, &envelope.replicas).await?;
+            Ok(StatusCode::NO_CONTENT.into_response())
+        }
         "previewGrant" => Ok(preview_grant(
             State(state),
             ConnectInfo(peer),
@@ -1635,6 +1644,22 @@ impl axum::response::IntoResponse for ApiError {
     }
 }
 
+/// Gives the loopback proxy its gateway replicas when the environment could not: a sandbox
+/// platform that has no per-sandbox environment sends them here once, over the same authenticated
+/// control channel as an egress update. Only a caller `authorize_control` admits gets this far, so
+/// a process inside the sandbox cannot set it. The list is validated (private IPv4 only, at most
+/// four) and fixed after the first call; until then no proxy listens and commands have none.
+async fn set_egress_proxy(
+    state: &AgentState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    replicas: &[String],
+) -> std::result::Result<(), ApiError> {
+    authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
+    crate::proxy_failover::configure_from_control(replicas)
+        .map_err(|reason| ApiError::from(AlienError::new(ErrorData::RequestInvalid { reason })))
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1786,5 +1811,33 @@ mod native_environment_tests {
         ] {
             assert!(is_inherited_native_variable(name), "{name} must pass");
         }
+    }
+
+    /// The gateway replicas set the forwarder every command's traffic goes through, so a process
+    /// inside the sandbox must not be able to set them. The op is admitted exactly as an egress
+    /// update is (`authorize_control`: in transport mode a caller in the guest, whatever its uid,
+    /// is refused unless it is neither the command user nor unattributable), and nothing is
+    /// touched before that check.
+    #[test]
+    fn the_replica_op_is_authorized_before_the_forwarder_is_touched() {
+        let source = include_str!("server.rs");
+        let start = source
+            .find("async fn set_egress_proxy(")
+            .expect("the handler exists");
+        let body = &source[start
+            ..source[start..]
+                .find("\n}\n")
+                .map(|end| start + end)
+                .unwrap()];
+        let authorize = body.find("authorize_control(").expect("it authorizes");
+        let configure = body
+            .find("configure_from_control(")
+            .expect("it configures the forwarder");
+        assert!(authorize < configure, "authorize first:\n{body}");
+        // The envelope arm reaches it only through that handler.
+        let arm = source
+            .find("\"setEgressProxy\" =>")
+            .expect("the envelope op exists");
+        assert!(source[arm..arm + 400].contains("set_egress_proxy(&state, peer, &headers"));
     }
 }

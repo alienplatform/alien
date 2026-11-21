@@ -220,10 +220,10 @@ async fn azure_internet_needs_an_agent_image_not_a_catalog_entry() {
     assert!(!rendered.contains("Alien sandbox agent"), "{rendered}");
 }
 
-/// Google Cloud's `internet` is native open outbound: it plans with no gateway, and an
-/// allowlist default policy is refused by name.
+/// Google Cloud's `internet` plans like every cloud's: through the gateway, so a default policy
+/// that names hosts is accepted at plan time too.
 #[tokio::test]
-async fn gcp_plans_internet_without_a_gateway_and_refuses_an_allowlist_default() {
+async fn gcp_plans_internet_and_an_allowlist_default() {
     let mut declared = sandbox(None);
     declared.egress = SandboxEgress::Internet;
     let result = PreflightRunner::new()
@@ -239,11 +239,7 @@ async fn gcp_plans_internet_without_a_gateway_and_refuses_an_allowlist_default()
         .run_compile_time_checks(&stack_with(declared), Platform::Gcp)
         .await
         .expect("preflight runs");
-    assert!(!result.success);
-    assert!(
-        format!("{result:?}").contains("Google Cloud sandboxes have no outbound allowlist"),
-        "{result:?}"
-    );
+    assert!(result.success, "{result:?}");
 }
 
 /// Image permissions and the image's own pause and resume steps are AWS Lambda MicroVM only.

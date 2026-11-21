@@ -1102,7 +1102,7 @@ fn deserialize_controller_by_tag(
         // They are registered via register_controller_deserializer_extension().
         #[cfg(feature = "kubernetes")]
         "KubernetesContainerController" => deser!(crate::container::KubernetesContainerController),
-        #[cfg(feature = "azure")]
+        #[cfg(any(feature = "azure", feature = "gcp"))]
         "AzureSandboxGatewayDeclarationController" => {
             deser!(crate::container::AzureSandboxGatewayDeclarationController)
         }

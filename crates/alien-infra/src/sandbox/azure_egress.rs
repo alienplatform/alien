@@ -80,6 +80,7 @@ pub(super) async fn initialize_key(
             port: GATEWAY_ADMIN_PORT,
             count: 2,
             min_protocol: alien_core::bindings::EGRESS_GATEWAY_ADMIN_PROTOCOL,
+            proxy_port: 0,
         }),
     }))
 }

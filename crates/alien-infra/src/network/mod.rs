@@ -24,6 +24,11 @@ pub use gcp::*;
 
 #[cfg(feature = "gcp")]
 mod gcp_import;
+
+#[cfg(feature = "gcp")]
+pub(crate) mod gcp_sandbox_gateway;
+#[cfg(feature = "gcp")]
+pub(crate) mod gcp_sandbox_gateway_setup;
 #[cfg(feature = "gcp")]
 pub use gcp_import::GcpNetworkImporter;
 

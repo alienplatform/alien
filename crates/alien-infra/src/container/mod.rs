@@ -10,9 +10,10 @@ pub(crate) mod kubernetes;
 #[cfg(feature = "kubernetes")]
 pub use kubernetes::*;
 
-#[cfg(feature = "azure")]
+// Also the gateway declaration on GCP: both clouds run the gateway as setup-created VMs.
+#[cfg(any(feature = "azure", feature = "gcp"))]
 mod azure_gateway;
-#[cfg(feature = "azure")]
+#[cfg(any(feature = "azure", feature = "gcp"))]
 pub use azure_gateway::*;
 
 #[cfg(feature = "local")]

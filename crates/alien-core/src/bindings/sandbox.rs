@@ -159,6 +159,12 @@ pub struct SandboxEgressReplicas {
     /// Azure's setup-created VMs are updated only by re-running setup, so they set it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub min_protocol: u32,
+    /// The port sandboxes dial on each address when it is not the gateway's own proxy port: GCP
+    /// sandboxes reach the gateway VMs on one port that crosses from Google's sandbox tenant into
+    /// the VPC, and the VM redirects it to the proxy. 0 means the gateway's own proxy port, as
+    /// every other backend uses. Setup records it once.
+    #[serde(default, skip_serializing_if = "is_zero_port")]
+    pub proxy_port: u16,
 }
 
 /// The gateway admin protocol this release speaks and serves at `GET /v1/protocol`. Bump only
@@ -166,6 +172,10 @@ pub struct SandboxEgressReplicas {
 pub const EGRESS_GATEWAY_ADMIN_PROTOCOL: u32 = 1;
 
 fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+fn is_zero_port(value: &u16) -> bool {
     *value == 0
 }
 
@@ -324,6 +334,11 @@ pub struct GcpAgentPlatformSandboxBinding {
     /// which ports the sandbox declared (its template cannot carry an environment).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_ports: Vec<u16>,
+    /// `address:port` of the deployment's Private Service Connect endpoint. A template with a
+    /// network attachment has private ingress, so its sandboxes answer only through this endpoint
+    /// (with the edge credential `previewServiceAccount` signs); absent for every other template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_endpoint: Option<String>,
 }
 
 /// Kubernetes sandbox binding configuration.
@@ -477,6 +492,7 @@ impl SandboxBinding {
             allow_egress,
             preview_service_account: None,
             preview_ports: Vec::new(),
+            private_endpoint: None,
         })
     }
 
@@ -678,5 +694,47 @@ mod tests {
 
         serde_json::from_str::<SandboxBinding>(&json)
             .expect_err("a container binding must not parse as a sandbox binding");
+    }
+
+    /// Every binding that exists today names no proxy port, and must serialize exactly as it did
+    /// before the field: older readers refuse unknown fields.
+    #[test]
+    fn replicas_without_a_proxy_port_serialize_as_before_for_every_backend() {
+        // DNS-resolved replicas (Kubernetes and AWS services), static addresses (Azure's VMs).
+        let dns = SandboxEgressReplicas {
+            dns: "gateway.default.svc".into(),
+            addresses: Vec::new(),
+            port: 3129,
+            count: 2,
+            min_protocol: 0,
+            proxy_port: 0,
+        };
+        let fixed = SandboxEgressReplicas {
+            dns: String::new(),
+            addresses: vec!["10.0.6.4".into(), "10.0.6.5".into()],
+            port: 3129,
+            count: 2,
+            min_protocol: EGRESS_GATEWAY_ADMIN_PROTOCOL,
+            proxy_port: 0,
+        };
+        assert_eq!(
+            serde_json::to_string(&dns).unwrap(),
+            r#"{"dns":"gateway.default.svc","port":3129,"count":2}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&fixed).unwrap(),
+            r#"{"dns":"","addresses":["10.0.6.4","10.0.6.5"],"port":3129,"count":2,"minProtocol":1}"#
+        );
+        // An old binding parses with no proxy port, and a GCP one carries it.
+        let parsed: SandboxEgressReplicas =
+            serde_json::from_str(&serde_json::to_string(&fixed).unwrap()).unwrap();
+        assert_eq!(parsed.proxy_port, 0);
+        let gcp = SandboxEgressReplicas {
+            proxy_port: 22,
+            ..fixed
+        };
+        assert!(serde_json::to_string(&gcp)
+            .unwrap()
+            .ends_with(r#""minProtocol":1,"proxyPort":22}"#));
     }
 }
