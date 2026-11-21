@@ -358,16 +358,20 @@ struct Relay {
     zone: String,
 }
 
-async fn create_relay(
-    compute: &ComputeClient,
-    deployed: &Deployed,
-    proof: &mut Proof,
-) -> anyhow::Result<Relay> {
-    let relay = Relay {
+fn relay_names(deployed: &Deployed) -> Relay {
+    Relay {
         vm: plan::resource_name(&deployed.resource_prefix, "live-relay"),
         firewall: plan::resource_name(&deployed.resource_prefix, "live-relay-iap"),
         zone: deployed.zone.clone(),
-    };
+    }
+}
+
+async fn create_relay(
+    compute: &ComputeClient,
+    deployed: &Deployed,
+    relay: &Relay,
+    proof: &mut Proof,
+) -> anyhow::Result<()> {
     let firewall = Firewall {
         name: Some(relay.firewall.clone()),
         network: Some(deployed.network.clone()),
@@ -436,7 +440,7 @@ async fn create_relay(
             .await?;
     }
     proof.note(format!("[relay] created VM {} in {}", relay.vm, relay.zone));
-    Ok(relay)
+    Ok(())
 }
 
 async fn delete_relay(compute: &ComputeClient, relay: &Relay, proof: &mut Proof) {
@@ -453,7 +457,12 @@ async fn delete_relay(compute: &ComputeClient, relay: &Relay, proof: &mut Proof)
         Err(error) => proof.note(format!("[relay] FAILED to delete VM {}: {error}", relay.vm)),
     }
     match compute.delete_firewall(relay.firewall.clone()).await {
-        Ok(_) => proof.note(format!("[relay] deleted firewall rule {}", relay.firewall)),
+        Ok(operation) => {
+            if let Some(name) = operation.name {
+                let _ = compute.wait_global_operation(name).await;
+            }
+            proof.note(format!("[relay] deleted firewall rule {}", relay.firewall))
+        }
         Err(error) => proof.note(format!(
             "[relay] FAILED to delete firewall rule {}: {error}",
             relay.firewall
@@ -671,12 +680,13 @@ async fn gcp_internet_sandbox_egress_goes_through_the_gateway_only(ctx: &mut Gcp
     ));
 
     let mut created = Vec::new();
-    let relay = create_relay(&compute, &deployed, &mut proof).await;
-    let outcome = match &relay {
-        Ok(relay) => {
+    let relay = relay_names(&deployed);
+    let created_relay = create_relay(&compute, &deployed, &relay, &mut proof).await;
+    let outcome = match &created_relay {
+        Ok(()) => {
             async {
-                let (_endpoint_tunnel, endpoint_port) = tunnel(relay, RELAY_ENDPOINT_PORT).await?;
-                let (_admin_tunnel, admin_port) = tunnel(relay, RELAY_ADMIN_PORT).await?;
+                let (_endpoint_tunnel, endpoint_port) = tunnel(&relay, RELAY_ENDPOINT_PORT).await?;
+                let (_admin_tunnel, admin_port) = tunnel(&relay, RELAY_ADMIN_PORT).await?;
                 let provider = provider(&deployed, endpoint_port, admin_port)?;
                 let sandbox = provider
                     .load_sandbox(SANDBOX)
@@ -694,10 +704,10 @@ async fn gcp_internet_sandbox_egress_goes_through_the_gateway_only(ctx: &mut Gcp
         }
         Err(error) => Err(anyhow::anyhow!("relay: {error:#}")),
     };
-    // The relay sits in the gateway subnet: it goes before the deployment's teardown.
-    if let Ok(relay) = &relay {
-        delete_relay(&compute, relay, &mut proof).await;
-    }
+    // The relay sits in the gateway subnet: it goes before the deployment's teardown. Both
+    // deletes run even when creation stopped half way (a rule without its VM still blocks the
+    // network's deletion); a delete of a resource that was never created only logs a 404.
+    delete_relay(&compute, &relay, &mut proof).await;
     if let Err(error) = &outcome {
         proof.note(format!("[error] {error:#}"));
     }
