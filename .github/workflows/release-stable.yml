@@ -4,7 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       qualification_run_id:
-        description: Resume from a prior stable run with successful qualification jobs
+        description: >-
+          Resume from a prior stable run with successful qualification jobs, or, when that run
+          reused the version pull request's qualification, from that Release qualification run
+          (the prior run's summary names it)
         type: string
         required: false
         default: ""
@@ -108,24 +111,54 @@ jobs:
               exit 1
             fi
             prior_run=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}")
-            if ! jq -e '
+            if jq -e '
               .path == ".github/workflows/release-stable.yml" and
               .event == "workflow_dispatch" and
               .head_branch == "main" and
               .status == "completed"
             ' <<< "$prior_run" >/dev/null; then
-              echo "::error::Resume requires a completed stable release run on main"
+              # A stable run that qualified the commit itself holds the artifacts.
+              RELEASE_COMMIT=$(jq -r '.head_sha' <<< "$prior_run")
+              QUALIFIED_COMMIT="$RELEASE_COMMIT"
+              if ! gh api --paginate --slurp \
+                "/repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}/jobs?per_page=100" |
+                jq -e '[.[] | .jobs[] | select(.name | startswith("qualify /"))] | length > 0' >/dev/null; then
+                echo "::error::Stable run ${RESUME_RUN_ID} reused the version pull request's qualification and holds no qualification artifacts; resume with that Release qualification run's id, which its summary names"
+                exit 1
+              fi
+            elif jq -e '
+              .path == ".github/workflows/release-qualification.yml" and
+              .event == "pull_request" and
+              .status == "completed" and
+              .conclusion == "success"
+            ' <<< "$prior_run" >/dev/null; then
+              # The version pull request's qualification, which a stable run reused. It
+              # qualified the pull request's head; the release commit is the commit that pull
+              # request merged as, and it must have exactly the qualified files.
+              QUALIFIED_COMMIT=$(jq -r '.head_sha' <<< "$prior_run")
+              RELEASE_COMMIT=$(gh api "/repos/${GITHUB_REPOSITORY}/commits/${QUALIFIED_COMMIT}/pulls" \
+                --jq '[.[] | select(.merged_at != null and .base.ref == "main")][0].merge_commit_sha // ""')
+              if [ -z "$RELEASE_COMMIT" ]; then
+                echo "::error::Qualified commit ${QUALIFIED_COMMIT} belongs to no pull request merged into main"
+                exit 1
+              fi
+              if ! git fetch --no-tags --quiet origin "$QUALIFIED_COMMIT" ||
+                 ! git diff --quiet "$QUALIFIED_COMMIT" "$RELEASE_COMMIT"; then
+                echo "::error::Release commit ${RELEASE_COMMIT} does not have exactly the files qualified at ${QUALIFIED_COMMIT}"
+                exit 1
+              fi
+            else
+              echo "::error::Resume requires a completed stable release run on main, or the successful Release qualification run it reused"
               exit 1
             fi
-            RELEASE_COMMIT=$(jq -r '.head_sha' <<< "$prior_run")
             if ! git merge-base --is-ancestor "$RELEASE_COMMIT" HEAD; then
-              echo "::error::Qualified commit is not an ancestor of main"
+              echo "::error::Release commit is not an ancestor of main"
               exit 1
             fi
-            verify_qualification_run "$RESUME_RUN_ID" "$RELEASE_COMMIT" || exit 1
-            echo "Resuming v${VERSION} from qualified run ${RESUME_RUN_ID} at ${RELEASE_COMMIT}"
+            verify_qualification_run "$RESUME_RUN_ID" "$QUALIFIED_COMMIT" || exit 1
+            echo "Resuming v${VERSION} from qualified run ${RESUME_RUN_ID} (qualified ${QUALIFIED_COMMIT}) at ${RELEASE_COMMIT}"
             echo "qualification_run_id=$RESUME_RUN_ID" >> "$GITHUB_OUTPUT"
-            echo "qualified_commit=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
+            echo "qualified_commit=$QUALIFIED_COMMIT" >> "$GITHUB_OUTPUT"
             REUSE=true
           else
             # By default, reuse the qualification run of the version pull request that
@@ -144,6 +177,7 @@ jobs:
                git diff --quiet "$pr_head" "$RELEASE_COMMIT" &&
                verify_qualification_run "$pr_run_id" "$pr_head"; then
               echo "Reusing the version pull request's qualification run ${pr_run_id} (qualified ${pr_head}, identical to ${RELEASE_COMMIT})"
+              echo "Qualification reused from Release qualification run ${pr_run_id} (${pr_head}). To resume after a failed publish, run this workflow with qualification_run_id=${pr_run_id}." >> "$GITHUB_STEP_SUMMARY"
               echo "qualification_run_id=$pr_run_id" >> "$GITHUB_OUTPUT"
               # The reused artifacts record the pull request's head commit, not main's.
               echo "qualified_commit=$pr_head" >> "$GITHUB_OUTPUT"
@@ -151,6 +185,7 @@ jobs:
             else
               # Publish the reviewed tip and the artifacts qualified by this run.
               echo "No reusable qualification run for ${RELEASE_COMMIT}; qualifying in this run"
+              echo "Qualified in this run. To resume after a failed publish, run this workflow with qualification_run_id=${GITHUB_RUN_ID}." >> "$GITHUB_STEP_SUMMARY"
               echo "qualification_run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
             fi
           fi
