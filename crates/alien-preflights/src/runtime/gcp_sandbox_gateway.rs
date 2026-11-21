@@ -214,7 +214,6 @@ mod tests {
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("us-east4") && errors[0].contains("us-central1"));
         assert!(errors[0].contains("Sandbox 'box'"));
-        eprintln!("refusal text: {}", errors[0]);
     }
 
     #[test]
