@@ -1,3 +1,4 @@
+mod cluster_check;
 pub mod down;
 pub mod inputs;
 pub mod join;
@@ -17,7 +18,9 @@ pub use list::{list_command, ListArgs};
 pub use operator::{operator_command, OperatorArgs};
 pub use register::{register_command, RegisterArgs};
 pub use status::{status_command, StatusArgs};
-pub use up::{push_deletion, push_initial_setup, up_command, SetupRunOutcome, UpArgs};
+pub use up::{
+    push_deletion, push_deletion_with, push_initial_setup, up_command, SetupRunOutcome, UpArgs,
+};
 pub use verify::{verify_command, VerifyArgs};
 pub mod helm_release;
 pub mod sync;

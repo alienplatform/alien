@@ -4518,6 +4518,7 @@ mod tests {
             token_env_var: None,
             name: None,
             display_name: None,
+            label_domain: None,
         };
 
         let plan =
@@ -4636,6 +4637,7 @@ mod tests {
             token_env_var: None,
             name: None,
             display_name: None,
+            label_domain: None,
         };
 
         let plan =
