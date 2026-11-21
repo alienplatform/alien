@@ -475,6 +475,11 @@ jobs:
             # alien-test-app process: the Worker integration job runs them.
             'and not binary_id(alien-local::worker_integration)'
             'and not binary_id(alien-worker-runtime::container_app)'
+
+            # Each test builds an example extension with cargo into one shared target directory, so
+            # they wait on each other's build lock: 7-18 min each, about 50 min of this job. The
+            # CLI extensions job runs them in parallel with this one.
+            'and not binary_id(alien-cli::extensions)'
           )
           # Compile non-default feature coverage in the same unified graph. Running
           # these as later `cargo test` commands adds two serial recompilation tails.
@@ -569,6 +574,126 @@ jobs:
         # mode, asserting each exits nonzero AND annotates. Needs no daemon.
         run: |
           ./scripts/smoke-sandbox-agent.test.sh
+
+  cli-extensions:
+    name: CLI extensions (${{ matrix.partition }}/3)
+    needs: [pr-conventions, changes]
+    # The `alien-cli::extensions` tests, which the Rust crates job skips. They run whenever Rust
+    # crates would test alien-cli.
+    if: >-
+      needs.changes.outputs.run_all == 'true' ||
+      (needs.changes.outputs.rust == 'true' &&
+      (needs.changes.outputs.rust_mode == 'full' ||
+      (needs.changes.outputs.rust_mode == 'affected' &&
+      contains(format(' {0} ', needs.changes.outputs.rust_packages), ' -p alien-cli '))))
+    # The 19 tests add up to about 95 minutes (2-17 min each) and run two at a time on a
+    # runner, so one runner takes about 50 min. Three runners take about 20.
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3]
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_BUILD_JOBS: "6"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
+        with:
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            examples/pnpm-lock.yaml
+
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
+
+      - name: Install Rust targets
+        # alien-hooks-runtime's tests build their hooks module for wasm32-wasip1.
+        run: rustup target add wasm32-wasip1
+
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        continue-on-error: true
+        with:
+          version: v0.16.0
+
+      - uses: taiki-e/install-action@nextest
+
+      # Rust on aarch64 Linux links with GNU ld by default; mold is much faster.
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # main
+        with:
+          mold-version: 2.42.1
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "35.x"
+          repo-token: ${{ github.token }}
+
+      - name: Install CloudFormation linter
+        run: pipx install cfn-lint==1.59.0
+
+      # The extension tests render Terraform, which runs only `terraform fmt`: no provider mirror
+      # and no Terraform 1.9, which only the generator tests in `Rust crates` use.
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.3
+          terraform_wrapper: false
+
+      - uses: azure/setup-helm@v5
+
+      - name: Install kubeconform
+        run: |
+          case "$(uname -m)" in
+            x86_64) KUBECONFORM_ARCH=amd64 ;;
+            aarch64|arm64) KUBECONFORM_ARCH=arm64 ;;
+            *) echo "Unsupported kubeconform architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -L "https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-${KUBECONFORM_ARCH}.tar.gz" \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/kubeconform
+
+      # Builds of Linux musl Rust resources run `zig` directly, so it has to be on
+      # PATH, which `pip3 install ziglang` does not do.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Configure git credentials for cargo
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build TypeScript dependencies for Rust tests
+        run: pnpm exec turbo run build --filter=@alienplatform/sdk --filter=@alienplatform/commands
+
+      - name: CLI extension tests
+        run: cargo nextest run --locked -p alien-cli --test extensions --no-fail-fast --partition count:${{ matrix.partition }}/3
 
   typescript:
     name: TypeScript packages and CLIs
@@ -1107,7 +1232,7 @@ jobs:
       github.event.pull_request.head.repo.fork != true) &&
       (github.event_name != 'push' ||
       startsWith(github.event.head_commit.message, 'chore: release '))
-    needs: [pr-conventions, changes, rust, rust-check, wasm32, workspace-hack, typescript, worker-integration, node-addon-portability, python-bindings, tpm-device-key]
+    needs: [pr-conventions, changes, rust, cli-extensions, rust-check, wasm32, workspace-hack, typescript, worker-integration, node-addon-portability, python-bindings, tpm-device-key]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area
@@ -1124,6 +1249,8 @@ jobs:
           TPM: ${{ needs.changes.outputs.tpm }}
           CHANGES: ${{ needs.changes.result }}
           RUST_TESTS: ${{ needs.rust.result }}
+          CLI_EXTENSIONS: ${{ needs.cli-extensions.result }}
+          RUST_PACKAGES: ${{ needs.changes.outputs.rust_packages }}
           TYPESCRIPT_TESTS: ${{ needs.typescript.result }}
           WORKER_RESULT: ${{ needs.worker-integration.result }}
           ADDON_RESULT: ${{ needs.node-addon-portability.result }}
@@ -1151,6 +1278,9 @@ jobs:
           }
           if [[ "$RUN_ALL" == "true" || ( "$RUST" == "true" && ( "$RUST_MODE" == "affected" || "$RUST_MODE" == "full" ) ) ]]; then
             need "Rust crates" "$RUST_TESTS"
+            if [[ "$RUN_ALL" == "true" || "$RUST_MODE" == "full" || " $RUST_PACKAGES " == *" -p alien-cli "* ]]; then
+              need "CLI extensions" "$CLI_EXTENSIONS"
+            fi
           fi
           if [[ "$RUN_ALL" == "true" || "$TYPESCRIPT" == "true" ]]; then
             need "TypeScript packages and CLIs" "$TYPESCRIPT_TESTS"
