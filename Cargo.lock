@@ -1701,6 +1701,7 @@ dependencies = [
  "alien-error",
  "alien-gcp-clients",
  "alien-helm",
+ "alien-infra",
  "alien-manager",
  "alien-manager-api",
  "alien-permissions",

@@ -86,6 +86,8 @@ zip = { workspace = true }
 # The GCP internet live test plans and deploys the stack the flipped switch would allow.
 alien-core = { workspace = true, features = ["test-gcp-internet-egress"] }
 alien-ai-gateway = { workspace = true }
+# The GCP internet live test reads the sandbox binding from the template controller's state.
+alien-infra = { workspace = true, features = ["gcp"] }
 alien-bindings = { workspace = true, default-features = false, features = ["aws", "azure", "gcp", "platform-sdk"] }
 axum = { workspace = true, features = ["http1", "json", "tokio"] }
 chrono = { workspace = true }
