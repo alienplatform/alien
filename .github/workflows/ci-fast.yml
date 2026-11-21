@@ -11,6 +11,9 @@ name: Tests
 #   (`workflow_dispatch`): every crate's tests, Worker integration, the whole TypeScript suite,
 #   the Node addon portability builds, and the Python bindings and TPM suites.
 # - Pushes to main do not run this workflow: the nightly run covers main.
+# - A pull request with the `ci:full` label tests the whole workspace (RUN_ALL) on every later
+#   push. Adding the label starts a run through ci-full-label.yml, whose checks never replace
+#   this workflow's `All tests passed`. See README.md.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -116,6 +119,9 @@ jobs:
       rust_features: ${{ steps.rust_selection.outputs.features }}
       rust_core: ${{ steps.rust_selection.outputs.core }}
       rust_agent: ${{ steps.rust_selection.outputs.agent }}
+      rust_test_filter: ${{ steps.rust_selection.outputs.test_filter }}
+      ts_filters: ${{ steps.rust_selection.outputs.ts_filters }}
+      repo_wide: ${{ steps.rust_selection.outputs.repo_wide }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -126,6 +132,8 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           FULL_INPUT: ${{ inputs.full }}
+          # The `ci:full` label on a pull request runs the whole workspace (RUN_ALL).
+          FULL_LABEL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full') }}
         run: |
           # Pull requests and the merge queue run the fast tier. The nightly run, manual runs
           # and callers that ask for `full` run both tiers on the whole workspace.
@@ -136,6 +144,9 @@ jobs:
           esac
           if [[ "$FULL_INPUT" == "true" ]]; then
             full_tier=true
+            run_all=true
+          fi
+          if [[ "$FULL_LABEL" == "true" ]]; then
             run_all=true
           fi
           echo "full_tier=$full_tier" >> "$GITHUB_OUTPUT"
@@ -309,6 +320,7 @@ jobs:
       # Debug info makes linking ~120 test binaries much slower and nothing in CI reads it.
       CARGO_PROFILE_DEV_DEBUG: "0"
       # The packages and features to build and test (see `Select Rust packages to test`).
+      RUST_TEST_FILTER: ${{ needs.changes.outputs.rust_test_filter }}
       RUST_SELECTION: >-
         ${{ needs.changes.outputs.rust_mode == 'affected'
         && format('{0}{1}', needs.changes.outputs.rust_packages,
@@ -511,7 +523,13 @@ jobs:
           # Compile non-default feature coverage in the same unified graph. Running
           # these as later `cargo test` commands adds two serial recompilation tails.
           read -r -a SELECTION <<< "$RUST_SELECTION"
-          cargo nextest run "${SELECTION[@]}" --no-fail-fast --filter-expr "${FILTER_CLAUSES[*]}"
+          FILTER="${FILTER_CLAUSES[*]}"
+          # Pull requests also select named test targets of dependents (scripts/ci-checks.json):
+          # keep only those targets in the packages that were selected for them.
+          if [[ -n "$RUST_TEST_FILTER" ]]; then
+            FILTER="($FILTER) and ($RUST_TEST_FILTER)"
+          fi
+          cargo nextest run "${SELECTION[@]}" --no-fail-fast --filter-expr "$FILTER"
 
       # Workspace-wide builds unify features, so alien-bindings is always built with
       # `local-artifact-registry` there (alien-local turns it on). Check alien-sdk
@@ -922,6 +940,32 @@ jobs:
         run: |
           pnpm --filter @alienplatform/core --filter @alienplatform/permissions --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
 
+      # Pull requests (the fast tier) test the packages whose inputs changed: their own files,
+      # their workspace dependencies, and the generated client and OpenAPI specs for core
+      # (scripts/ci-checks.json). The full tier runs the step above for all of them.
+      - name: TypeScript tests of changed inputs
+        if: needs.changes.outputs.full_tier != 'true' && needs.changes.outputs.run_all != 'true' && needs.changes.outputs.ts_filters != ''
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+          TS_FILTERS: ${{ needs.changes.outputs.ts_filters }}
+        run: |
+          read -r -a FILTERS <<< "$TS_FILTERS"
+          # Build the selected packages' dependencies (for example core's dist) first.
+          build=()
+          for name in "${FILTERS[@]}"; do
+            [[ "$name" == "--filter" ]] || build+=(--filter "$name^...")
+          done
+          pnpm "${build[@]}" build
+          pnpm "${FILTERS[@]}" test
+
+      - name: TypeScript unit tests (every package, label ci:full)
+        if: needs.changes.outputs.full_tier != 'true' && needs.changes.outputs.run_all == 'true'
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+        run: |
+          pnpm --filter @alienplatform/sdk... build
+          pnpm --filter @alienplatform/core --filter @alienplatform/permissions --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
+
       - name: Build TypeScript packages
         if: needs.changes.outputs.full_tier == 'true' && (steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || needs.changes.outputs.run_all == 'true')
         env:
@@ -981,6 +1025,23 @@ jobs:
         # The example is a standalone Cargo workspace, so the repository's cargo commands skip it.
         working-directory: examples/bare-metal-worker
         run: cargo test --locked
+
+  # Tests that read files outside their own package (the install-wait scan over every tracked
+  # file, the release workflow checks). They need no Rust build, so they run on every pull
+  # request that changes more than documentation. The list is `repo_wide` in scripts/ci-checks.json.
+  repo-wide:
+    name: Repository-wide checks
+    needs: [pr-conventions, changes]
+    if: needs.changes.outputs.run_all == 'true' || needs.changes.outputs.repo_wide != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Run the repository-wide checks
+        run: python3 scripts/affected-rust-packages.py --run-repo-wide
 
   rust-check:
     name: Rust check
@@ -1343,7 +1404,7 @@ jobs:
       always() &&
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.fork != true)
-    needs: [gate, pr-conventions, changes, rust, cli-extensions, rust-check, wasm32, workspace-hack, typescript, worker-integration, node-addon-portability, python-bindings, tpm-device-key]
+    needs: [gate, pr-conventions, changes, rust, cli-extensions, repo-wide, rust-check, wasm32, workspace-hack, typescript, worker-integration, node-addon-portability, python-bindings, tpm-device-key]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area
@@ -1362,6 +1423,8 @@ jobs:
           RUST_TESTS: ${{ needs.rust.result }}
           CLI_EXTENSIONS: ${{ needs.cli-extensions.result }}
           RUST_PACKAGES: ${{ needs.changes.outputs.rust_packages }}
+          REPO_WIDE: ${{ needs.changes.outputs.repo_wide }}
+          REPO_WIDE_RESULT: ${{ needs.repo-wide.result }}
           RUST_CHECK: ${{ needs.rust-check.result }}
           WORKSPACE_HACK: ${{ needs.workspace-hack.result }}
           GATE: ${{ needs.gate.outputs.changed }}
@@ -1398,6 +1461,9 @@ jobs:
           fi
           if [[ "$RUST" == "true" && ( "$RUST_MODE" == "affected" || "$RUST_MODE" == "check-only" ) ]]; then
             need "Rust check" "$RUST_CHECK"
+          fi
+          if [[ "$RUN_ALL" == "true" || -n "$REPO_WIDE" ]]; then
+            need "Repository-wide checks" "$REPO_WIDE_RESULT"
           fi
           if [[ "$RUN_ALL" == "true" || "$RUST" == "true" ]]; then
             need "Workspace-hack up to date" "$WORKSPACE_HACK"

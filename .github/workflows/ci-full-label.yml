@@ -1,0 +1,31 @@
+name: Full tests for a labeled pull request
+
+# Adding the `ci:full` label to a pull request runs the full tier on its head commit, by calling
+# ci-fast.yml. The called jobs report as `<job> / …`, so they never replace the pull request's
+# own required `All tests passed` check. Later pushes run the whole workspace through the label
+# check in ci-fast.yml. Any other label starts nothing. See README.md.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-full-label-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  full:
+    name: Full
+    if: github.event.label.name == 'ci:full' && github.event.pull_request.head.repo.fork != true
+    # The called workflow's jobs ask for these; a caller must grant at least as much.
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    uses: ./.github/workflows/ci-fast.yml
+    secrets: inherit
+    with:
+      ref: ${{ github.event.pull_request.head.sha }}
+      full: true
