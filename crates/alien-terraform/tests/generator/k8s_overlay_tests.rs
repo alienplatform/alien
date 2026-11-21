@@ -1151,7 +1151,7 @@ fn destroy_guard_is_the_only_change_between_old_and_new_registered_modules() {
         assert!(old
             .iter()
             .all(|(_, contents)| !contents.contains("destroy_guard")
-                && !contents.contains("teardown-required")));
+                && !contents.contains("`terraform destroy` stops first")));
     }
 }
 
