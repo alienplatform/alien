@@ -119,6 +119,7 @@ console_error_panic_hook = { workspace = true }
 # `cargo test -p alien-infra` builds this crate alone (no other workspace crate turning them on).
 alien-infra = { path = ".", features = ["all-platforms", "test-utils", "test"] }
 alien-client-core = { workspace = true, features = ["test-utils"] }
+alien-core = { workspace = true, features = ["test-gcp-internet-egress"] }
 alien-bindings = { workspace = true, features = ["aws", "gcp"] }
 alien-preflights = { workspace = true }
 alien-terraform = { workspace = true }

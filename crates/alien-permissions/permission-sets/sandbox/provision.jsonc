@@ -321,60 +321,6 @@
             "scope": "projects/${projectName}"
           }
         }
-      },
-      {
-        // What provisioning may do for an Internet sandbox, and why:
-        //  - read the project's sandbox placement (engines, templates, network attachments)
-        //    before it creates a template beside the deployment's network attachment;
-        //  - reserve one internal address and create one Private Service Connect forwarding rule,
-        //    the only way into a sandbox that has private ingress, and delete them again;
-        //  - create, read, list and delete a probe sandbox: the forwarding rule targets a service
-        //    attachment that only a sandbox's connection info reveals, so one short-lived sandbox
-        //    is created to read it and deleted in the same flow (also when the flow fails, and
-        //    by a 10 minute lifetime if the controller dies).
-        // The sandbox verbs are exactly create, get, list and delete. Never `execute`, snapshot or
-        // update: nothing here runs code in a session or reads its contents (a test holds this).
-        //
-        // Scope: the whole project. Neither Agent Platform nor the compute address and forwarding
-        // rule verbs were verified to honour a resource-name condition, and a condition that
-        // silently does not match would break provisioning, so none is set; the names the
-        // controller creates all carry the deployment's prefix.
-        "label": "manage-sandbox-private-endpoint",
-        "description": "Read the project's sandbox placement and manage the private endpoint Internet sandboxes are reached through.",
-        "grant": {
-          "permissions": [
-            "aiplatform.reasoningEngines.list",
-            "aiplatform.sandboxEnvironments.create",
-            "aiplatform.sandboxEnvironments.get",
-            "aiplatform.sandboxEnvironments.list",
-            "aiplatform.sandboxEnvironments.delete",
-            "compute.networkAttachments.get",
-            "compute.networkAttachments.list",
-            "compute.addresses.create",
-            "compute.addresses.createInternal",
-            "compute.addresses.get",
-            "compute.addresses.delete",
-            "compute.addresses.deleteInternal",
-            "compute.addresses.use",
-            "compute.addresses.useInternal",
-            "compute.forwardingRules.create",
-            "compute.forwardingRules.get",
-            "compute.forwardingRules.delete",
-            "compute.forwardingRules.pscCreate",
-            "compute.forwardingRules.pscDelete",
-            "compute.subnetworks.use",
-            "compute.networks.use",
-            "compute.regionOperations.get"
-          ]
-        },
-        "binding": {
-          "stack": {
-            "scope": "projects/${projectName}"
-          },
-          "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
       }
     ]
   }
