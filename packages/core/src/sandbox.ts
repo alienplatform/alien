@@ -168,7 +168,8 @@ export class Sandbox extends ResourceBuilder {
    */
   public link(resource: Resource | ResourceRef): this {
     const ref = resource instanceof Resource ? resource.ref() : resource
-    const links = (this._config.gatewayLinks ??= [])
+    const links = this._config.gatewayLinks ?? []
+    this._config.gatewayLinks = links
     if (!links.some(link => link.id === ref.id && link.type === ref.type)) {
       links.push(ref)
     }
