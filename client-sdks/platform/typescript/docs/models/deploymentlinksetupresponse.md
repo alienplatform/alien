@@ -7,7 +7,7 @@ import { DeploymentLinkSetupResponse } from "@alienplatform/platform-api/models"
 
 let value: DeploymentLinkSetupResponse = {
   activeRelease: {
-    id: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    id: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     version: "<value>",
     stack: {},
   },

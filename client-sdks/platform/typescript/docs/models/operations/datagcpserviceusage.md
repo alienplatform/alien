@@ -13,15 +13,15 @@ let value: DataGcpServiceUsage = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
+        reason: "collection-failed",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "stopped",
-    partial: true,
-    stale: true,
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: false,
+    stale: false,
   },
   backend: "gcpServiceUsage",
 };
@@ -37,6 +37,6 @@ let value: DataGcpServiceUsage = {
 | `serviceName`                                                                                                            | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `serviceResourceName`                                                                                                    | *string*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
 | `state`                                                                                                                  | *string*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
-| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus60](../../models/operations/getresourcedeploymentdetaildatastatus60.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus64](../../models/operations/getresourcedeploymentdetaildatastatus64.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `title`                                                                                                                  | *string*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
 | `backend`                                                                                                                | *"gcpServiceUsage"*                                                                                                      | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |

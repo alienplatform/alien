@@ -68,7 +68,7 @@ export function useDeploymentsRedeployMutation(
 }
 
 export function mutationKeyDeploymentsRedeploy(): MutationKey {
-  return ["@alienplatform/platform-api", "deployments", "redeploy"];
+  return ["@alienplatform/platform-api", "Deployments", "redeploy"];
 }
 
 export function buildDeploymentsRedeployMutation(

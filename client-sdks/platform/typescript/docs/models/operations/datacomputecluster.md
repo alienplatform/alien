@@ -33,7 +33,7 @@ let value: DataComputeCluster = {
 
 ## Fields
 
-| Field                   | Type                    | Required                | Description             |
-| ----------------------- | ----------------------- | ----------------------- | ----------------------- |
-| `data`                  | *operations.DataUnion5* | :heavy_check_mark:      | N/A                     |
-| `resourceType`          | *"compute-cluster"*     | :heavy_check_mark:      | N/A                     |
+| Field                                                                                          | Type                                                                                           | Required                                                                                       | Description                                                                                    |
+| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `data`                                                                                         | *operations.DataUnion5*                                                                        | :heavy_check_mark:                                                                             | N/A                                                                                            |
+| `resourceType`                                                                                 | [operations.ResourceTypeComputeCluster](../../models/operations/resourcetypecomputecluster.md) | :heavy_check_mark:                                                                             | N/A                                                                                            |

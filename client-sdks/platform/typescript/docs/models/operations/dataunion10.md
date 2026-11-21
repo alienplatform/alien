@@ -3,50 +3,56 @@
 
 ## Supported Types
 
-### `operations.DataAwsIamRole1`
+### `operations.DataAwsParameterStore`
 
 ```typescript
-const value: operations.DataAwsIamRole1 = {
-  assumeRolePolicyPresent: false,
-  attachedPolicyCount: 410901,
-  attachedPolicyNames: [],
-  createDate: "<value>",
-  inlinePolicyCount: 846965,
-  inlinePolicyNames: [],
-  managedTagCount: 519428,
-  path: "/etc",
-  roleArn: "<value>",
-  roleId: "<id>",
-  roleName: "<value>",
-  stackPermissionsApplied: false,
+const value: operations.DataAwsParameterStore = {
+  accountId: "<id>",
+  parameterMetadataSampled: true,
+  prefix: "<value>",
+  region: "<value>",
   status: {
     collectionIssues: [],
-    health: "healthy",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "unknown",
     partial: true,
     stale: false,
   },
-  tagCount: 250500,
-  backend: "awsIamRole",
+  backend: "awsParameterStore",
 };
 ```
 
-### `operations.DataGcpServiceAccount1`
+### `operations.DataGcpSecretManager`
 
 ```typescript
-const value: operations.DataGcpServiceAccount1 = {
-  email: "Narciso53@hotmail.com",
-  projectBindingCount: 780560,
-  projectRoles: [
-    "<value 1>",
-    "<value 2>",
-  ],
-  serviceAccountBindingCount: 884958,
-  serviceAccountRoles: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
+const value: operations.DataGcpSecretManager = {
+  location: "<value>",
+  prefix: "<value>",
+  projectId: "<id>",
+  secretMetadataListed: true,
+  status: {
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "stopping",
+    partial: true,
+    stale: false,
+  },
+  backend: "gcpSecretManager",
+};
+```
+
+### `operations.DataAzureKeyVault1`
+
+```typescript
+const value: operations.DataAzureKeyVault1 = {
+  accessPolicyCount: 582917,
+  name: "<value>",
+  privateEndpointConnectionCount: 112234,
+  publicNetworkAccess: "<value>",
+  rbacAuthorizationEnabled: true,
+  secretMetadataListed: false,
+  softDeleteEnabled: true,
+  softDeleteRetentionDays: 457442,
   status: {
     collectionIssues: [
       {
@@ -56,37 +62,22 @@ const value: operations.DataGcpServiceAccount1 = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "stopped",
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: true,
-    stale: false,
+    stale: true,
   },
-  backend: "gcpServiceAccount",
+  backend: "azureKeyVault",
 };
 ```
 
-### `operations.DataAzureManagedIdentity1`
+### `operations.DataKubernetesSecret`
 
 ```typescript
-const value: operations.DataAzureManagedIdentity1 = {
-  customRoleDefinitionCount: 863031,
-  customRoleDefinitionIds: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
-  location: "<value>",
-  managedTagCount: 765674,
-  name: "<value>",
-  resourceGroup: "<value>",
-  resourceId: "<id>",
-  roleAssignmentCount: 833585,
-  roleAssignmentIds: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
-  stackPermissionsApplied: false,
+const value: operations.DataKubernetesSecret = {
+  namespace: "<value>",
+  prefix: "<value>",
+  secretMetadataListed: false,
   status: {
     collectionIssues: [
       {
@@ -96,12 +87,12 @@ const value: operations.DataAzureManagedIdentity1 = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "stopped",
-    partial: true,
+    health: "unknown",
+    lifecycle: "deleting",
+    partial: false,
     stale: false,
   },
-  backend: "azureManagedIdentity",
+  backend: "kubernetesSecret",
 };
 ```
 
@@ -109,16 +100,16 @@ const value: operations.DataAzureManagedIdentity1 = {
 
 ```typescript
 const value: operations.DataLocal10 = {
-  configured: true,
-  identity: "<value>",
+  path: "/home/user",
+  pathExists: true,
+  secretMetadataListed: false,
   status: {
     collectionIssues: [],
-    health: "unhealthy",
+    health: "healthy",
     lifecycle: "updating",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "local",
 };
 ```
-

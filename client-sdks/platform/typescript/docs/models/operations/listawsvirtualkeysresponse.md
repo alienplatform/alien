@@ -10,7 +10,7 @@ import { ListAwsVirtualKeysResponse } from "@alienplatform/platform-api/models/o
 let value: ListAwsVirtualKeysResponse = {
   virtualKeys: [
     {
-      id: "vkey_0p9nwqgtftugsoey99lqyqq",
+      id: "vkey_0p9nwqgtftugsoey99lqyqq8eq8z",
       projectId: "<id>",
       status: "action-required",
       externalKeyId: "<id>",

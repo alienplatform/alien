@@ -23,6 +23,26 @@ import {
   KubernetesBasePlatform,
   KubernetesBasePlatform$outboundSchema,
 } from "./kubernetesbaseplatform.js";
+import {
+  KubernetesExposureCustom,
+  KubernetesExposureCustom$Outbound,
+  KubernetesExposureCustom$outboundSchema,
+} from "./kubernetesexposurecustom.js";
+import {
+  KubernetesExposureCustomBaseDomain,
+  KubernetesExposureCustomBaseDomain$Outbound,
+  KubernetesExposureCustomBaseDomain$outboundSchema,
+} from "./kubernetesexposurecustombasedomain.js";
+import {
+  KubernetesExposureDisabled,
+  KubernetesExposureDisabled$Outbound,
+  KubernetesExposureDisabled$outboundSchema,
+} from "./kubernetesexposuredisabled.js";
+import {
+  KubernetesExposureGenerated,
+  KubernetesExposureGenerated$Outbound,
+  KubernetesExposureGenerated$outboundSchema,
+} from "./kubernetesexposuregenerated.js";
 
 /**
  * Cloud platform of the imported stack
@@ -84,6 +104,13 @@ export type ImportSourceFailureDomainsUnion2 =
   | string;
 
 export type ImportSourcePoolsAutoscale = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?: ImportSourceFailureDomains2 | string | null | undefined;
   /**
    * Provider machine type selected for this deployment.
@@ -122,6 +149,13 @@ export type ImportSourceFailureDomainsUnion1 =
   | string;
 
 export type ImportSourcePoolsFixed = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?: ImportSourceFailureDomains1 | string | null | undefined;
   /**
    * Provider machine type selected for this deployment.
@@ -224,13 +258,21 @@ export type ImportSourceDomainsKubernetesUnion =
   | string;
 
 /**
+ * Managed certificate issuance settings.
+ */
+export type ImportSourceManaged = {};
+
+export type ImportSourceManagedUnion = ImportSourceManaged | string;
+
+/**
  * Platform-specific certificate references for custom domains.
  */
-export type ImportSourceDomainsCertificate = {
+export type ImportSourceCertificate = {
   aws?: ImportSourceAws | string | null | undefined;
   azure?: ImportSourceAzure | string | null | undefined;
   gcp?: ImportSourceGcp | string | null | undefined;
   kubernetes?: ImportSourceDomainsKubernetes | string | null | undefined;
+  managed?: ImportSourceManaged | string | null | undefined;
 };
 
 /**
@@ -240,11 +282,15 @@ export type ImportSourceCustomDomains = {
   /**
    * Platform-specific certificate references for custom domains.
    */
-  certificate: ImportSourceDomainsCertificate;
+  certificate: ImportSourceCertificate;
   /**
-   * Fully qualified domain name to use.
+   * Fully qualified domain name for a supplied certificate.
    */
-  domain: string;
+  domain?: string | undefined;
+  /**
+   * Hostnames keyed by endpoint name for a managed certificate.
+   */
+  endpoints?: { [k: string]: string } | undefined;
 };
 
 export const ImportSourceModeLoadBalancer = {
@@ -284,7 +330,7 @@ export type ImportSourcePublicEndpointTargetUnion =
  * @remarks
  *
  * When `custom_domains` is set, the specified resources use customer-provided
- * domains and certificates. Otherwise, Alien auto-generates domains.
+ * domains with supplied or managed certificates. Otherwise, Alien auto-generates domains.
  */
 export type ImportSourceDomains = {
   /**
@@ -372,615 +418,11 @@ export type ImportSourceCluster = {
 
 export type ImportSourceClusterUnion = ImportSourceCluster | string;
 
-export type ImportSourceCertificateNone2 = {
-  mode: "none";
-};
-
-export type ImportSourceCertificateManagedTLSSecret2 = {
-  mode: "managedTlsSecret";
-  /**
-   * Secret name template. Runtime may substitute resource/deployment tokens.
-   */
-  secretNameTemplate: string;
-};
-
-export type ImportSourceCertificateAwsAcmArn2 = {
-  /**
-   * Existing ACM certificate ARN.
-   */
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-export type ImportSourceCertificateManagedAcmImport2 = {
-  mode: "managedAcmImport";
-  /**
-   * ACM region. Defaults to the deployment region when omitted.
-   */
-  region?: string | null | undefined;
-  /**
-   * Tags applied to runtime-imported ACM certificates.
-   */
-  tags?: { [k: string]: string } | undefined;
-};
-
-/**
- * Namespace-scoped Kubernetes TLS Secret reference.
- */
-export type ImportSourceCertificateTLSSecretRef2 = {
-  /**
-   * Secret namespace. Defaults to the release namespace when omitted.
-   */
-  namespace?: string | null | undefined;
-  /**
-   * Secret name.
-   */
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/**
- * Certificate publication or reference mode for Kubernetes public endpoints.
- */
-export type ImportSourceCertificateUnion2 =
-  | ImportSourceCertificateTLSSecretRef2
-  | ImportSourceCertificateManagedAcmImport2
-  | ImportSourceCertificateAwsAcmArn2
-  | ImportSourceCertificateManagedTLSSecret2
-  | ImportSourceCertificateNone2;
-
-export const ImportSourceModeCustom = {
-  Custom: "custom",
-} as const;
-export type ImportSourceModeCustom = ClosedEnum<typeof ImportSourceModeCustom>;
-
-export const ImportSourceProviderAzureApplicationGatewayForContainersEnum4 = {
-  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
-} as const;
-export type ImportSourceProviderAzureApplicationGatewayForContainersEnum4 =
-  ClosedEnum<
-    typeof ImportSourceProviderAzureApplicationGatewayForContainersEnum4
-  >;
-
-export type ImportSourceProviderAzureApplicationGatewayForContainers4 = {
-  /**
-   * Optional ALB name when using BYO Application Gateway resources.
-   */
-  albName?: string | null | undefined;
-  /**
-   * Optional ALB namespace when using BYO Application Gateway resources.
-   */
-  albNamespace?: string | null | undefined;
-  /**
-   * Public or internal frontend exposure.
-   */
-  frontend: string;
-  provider: ImportSourceProviderAzureApplicationGatewayForContainersEnum4;
-};
-
-export const ImportSourceProviderGkeGatewayEnum4 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type ImportSourceProviderGkeGatewayEnum4 = ClosedEnum<
-  typeof ImportSourceProviderGkeGatewayEnum4
->;
-
-export type ImportSourceProviderGkeGateway4 = {
-  provider: ImportSourceProviderGkeGatewayEnum4;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const ImportSourceProviderAwsAlbEnum4 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type ImportSourceProviderAwsAlbEnum4 = ClosedEnum<
-  typeof ImportSourceProviderAwsAlbEnum4
->;
-
-export type ImportSourceProviderAwsAlb4 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: ImportSourceProviderAwsAlbEnum4;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type ImportSourceProviderUnion4 =
-  | ImportSourceProviderAwsAlb4
-  | ImportSourceProviderAzureApplicationGatewayForContainers4
-  | ImportSourceProviderGkeGateway4
-  | string;
-
-/**
- * Shared Gateway API route profile values.
- */
-export type ImportSourceRouteGateway2 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example a cloud Gateway controller.
-   */
-  controller?: string | null | undefined;
-  /**
-   * GatewayClass selected for generated Gateways.
-   */
-  gatewayClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  /**
-   * Listener port, usually 443.
-   */
-  listenerPort: number;
-  provider?:
-    | ImportSourceProviderAwsAlb4
-    | ImportSourceProviderAzureApplicationGatewayForContainers4
-    | ImportSourceProviderGkeGateway4
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-export const ImportSourceProviderAzureApplicationGatewayForContainersEnum3 = {
-  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
-} as const;
-export type ImportSourceProviderAzureApplicationGatewayForContainersEnum3 =
-  ClosedEnum<
-    typeof ImportSourceProviderAzureApplicationGatewayForContainersEnum3
-  >;
-
-export type ImportSourceProviderAzureApplicationGatewayForContainers3 = {
-  /**
-   * Optional ALB name when using BYO Application Gateway resources.
-   */
-  albName?: string | null | undefined;
-  /**
-   * Optional ALB namespace when using BYO Application Gateway resources.
-   */
-  albNamespace?: string | null | undefined;
-  /**
-   * Public or internal frontend exposure.
-   */
-  frontend: string;
-  provider: ImportSourceProviderAzureApplicationGatewayForContainersEnum3;
-};
-
-export const ImportSourceProviderGkeGatewayEnum3 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type ImportSourceProviderGkeGatewayEnum3 = ClosedEnum<
-  typeof ImportSourceProviderGkeGatewayEnum3
->;
-
-export type ImportSourceProviderGkeGateway3 = {
-  provider: ImportSourceProviderGkeGatewayEnum3;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const ImportSourceProviderAwsAlbEnum3 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type ImportSourceProviderAwsAlbEnum3 = ClosedEnum<
-  typeof ImportSourceProviderAwsAlbEnum3
->;
-
-export type ImportSourceProviderAwsAlb3 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: ImportSourceProviderAwsAlbEnum3;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type ImportSourceProviderUnion3 =
-  | ImportSourceProviderAwsAlb3
-  | ImportSourceProviderAzureApplicationGatewayForContainers3
-  | ImportSourceProviderGkeGateway3
-  | string;
-
-/**
- * Shared Ingress route profile values.
- */
-export type ImportSourceRouteIngress2 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example `eks.amazonaws.com/alb`.
-   */
-  controller?: string | null | undefined;
-  /**
-   * `spec.ingressClassName` for generated Ingresses.
-   */
-  ingressClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | ImportSourceProviderAwsAlb3
-    | ImportSourceProviderAzureApplicationGatewayForContainers3
-    | ImportSourceProviderGkeGateway3
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/**
- * Kubernetes route API selected for public endpoints.
- */
-export type ImportSourceRouteUnion2 =
-  | ImportSourceRouteIngress2
-  | ImportSourceRouteGateway2;
-
-export type ImportSourceExposureCustom = {
-  /**
-   * Certificate publication or reference mode for Kubernetes public endpoints.
-   */
-  certificate:
-    | ImportSourceCertificateTLSSecretRef2
-    | ImportSourceCertificateManagedAcmImport2
-    | ImportSourceCertificateAwsAcmArn2
-    | ImportSourceCertificateManagedTLSSecret2
-    | ImportSourceCertificateNone2;
-  /**
-   * Hostname routed by the Kubernetes public endpoint.
-   */
-  domain: string;
-  mode: ImportSourceModeCustom;
-  /**
-   * Kubernetes route API selected for public endpoints.
-   */
-  route: ImportSourceRouteIngress2 | ImportSourceRouteGateway2;
-};
-
-export type ImportSourceCertificateNone1 = {
-  mode: "none";
-};
-
-export type ImportSourceCertificateManagedTLSSecret1 = {
-  mode: "managedTlsSecret";
-  /**
-   * Secret name template. Runtime may substitute resource/deployment tokens.
-   */
-  secretNameTemplate: string;
-};
-
-export type ImportSourceCertificateAwsAcmArn1 = {
-  /**
-   * Existing ACM certificate ARN.
-   */
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-export type ImportSourceCertificateManagedAcmImport1 = {
-  mode: "managedAcmImport";
-  /**
-   * ACM region. Defaults to the deployment region when omitted.
-   */
-  region?: string | null | undefined;
-  /**
-   * Tags applied to runtime-imported ACM certificates.
-   */
-  tags?: { [k: string]: string } | undefined;
-};
-
-/**
- * Namespace-scoped Kubernetes TLS Secret reference.
- */
-export type ImportSourceCertificateTLSSecretRef1 = {
-  /**
-   * Secret namespace. Defaults to the release namespace when omitted.
-   */
-  namespace?: string | null | undefined;
-  /**
-   * Secret name.
-   */
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/**
- * Certificate publication or reference mode for Kubernetes public endpoints.
- */
-export type ImportSourceCertificateUnion1 =
-  | ImportSourceCertificateTLSSecretRef1
-  | ImportSourceCertificateManagedAcmImport1
-  | ImportSourceCertificateAwsAcmArn1
-  | ImportSourceCertificateManagedTLSSecret1
-  | ImportSourceCertificateNone1;
-
-export const ImportSourceModeGenerated = {
-  Generated: "generated",
-} as const;
-export type ImportSourceModeGenerated = ClosedEnum<
-  typeof ImportSourceModeGenerated
->;
-
-export const ImportSourceProviderAzureApplicationGatewayForContainersEnum2 = {
-  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
-} as const;
-export type ImportSourceProviderAzureApplicationGatewayForContainersEnum2 =
-  ClosedEnum<
-    typeof ImportSourceProviderAzureApplicationGatewayForContainersEnum2
-  >;
-
-export type ImportSourceProviderAzureApplicationGatewayForContainers2 = {
-  /**
-   * Optional ALB name when using BYO Application Gateway resources.
-   */
-  albName?: string | null | undefined;
-  /**
-   * Optional ALB namespace when using BYO Application Gateway resources.
-   */
-  albNamespace?: string | null | undefined;
-  /**
-   * Public or internal frontend exposure.
-   */
-  frontend: string;
-  provider: ImportSourceProviderAzureApplicationGatewayForContainersEnum2;
-};
-
-export const ImportSourceProviderGkeGatewayEnum2 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type ImportSourceProviderGkeGatewayEnum2 = ClosedEnum<
-  typeof ImportSourceProviderGkeGatewayEnum2
->;
-
-export type ImportSourceProviderGkeGateway2 = {
-  provider: ImportSourceProviderGkeGatewayEnum2;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const ImportSourceProviderAwsAlbEnum2 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type ImportSourceProviderAwsAlbEnum2 = ClosedEnum<
-  typeof ImportSourceProviderAwsAlbEnum2
->;
-
-export type ImportSourceProviderAwsAlb2 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: ImportSourceProviderAwsAlbEnum2;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type ImportSourceProviderUnion2 =
-  | ImportSourceProviderAwsAlb2
-  | ImportSourceProviderAzureApplicationGatewayForContainers2
-  | ImportSourceProviderGkeGateway2
-  | string;
-
-/**
- * Shared Gateway API route profile values.
- */
-export type ImportSourceRouteGateway1 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example a cloud Gateway controller.
-   */
-  controller?: string | null | undefined;
-  /**
-   * GatewayClass selected for generated Gateways.
-   */
-  gatewayClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  /**
-   * Listener port, usually 443.
-   */
-  listenerPort: number;
-  provider?:
-    | ImportSourceProviderAwsAlb2
-    | ImportSourceProviderAzureApplicationGatewayForContainers2
-    | ImportSourceProviderGkeGateway2
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-export const ImportSourceProviderAzureApplicationGatewayForContainersEnum1 = {
-  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
-} as const;
-export type ImportSourceProviderAzureApplicationGatewayForContainersEnum1 =
-  ClosedEnum<
-    typeof ImportSourceProviderAzureApplicationGatewayForContainersEnum1
-  >;
-
-export type ImportSourceProviderAzureApplicationGatewayForContainers1 = {
-  /**
-   * Optional ALB name when using BYO Application Gateway resources.
-   */
-  albName?: string | null | undefined;
-  /**
-   * Optional ALB namespace when using BYO Application Gateway resources.
-   */
-  albNamespace?: string | null | undefined;
-  /**
-   * Public or internal frontend exposure.
-   */
-  frontend: string;
-  provider: ImportSourceProviderAzureApplicationGatewayForContainersEnum1;
-};
-
-export const ImportSourceProviderGkeGatewayEnum1 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type ImportSourceProviderGkeGatewayEnum1 = ClosedEnum<
-  typeof ImportSourceProviderGkeGatewayEnum1
->;
-
-export type ImportSourceProviderGkeGateway1 = {
-  provider: ImportSourceProviderGkeGatewayEnum1;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const ImportSourceProviderAwsAlbEnum1 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type ImportSourceProviderAwsAlbEnum1 = ClosedEnum<
-  typeof ImportSourceProviderAwsAlbEnum1
->;
-
-export type ImportSourceProviderAwsAlb1 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: ImportSourceProviderAwsAlbEnum1;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type ImportSourceProviderUnion1 =
-  | ImportSourceProviderAwsAlb1
-  | ImportSourceProviderAzureApplicationGatewayForContainers1
-  | ImportSourceProviderGkeGateway1
-  | string;
-
-/**
- * Shared Ingress route profile values.
- */
-export type ImportSourceRouteIngress1 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example `eks.amazonaws.com/alb`.
-   */
-  controller?: string | null | undefined;
-  /**
-   * `spec.ingressClassName` for generated Ingresses.
-   */
-  ingressClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | ImportSourceProviderAwsAlb1
-    | ImportSourceProviderAzureApplicationGatewayForContainers1
-    | ImportSourceProviderGkeGateway1
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/**
- * Kubernetes route API selected for public endpoints.
- */
-export type ImportSourceRouteUnion1 =
-  | ImportSourceRouteIngress1
-  | ImportSourceRouteGateway1;
-
-export type ImportSourceExposureGenerated = {
-  /**
-   * Certificate publication or reference mode for Kubernetes public endpoints.
-   */
-  certificate:
-    | ImportSourceCertificateTLSSecretRef1
-    | ImportSourceCertificateManagedAcmImport1
-    | ImportSourceCertificateAwsAcmArn1
-    | ImportSourceCertificateManagedTLSSecret1
-    | ImportSourceCertificateNone1;
-  mode: ImportSourceModeGenerated;
-  /**
-   * Kubernetes route API selected for public endpoints.
-   */
-  route: ImportSourceRouteIngress1 | ImportSourceRouteGateway1;
-};
-
-export const ImportSourceModeDisabled = {
-  Disabled: "disabled",
-} as const;
-export type ImportSourceModeDisabled = ClosedEnum<
-  typeof ImportSourceModeDisabled
->;
-
-export type ImportSourceExposureDisabled = {
-  mode: ImportSourceModeDisabled;
-};
-
-export type ImportSourceExposureUnion =
-  | ImportSourceExposureCustom
-  | ImportSourceExposureGenerated
-  | ImportSourceExposureDisabled
+export type ImportSourceExposure =
+  | KubernetesExposureCustom
+  | KubernetesExposureCustomBaseDomain
+  | KubernetesExposureGenerated
+  | KubernetesExposureDisabled
   | string;
 
 /**
@@ -996,9 +438,10 @@ export type ImportSourceExposureUnion =
 export type ImportSourceKubernetes = {
   cluster?: ImportSourceCluster | string | null | undefined;
   exposure?:
-    | ImportSourceExposureCustom
-    | ImportSourceExposureGenerated
-    | ImportSourceExposureDisabled
+    | KubernetesExposureCustom
+    | KubernetesExposureCustomBaseDomain
+    | KubernetesExposureGenerated
+    | KubernetesExposureDisabled
     | string
     | null
     | undefined;
@@ -1022,10 +465,10 @@ export type ImportSourceNetworkByoVnetAzure = {
    * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
    *
    * @remarks
-   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * Postgres Flexible Server or Azure Managed Redis). A Private Endpoint must not share the private
    * subnet, which is already claimed by the Container Apps environment's
    * `infrastructure_subnet_id`. Required only when the stack contains a
-   * Postgres resource; otherwise unused.
+   * Postgres or Redis resource; otherwise unused.
    */
   privateEndpointSubnetName?: string | null | undefined;
   /**
@@ -1147,6 +590,27 @@ export type ImportSourceSetupManagement = ClosedEnum<
 >;
 
 /**
+ * What setup pins for a protected install.
+ *
+ * @remarks
+ *
+ * Take the values from the vendor's install guide or signed release, not from the
+ * control plane.
+ */
+export type ImportSourceSigning = {
+  /**
+   * Release channel the install follows, such as `production`.
+   */
+  channel: string;
+  /**
+   * `SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.
+   */
+  fingerprint: string;
+};
+
+export type ImportSourceSigningUnion = ImportSourceSigning | string;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const ImportSourceTelemetry = {
@@ -1184,6 +648,13 @@ export type ImportSourceUpdates = ClosedEnum<typeof ImportSourceUpdates>;
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type ImportSourceStackSettings = {
+  /**
+   * Deliver Kubernetes updates and reports as carried bundles instead of a live connection.
+   *
+   * @remarks
+   * The Operator still executes deployments with the pull model.
+   */
+  airgapped?: boolean | undefined;
   compute?: ImportSourceCompute | string | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
@@ -1231,6 +702,7 @@ export type ImportSourceStackSettings = {
    * Whether setup remains a separate administrator operation.
    */
   setupManagement?: ImportSourceSetupManagement | undefined;
+  signing?: ImportSourceSigning | string | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -1498,6 +970,7 @@ export function importSourceFailureDomainsUnion2ToJSON(
 
 /** @internal */
 export type ImportSourcePoolsAutoscale$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?:
     | ImportSourceFailureDomains2$Outbound
     | string
@@ -1514,6 +987,7 @@ export const ImportSourcePoolsAutoscale$outboundSchema: z.ZodType<
   ImportSourcePoolsAutoscale$Outbound,
   ImportSourcePoolsAutoscale
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => ImportSourceFailureDomains2$outboundSchema),
@@ -1589,6 +1063,7 @@ export function importSourceFailureDomainsUnion1ToJSON(
 
 /** @internal */
 export type ImportSourcePoolsFixed$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?:
     | ImportSourceFailureDomains1$Outbound
     | string
@@ -1604,6 +1079,7 @@ export const ImportSourcePoolsFixed$outboundSchema: z.ZodType<
   ImportSourcePoolsFixed$Outbound,
   ImportSourcePoolsFixed
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => ImportSourceFailureDomains1$outboundSchema),
@@ -1894,7 +1370,43 @@ export function importSourceDomainsKubernetesUnionToJSON(
 }
 
 /** @internal */
-export type ImportSourceDomainsCertificate$Outbound = {
+export type ImportSourceManaged$Outbound = {};
+
+/** @internal */
+export const ImportSourceManaged$outboundSchema: z.ZodType<
+  ImportSourceManaged$Outbound,
+  ImportSourceManaged
+> = z.object({});
+
+export function importSourceManagedToJSON(
+  importSourceManaged: ImportSourceManaged,
+): string {
+  return JSON.stringify(
+    ImportSourceManaged$outboundSchema.parse(importSourceManaged),
+  );
+}
+
+/** @internal */
+export type ImportSourceManagedUnion$Outbound =
+  | ImportSourceManaged$Outbound
+  | string;
+
+/** @internal */
+export const ImportSourceManagedUnion$outboundSchema: z.ZodType<
+  ImportSourceManagedUnion$Outbound,
+  ImportSourceManagedUnion
+> = z.union([z.lazy(() => ImportSourceManaged$outboundSchema), z.string()]);
+
+export function importSourceManagedUnionToJSON(
+  importSourceManagedUnion: ImportSourceManagedUnion,
+): string {
+  return JSON.stringify(
+    ImportSourceManagedUnion$outboundSchema.parse(importSourceManagedUnion),
+  );
+}
+
+/** @internal */
+export type ImportSourceCertificate$Outbound = {
   aws?: ImportSourceAws$Outbound | string | null | undefined;
   azure?: ImportSourceAzure$Outbound | string | null | undefined;
   gcp?: ImportSourceGcp$Outbound | string | null | undefined;
@@ -1903,12 +1415,13 @@ export type ImportSourceDomainsCertificate$Outbound = {
     | string
     | null
     | undefined;
+  managed?: ImportSourceManaged$Outbound | string | null | undefined;
 };
 
 /** @internal */
-export const ImportSourceDomainsCertificate$outboundSchema: z.ZodType<
-  ImportSourceDomainsCertificate$Outbound,
-  ImportSourceDomainsCertificate
+export const ImportSourceCertificate$outboundSchema: z.ZodType<
+  ImportSourceCertificate$Outbound,
+  ImportSourceCertificate
 > = z.object({
   aws: z.nullable(
     z.union([z.lazy(() => ImportSourceAws$outboundSchema), z.string()]),
@@ -1925,22 +1438,24 @@ export const ImportSourceDomainsCertificate$outboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  managed: z.nullable(
+    z.union([z.lazy(() => ImportSourceManaged$outboundSchema), z.string()]),
+  ).optional(),
 });
 
-export function importSourceDomainsCertificateToJSON(
-  importSourceDomainsCertificate: ImportSourceDomainsCertificate,
+export function importSourceCertificateToJSON(
+  importSourceCertificate: ImportSourceCertificate,
 ): string {
   return JSON.stringify(
-    ImportSourceDomainsCertificate$outboundSchema.parse(
-      importSourceDomainsCertificate,
-    ),
+    ImportSourceCertificate$outboundSchema.parse(importSourceCertificate),
   );
 }
 
 /** @internal */
 export type ImportSourceCustomDomains$Outbound = {
-  certificate: ImportSourceDomainsCertificate$Outbound;
-  domain: string;
+  certificate: ImportSourceCertificate$Outbound;
+  domain?: string | undefined;
+  endpoints?: { [k: string]: string } | undefined;
 };
 
 /** @internal */
@@ -1948,8 +1463,9 @@ export const ImportSourceCustomDomains$outboundSchema: z.ZodType<
   ImportSourceCustomDomains$Outbound,
   ImportSourceCustomDomains
 > = z.object({
-  certificate: z.lazy(() => ImportSourceDomainsCertificate$outboundSchema),
-  domain: z.string(),
+  certificate: z.lazy(() => ImportSourceCertificate$outboundSchema),
+  domain: z.string().optional(),
+  endpoints: z.record(z.string(), z.string()).optional(),
 });
 
 export function importSourceCustomDomainsToJSON(
@@ -2225,1230 +1741,30 @@ export function importSourceClusterUnionToJSON(
 }
 
 /** @internal */
-export type ImportSourceCertificateNone2$Outbound = {
-  mode: "none";
-};
-
-/** @internal */
-export const ImportSourceCertificateNone2$outboundSchema: z.ZodType<
-  ImportSourceCertificateNone2$Outbound,
-  ImportSourceCertificateNone2
-> = z.object({
-  mode: z.literal("none"),
-});
-
-export function importSourceCertificateNone2ToJSON(
-  importSourceCertificateNone2: ImportSourceCertificateNone2,
-): string {
-  return JSON.stringify(
-    ImportSourceCertificateNone2$outboundSchema.parse(
-      importSourceCertificateNone2,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceCertificateManagedTLSSecret2$Outbound = {
-  mode: "managedTlsSecret";
-  secretNameTemplate: string;
-};
-
-/** @internal */
-export const ImportSourceCertificateManagedTLSSecret2$outboundSchema: z.ZodType<
-  ImportSourceCertificateManagedTLSSecret2$Outbound,
-  ImportSourceCertificateManagedTLSSecret2
-> = z.object({
-  mode: z.literal("managedTlsSecret"),
-  secretNameTemplate: z.string(),
-});
-
-export function importSourceCertificateManagedTLSSecret2ToJSON(
-  importSourceCertificateManagedTLSSecret2:
-    ImportSourceCertificateManagedTLSSecret2,
-): string {
-  return JSON.stringify(
-    ImportSourceCertificateManagedTLSSecret2$outboundSchema.parse(
-      importSourceCertificateManagedTLSSecret2,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceCertificateAwsAcmArn2$Outbound = {
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-/** @internal */
-export const ImportSourceCertificateAwsAcmArn2$outboundSchema: z.ZodType<
-  ImportSourceCertificateAwsAcmArn2$Outbound,
-  ImportSourceCertificateAwsAcmArn2
-> = z.object({
-  certificateArn: z.string(),
-  mode: z.literal("awsAcmArn"),
-});
-
-export function importSourceCertificateAwsAcmArn2ToJSON(
-  importSourceCertificateAwsAcmArn2: ImportSourceCertificateAwsAcmArn2,
-): string {
-  return JSON.stringify(
-    ImportSourceCertificateAwsAcmArn2$outboundSchema.parse(
-      importSourceCertificateAwsAcmArn2,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceCertificateManagedAcmImport2$Outbound = {
-  mode: "managedAcmImport";
-  region?: string | null | undefined;
-  tags?: { [k: string]: string } | undefined;
-};
-
-/** @internal */
-export const ImportSourceCertificateManagedAcmImport2$outboundSchema: z.ZodType<
-  ImportSourceCertificateManagedAcmImport2$Outbound,
-  ImportSourceCertificateManagedAcmImport2
-> = z.object({
-  mode: z.literal("managedAcmImport"),
-  region: z.nullable(z.string()).optional(),
-  tags: z.record(z.string(), z.string()).optional(),
-});
-
-export function importSourceCertificateManagedAcmImport2ToJSON(
-  importSourceCertificateManagedAcmImport2:
-    ImportSourceCertificateManagedAcmImport2,
-): string {
-  return JSON.stringify(
-    ImportSourceCertificateManagedAcmImport2$outboundSchema.parse(
-      importSourceCertificateManagedAcmImport2,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceCertificateTLSSecretRef2$Outbound = {
-  namespace?: string | null | undefined;
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/** @internal */
-export const ImportSourceCertificateTLSSecretRef2$outboundSchema: z.ZodType<
-  ImportSourceCertificateTLSSecretRef2$Outbound,
-  ImportSourceCertificateTLSSecretRef2
-> = z.object({
-  namespace: z.nullable(z.string()).optional(),
-  secretName: z.string(),
-  mode: z.literal("tlsSecretRef"),
-});
-
-export function importSourceCertificateTLSSecretRef2ToJSON(
-  importSourceCertificateTLSSecretRef2: ImportSourceCertificateTLSSecretRef2,
-): string {
-  return JSON.stringify(
-    ImportSourceCertificateTLSSecretRef2$outboundSchema.parse(
-      importSourceCertificateTLSSecretRef2,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceCertificateUnion2$Outbound =
-  | ImportSourceCertificateTLSSecretRef2$Outbound
-  | ImportSourceCertificateManagedAcmImport2$Outbound
-  | ImportSourceCertificateAwsAcmArn2$Outbound
-  | ImportSourceCertificateManagedTLSSecret2$Outbound
-  | ImportSourceCertificateNone2$Outbound;
-
-/** @internal */
-export const ImportSourceCertificateUnion2$outboundSchema: z.ZodType<
-  ImportSourceCertificateUnion2$Outbound,
-  ImportSourceCertificateUnion2
-> = z.union([
-  z.lazy(() => ImportSourceCertificateTLSSecretRef2$outboundSchema),
-  z.lazy(() => ImportSourceCertificateManagedAcmImport2$outboundSchema),
-  z.lazy(() => ImportSourceCertificateAwsAcmArn2$outboundSchema),
-  z.lazy(() => ImportSourceCertificateManagedTLSSecret2$outboundSchema),
-  z.lazy(() => ImportSourceCertificateNone2$outboundSchema),
-]);
-
-export function importSourceCertificateUnion2ToJSON(
-  importSourceCertificateUnion2: ImportSourceCertificateUnion2,
-): string {
-  return JSON.stringify(
-    ImportSourceCertificateUnion2$outboundSchema.parse(
-      importSourceCertificateUnion2,
-    ),
-  );
-}
-
-/** @internal */
-export const ImportSourceModeCustom$outboundSchema: z.ZodEnum<
-  typeof ImportSourceModeCustom
-> = z.enum(ImportSourceModeCustom);
-
-/** @internal */
-export const ImportSourceProviderAzureApplicationGatewayForContainersEnum4$outboundSchema:
-  z.ZodEnum<
-    typeof ImportSourceProviderAzureApplicationGatewayForContainersEnum4
-  > = z.enum(ImportSourceProviderAzureApplicationGatewayForContainersEnum4);
-
-/** @internal */
-export type ImportSourceProviderAzureApplicationGatewayForContainers4$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const ImportSourceProviderAzureApplicationGatewayForContainers4$outboundSchema:
-  z.ZodType<
-    ImportSourceProviderAzureApplicationGatewayForContainers4$Outbound,
-    ImportSourceProviderAzureApplicationGatewayForContainers4
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      ImportSourceProviderAzureApplicationGatewayForContainersEnum4$outboundSchema,
-  });
-
-export function importSourceProviderAzureApplicationGatewayForContainers4ToJSON(
-  importSourceProviderAzureApplicationGatewayForContainers4:
-    ImportSourceProviderAzureApplicationGatewayForContainers4,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderAzureApplicationGatewayForContainers4$outboundSchema
-      .parse(importSourceProviderAzureApplicationGatewayForContainers4),
-  );
-}
-
-/** @internal */
-export const ImportSourceProviderGkeGatewayEnum4$outboundSchema: z.ZodEnum<
-  typeof ImportSourceProviderGkeGatewayEnum4
-> = z.enum(ImportSourceProviderGkeGatewayEnum4);
-
-/** @internal */
-export type ImportSourceProviderGkeGateway4$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const ImportSourceProviderGkeGateway4$outboundSchema: z.ZodType<
-  ImportSourceProviderGkeGateway4$Outbound,
-  ImportSourceProviderGkeGateway4
-> = z.object({
-  provider: ImportSourceProviderGkeGatewayEnum4$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function importSourceProviderGkeGateway4ToJSON(
-  importSourceProviderGkeGateway4: ImportSourceProviderGkeGateway4,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderGkeGateway4$outboundSchema.parse(
-      importSourceProviderGkeGateway4,
-    ),
-  );
-}
-
-/** @internal */
-export const ImportSourceProviderAwsAlbEnum4$outboundSchema: z.ZodEnum<
-  typeof ImportSourceProviderAwsAlbEnum4
-> = z.enum(ImportSourceProviderAwsAlbEnum4);
-
-/** @internal */
-export type ImportSourceProviderAwsAlb4$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const ImportSourceProviderAwsAlb4$outboundSchema: z.ZodType<
-  ImportSourceProviderAwsAlb4$Outbound,
-  ImportSourceProviderAwsAlb4
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: ImportSourceProviderAwsAlbEnum4$outboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function importSourceProviderAwsAlb4ToJSON(
-  importSourceProviderAwsAlb4: ImportSourceProviderAwsAlb4,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderAwsAlb4$outboundSchema.parse(
-      importSourceProviderAwsAlb4,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceProviderUnion4$Outbound =
-  | ImportSourceProviderAwsAlb4$Outbound
-  | ImportSourceProviderAzureApplicationGatewayForContainers4$Outbound
-  | ImportSourceProviderGkeGateway4$Outbound
+export type ImportSourceExposure$Outbound =
+  | KubernetesExposureCustom$Outbound
+  | KubernetesExposureCustomBaseDomain$Outbound
+  | KubernetesExposureGenerated$Outbound
+  | KubernetesExposureDisabled$Outbound
   | string;
 
 /** @internal */
-export const ImportSourceProviderUnion4$outboundSchema: z.ZodType<
-  ImportSourceProviderUnion4$Outbound,
-  ImportSourceProviderUnion4
+export const ImportSourceExposure$outboundSchema: z.ZodType<
+  ImportSourceExposure$Outbound,
+  ImportSourceExposure
 > = z.union([
-  z.lazy(() => ImportSourceProviderAwsAlb4$outboundSchema),
-  z.lazy(() =>
-    ImportSourceProviderAzureApplicationGatewayForContainers4$outboundSchema
-  ),
-  z.lazy(() => ImportSourceProviderGkeGateway4$outboundSchema),
+  KubernetesExposureCustom$outboundSchema,
+  KubernetesExposureCustomBaseDomain$outboundSchema,
+  KubernetesExposureGenerated$outboundSchema,
+  KubernetesExposureDisabled$outboundSchema,
   z.string(),
 ]);
 
-export function importSourceProviderUnion4ToJSON(
-  importSourceProviderUnion4: ImportSourceProviderUnion4,
+export function importSourceExposureToJSON(
+  importSourceExposure: ImportSourceExposure,
 ): string {
   return JSON.stringify(
-    ImportSourceProviderUnion4$outboundSchema.parse(importSourceProviderUnion4),
-  );
-}
-
-/** @internal */
-export type ImportSourceRouteGateway2$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  gatewayClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  listenerPort: number;
-  provider?:
-    | ImportSourceProviderAwsAlb4$Outbound
-    | ImportSourceProviderAzureApplicationGatewayForContainers4$Outbound
-    | ImportSourceProviderGkeGateway4$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-/** @internal */
-export const ImportSourceRouteGateway2$outboundSchema: z.ZodType<
-  ImportSourceRouteGateway2$Outbound,
-  ImportSourceRouteGateway2
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  gatewayClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  listenerPort: z.int(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => ImportSourceProviderAwsAlb4$outboundSchema),
-      z.lazy(() =>
-        ImportSourceProviderAzureApplicationGatewayForContainers4$outboundSchema
-      ),
-      z.lazy(() => ImportSourceProviderGkeGateway4$outboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("gateway"),
-});
-
-export function importSourceRouteGateway2ToJSON(
-  importSourceRouteGateway2: ImportSourceRouteGateway2,
-): string {
-  return JSON.stringify(
-    ImportSourceRouteGateway2$outboundSchema.parse(importSourceRouteGateway2),
-  );
-}
-
-/** @internal */
-export const ImportSourceProviderAzureApplicationGatewayForContainersEnum3$outboundSchema:
-  z.ZodEnum<
-    typeof ImportSourceProviderAzureApplicationGatewayForContainersEnum3
-  > = z.enum(ImportSourceProviderAzureApplicationGatewayForContainersEnum3);
-
-/** @internal */
-export type ImportSourceProviderAzureApplicationGatewayForContainers3$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const ImportSourceProviderAzureApplicationGatewayForContainers3$outboundSchema:
-  z.ZodType<
-    ImportSourceProviderAzureApplicationGatewayForContainers3$Outbound,
-    ImportSourceProviderAzureApplicationGatewayForContainers3
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      ImportSourceProviderAzureApplicationGatewayForContainersEnum3$outboundSchema,
-  });
-
-export function importSourceProviderAzureApplicationGatewayForContainers3ToJSON(
-  importSourceProviderAzureApplicationGatewayForContainers3:
-    ImportSourceProviderAzureApplicationGatewayForContainers3,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderAzureApplicationGatewayForContainers3$outboundSchema
-      .parse(importSourceProviderAzureApplicationGatewayForContainers3),
-  );
-}
-
-/** @internal */
-export const ImportSourceProviderGkeGatewayEnum3$outboundSchema: z.ZodEnum<
-  typeof ImportSourceProviderGkeGatewayEnum3
-> = z.enum(ImportSourceProviderGkeGatewayEnum3);
-
-/** @internal */
-export type ImportSourceProviderGkeGateway3$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const ImportSourceProviderGkeGateway3$outboundSchema: z.ZodType<
-  ImportSourceProviderGkeGateway3$Outbound,
-  ImportSourceProviderGkeGateway3
-> = z.object({
-  provider: ImportSourceProviderGkeGatewayEnum3$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function importSourceProviderGkeGateway3ToJSON(
-  importSourceProviderGkeGateway3: ImportSourceProviderGkeGateway3,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderGkeGateway3$outboundSchema.parse(
-      importSourceProviderGkeGateway3,
-    ),
-  );
-}
-
-/** @internal */
-export const ImportSourceProviderAwsAlbEnum3$outboundSchema: z.ZodEnum<
-  typeof ImportSourceProviderAwsAlbEnum3
-> = z.enum(ImportSourceProviderAwsAlbEnum3);
-
-/** @internal */
-export type ImportSourceProviderAwsAlb3$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const ImportSourceProviderAwsAlb3$outboundSchema: z.ZodType<
-  ImportSourceProviderAwsAlb3$Outbound,
-  ImportSourceProviderAwsAlb3
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: ImportSourceProviderAwsAlbEnum3$outboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function importSourceProviderAwsAlb3ToJSON(
-  importSourceProviderAwsAlb3: ImportSourceProviderAwsAlb3,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderAwsAlb3$outboundSchema.parse(
-      importSourceProviderAwsAlb3,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceProviderUnion3$Outbound =
-  | ImportSourceProviderAwsAlb3$Outbound
-  | ImportSourceProviderAzureApplicationGatewayForContainers3$Outbound
-  | ImportSourceProviderGkeGateway3$Outbound
-  | string;
-
-/** @internal */
-export const ImportSourceProviderUnion3$outboundSchema: z.ZodType<
-  ImportSourceProviderUnion3$Outbound,
-  ImportSourceProviderUnion3
-> = z.union([
-  z.lazy(() => ImportSourceProviderAwsAlb3$outboundSchema),
-  z.lazy(() =>
-    ImportSourceProviderAzureApplicationGatewayForContainers3$outboundSchema
-  ),
-  z.lazy(() => ImportSourceProviderGkeGateway3$outboundSchema),
-  z.string(),
-]);
-
-export function importSourceProviderUnion3ToJSON(
-  importSourceProviderUnion3: ImportSourceProviderUnion3,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderUnion3$outboundSchema.parse(importSourceProviderUnion3),
-  );
-}
-
-/** @internal */
-export type ImportSourceRouteIngress2$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  ingressClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | ImportSourceProviderAwsAlb3$Outbound
-    | ImportSourceProviderAzureApplicationGatewayForContainers3$Outbound
-    | ImportSourceProviderGkeGateway3$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/** @internal */
-export const ImportSourceRouteIngress2$outboundSchema: z.ZodType<
-  ImportSourceRouteIngress2$Outbound,
-  ImportSourceRouteIngress2
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  ingressClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => ImportSourceProviderAwsAlb3$outboundSchema),
-      z.lazy(() =>
-        ImportSourceProviderAzureApplicationGatewayForContainers3$outboundSchema
-      ),
-      z.lazy(() => ImportSourceProviderGkeGateway3$outboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("ingress"),
-});
-
-export function importSourceRouteIngress2ToJSON(
-  importSourceRouteIngress2: ImportSourceRouteIngress2,
-): string {
-  return JSON.stringify(
-    ImportSourceRouteIngress2$outboundSchema.parse(importSourceRouteIngress2),
-  );
-}
-
-/** @internal */
-export type ImportSourceRouteUnion2$Outbound =
-  | ImportSourceRouteIngress2$Outbound
-  | ImportSourceRouteGateway2$Outbound;
-
-/** @internal */
-export const ImportSourceRouteUnion2$outboundSchema: z.ZodType<
-  ImportSourceRouteUnion2$Outbound,
-  ImportSourceRouteUnion2
-> = z.union([
-  z.lazy(() => ImportSourceRouteIngress2$outboundSchema),
-  z.lazy(() => ImportSourceRouteGateway2$outboundSchema),
-]);
-
-export function importSourceRouteUnion2ToJSON(
-  importSourceRouteUnion2: ImportSourceRouteUnion2,
-): string {
-  return JSON.stringify(
-    ImportSourceRouteUnion2$outboundSchema.parse(importSourceRouteUnion2),
-  );
-}
-
-/** @internal */
-export type ImportSourceExposureCustom$Outbound = {
-  certificate:
-    | ImportSourceCertificateTLSSecretRef2$Outbound
-    | ImportSourceCertificateManagedAcmImport2$Outbound
-    | ImportSourceCertificateAwsAcmArn2$Outbound
-    | ImportSourceCertificateManagedTLSSecret2$Outbound
-    | ImportSourceCertificateNone2$Outbound;
-  domain: string;
-  mode: string;
-  route:
-    | ImportSourceRouteIngress2$Outbound
-    | ImportSourceRouteGateway2$Outbound;
-};
-
-/** @internal */
-export const ImportSourceExposureCustom$outboundSchema: z.ZodType<
-  ImportSourceExposureCustom$Outbound,
-  ImportSourceExposureCustom
-> = z.object({
-  certificate: z.union([
-    z.lazy(() => ImportSourceCertificateTLSSecretRef2$outboundSchema),
-    z.lazy(() => ImportSourceCertificateManagedAcmImport2$outboundSchema),
-    z.lazy(() => ImportSourceCertificateAwsAcmArn2$outboundSchema),
-    z.lazy(() => ImportSourceCertificateManagedTLSSecret2$outboundSchema),
-    z.lazy(() => ImportSourceCertificateNone2$outboundSchema),
-  ]),
-  domain: z.string(),
-  mode: ImportSourceModeCustom$outboundSchema,
-  route: z.union([
-    z.lazy(() => ImportSourceRouteIngress2$outboundSchema),
-    z.lazy(() => ImportSourceRouteGateway2$outboundSchema),
-  ]),
-});
-
-export function importSourceExposureCustomToJSON(
-  importSourceExposureCustom: ImportSourceExposureCustom,
-): string {
-  return JSON.stringify(
-    ImportSourceExposureCustom$outboundSchema.parse(importSourceExposureCustom),
-  );
-}
-
-/** @internal */
-export type ImportSourceCertificateNone1$Outbound = {
-  mode: "none";
-};
-
-/** @internal */
-export const ImportSourceCertificateNone1$outboundSchema: z.ZodType<
-  ImportSourceCertificateNone1$Outbound,
-  ImportSourceCertificateNone1
-> = z.object({
-  mode: z.literal("none"),
-});
-
-export function importSourceCertificateNone1ToJSON(
-  importSourceCertificateNone1: ImportSourceCertificateNone1,
-): string {
-  return JSON.stringify(
-    ImportSourceCertificateNone1$outboundSchema.parse(
-      importSourceCertificateNone1,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceCertificateManagedTLSSecret1$Outbound = {
-  mode: "managedTlsSecret";
-  secretNameTemplate: string;
-};
-
-/** @internal */
-export const ImportSourceCertificateManagedTLSSecret1$outboundSchema: z.ZodType<
-  ImportSourceCertificateManagedTLSSecret1$Outbound,
-  ImportSourceCertificateManagedTLSSecret1
-> = z.object({
-  mode: z.literal("managedTlsSecret"),
-  secretNameTemplate: z.string(),
-});
-
-export function importSourceCertificateManagedTLSSecret1ToJSON(
-  importSourceCertificateManagedTLSSecret1:
-    ImportSourceCertificateManagedTLSSecret1,
-): string {
-  return JSON.stringify(
-    ImportSourceCertificateManagedTLSSecret1$outboundSchema.parse(
-      importSourceCertificateManagedTLSSecret1,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceCertificateAwsAcmArn1$Outbound = {
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-/** @internal */
-export const ImportSourceCertificateAwsAcmArn1$outboundSchema: z.ZodType<
-  ImportSourceCertificateAwsAcmArn1$Outbound,
-  ImportSourceCertificateAwsAcmArn1
-> = z.object({
-  certificateArn: z.string(),
-  mode: z.literal("awsAcmArn"),
-});
-
-export function importSourceCertificateAwsAcmArn1ToJSON(
-  importSourceCertificateAwsAcmArn1: ImportSourceCertificateAwsAcmArn1,
-): string {
-  return JSON.stringify(
-    ImportSourceCertificateAwsAcmArn1$outboundSchema.parse(
-      importSourceCertificateAwsAcmArn1,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceCertificateManagedAcmImport1$Outbound = {
-  mode: "managedAcmImport";
-  region?: string | null | undefined;
-  tags?: { [k: string]: string } | undefined;
-};
-
-/** @internal */
-export const ImportSourceCertificateManagedAcmImport1$outboundSchema: z.ZodType<
-  ImportSourceCertificateManagedAcmImport1$Outbound,
-  ImportSourceCertificateManagedAcmImport1
-> = z.object({
-  mode: z.literal("managedAcmImport"),
-  region: z.nullable(z.string()).optional(),
-  tags: z.record(z.string(), z.string()).optional(),
-});
-
-export function importSourceCertificateManagedAcmImport1ToJSON(
-  importSourceCertificateManagedAcmImport1:
-    ImportSourceCertificateManagedAcmImport1,
-): string {
-  return JSON.stringify(
-    ImportSourceCertificateManagedAcmImport1$outboundSchema.parse(
-      importSourceCertificateManagedAcmImport1,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceCertificateTLSSecretRef1$Outbound = {
-  namespace?: string | null | undefined;
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/** @internal */
-export const ImportSourceCertificateTLSSecretRef1$outboundSchema: z.ZodType<
-  ImportSourceCertificateTLSSecretRef1$Outbound,
-  ImportSourceCertificateTLSSecretRef1
-> = z.object({
-  namespace: z.nullable(z.string()).optional(),
-  secretName: z.string(),
-  mode: z.literal("tlsSecretRef"),
-});
-
-export function importSourceCertificateTLSSecretRef1ToJSON(
-  importSourceCertificateTLSSecretRef1: ImportSourceCertificateTLSSecretRef1,
-): string {
-  return JSON.stringify(
-    ImportSourceCertificateTLSSecretRef1$outboundSchema.parse(
-      importSourceCertificateTLSSecretRef1,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceCertificateUnion1$Outbound =
-  | ImportSourceCertificateTLSSecretRef1$Outbound
-  | ImportSourceCertificateManagedAcmImport1$Outbound
-  | ImportSourceCertificateAwsAcmArn1$Outbound
-  | ImportSourceCertificateManagedTLSSecret1$Outbound
-  | ImportSourceCertificateNone1$Outbound;
-
-/** @internal */
-export const ImportSourceCertificateUnion1$outboundSchema: z.ZodType<
-  ImportSourceCertificateUnion1$Outbound,
-  ImportSourceCertificateUnion1
-> = z.union([
-  z.lazy(() => ImportSourceCertificateTLSSecretRef1$outboundSchema),
-  z.lazy(() => ImportSourceCertificateManagedAcmImport1$outboundSchema),
-  z.lazy(() => ImportSourceCertificateAwsAcmArn1$outboundSchema),
-  z.lazy(() => ImportSourceCertificateManagedTLSSecret1$outboundSchema),
-  z.lazy(() => ImportSourceCertificateNone1$outboundSchema),
-]);
-
-export function importSourceCertificateUnion1ToJSON(
-  importSourceCertificateUnion1: ImportSourceCertificateUnion1,
-): string {
-  return JSON.stringify(
-    ImportSourceCertificateUnion1$outboundSchema.parse(
-      importSourceCertificateUnion1,
-    ),
-  );
-}
-
-/** @internal */
-export const ImportSourceModeGenerated$outboundSchema: z.ZodEnum<
-  typeof ImportSourceModeGenerated
-> = z.enum(ImportSourceModeGenerated);
-
-/** @internal */
-export const ImportSourceProviderAzureApplicationGatewayForContainersEnum2$outboundSchema:
-  z.ZodEnum<
-    typeof ImportSourceProviderAzureApplicationGatewayForContainersEnum2
-  > = z.enum(ImportSourceProviderAzureApplicationGatewayForContainersEnum2);
-
-/** @internal */
-export type ImportSourceProviderAzureApplicationGatewayForContainers2$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const ImportSourceProviderAzureApplicationGatewayForContainers2$outboundSchema:
-  z.ZodType<
-    ImportSourceProviderAzureApplicationGatewayForContainers2$Outbound,
-    ImportSourceProviderAzureApplicationGatewayForContainers2
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      ImportSourceProviderAzureApplicationGatewayForContainersEnum2$outboundSchema,
-  });
-
-export function importSourceProviderAzureApplicationGatewayForContainers2ToJSON(
-  importSourceProviderAzureApplicationGatewayForContainers2:
-    ImportSourceProviderAzureApplicationGatewayForContainers2,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderAzureApplicationGatewayForContainers2$outboundSchema
-      .parse(importSourceProviderAzureApplicationGatewayForContainers2),
-  );
-}
-
-/** @internal */
-export const ImportSourceProviderGkeGatewayEnum2$outboundSchema: z.ZodEnum<
-  typeof ImportSourceProviderGkeGatewayEnum2
-> = z.enum(ImportSourceProviderGkeGatewayEnum2);
-
-/** @internal */
-export type ImportSourceProviderGkeGateway2$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const ImportSourceProviderGkeGateway2$outboundSchema: z.ZodType<
-  ImportSourceProviderGkeGateway2$Outbound,
-  ImportSourceProviderGkeGateway2
-> = z.object({
-  provider: ImportSourceProviderGkeGatewayEnum2$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function importSourceProviderGkeGateway2ToJSON(
-  importSourceProviderGkeGateway2: ImportSourceProviderGkeGateway2,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderGkeGateway2$outboundSchema.parse(
-      importSourceProviderGkeGateway2,
-    ),
-  );
-}
-
-/** @internal */
-export const ImportSourceProviderAwsAlbEnum2$outboundSchema: z.ZodEnum<
-  typeof ImportSourceProviderAwsAlbEnum2
-> = z.enum(ImportSourceProviderAwsAlbEnum2);
-
-/** @internal */
-export type ImportSourceProviderAwsAlb2$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const ImportSourceProviderAwsAlb2$outboundSchema: z.ZodType<
-  ImportSourceProviderAwsAlb2$Outbound,
-  ImportSourceProviderAwsAlb2
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: ImportSourceProviderAwsAlbEnum2$outboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function importSourceProviderAwsAlb2ToJSON(
-  importSourceProviderAwsAlb2: ImportSourceProviderAwsAlb2,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderAwsAlb2$outboundSchema.parse(
-      importSourceProviderAwsAlb2,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceProviderUnion2$Outbound =
-  | ImportSourceProviderAwsAlb2$Outbound
-  | ImportSourceProviderAzureApplicationGatewayForContainers2$Outbound
-  | ImportSourceProviderGkeGateway2$Outbound
-  | string;
-
-/** @internal */
-export const ImportSourceProviderUnion2$outboundSchema: z.ZodType<
-  ImportSourceProviderUnion2$Outbound,
-  ImportSourceProviderUnion2
-> = z.union([
-  z.lazy(() => ImportSourceProviderAwsAlb2$outboundSchema),
-  z.lazy(() =>
-    ImportSourceProviderAzureApplicationGatewayForContainers2$outboundSchema
-  ),
-  z.lazy(() => ImportSourceProviderGkeGateway2$outboundSchema),
-  z.string(),
-]);
-
-export function importSourceProviderUnion2ToJSON(
-  importSourceProviderUnion2: ImportSourceProviderUnion2,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderUnion2$outboundSchema.parse(importSourceProviderUnion2),
-  );
-}
-
-/** @internal */
-export type ImportSourceRouteGateway1$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  gatewayClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  listenerPort: number;
-  provider?:
-    | ImportSourceProviderAwsAlb2$Outbound
-    | ImportSourceProviderAzureApplicationGatewayForContainers2$Outbound
-    | ImportSourceProviderGkeGateway2$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-/** @internal */
-export const ImportSourceRouteGateway1$outboundSchema: z.ZodType<
-  ImportSourceRouteGateway1$Outbound,
-  ImportSourceRouteGateway1
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  gatewayClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  listenerPort: z.int(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => ImportSourceProviderAwsAlb2$outboundSchema),
-      z.lazy(() =>
-        ImportSourceProviderAzureApplicationGatewayForContainers2$outboundSchema
-      ),
-      z.lazy(() => ImportSourceProviderGkeGateway2$outboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("gateway"),
-});
-
-export function importSourceRouteGateway1ToJSON(
-  importSourceRouteGateway1: ImportSourceRouteGateway1,
-): string {
-  return JSON.stringify(
-    ImportSourceRouteGateway1$outboundSchema.parse(importSourceRouteGateway1),
-  );
-}
-
-/** @internal */
-export const ImportSourceProviderAzureApplicationGatewayForContainersEnum1$outboundSchema:
-  z.ZodEnum<
-    typeof ImportSourceProviderAzureApplicationGatewayForContainersEnum1
-  > = z.enum(ImportSourceProviderAzureApplicationGatewayForContainersEnum1);
-
-/** @internal */
-export type ImportSourceProviderAzureApplicationGatewayForContainers1$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const ImportSourceProviderAzureApplicationGatewayForContainers1$outboundSchema:
-  z.ZodType<
-    ImportSourceProviderAzureApplicationGatewayForContainers1$Outbound,
-    ImportSourceProviderAzureApplicationGatewayForContainers1
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      ImportSourceProviderAzureApplicationGatewayForContainersEnum1$outboundSchema,
-  });
-
-export function importSourceProviderAzureApplicationGatewayForContainers1ToJSON(
-  importSourceProviderAzureApplicationGatewayForContainers1:
-    ImportSourceProviderAzureApplicationGatewayForContainers1,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderAzureApplicationGatewayForContainers1$outboundSchema
-      .parse(importSourceProviderAzureApplicationGatewayForContainers1),
-  );
-}
-
-/** @internal */
-export const ImportSourceProviderGkeGatewayEnum1$outboundSchema: z.ZodEnum<
-  typeof ImportSourceProviderGkeGatewayEnum1
-> = z.enum(ImportSourceProviderGkeGatewayEnum1);
-
-/** @internal */
-export type ImportSourceProviderGkeGateway1$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const ImportSourceProviderGkeGateway1$outboundSchema: z.ZodType<
-  ImportSourceProviderGkeGateway1$Outbound,
-  ImportSourceProviderGkeGateway1
-> = z.object({
-  provider: ImportSourceProviderGkeGatewayEnum1$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function importSourceProviderGkeGateway1ToJSON(
-  importSourceProviderGkeGateway1: ImportSourceProviderGkeGateway1,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderGkeGateway1$outboundSchema.parse(
-      importSourceProviderGkeGateway1,
-    ),
-  );
-}
-
-/** @internal */
-export const ImportSourceProviderAwsAlbEnum1$outboundSchema: z.ZodEnum<
-  typeof ImportSourceProviderAwsAlbEnum1
-> = z.enum(ImportSourceProviderAwsAlbEnum1);
-
-/** @internal */
-export type ImportSourceProviderAwsAlb1$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const ImportSourceProviderAwsAlb1$outboundSchema: z.ZodType<
-  ImportSourceProviderAwsAlb1$Outbound,
-  ImportSourceProviderAwsAlb1
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: ImportSourceProviderAwsAlbEnum1$outboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function importSourceProviderAwsAlb1ToJSON(
-  importSourceProviderAwsAlb1: ImportSourceProviderAwsAlb1,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderAwsAlb1$outboundSchema.parse(
-      importSourceProviderAwsAlb1,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceProviderUnion1$Outbound =
-  | ImportSourceProviderAwsAlb1$Outbound
-  | ImportSourceProviderAzureApplicationGatewayForContainers1$Outbound
-  | ImportSourceProviderGkeGateway1$Outbound
-  | string;
-
-/** @internal */
-export const ImportSourceProviderUnion1$outboundSchema: z.ZodType<
-  ImportSourceProviderUnion1$Outbound,
-  ImportSourceProviderUnion1
-> = z.union([
-  z.lazy(() => ImportSourceProviderAwsAlb1$outboundSchema),
-  z.lazy(() =>
-    ImportSourceProviderAzureApplicationGatewayForContainers1$outboundSchema
-  ),
-  z.lazy(() => ImportSourceProviderGkeGateway1$outboundSchema),
-  z.string(),
-]);
-
-export function importSourceProviderUnion1ToJSON(
-  importSourceProviderUnion1: ImportSourceProviderUnion1,
-): string {
-  return JSON.stringify(
-    ImportSourceProviderUnion1$outboundSchema.parse(importSourceProviderUnion1),
-  );
-}
-
-/** @internal */
-export type ImportSourceRouteIngress1$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  ingressClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | ImportSourceProviderAwsAlb1$Outbound
-    | ImportSourceProviderAzureApplicationGatewayForContainers1$Outbound
-    | ImportSourceProviderGkeGateway1$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/** @internal */
-export const ImportSourceRouteIngress1$outboundSchema: z.ZodType<
-  ImportSourceRouteIngress1$Outbound,
-  ImportSourceRouteIngress1
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  ingressClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => ImportSourceProviderAwsAlb1$outboundSchema),
-      z.lazy(() =>
-        ImportSourceProviderAzureApplicationGatewayForContainers1$outboundSchema
-      ),
-      z.lazy(() => ImportSourceProviderGkeGateway1$outboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("ingress"),
-});
-
-export function importSourceRouteIngress1ToJSON(
-  importSourceRouteIngress1: ImportSourceRouteIngress1,
-): string {
-  return JSON.stringify(
-    ImportSourceRouteIngress1$outboundSchema.parse(importSourceRouteIngress1),
-  );
-}
-
-/** @internal */
-export type ImportSourceRouteUnion1$Outbound =
-  | ImportSourceRouteIngress1$Outbound
-  | ImportSourceRouteGateway1$Outbound;
-
-/** @internal */
-export const ImportSourceRouteUnion1$outboundSchema: z.ZodType<
-  ImportSourceRouteUnion1$Outbound,
-  ImportSourceRouteUnion1
-> = z.union([
-  z.lazy(() => ImportSourceRouteIngress1$outboundSchema),
-  z.lazy(() => ImportSourceRouteGateway1$outboundSchema),
-]);
-
-export function importSourceRouteUnion1ToJSON(
-  importSourceRouteUnion1: ImportSourceRouteUnion1,
-): string {
-  return JSON.stringify(
-    ImportSourceRouteUnion1$outboundSchema.parse(importSourceRouteUnion1),
-  );
-}
-
-/** @internal */
-export type ImportSourceExposureGenerated$Outbound = {
-  certificate:
-    | ImportSourceCertificateTLSSecretRef1$Outbound
-    | ImportSourceCertificateManagedAcmImport1$Outbound
-    | ImportSourceCertificateAwsAcmArn1$Outbound
-    | ImportSourceCertificateManagedTLSSecret1$Outbound
-    | ImportSourceCertificateNone1$Outbound;
-  mode: string;
-  route:
-    | ImportSourceRouteIngress1$Outbound
-    | ImportSourceRouteGateway1$Outbound;
-};
-
-/** @internal */
-export const ImportSourceExposureGenerated$outboundSchema: z.ZodType<
-  ImportSourceExposureGenerated$Outbound,
-  ImportSourceExposureGenerated
-> = z.object({
-  certificate: z.union([
-    z.lazy(() => ImportSourceCertificateTLSSecretRef1$outboundSchema),
-    z.lazy(() => ImportSourceCertificateManagedAcmImport1$outboundSchema),
-    z.lazy(() => ImportSourceCertificateAwsAcmArn1$outboundSchema),
-    z.lazy(() => ImportSourceCertificateManagedTLSSecret1$outboundSchema),
-    z.lazy(() => ImportSourceCertificateNone1$outboundSchema),
-  ]),
-  mode: ImportSourceModeGenerated$outboundSchema,
-  route: z.union([
-    z.lazy(() => ImportSourceRouteIngress1$outboundSchema),
-    z.lazy(() => ImportSourceRouteGateway1$outboundSchema),
-  ]),
-});
-
-export function importSourceExposureGeneratedToJSON(
-  importSourceExposureGenerated: ImportSourceExposureGenerated,
-): string {
-  return JSON.stringify(
-    ImportSourceExposureGenerated$outboundSchema.parse(
-      importSourceExposureGenerated,
-    ),
-  );
-}
-
-/** @internal */
-export const ImportSourceModeDisabled$outboundSchema: z.ZodEnum<
-  typeof ImportSourceModeDisabled
-> = z.enum(ImportSourceModeDisabled);
-
-/** @internal */
-export type ImportSourceExposureDisabled$Outbound = {
-  mode: string;
-};
-
-/** @internal */
-export const ImportSourceExposureDisabled$outboundSchema: z.ZodType<
-  ImportSourceExposureDisabled$Outbound,
-  ImportSourceExposureDisabled
-> = z.object({
-  mode: ImportSourceModeDisabled$outboundSchema,
-});
-
-export function importSourceExposureDisabledToJSON(
-  importSourceExposureDisabled: ImportSourceExposureDisabled,
-): string {
-  return JSON.stringify(
-    ImportSourceExposureDisabled$outboundSchema.parse(
-      importSourceExposureDisabled,
-    ),
-  );
-}
-
-/** @internal */
-export type ImportSourceExposureUnion$Outbound =
-  | ImportSourceExposureCustom$Outbound
-  | ImportSourceExposureGenerated$Outbound
-  | ImportSourceExposureDisabled$Outbound
-  | string;
-
-/** @internal */
-export const ImportSourceExposureUnion$outboundSchema: z.ZodType<
-  ImportSourceExposureUnion$Outbound,
-  ImportSourceExposureUnion
-> = z.union([
-  z.lazy(() => ImportSourceExposureCustom$outboundSchema),
-  z.lazy(() => ImportSourceExposureGenerated$outboundSchema),
-  z.lazy(() => ImportSourceExposureDisabled$outboundSchema),
-  z.string(),
-]);
-
-export function importSourceExposureUnionToJSON(
-  importSourceExposureUnion: ImportSourceExposureUnion,
-): string {
-  return JSON.stringify(
-    ImportSourceExposureUnion$outboundSchema.parse(importSourceExposureUnion),
+    ImportSourceExposure$outboundSchema.parse(importSourceExposure),
   );
 }
 
@@ -3456,9 +1772,10 @@ export function importSourceExposureUnionToJSON(
 export type ImportSourceKubernetes$Outbound = {
   cluster?: ImportSourceCluster$Outbound | string | null | undefined;
   exposure?:
-    | ImportSourceExposureCustom$Outbound
-    | ImportSourceExposureGenerated$Outbound
-    | ImportSourceExposureDisabled$Outbound
+    | KubernetesExposureCustom$Outbound
+    | KubernetesExposureCustomBaseDomain$Outbound
+    | KubernetesExposureGenerated$Outbound
+    | KubernetesExposureDisabled$Outbound
     | string
     | null
     | undefined;
@@ -3474,9 +1791,10 @@ export const ImportSourceKubernetes$outboundSchema: z.ZodType<
   ).optional(),
   exposure: z.nullable(
     z.union([
-      z.lazy(() => ImportSourceExposureCustom$outboundSchema),
-      z.lazy(() => ImportSourceExposureGenerated$outboundSchema),
-      z.lazy(() => ImportSourceExposureDisabled$outboundSchema),
+      KubernetesExposureCustom$outboundSchema,
+      KubernetesExposureCustomBaseDomain$outboundSchema,
+      KubernetesExposureGenerated$outboundSchema,
+      KubernetesExposureDisabled$outboundSchema,
       z.string(),
     ]),
   ).optional(),
@@ -3737,6 +2055,48 @@ export const ImportSourceSetupManagement$outboundSchema: z.ZodEnum<
 > = z.enum(ImportSourceSetupManagement);
 
 /** @internal */
+export type ImportSourceSigning$Outbound = {
+  channel: string;
+  fingerprint: string;
+};
+
+/** @internal */
+export const ImportSourceSigning$outboundSchema: z.ZodType<
+  ImportSourceSigning$Outbound,
+  ImportSourceSigning
+> = z.object({
+  channel: z.string(),
+  fingerprint: z.string(),
+});
+
+export function importSourceSigningToJSON(
+  importSourceSigning: ImportSourceSigning,
+): string {
+  return JSON.stringify(
+    ImportSourceSigning$outboundSchema.parse(importSourceSigning),
+  );
+}
+
+/** @internal */
+export type ImportSourceSigningUnion$Outbound =
+  | ImportSourceSigning$Outbound
+  | string;
+
+/** @internal */
+export const ImportSourceSigningUnion$outboundSchema: z.ZodType<
+  ImportSourceSigningUnion$Outbound,
+  ImportSourceSigningUnion
+> = z.union([z.lazy(() => ImportSourceSigning$outboundSchema), z.string()]);
+
+export function importSourceSigningUnionToJSON(
+  importSourceSigningUnion: ImportSourceSigningUnion,
+): string {
+  return JSON.stringify(
+    ImportSourceSigningUnion$outboundSchema.parse(importSourceSigningUnion),
+  );
+}
+
+/** @internal */
 export const ImportSourceTelemetry$outboundSchema: z.ZodEnum<
   typeof ImportSourceTelemetry
 > = z.enum(ImportSourceTelemetry);
@@ -3748,6 +2108,7 @@ export const ImportSourceUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type ImportSourceStackSettings$Outbound = {
+  airgapped?: boolean | undefined;
   compute?: ImportSourceCompute$Outbound | string | null | undefined;
   deploymentModel?: string | undefined;
   domains?: ImportSourceDomains$Outbound | string | null | undefined;
@@ -3770,6 +2131,7 @@ export type ImportSourceStackSettings$Outbound = {
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   quotaWarningOverrides?: Array<string> | undefined;
   setupManagement?: string | undefined;
+  signing?: ImportSourceSigning$Outbound | string | null | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -3779,6 +2141,7 @@ export const ImportSourceStackSettings$outboundSchema: z.ZodType<
   ImportSourceStackSettings$Outbound,
   ImportSourceStackSettings
 > = z.object({
+  airgapped: z.boolean().optional(),
   compute: z.nullable(
     z.union([z.lazy(() => ImportSourceCompute$outboundSchema), z.string()]),
   ).optional(),
@@ -3809,6 +2172,9 @@ export const ImportSourceStackSettings$outboundSchema: z.ZodType<
   ).optional(),
   quotaWarningOverrides: z.array(z.string()).optional(),
   setupManagement: ImportSourceSetupManagement$outboundSchema.optional(),
+  signing: z.nullable(
+    z.union([z.lazy(() => ImportSourceSigning$outboundSchema), z.string()]),
+  ).optional(),
   telemetry: ImportSourceTelemetry$outboundSchema.optional(),
   updates: ImportSourceUpdates$outboundSchema.optional(),
 });
@@ -4093,3 +2459,191 @@ export const ImportSource$outboundSchema: z.ZodType<
 export function importSourceToJSON(importSource: ImportSource): string {
   return JSON.stringify(ImportSource$outboundSchema.parse(importSource));
 }
+
+// Published compatibility exports. Generated by generate-compatibility-exports.mjs.
+export type { KubernetesExposureGeneratedCertificateAwsAcmArn as ImportSourceCertificateAwsAcmArn1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedCertificateAwsAcmArn$Outbound as ImportSourceCertificateAwsAcmArn1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedCertificateAwsAcmArn$outboundSchema as ImportSourceCertificateAwsAcmArn1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedCertificateAwsAcmArnToJSON as importSourceCertificateAwsAcmArn1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomCertificateAwsAcmArn as ImportSourceCertificateAwsAcmArn2 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomCertificateAwsAcmArn$Outbound as ImportSourceCertificateAwsAcmArn2$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomCertificateAwsAcmArn$outboundSchema as ImportSourceCertificateAwsAcmArn2$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomCertificateAwsAcmArnToJSON as importSourceCertificateAwsAcmArn2ToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureGeneratedCertificateManagedAcmImport as ImportSourceCertificateManagedAcmImport1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedCertificateManagedAcmImport$Outbound as ImportSourceCertificateManagedAcmImport1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedCertificateManagedAcmImport$outboundSchema as ImportSourceCertificateManagedAcmImport1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedCertificateManagedAcmImportToJSON as importSourceCertificateManagedAcmImport1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomCertificateManagedAcmImport as ImportSourceCertificateManagedAcmImport2 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomCertificateManagedAcmImport$Outbound as ImportSourceCertificateManagedAcmImport2$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomCertificateManagedAcmImport$outboundSchema as ImportSourceCertificateManagedAcmImport2$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomCertificateManagedAcmImportToJSON as importSourceCertificateManagedAcmImport2ToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureGeneratedCertificateManagedTLSSecret as ImportSourceCertificateManagedTLSSecret1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedCertificateManagedTLSSecret$Outbound as ImportSourceCertificateManagedTLSSecret1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedCertificateManagedTLSSecret$outboundSchema as ImportSourceCertificateManagedTLSSecret1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedCertificateManagedTLSSecretToJSON as importSourceCertificateManagedTLSSecret1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomCertificateManagedTLSSecret as ImportSourceCertificateManagedTLSSecret2 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomCertificateManagedTLSSecret$Outbound as ImportSourceCertificateManagedTLSSecret2$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomCertificateManagedTLSSecret$outboundSchema as ImportSourceCertificateManagedTLSSecret2$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomCertificateManagedTLSSecretToJSON as importSourceCertificateManagedTLSSecret2ToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureGeneratedCertificateNone as ImportSourceCertificateNone1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedCertificateNone$Outbound as ImportSourceCertificateNone1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedCertificateNone$outboundSchema as ImportSourceCertificateNone1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedCertificateNoneToJSON as importSourceCertificateNone1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomCertificateNone as ImportSourceCertificateNone2 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomCertificateNone$Outbound as ImportSourceCertificateNone2$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomCertificateNone$outboundSchema as ImportSourceCertificateNone2$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomCertificateNoneToJSON as importSourceCertificateNone2ToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureGeneratedCertificateTLSSecretRef as ImportSourceCertificateTLSSecretRef1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedCertificateTLSSecretRef$Outbound as ImportSourceCertificateTLSSecretRef1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedCertificateTLSSecretRef$outboundSchema as ImportSourceCertificateTLSSecretRef1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedCertificateTLSSecretRefToJSON as importSourceCertificateTLSSecretRef1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomCertificateTLSSecretRef as ImportSourceCertificateTLSSecretRef2 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomCertificateTLSSecretRef$Outbound as ImportSourceCertificateTLSSecretRef2$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomCertificateTLSSecretRef$outboundSchema as ImportSourceCertificateTLSSecretRef2$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomCertificateTLSSecretRefToJSON as importSourceCertificateTLSSecretRef2ToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureGeneratedCertificateUnion as ImportSourceCertificateUnion1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedCertificateUnion$Outbound as ImportSourceCertificateUnion1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedCertificateUnion$outboundSchema as ImportSourceCertificateUnion1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedCertificateUnionToJSON as importSourceCertificateUnion1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomCertificateUnion as ImportSourceCertificateUnion2 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomCertificateUnion$Outbound as ImportSourceCertificateUnion2$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomCertificateUnion$outboundSchema as ImportSourceCertificateUnion2$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomCertificateUnionToJSON as importSourceCertificateUnion2ToJSON } from "./kubernetesexposurecustom.js";
+export type { ImportSourceCertificate as ImportSourceDomainsCertificate };
+export type { ImportSourceCertificate$Outbound as ImportSourceDomainsCertificate$Outbound };
+export { ImportSourceCertificate$outboundSchema as ImportSourceDomainsCertificate$outboundSchema };
+export { importSourceCertificateToJSON as importSourceDomainsCertificateToJSON };
+export type { KubernetesExposureCustom as ImportSourceExposureCustom } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustom$Outbound as ImportSourceExposureCustom$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustom$outboundSchema as ImportSourceExposureCustom$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomToJSON as importSourceExposureCustomToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureDisabled as ImportSourceExposureDisabled } from "./kubernetesexposuredisabled.js";
+export type { KubernetesExposureDisabled$Outbound as ImportSourceExposureDisabled$Outbound } from "./kubernetesexposuredisabled.js";
+export { KubernetesExposureDisabled$outboundSchema as ImportSourceExposureDisabled$outboundSchema } from "./kubernetesexposuredisabled.js";
+export { kubernetesExposureDisabledToJSON as importSourceExposureDisabledToJSON } from "./kubernetesexposuredisabled.js";
+export type { KubernetesExposureGenerated as ImportSourceExposureGenerated } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGenerated$Outbound as ImportSourceExposureGenerated$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGenerated$outboundSchema as ImportSourceExposureGenerated$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedToJSON as importSourceExposureGeneratedToJSON } from "./kubernetesexposuregenerated.js";
+export type { CreateManagerResponseExposure3 as ImportSourceExposureUnion } from "./createmanagerresponse.js";
+export type { CreateSetupRegistrationOperationRequestExposure$Outbound as ImportSourceExposureUnion$Outbound } from "./createsetupregistrationoperationrequest.js";
+export { CreateSetupRegistrationOperationRequestExposure$outboundSchema as ImportSourceExposureUnion$outboundSchema } from "./createsetupregistrationoperationrequest.js";
+export { createSetupRegistrationOperationRequestExposureToJSON as importSourceExposureUnionToJSON } from "./createsetupregistrationoperationrequest.js";
+export { KubernetesExposureCustomModeCustom as ImportSourceModeCustom } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomModeCustom$outboundSchema as ImportSourceModeCustom$outboundSchema } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureDisabledMode as ImportSourceModeDisabled } from "./kubernetesexposuredisabled.js";
+export { KubernetesExposureDisabledMode$outboundSchema as ImportSourceModeDisabled$outboundSchema } from "./kubernetesexposuredisabled.js";
+export { ModeGenerated as ImportSourceModeGenerated } from "./kubernetesexposuregenerated.js";
+export { ModeGenerated$outboundSchema as ImportSourceModeGenerated$outboundSchema } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderAwsAlb1 as ImportSourceProviderAwsAlb1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderAwsAlb1$Outbound as ImportSourceProviderAwsAlb1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderAwsAlb1$outboundSchema as ImportSourceProviderAwsAlb1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedProviderAwsAlb1ToJSON as importSourceProviderAwsAlb1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderAwsAlb2 as ImportSourceProviderAwsAlb2 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderAwsAlb2$Outbound as ImportSourceProviderAwsAlb2$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderAwsAlb2$outboundSchema as ImportSourceProviderAwsAlb2$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedProviderAwsAlb2ToJSON as importSourceProviderAwsAlb2ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomProviderAwsAlb1 as ImportSourceProviderAwsAlb3 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomProviderAwsAlb1$Outbound as ImportSourceProviderAwsAlb3$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderAwsAlb1$outboundSchema as ImportSourceProviderAwsAlb3$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomProviderAwsAlb1ToJSON as importSourceProviderAwsAlb3ToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomProviderAwsAlb2 as ImportSourceProviderAwsAlb4 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomProviderAwsAlb2$Outbound as ImportSourceProviderAwsAlb4$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderAwsAlb2$outboundSchema as ImportSourceProviderAwsAlb4$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomProviderAwsAlb2ToJSON as importSourceProviderAwsAlb4ToJSON } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureGeneratedProviderAwsAlbEnum1 as ImportSourceProviderAwsAlbEnum1 } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderAwsAlbEnum1$outboundSchema as ImportSourceProviderAwsAlbEnum1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderAwsAlbEnum2 as ImportSourceProviderAwsAlbEnum2 } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderAwsAlbEnum2$outboundSchema as ImportSourceProviderAwsAlbEnum2$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureCustomProviderAwsAlbEnum1 as ImportSourceProviderAwsAlbEnum3 } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderAwsAlbEnum1$outboundSchema as ImportSourceProviderAwsAlbEnum3$outboundSchema } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderAwsAlbEnum2 as ImportSourceProviderAwsAlbEnum4 } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderAwsAlbEnum2$outboundSchema as ImportSourceProviderAwsAlbEnum4$outboundSchema } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureGeneratedProviderAzureApplicationGatewayForContainers1 as ImportSourceProviderAzureApplicationGatewayForContainers1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderAzureApplicationGatewayForContainers1$Outbound as ImportSourceProviderAzureApplicationGatewayForContainers1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderAzureApplicationGatewayForContainers1$outboundSchema as ImportSourceProviderAzureApplicationGatewayForContainers1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedProviderAzureApplicationGatewayForContainers1ToJSON as importSourceProviderAzureApplicationGatewayForContainers1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderAzureApplicationGatewayForContainers2 as ImportSourceProviderAzureApplicationGatewayForContainers2 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderAzureApplicationGatewayForContainers2$Outbound as ImportSourceProviderAzureApplicationGatewayForContainers2$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderAzureApplicationGatewayForContainers2$outboundSchema as ImportSourceProviderAzureApplicationGatewayForContainers2$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedProviderAzureApplicationGatewayForContainers2ToJSON as importSourceProviderAzureApplicationGatewayForContainers2ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomProviderAzureApplicationGatewayForContainers1 as ImportSourceProviderAzureApplicationGatewayForContainers3 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomProviderAzureApplicationGatewayForContainers1$Outbound as ImportSourceProviderAzureApplicationGatewayForContainers3$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderAzureApplicationGatewayForContainers1$outboundSchema as ImportSourceProviderAzureApplicationGatewayForContainers3$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomProviderAzureApplicationGatewayForContainers1ToJSON as importSourceProviderAzureApplicationGatewayForContainers3ToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomProviderAzureApplicationGatewayForContainers2 as ImportSourceProviderAzureApplicationGatewayForContainers4 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomProviderAzureApplicationGatewayForContainers2$Outbound as ImportSourceProviderAzureApplicationGatewayForContainers4$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderAzureApplicationGatewayForContainers2$outboundSchema as ImportSourceProviderAzureApplicationGatewayForContainers4$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomProviderAzureApplicationGatewayForContainers2ToJSON as importSourceProviderAzureApplicationGatewayForContainers4ToJSON } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureGeneratedProviderAzureApplicationGatewayForContainersEnum1 as ImportSourceProviderAzureApplicationGatewayForContainersEnum1 } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderAzureApplicationGatewayForContainersEnum1$outboundSchema as ImportSourceProviderAzureApplicationGatewayForContainersEnum1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderAzureApplicationGatewayForContainersEnum2 as ImportSourceProviderAzureApplicationGatewayForContainersEnum2 } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderAzureApplicationGatewayForContainersEnum2$outboundSchema as ImportSourceProviderAzureApplicationGatewayForContainersEnum2$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureCustomProviderAzureApplicationGatewayForContainersEnum1 as ImportSourceProviderAzureApplicationGatewayForContainersEnum3 } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderAzureApplicationGatewayForContainersEnum1$outboundSchema as ImportSourceProviderAzureApplicationGatewayForContainersEnum3$outboundSchema } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderAzureApplicationGatewayForContainersEnum2 as ImportSourceProviderAzureApplicationGatewayForContainersEnum4 } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderAzureApplicationGatewayForContainersEnum2$outboundSchema as ImportSourceProviderAzureApplicationGatewayForContainersEnum4$outboundSchema } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureGeneratedProviderGkeGateway1 as ImportSourceProviderGkeGateway1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderGkeGateway1$Outbound as ImportSourceProviderGkeGateway1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderGkeGateway1$outboundSchema as ImportSourceProviderGkeGateway1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedProviderGkeGateway1ToJSON as importSourceProviderGkeGateway1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderGkeGateway2 as ImportSourceProviderGkeGateway2 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderGkeGateway2$Outbound as ImportSourceProviderGkeGateway2$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderGkeGateway2$outboundSchema as ImportSourceProviderGkeGateway2$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedProviderGkeGateway2ToJSON as importSourceProviderGkeGateway2ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomProviderGkeGateway1 as ImportSourceProviderGkeGateway3 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomProviderGkeGateway1$Outbound as ImportSourceProviderGkeGateway3$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderGkeGateway1$outboundSchema as ImportSourceProviderGkeGateway3$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomProviderGkeGateway1ToJSON as importSourceProviderGkeGateway3ToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomProviderGkeGateway2 as ImportSourceProviderGkeGateway4 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomProviderGkeGateway2$Outbound as ImportSourceProviderGkeGateway4$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderGkeGateway2$outboundSchema as ImportSourceProviderGkeGateway4$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomProviderGkeGateway2ToJSON as importSourceProviderGkeGateway4ToJSON } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureGeneratedProviderGkeGatewayEnum1 as ImportSourceProviderGkeGatewayEnum1 } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderGkeGatewayEnum1$outboundSchema as ImportSourceProviderGkeGatewayEnum1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderGkeGatewayEnum2 as ImportSourceProviderGkeGatewayEnum2 } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderGkeGatewayEnum2$outboundSchema as ImportSourceProviderGkeGatewayEnum2$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureCustomProviderGkeGatewayEnum1 as ImportSourceProviderGkeGatewayEnum3 } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderGkeGatewayEnum1$outboundSchema as ImportSourceProviderGkeGatewayEnum3$outboundSchema } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderGkeGatewayEnum2 as ImportSourceProviderGkeGatewayEnum4 } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderGkeGatewayEnum2$outboundSchema as ImportSourceProviderGkeGatewayEnum4$outboundSchema } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureGeneratedProviderUnion1 as ImportSourceProviderUnion1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderUnion1$Outbound as ImportSourceProviderUnion1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderUnion1$outboundSchema as ImportSourceProviderUnion1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedProviderUnion1ToJSON as importSourceProviderUnion1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderUnion2 as ImportSourceProviderUnion2 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedProviderUnion2$Outbound as ImportSourceProviderUnion2$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedProviderUnion2$outboundSchema as ImportSourceProviderUnion2$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedProviderUnion2ToJSON as importSourceProviderUnion2ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomProviderUnion1 as ImportSourceProviderUnion3 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomProviderUnion1$Outbound as ImportSourceProviderUnion3$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderUnion1$outboundSchema as ImportSourceProviderUnion3$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomProviderUnion1ToJSON as importSourceProviderUnion3ToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomProviderUnion2 as ImportSourceProviderUnion4 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomProviderUnion2$Outbound as ImportSourceProviderUnion4$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomProviderUnion2$outboundSchema as ImportSourceProviderUnion4$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomProviderUnion2ToJSON as importSourceProviderUnion4ToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureGeneratedRouteGateway as ImportSourceRouteGateway1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedRouteGateway$Outbound as ImportSourceRouteGateway1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedRouteGateway$outboundSchema as ImportSourceRouteGateway1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedRouteGatewayToJSON as importSourceRouteGateway1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomRouteGateway as ImportSourceRouteGateway2 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomRouteGateway$Outbound as ImportSourceRouteGateway2$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomRouteGateway$outboundSchema as ImportSourceRouteGateway2$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomRouteGatewayToJSON as importSourceRouteGateway2ToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureGeneratedRouteIngress as ImportSourceRouteIngress1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedRouteIngress$Outbound as ImportSourceRouteIngress1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedRouteIngress$outboundSchema as ImportSourceRouteIngress1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedRouteIngressToJSON as importSourceRouteIngress1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomRouteIngress as ImportSourceRouteIngress2 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomRouteIngress$Outbound as ImportSourceRouteIngress2$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomRouteIngress$outboundSchema as ImportSourceRouteIngress2$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomRouteIngressToJSON as importSourceRouteIngress2ToJSON } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureGeneratedRouteUnion as ImportSourceRouteUnion1 } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureGeneratedRouteUnion$Outbound as ImportSourceRouteUnion1$Outbound } from "./kubernetesexposuregenerated.js";
+export { KubernetesExposureGeneratedRouteUnion$outboundSchema as ImportSourceRouteUnion1$outboundSchema } from "./kubernetesexposuregenerated.js";
+export { kubernetesExposureGeneratedRouteUnionToJSON as importSourceRouteUnion1ToJSON } from "./kubernetesexposuregenerated.js";
+export type { KubernetesExposureCustomRouteUnion as ImportSourceRouteUnion2 } from "./kubernetesexposurecustom.js";
+export type { KubernetesExposureCustomRouteUnion$Outbound as ImportSourceRouteUnion2$Outbound } from "./kubernetesexposurecustom.js";
+export { KubernetesExposureCustomRouteUnion$outboundSchema as ImportSourceRouteUnion2$outboundSchema } from "./kubernetesexposurecustom.js";
+export { kubernetesExposureCustomRouteUnionToJSON as importSourceRouteUnion2ToJSON } from "./kubernetesexposurecustom.js";

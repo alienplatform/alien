@@ -6,7 +6,7 @@
 import { DeploymentCredentialRotationStatus } from "@alienplatform/platform-api/models";
 
 let value: DeploymentCredentialRotationStatus = {
-  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
   revision: 796490,
   rotation: {
     id: "<id>",
@@ -21,6 +21,6 @@ let value: DeploymentCredentialRotationStatus = {
 
 | Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      | Example                                                                          |
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `deploymentId`                                                                   | *string*                                                                         | :heavy_check_mark:                                                               | Unique identifier for the deployment.                                            | dep_0c29fq4a2yjb7kx3smwdgxlc                                                     |
+| `deploymentId`                                                                   | *string*                                                                         | :heavy_check_mark:                                                               | Unique identifier for the deployment.                                            | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f                                                 |
 | `revision`                                                                       | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |                                                                                  |
 | `rotation`                                                                       | [models.DeploymentCredentialRotation](../models/deploymentcredentialrotation.md) | :heavy_check_mark:                                                               | N/A                                                                              |                                                                                  |

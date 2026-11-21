@@ -9,6 +9,16 @@ import {
   GitMetadata$outboundSchema,
 } from "./gitmetadata.js";
 import {
+  SetupTemplatesByPlatform,
+  SetupTemplatesByPlatform$Outbound,
+  SetupTemplatesByPlatform$outboundSchema,
+} from "./setuptemplatesbyplatform.js";
+import {
+  SignedStacksByPlatform,
+  SignedStacksByPlatform$Outbound,
+  SignedStacksByPlatform$outboundSchema,
+} from "./signedstacksbyplatform.js";
+import {
   StackByPlatform,
   StackByPlatform$Outbound,
   StackByPlatform$outboundSchema,
@@ -26,6 +36,11 @@ export type CreateReleaseRequest = {
   title?: string | null | undefined;
   gitMetadata?: GitMetadata | null | undefined;
   stack?: StackByPlatform | undefined;
+  signedStacks?: SignedStacksByPlatform | undefined;
+  /**
+   * The setup templates `alien release --sign` rendered, by platform and template name, as base64 of the exact bytes. Required for every template a signed statement names, and only for those; each sha256 must equal the statement's digest. Protected deployments are served these bytes.
+   */
+  setupTemplates?: SetupTemplatesByPlatform | undefined;
   rootDirectory?: string | null | undefined;
   /**
    * Advance the release channel and schedule deployment updates. Defaults to true. Set false to create a release without changing any channel or deployment.
@@ -41,6 +56,8 @@ export type CreateReleaseRequest$Outbound = {
   title?: string | null | undefined;
   gitMetadata?: GitMetadata$Outbound | null | undefined;
   stack?: StackByPlatform$Outbound | undefined;
+  signedStacks?: SignedStacksByPlatform$Outbound | undefined;
+  setupTemplates?: SetupTemplatesByPlatform$Outbound | undefined;
   rootDirectory?: string | null | undefined;
   promote?: boolean | undefined;
   channel?: string | undefined;
@@ -56,6 +73,8 @@ export const CreateReleaseRequest$outboundSchema: z.ZodType<
   title: z.nullable(z.string()).optional(),
   gitMetadata: z.nullable(GitMetadata$outboundSchema).optional(),
   stack: StackByPlatform$outboundSchema.optional(),
+  signedStacks: SignedStacksByPlatform$outboundSchema.optional(),
+  setupTemplates: SetupTemplatesByPlatform$outboundSchema.optional(),
   rootDirectory: z.nullable(z.string()).optional(),
   promote: z.boolean().optional(),
   channel: z.string().optional(),

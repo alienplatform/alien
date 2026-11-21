@@ -73,7 +73,7 @@ export function useDeploymentsCreateSetupRegistrationOperationMutation(
 export function mutationKeyDeploymentsCreateSetupRegistrationOperation(): MutationKey {
   return [
     "@alienplatform/platform-api",
-    "deployments",
+    "Deployments",
     "createSetupRegistrationOperation",
   ];
 }

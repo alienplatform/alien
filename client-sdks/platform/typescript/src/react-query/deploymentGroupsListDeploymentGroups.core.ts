@@ -44,6 +44,8 @@ export function buildDeploymentGroupsListDeploymentGroupsQuery(
   return {
     queryKey: queryKeyDeploymentGroupsListDeploymentGroups({
       project: request?.project,
+      pendingInvites: request?.pendingInvites,
+      empty: request?.empty,
       search: request?.search,
       include: request?.include,
       limit: request?.limit,
@@ -75,6 +77,8 @@ export function buildDeploymentGroupsListDeploymentGroupsQuery(
 export function queryKeyDeploymentGroupsListDeploymentGroups(
   parameters: {
     project?: string | undefined;
+    pendingInvites?: operations.PendingInvites | undefined;
+    empty?: operations.Empty | undefined;
     search?: string | undefined;
     include?: Array<operations.ListDeploymentGroupsInclude> | undefined;
     limit?: number | undefined;

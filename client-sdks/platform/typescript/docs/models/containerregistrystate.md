@@ -11,7 +11,7 @@ let value: ContainerRegistryState = {
   repositories: [],
   credentials: [
     {
-      id: "crcred_oz1xjr82f37j17g4gtmyu",
+      id: "crcred_oz1xjr82f37j17g4gtmyu5w0eaem",
       label: "<value>",
       scope: "pushPull",
       repositorySubset: [

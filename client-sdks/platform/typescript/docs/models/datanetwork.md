@@ -23,7 +23,7 @@ let value: DataNetwork = {
 
 ## Fields
 
-| Field                                    | Type                                     | Required                                 | Description                              |
-| ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
-| `data`                                   | *models.SyncReconcileRequestDataUnion11* | :heavy_check_mark:                       | N/A                                      |
-| `resourceType`                           | *"network"*                              | :heavy_check_mark:                       | N/A                                      |
+| Field                                                          | Type                                                           | Required                                                       | Description                                                    |
+| -------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------- |
+| `data`                                                         | *models.SyncReconcileRequestDataUnion12*                       | :heavy_check_mark:                                             | N/A                                                            |
+| `resourceType`                                                 | [models.ResourceTypeNetwork](../models/resourcetypenetwork.md) | :heavy_check_mark:                                             | N/A                                                            |

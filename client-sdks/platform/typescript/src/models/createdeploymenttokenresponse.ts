@@ -16,6 +16,10 @@ export type CreateDeploymentTokenResponse = {
    * The deployment ID that this token is scoped to
    */
   deploymentId: string;
+  /**
+   * When the token expires, or null if never. A key below the workspace cannot mint a token that outlives itself, so this can be earlier than requested.
+   */
+  expiresAt: Date | null;
 };
 
 /** @internal */
@@ -25,6 +29,9 @@ export const CreateDeploymentTokenResponse$inboundSchema: z.ZodType<
 > = z.object({
   token: z.string(),
   deploymentId: z.string(),
+  expiresAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
 });
 
 export function createDeploymentTokenResponseFromJSON(

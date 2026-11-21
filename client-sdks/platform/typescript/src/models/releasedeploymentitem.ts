@@ -222,6 +222,35 @@ export type ReleaseDeploymentItemDeploymentGroup = {
    * Case-sensitive, URL- and header-safe identifier from the integrating application.
    */
   externalId: string | null;
+  /**
+   * Total deployments visible to the caller in this customer, independent of pagination and search
+   */
+  deploymentCount?: number | undefined;
+};
+
+export type ReleaseDeploymentItemStackSettings = {
+  airgapped?: boolean | undefined;
+};
+
+/**
+ * When an air-gapped site's latest status was written and received.
+ */
+export type ReleaseDeploymentItemAirgappedReport = {
+  /**
+   * Manager clock time when the report was accepted.
+   */
+  receivedAt: Date;
+  /**
+   * Site clock time; absent for reports from older clients.
+   */
+  writtenAt?: Date | null | undefined;
+};
+
+export type ReleaseDeploymentItemRuntimeMetadata = {
+  /**
+   * When an air-gapped site's latest status was written and received.
+   */
+  airgappedReport?: ReleaseDeploymentItemAirgappedReport | null | undefined;
 };
 
 /**
@@ -376,6 +405,8 @@ export type ReleaseDeploymentItem = {
    * Timestamp of the last received heartbeat
    */
   lastHeartbeatAt?: Date | null | undefined;
+  stackSettings?: ReleaseDeploymentItemStackSettings | undefined;
+  runtimeMetadata?: ReleaseDeploymentItemRuntimeMetadata | null | undefined;
   rolloutState: ReleaseRolloutState;
   /**
    * When this release went live on the deployment, null if it never did
@@ -599,6 +630,7 @@ export const ReleaseDeploymentItemDeploymentGroup$inboundSchema: z.ZodType<
   id: z.string(),
   name: z.string(),
   externalId: z.nullable(z.string()),
+  deploymentCount: z.int().optional(),
 });
 
 export function releaseDeploymentItemDeploymentGroupFromJSON(
@@ -609,6 +641,68 @@ export function releaseDeploymentItemDeploymentGroupFromJSON(
     (x) =>
       ReleaseDeploymentItemDeploymentGroup$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ReleaseDeploymentItemDeploymentGroup' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseDeploymentItemStackSettings$inboundSchema: z.ZodType<
+  ReleaseDeploymentItemStackSettings,
+  unknown
+> = z.object({
+  airgapped: z.boolean().optional(),
+});
+
+export function releaseDeploymentItemStackSettingsFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseDeploymentItemStackSettings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ReleaseDeploymentItemStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseDeploymentItemStackSettings' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseDeploymentItemAirgappedReport$inboundSchema: z.ZodType<
+  ReleaseDeploymentItemAirgappedReport,
+  unknown
+> = z.object({
+  receivedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  writtenAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+});
+
+export function releaseDeploymentItemAirgappedReportFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseDeploymentItemAirgappedReport, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ReleaseDeploymentItemAirgappedReport$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseDeploymentItemAirgappedReport' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseDeploymentItemRuntimeMetadata$inboundSchema: z.ZodType<
+  ReleaseDeploymentItemRuntimeMetadata,
+  unknown
+> = z.object({
+  airgappedReport: z.nullable(
+    z.lazy(() => ReleaseDeploymentItemAirgappedReport$inboundSchema),
+  ).optional(),
+});
+
+export function releaseDeploymentItemRuntimeMetadataFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseDeploymentItemRuntimeMetadata, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ReleaseDeploymentItemRuntimeMetadata$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseDeploymentItemRuntimeMetadata' from JSON`,
   );
 }
 
@@ -669,6 +763,11 @@ export const ReleaseDeploymentItem$inboundSchema: z.ZodType<
   pinnedReleaseId: z.nullable(z.string()).optional(),
   lastHeartbeatAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  stackSettings: z.lazy(() => ReleaseDeploymentItemStackSettings$inboundSchema)
+    .optional(),
+  runtimeMetadata: z.nullable(
+    z.lazy(() => ReleaseDeploymentItemRuntimeMetadata$inboundSchema),
   ).optional(),
   rolloutState: ReleaseRolloutState$inboundSchema,
   releasedAt: z.nullable(

@@ -3,12 +3,14 @@
  */
 
 import { syncAcquire } from "../funcs/syncAcquire.js";
+import { syncConfigStatement } from "../funcs/syncConfigStatement.js";
 import { syncContext } from "../funcs/syncContext.js";
 import { syncList } from "../funcs/syncList.js";
 import { syncManagementExternalId } from "../funcs/syncManagementExternalId.js";
 import { syncReconcile } from "../funcs/syncReconcile.js";
 import { syncRelease } from "../funcs/syncRelease.js";
 import { syncRenew } from "../funcs/syncRenew.js";
+import { syncSignerLists } from "../funcs/syncSignerLists.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -23,6 +25,34 @@ export class Sync extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.SyncListResponse> {
     return unwrapAsync(syncList(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * The deployment's newest signed `config/v1` statement, exactly as stored, for the manager that syncs it. 404 CONFIG_STATEMENT_NOT_FOUND when none is stored.
+   */
+  async configStatement(
+    request?: models.SyncConfigStatementRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.ConfigStatementResponse> {
+    return unwrapAsync(syncConfigStatement(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Every stored signer list version of a project, oldest first, exactly as stored, for a manager that syncs one of its deployments.
+   */
+  async signerLists(
+    request?: models.SyncSignerListsRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.SignerListsResponse> {
+    return unwrapAsync(syncSignerLists(
       this,
       request,
       options,

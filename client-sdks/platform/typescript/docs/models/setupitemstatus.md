@@ -10,7 +10,7 @@ let value: SetupItemStatus = {
   source: {
     type: "project-release",
     releaseChannel: "<value>",
-    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
   },
   required: false,
   status: "connected",

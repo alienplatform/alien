@@ -123,6 +123,43 @@ export type APIKeyDeploymentSetupConfigItem = {
   configuration?: APIKeyDeploymentSetupConfigConfiguration | undefined;
 };
 
+/**
+ * Asks Alien to generate a secret input's value.
+ *
+ * @remarks
+ *
+ * The value is an alphanumeric string (`A-Z`, `a-z`, `0-9`), so it is safe in
+ * connection strings, command lines and environment variables. It is generated
+ * once, when the deployment's input values are first resolved, and then kept
+ * with the deployment's other input values.
+ */
+export type APIKeyDeploymentSetupConfigGenerate = {
+  /**
+   * Number of characters to generate.
+   */
+  length: number;
+};
+
+export type APIKeyDeploymentSetupConfigGenerateUnion =
+  | APIKeyDeploymentSetupConfigGenerate
+  | string;
+
+export type DeveloperInputsByPlatform = {
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  generate?: APIKeyDeploymentSetupConfigGenerate | string | null | undefined;
+};
+
 export type APIKeyDeploymentSetupConfig = {
   /**
    * Vendor destination when leaving or completing setup. Must be an absolute HTTPS URL without userinfo (embedded credentials), at most 2048 characters. Null clears the destination; omit to keep it unchanged.
@@ -136,6 +173,12 @@ export type APIKeyDeploymentSetupConfig = {
   policy: DeploymentSetupPolicy;
   environmentVariables: Array<APIKeyDeploymentSetupEnvironmentVariable>;
   items?: Array<APIKeyDeploymentSetupConfigItem> | undefined;
+  /**
+   * Applicable developer input summaries per platform, returned when retrieving a link. Stored answers are omitted.
+   */
+  developerInputsByPlatform?:
+    | { [k: string]: Array<DeveloperInputsByPlatform> }
+    | undefined;
 };
 
 /** @internal */
@@ -321,6 +364,76 @@ export function apiKeyDeploymentSetupConfigItemFromJSON(
 }
 
 /** @internal */
+export const APIKeyDeploymentSetupConfigGenerate$inboundSchema: z.ZodType<
+  APIKeyDeploymentSetupConfigGenerate,
+  unknown
+> = z.object({
+  length: z.int(),
+});
+
+export function apiKeyDeploymentSetupConfigGenerateFromJSON(
+  jsonString: string,
+): SafeParseResult<APIKeyDeploymentSetupConfigGenerate, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      APIKeyDeploymentSetupConfigGenerate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'APIKeyDeploymentSetupConfigGenerate' from JSON`,
+  );
+}
+
+/** @internal */
+export const APIKeyDeploymentSetupConfigGenerateUnion$inboundSchema: z.ZodType<
+  APIKeyDeploymentSetupConfigGenerateUnion,
+  unknown
+> = z.union([
+  z.lazy(() => APIKeyDeploymentSetupConfigGenerate$inboundSchema),
+  z.string(),
+]);
+
+export function apiKeyDeploymentSetupConfigGenerateUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  APIKeyDeploymentSetupConfigGenerateUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      APIKeyDeploymentSetupConfigGenerateUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'APIKeyDeploymentSetupConfigGenerateUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeveloperInputsByPlatform$inboundSchema: z.ZodType<
+  DeveloperInputsByPlatform,
+  unknown
+> = z.object({
+  id: z.string(),
+  label: z.string(),
+  required: z.boolean(),
+  generate: z.nullable(
+    z.union([
+      z.lazy(() => APIKeyDeploymentSetupConfigGenerate$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function developerInputsByPlatformFromJSON(
+  jsonString: string,
+): SafeParseResult<DeveloperInputsByPlatform, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeveloperInputsByPlatform$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeveloperInputsByPlatform' from JSON`,
+  );
+}
+
+/** @internal */
 export const APIKeyDeploymentSetupConfig$inboundSchema: z.ZodType<
   APIKeyDeploymentSetupConfig,
   unknown
@@ -334,6 +447,10 @@ export const APIKeyDeploymentSetupConfig$inboundSchema: z.ZodType<
   ),
   items: z.array(z.lazy(() => APIKeyDeploymentSetupConfigItem$inboundSchema))
     .optional(),
+  developerInputsByPlatform: z.record(
+    z.string(),
+    z.array(z.lazy(() => DeveloperInputsByPlatform$inboundSchema)),
+  ).optional(),
 });
 
 export function apiKeyDeploymentSetupConfigFromJSON(

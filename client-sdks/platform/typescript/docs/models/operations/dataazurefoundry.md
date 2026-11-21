@@ -26,14 +26,14 @@ let value: DataAzureFoundry = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "collection-failed",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
+    health: "unknown",
     lifecycle: "stopping",
-    partial: true,
+    partial: false,
     stale: false,
   },
   backend: "azureFoundry",
@@ -49,5 +49,5 @@ let value: DataAzureFoundry = {
 | `endpoint`                                                                                                               | *string*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
 | `location`                                                                                                               | *string*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
 | `resourceGroup`                                                                                                          | *string*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
-| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus68](../../models/operations/getresourcedeploymentdetaildatastatus68.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus72](../../models/operations/getresourcedeploymentdetaildatastatus72.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `backend`                                                                                                                | *"azureFoundry"*                                                                                                         | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |

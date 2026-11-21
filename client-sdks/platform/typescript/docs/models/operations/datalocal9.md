@@ -1,20 +1,21 @@
 # DataLocal9
 
+Local Valkey container.
+
 ## Example Usage
 
 ```typescript
 import { DataLocal9 } from "@alienplatform/platform-api/models/operations";
 
 let value: DataLocal9 = {
-  path: "/usr/include",
-  pathExists: false,
-  secretMetadataListed: false,
+  name: "<value>",
+  processRunning: false,
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "warning",
+        reason: "collection-failed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -23,6 +24,7 @@ let value: DataLocal9 = {
     partial: true,
     stale: true,
   },
+  version: "<value>",
   backend: "local",
 };
 ```
@@ -31,11 +33,9 @@ let value: DataLocal9 = {
 
 | Field                                                                                                                    | Type                                                                                                                     | Required                                                                                                                 | Description                                                                                                              |
 | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `isDirectory`                                                                                                            | *boolean*                                                                                                                | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
-| `modifiedAt`                                                                                                             | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date)                            | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
-| `path`                                                                                                                   | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
-| `pathExists`                                                                                                             | *boolean*                                                                                                                | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
-| `readonly`                                                                                                               | *boolean*                                                                                                                | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
-| `secretMetadataListed`                                                                                                   | *boolean*                                                                                                                | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
-| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus41](../../models/operations/getresourcedeploymentdetaildatastatus41.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `name`                                                                                                                   | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `port`                                                                                                                   | *number*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
+| `processRunning`                                                                                                         | *boolean*                                                                                                                | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus40](../../models/operations/getresourcedeploymentdetaildatastatus40.md) | :heavy_check_mark:                                                                                                       | Same fields as every other resource heartbeat status.                                                                    |
+| `version`                                                                                                                | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `backend`                                                                                                                | *"local"*                                                                                                                | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |

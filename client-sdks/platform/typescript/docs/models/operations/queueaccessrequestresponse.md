@@ -17,7 +17,7 @@ let value: QueueAccessRequestResponse = {
     id: "<id>",
     name: "<value>",
     deploymentGroup: {
-      id: "dg_r27ict8c7vcgsumpj90ackf7b",
+      id: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
       name: "prod-us-east-1",
       externalId: "ext_example_01",
     },
@@ -35,13 +35,32 @@ let value: QueueAccessRequestResponse = {
   createdAt: "1728064373891",
   queuedBy: "<value>",
   queuedAt: "<value>",
+  approver: "customer",
   approvedBy: {
     method: "<value>",
     actorId: "<id>",
+    slack: {
+      userId: "<id>",
+      userName: "Dusty_Simonis",
+      teamId: "<id>",
+      teamName: "<value>",
+      channelId: "<id>",
+      messageTs: "<value>",
+      app: "<value>",
+    },
     at: "<value>",
   },
   deniedBy: {
-    actorId: "<id>",
+    actorId: null,
+    slack: {
+      userId: "<id>",
+      userName: "Dusty_Simonis",
+      teamId: "<id>",
+      teamName: "<value>",
+      channelId: "<id>",
+      messageTs: "<value>",
+      app: "<value>",
+    },
     at: "<value>",
   },
   revokedBy: {
@@ -77,7 +96,8 @@ let value: QueueAccessRequestResponse = {
 | `createdAt`                                                                                              | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `queuedBy`                                                                                               | *string*                                                                                                 | :heavy_check_mark:                                                                                       | Who passed the engineer gate; the requester for a plan-less request.                                     |
 | `queuedAt`                                                                                               | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `approvedBy`                                                                                             | [operations.QueueAccessRequestApprovedBy](../../models/operations/queueaccessrequestapprovedby.md)       | :heavy_check_mark:                                                                                       | How and when the customer gate was passed. Null until approved.                                          |
+| `approver`                                                                                               | [models.AccessApprover](../../models/accessapprover.md)                                                  | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `approvedBy`                                                                                             | [operations.QueueAccessRequestApprovedBy](../../models/operations/queueaccessrequestapprovedby.md)       | :heavy_check_mark:                                                                                       | How, when and by whom the request was approved. Null until approved.                                     |
 | `deniedBy`                                                                                               | [operations.QueueAccessRequestDeniedBy](../../models/operations/queueaccessrequestdeniedby.md)           | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `revokedBy`                                                                                              | [operations.QueueAccessRequestRevokedBy](../../models/operations/queueaccessrequestrevokedby.md)         | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `approvalChannels`                                                                                       | [models.AccessRequestApprovalChannel](../../models/accessrequestapprovalchannel.md)[]                    | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |

@@ -26,7 +26,7 @@ let value: DataVault = {
 
 ## Fields
 
-| Field                                   | Type                                    | Required                                | Description                             |
-| --------------------------------------- | --------------------------------------- | --------------------------------------- | --------------------------------------- |
-| `data`                                  | *models.SyncReconcileRequestDataUnion9* | :heavy_check_mark:                      | N/A                                     |
-| `resourceType`                          | *"vault"*                               | :heavy_check_mark:                      | N/A                                     |
+| Field                                                      | Type                                                       | Required                                                   | Description                                                |
+| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `data`                                                     | *models.SyncReconcileRequestDataUnion10*                   | :heavy_check_mark:                                         | N/A                                                        |
+| `resourceType`                                             | [models.ResourceTypeVault](../models/resourcetypevault.md) | :heavy_check_mark:                                         | N/A                                                        |

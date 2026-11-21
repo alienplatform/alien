@@ -7,6 +7,7 @@ import { safeParse } from "../../lib/schemas.js";
 import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
+import * as models from "../index.js";
 
 export type GetDeploymentGroupGlobals = {
   /**
@@ -75,15 +76,31 @@ export type GetDeploymentGroupResponse = {
    * Maximum number of deployments allowed in this deployment group
    */
   maxDeployments: number;
+  /**
+   * Whether new deployments from this group are protected once the project's signing is ready. On by default; the vendor may turn it off.
+   */
+  protectNewDeployments: boolean;
+  /**
+   * Who approves access requests. `customer`: the customer approves on the Slack card (through the Alien app or your own Slack app) or, on Kubernetes, with kubectl. Slack cannot prove who a customer is, so the Slack click is approval in Slack through your control plane, not a verified customer identity. `team`: your own team approves in the Alien Slack app or the dashboard. Every group defaults to `customer`, and only a workspace admin changes it.
+   */
+  accessApprover: models.AccessApprover;
   createdAt: Date;
   /**
    * Project info, included when ?include=project is used
    */
   project?: GetDeploymentGroupProject | null | undefined;
   /**
+   * Where values entered for this group's setup links are stored. The platform for now: the group's value-access endpoint answers 409 until that changes.
+   */
+  valueStorage?: models.DeploymentValueStorage | undefined;
+  /**
    * Current number of deployments in this deployment group
    */
   deploymentCount: number;
+  /**
+   * Whether new deployments that follow the default release channel start protected. Always sent; clients read an absent value as not protected.
+   */
+  protection?: models.DeploymentGroupProtection | undefined;
 };
 
 /** @internal */
@@ -144,10 +161,14 @@ export const GetDeploymentGroupResponse$inboundSchema: z.ZodType<
   projectId: z.string(),
   workspaceId: z.string(),
   maxDeployments: z.int().default(100),
+  protectNewDeployments: z.boolean().default(true),
+  accessApprover: models.AccessApprover$inboundSchema,
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   project: z.nullable(z.lazy(() => GetDeploymentGroupProject$inboundSchema))
     .optional(),
+  valueStorage: models.DeploymentValueStorage$inboundSchema.optional(),
   deploymentCount: z.int(),
+  protection: models.DeploymentGroupProtection$inboundSchema.optional(),
 });
 
 export function getDeploymentGroupResponseFromJSON(

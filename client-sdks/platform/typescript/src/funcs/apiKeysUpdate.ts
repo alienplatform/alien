@@ -178,7 +178,7 @@ async function $do(
     | SDKValidationError
   >(
     M.json(200, models.APIKey$inboundSchema),
-    M.jsonErr(404, errors.APIError$inboundSchema),
+    M.jsonErr([403, 404, 422], errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),
