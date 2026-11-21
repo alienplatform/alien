@@ -313,18 +313,21 @@ async fn deployed(
         .get_binding_params()
         .map_err(|error| anyhow::anyhow!("sandbox binding: {error}"))?
         .context("the sandbox controller has no binding")?;
-    let private_endpoint = binding
-        .pointer("/privateEndpoint")
-        .and_then(|value| value.as_str())
-        .context("the binding names no private endpoint")?
-        .to_string();
-    let gateway_ips: Vec<String> = binding
-        .pointer("/egress/gateway/replicas/addresses")
-        .and_then(|value| value.as_array())
-        .context("the binding names no gateway replicas")?
-        .iter()
-        .filter_map(|value| value.as_str().map(str::to_string))
-        .collect();
+    // Read through the typed binding, so a shape the provider would not read fails here.
+    let typed: alien_core::bindings::GcpAgentPlatformSandboxBinding =
+        serde_json::from_value(binding.clone()).context("parse the sandbox binding")?;
+    let private_endpoint = typed
+        .private_endpoint
+        .clone()
+        .context("the binding names no private endpoint")?;
+    let gateway_ips: Vec<String> = typed
+        .egress
+        .as_ref()
+        .and_then(|egress| egress.gateway())
+        .and_then(|gateway| gateway.replicas.as_ref())
+        .map(|replicas| replicas.addresses.clone())
+        .filter(|addresses| !addresses.is_empty())
+        .context("the binding names no gateway replicas")?;
     let resource_prefix = state.resource_prefix.clone();
     let vm = plan::resource_name(&resource_prefix, &plan::suffix::vm(0));
     let region = gcp_config().region;

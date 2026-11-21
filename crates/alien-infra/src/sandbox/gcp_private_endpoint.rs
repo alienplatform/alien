@@ -120,7 +120,14 @@ async fn step(
                     .context(cloud(
                         "The sandbox endpoint address was not reserved",
                         inputs.resource_id,
-                    ))?;
+                    ))
+                    .and_then(|operation| {
+                        crate::network::gcp_sandbox_gateway_setup::operation_outcome(
+                            &operation,
+                            "The sandbox endpoint address reservation",
+                            inputs.resource_id,
+                        )
+                    })?;
             }
             return Ok(Step::Wait);
         }
@@ -210,7 +217,14 @@ async fn step(
             .context(cloud(
                 "The sandbox endpoint forwarding rule was not created",
                 inputs.resource_id,
-            ))?;
+            ))
+            .and_then(|operation| {
+                crate::network::gcp_sandbox_gateway_setup::operation_outcome(
+                    &operation,
+                    "The sandbox endpoint forwarding rule creation",
+                    inputs.resource_id,
+                )
+            })?;
     }
     Ok(Step::Wait)
 }
@@ -230,6 +244,9 @@ pub(super) async fn run(
     let result = step(compute, platform, inputs, progress).await;
     if result.is_err() && progress.probe_requested {
         delete_probes(platform, inputs).await;
+        // The probe is gone, so the retry may ask for a new one: with the flag left set and no
+        // other sandbox to reveal the service attachment, every retry would wait forever.
+        progress.probe_requested = false;
     }
     result
 }
@@ -254,7 +271,47 @@ async fn delete_probes_named(platform: &dyn AgentPlatformApi, engine: &str, reso
     }
 }
 
-/// Removes the forwarding rule, then the address. Not-found is success.
+/// Whether an internet sandbox other than `sandbox_id` still uses the deployment's endpoint:
+/// one the desired stack declares, or one in the state that is not itself on its way out.
+///
+/// A sandbox that is being deleted does not count, so when a whole deployment goes and its
+/// internet sandboxes are deleted together, each removes the endpoint rather than each leaving it
+/// to the others; the deletes are idempotent, so the second finds it gone.
+pub(super) fn endpoint_still_needed(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+    sandbox_id: &str,
+) -> bool {
+    needed_by_another(ctx.desired_stack, ctx.state, sandbox_id)
+}
+
+fn needed_by_another(
+    desired: &alien_core::Stack,
+    state: &alien_core::StackState,
+    sandbox_id: &str,
+) -> bool {
+    use alien_core::{ResourceStatus, Sandbox, SandboxEgress};
+    let internet =
+        |sandbox: &Sandbox| sandbox.egress == SandboxEgress::Internet && sandbox.id() != sandbox_id;
+    desired
+        .resources()
+        .any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some_and(internet))
+        || state.resources.values().any(|resource| {
+            !matches!(
+                resource.status,
+                ResourceStatus::Deleting
+                    | ResourceStatus::DeleteFailed
+                    | ResourceStatus::TeardownRequired
+                    | ResourceStatus::Deleted
+            ) && resource
+                .config
+                .downcast_ref::<Sandbox>()
+                .is_some_and(internet)
+        })
+}
+
+/// Removes this sandbox's probes and, when `remove_endpoint`, the deployment's forwarding rule,
+/// then its address. Not-found is success; any other failure, including an operation that
+/// finished with an error, is returned.
 pub(super) async fn delete(
     compute: &dyn ComputeApi,
     platform: &dyn AgentPlatformApi,
@@ -262,11 +319,15 @@ pub(super) async fn delete(
     resource_prefix: &str,
     region: &str,
     resource_id: &str,
+    remove_endpoint: bool,
 ) -> Result<()> {
     let (address_name, rule_name) = names(resource_prefix);
     let region = region.to_string();
     // A probe the creation left behind goes first: it holds the service attachment's connection.
     delete_probes_named(platform, engine, resource_prefix).await;
+    if !remove_endpoint {
+        return Ok(());
+    }
     let result = compute
         .delete_forwarding_rule(region.clone(), rule_name)
         .await;
@@ -282,7 +343,14 @@ pub(super) async fn delete(
                 .context(cloud(
                     "The sandbox endpoint forwarding rule was not deleted",
                     resource_id,
-                ))?;
+                ))
+                .and_then(|operation| {
+                    crate::network::gcp_sandbox_gateway_setup::operation_outcome(
+                        &operation,
+                        "The sandbox endpoint forwarding rule delete",
+                        resource_id,
+                    )
+                })?;
         }
     }
     let result = compute.delete_address(region.clone(), address_name).await;
@@ -298,7 +366,14 @@ pub(super) async fn delete(
                 .context(cloud(
                     "The sandbox endpoint address was not deleted",
                     resource_id,
-                ))?;
+                ))
+                .and_then(|operation| {
+                    crate::network::gcp_sandbox_gateway_setup::operation_outcome(
+                        &operation,
+                        "The sandbox endpoint address delete",
+                        resource_id,
+                    )
+                })?;
         }
     }
     Ok(())
@@ -334,6 +409,7 @@ mod tests {
     fn done() -> Operation {
         Operation {
             name: Some("op".into()),
+            status: Some(alien_gcp_clients::compute::OperationStatus::Done),
             ..Default::default()
         }
     }
@@ -497,9 +573,123 @@ mod tests {
         platform
             .expect_list_sandboxes_by_display_names()
             .returning(|_, _| Ok(Vec::new()));
-        delete(&compute, &platform, "eng", "p", "us-central1", "sbx")
+        delete(&compute, &platform, "eng", "p", "us-central1", "sbx", true)
             .await
             .unwrap();
+    }
+
+    /// A forwarding rule delete that finished with an error (as one a missing permission stops
+    /// reads `DONE` with an error) fails the delete instead of passing as removed, and the
+    /// address, which the rule still uses, is not tried.
+    #[tokio::test]
+    async fn a_delete_operation_that_finished_with_an_error_fails() {
+        let mut compute = MockComputeApi::new();
+        compute
+            .expect_delete_forwarding_rule()
+            .times(1)
+            .returning(|_, _| Ok(done()));
+        compute.expect_wait_region_operation().returning(|_, _| {
+            let mut operation = done();
+            operation.error = Some(alien_gcp_clients::compute::OperationError {
+                errors: vec![alien_gcp_clients::compute::OperationErrorItem {
+                    code: Some("SERVICE_DIRECTORY_PERMISSION_DENIED".into()),
+                    location: None,
+                    message: Some("Permission 'servicedirectory.services.delete' denied".into()),
+                }],
+            });
+            Ok(operation)
+        });
+        compute.expect_delete_address().times(0);
+        let mut platform = MockAgentPlatformApi::new();
+        platform
+            .expect_list_sandboxes_by_display_names()
+            .returning(|_, _| Ok(Vec::new()));
+        let error = delete(&compute, &platform, "eng", "p", "us-central1", "sbx", true)
+            .await
+            .expect_err("a failed operation is not a deleted rule");
+        assert!(
+            error
+                .to_string()
+                .contains("SERVICE_DIRECTORY_PERMISSION_DENIED")
+                || format!("{error:?}").contains("SERVICE_DIRECTORY_PERMISSION_DENIED"),
+            "the operation's own error is reported: {error:?}"
+        );
+    }
+
+    /// While another internet sandbox still uses the endpoint, deleting one sandbox removes only
+    /// its own probes and leaves the deployment's endpoint alone.
+    #[tokio::test]
+    async fn a_shared_endpoint_is_left_for_the_other_sandboxes() {
+        let mut compute = MockComputeApi::new();
+        compute.expect_delete_forwarding_rule().times(0);
+        compute.expect_delete_address().times(0);
+        let mut platform = MockAgentPlatformApi::new();
+        platform
+            .expect_list_sandboxes_by_display_names()
+            .times(1)
+            .returning(|_, _| Ok(Vec::new()));
+        delete(&compute, &platform, "eng", "p", "us-central1", "sbx", false)
+            .await
+            .unwrap();
+    }
+
+    fn internet_sandbox(id: &str) -> alien_core::Sandbox {
+        alien_core::Sandbox::new(id.to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "img".to_string(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::Internet)
+            .lifecycle(alien_core::SandboxLifecyclePolicy::default())
+            .build()
+    }
+
+    fn state_with(sandboxes: &[(&str, alien_core::ResourceStatus)]) -> alien_core::StackState {
+        let mut state = alien_core::StackState::new(alien_core::Platform::Gcp);
+        for (id, status) in sandboxes {
+            let mut resource = alien_core::StackResourceState::new_pending(
+                alien_core::Sandbox::RESOURCE_TYPE.to_string(),
+                alien_core::Resource::new(internet_sandbox(id)),
+                None,
+                Vec::new(),
+            );
+            resource.status = *status;
+            state.resources.insert(id.to_string(), resource);
+        }
+        state
+    }
+
+    /// The endpoint stays while another internet sandbox is declared or not on its way out, and
+    /// goes when the others are being deleted too (a whole deployment's teardown), so that
+    /// concurrent deletes never each leave it to the other.
+    #[test]
+    fn the_endpoint_goes_with_the_last_internet_sandbox() {
+        use alien_core::ResourceStatus::*;
+        let empty = alien_core::Stack::new("s".to_string()).build();
+        let declared = alien_core::Stack::new("s".to_string())
+            .add(internet_sandbox("b"), alien_core::ResourceLifecycle::Frozen)
+            .build();
+        assert!(needed_by_another(&declared, &state_with(&[]), "a"));
+        assert!(needed_by_another(
+            &empty,
+            &state_with(&[("b", Running)]),
+            "a"
+        ));
+        assert!(needed_by_another(
+            &empty,
+            &state_with(&[("b", Provisioning)]),
+            "a"
+        ));
+        for gone in [Deleting, DeleteFailed, TeardownRequired, Deleted] {
+            assert!(
+                !needed_by_another(&empty, &state_with(&[("b", gone)]), "a"),
+                "{gone:?} is on its way out"
+            );
+        }
+        assert!(
+            !needed_by_another(&declared, &state_with(&[("b", Running)]), "b"),
+            "a sandbox never keeps the endpoint for itself"
+        );
     }
 
     #[tokio::test]
@@ -532,5 +722,9 @@ mod tests {
         assert!(run(&compute, &platform, &inputs(), &mut progress)
             .await
             .is_err());
+        assert!(
+            !progress.probe_requested,
+            "the probe is gone, so a retry may request a new one"
+        );
     }
 }

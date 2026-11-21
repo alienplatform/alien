@@ -548,10 +548,11 @@ const SIGN_JWT_PERMISSION: &str = "iam.serviceAccounts.signJwt";
 /// sandbox: the role is project-wide and its id is fixed.
 const PREVIEW_SIGN_ROLE_LABEL: &str = "gcp_role_sandbox_preview_sign";
 
-/// Whether setup creates the edge-signing identity: only where the deployment declares preview
-/// ports and owns the engine, so a sandbox without preview adds nothing to an existing plan.
+/// Whether setup creates the edge-signing identity: only where the sandbox needs one (preview
+/// ports, or an `internet` sandbox's private ingress) and the deployment owns the engine, so a
+/// sandbox with neither adds nothing to an existing plan.
 fn has_preview_signer(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> bool {
-    !sandbox.preview_ports.is_empty() && ctx.resource.lifecycle == ResourceLifecycle::Frozen
+    sandbox.needs_gcp_edge_signer() && ctx.resource.lifecycle == ResourceLifecycle::Frozen
 }
 
 /// Creates the per-deployment identity the GCP edge accepts a signed JWT from, and lets the
@@ -1037,7 +1038,7 @@ mod tests {
                         image: "ubuntu".to_string(),
                         bundled_from: None,
                     })
-                    .egress(SandboxEgress::Internet)
+                    .egress(SandboxEgress::Allow)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -1181,7 +1182,7 @@ mod tests {
                         image: "ubuntu".to_string(),
                         bundled_from: None,
                     })
-                    .egress(SandboxEgress::Internet)
+                    .egress(SandboxEgress::Allow)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -1320,7 +1321,7 @@ mod tests {
                     image: "ubuntu".to_string(),
                     bundled_from: None,
                 })
-                .egress(SandboxEgress::Internet)
+                .egress(SandboxEgress::Allow)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -1553,9 +1554,23 @@ mod tests {
         /// The emitted keys are read against the binding type, not a second hand-typed list, so
         /// a rename on either side fails here rather than reaching a customer's cluster. The ttl is
         /// set on both sides so the key sets are comparable whole.
+        /// An `internet` sandbox answers only through its private endpoint, to the edge credential
+        /// the signing identity signs, so its binding names that identity without preview ports.
+        #[test]
+        fn an_internet_sandbox_gets_the_signing_identity_without_preview_ports() {
+            let emitted = emit_binding(SandboxEgress::Internet, Some(3600))
+                .expect("the binding renders")
+                .expect("an Agent Platform sandbox has a binding");
+            assert!(object_keys(&emitted).contains("previewServiceAccount"));
+            let open = emit_binding(SandboxEgress::Allow, Some(3600))
+                .expect("the binding renders")
+                .expect("an Agent Platform sandbox has a binding");
+            assert!(!object_keys(&open).contains("previewServiceAccount"));
+        }
+
         #[test]
         fn emitted_binding_keys_match_the_binding_type() {
-            let emitted = emit_binding(SandboxEgress::Internet, Some(3600))
+            let emitted = emit_binding(SandboxEgress::Allow, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
 

@@ -23,16 +23,18 @@ async fn module(egress: SandboxEgress) -> (Body, String) {
             image: "us-central1-docker.pkg.dev/p/r/agents:1".to_string(),
             bundled_from: None,
         })
-        .egress(egress)
+        .egress(egress.clone())
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
             ..Default::default()
         })
         .build();
+    let sandbox_id = sandbox.id().to_string();
     let stack = Stack::new("gcpint".to_string())
         .add(sandbox, ResourceLifecycle::Frozen)
         .build();
+    let stack = with_execute_holder(stack, &sandbox_id, &egress);
     let prepared = prepare_for_target(stack, TerraformTarget::Gcp).await;
     let image = prepared
         .resources()
@@ -71,6 +73,20 @@ fn attribute(block: &hcl::Block, key: &str) -> String {
         .find(|a| a.key() == key)
         .map(|a| a.expr().to_string())
         .unwrap_or_default()
+}
+
+/// A Google Cloud internet sandbox needs a profile that holds `sandbox/execute` on it (its private
+/// ingress answers only to a credential signed for such an identity); other stacks get none, so
+/// their rendering is unchanged.
+fn with_execute_holder(mut stack: Stack, sandbox_id: &str, egress: &SandboxEgress) -> Stack {
+    if *egress == SandboxEgress::Internet {
+        stack.permissions.profiles.insert(
+            "operator".to_string(),
+            alien_core::permissions::PermissionProfile::new()
+                .resource(sandbox_id, ["sandbox/execute"]),
+        );
+    }
+    stack
 }
 
 #[tokio::test]
@@ -247,12 +263,13 @@ async fn snapshot_stack(egress: SandboxEgress, lifecycle: ResourceLifecycle, nam
             image: "us-central1-docker.pkg.dev/p/r/agents:1".to_string(),
             bundled_from: None,
         })
-        .egress(egress)
+        .egress(egress.clone())
         .lifecycle(SandboxLifecyclePolicy::default())
         .build();
     let stack = Stack::new("gcpint".to_string())
         .add(sandbox, lifecycle)
         .build();
+    let stack = with_execute_holder(stack, "agents", &egress);
     let prepared = prepare_for_target(stack, TerraformTarget::Gcp).await;
     let module = render(&prepared, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module(name, &module);

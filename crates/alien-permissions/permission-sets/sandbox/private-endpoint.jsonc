@@ -13,7 +13,11 @@
         //  - create, read, list and delete a probe sandbox: the forwarding rule targets a service
         //    attachment that only a sandbox's connection info reveals, so one short-lived sandbox
         //    is created to read it and deleted in the same flow (also when the flow fails, and
-        //    by a 10 minute lifetime if the controller dies).
+        //    by a 10 minute lifetime if the controller dies);
+        //  - delete the Service Directory entry Google registers for the endpoint
+        //    (`goog-psc-default/services/{rule}`): a forwarding rule delete without it finishes
+        //    with SERVICE_DIRECTORY_PERMISSION_DENIED and the rule stays (measured), even in a
+        //    project where the Service Directory API is not enabled.
         // The sandbox verbs are exactly create, get, list and delete. Never `execute`, snapshot or
         // update: nothing here runs code in a session or reads its contents (a test holds this).
         //
@@ -46,7 +50,8 @@
             "compute.forwardingRules.pscDelete",
             "compute.subnetworks.use",
             "compute.networks.use",
-            "compute.regionOperations.get"
+            "compute.regionOperations.get",
+            "servicedirectory.services.delete"
           ]
         },
         "binding": {

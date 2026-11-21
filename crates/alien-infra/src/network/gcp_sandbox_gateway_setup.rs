@@ -118,8 +118,44 @@ async fn wait(
         }
         Scope::Zone(zone) => compute.wait_zone_operation(zone.to_string(), name).await,
     }
-    .map(|_| ())
     .context(cloud(&format!("{what} was not completed"), resource_id))
+    .and_then(|operation| operation_outcome(&operation, what, resource_id))
+}
+
+/// What a compute operation the wait call returned says. The wait call answers after about two
+/// minutes even when the operation still runs, and a finished operation can carry an error (a
+/// forwarding rule delete that a missing permission stopped reads `DONE` with one), so neither
+/// may pass as done.
+pub(crate) fn operation_outcome(
+    operation: &alien_gcp_clients::compute::Operation,
+    what: &str,
+    resource_id: &str,
+) -> Result<()> {
+    if operation.has_error() {
+        let reason = operation
+            .error
+            .as_ref()
+            .and_then(|error| error.errors.first())
+            .map(|item| {
+                format!(
+                    "{}: {}",
+                    item.code.as_deref().unwrap_or("error"),
+                    item.message.as_deref().unwrap_or("no message")
+                )
+            })
+            .unwrap_or_default();
+        return Err(AlienError::new(cloud(
+            &format!("{what} failed: {reason}"),
+            resource_id,
+        )));
+    }
+    if !operation.is_done() {
+        return Err(AlienError::new(cloud(
+            &format!("{what} is still running"),
+            resource_id,
+        )));
+    }
+    Ok(())
 }
 
 /// The two VM zones: the first two zones of the region that are up, in name order, as the
@@ -774,6 +810,7 @@ mod tests {
     fn done() -> Operation {
         Operation {
             name: Some("op".into()),
+            status: Some(alien_gcp_clients::compute::OperationStatus::Done),
             ..Default::default()
         }
     }

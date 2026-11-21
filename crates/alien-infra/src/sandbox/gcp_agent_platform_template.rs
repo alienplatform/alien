@@ -151,12 +151,7 @@ fn per_project_image_project_id(path: &str) -> Option<&str> {
 /// rather than approximated. The mode→switch mapping is `SandboxEgress::internet_access_switch`, so
 /// this cannot disagree with the emitter or the provider on what a mode means.
 fn internet_access_or_refuse(sandbox: &Sandbox) -> Result<bool> {
-    // `internet` is not the cloud's open switch: the sandbox's only way out is the network
-    // attachment into the deployment's VPC, where the egress gateway applies the allowlist. The
-    // switch stays false so nothing can bypass that path.
-    if uses_gateway_path(sandbox) {
-        return Ok(false);
-    }
+    // `internet` maps to a closed switch there: its only way out is the network attachment.
     sandbox.egress.internet_access_switch().ok_or_else(|| {
         AlienError::new(ErrorData::ResourceConfigInvalid {
             message: format!(
@@ -1293,20 +1288,21 @@ impl GcpAgentPlatformTemplateController {
             .get_gcp_agent_platform_client(gcp_config)?;
 
         if self.private_endpoint.is_some() || self.endpoint_progress.probe_requested {
-            let region = self.region.clone().unwrap_or_default();
             let compute = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
-            if let Err(e) = super::gcp_private_endpoint::delete(
+            // The endpoint is the deployment's, shared by every internet sandbox: it goes with
+            // the last one. A failed delete fails the step, so it is retried rather than left
+            // in the subnet, where it would block the network's own teardown.
+            let shared = super::gcp_private_endpoint::endpoint_still_needed(ctx, &config.id);
+            super::gcp_private_endpoint::delete(
                 compute.as_ref(),
                 client.as_ref(),
                 &engine,
                 ctx.resource_prefix,
-                &region,
+                &gcp_config.region,
                 &config.id,
+                !shared,
             )
-            .await
-            {
-                warn!(id=%config.id, error=%e, "could not delete the sandbox endpoint during teardown, continuing");
-            }
+            .await?;
         }
 
         super::gcp_egress::delete_shared_secrets(ctx, &config.id, self.egress_public_key.is_some())
@@ -1331,12 +1327,12 @@ impl GcpAgentPlatformTemplateController {
                 &self.engine_setup,
             )
             .await?;
-        } else if !config.preview_ports.is_empty()
+        } else if config.needs_gcp_edge_signer()
             && ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
         {
             // The record may have been dropped by an older manager rewriting the state; the
             // signer's own description still names this deployment. Only a direct-setup
-            // deployment with preview ports can have a signer, and a package install's
+            // deployment with preview ports or an internet sandbox can have a signer, and a package install's
             // management identity cannot read service accounts (GCP answers 403).
             crate::sandbox::gcp_engine_setup::remove_marked_signer(ctx, &config.id).await?;
         }
@@ -2394,6 +2390,49 @@ mod tests {
         );
     }
 
+    /// The verifier signs off on the body the controller builds for an `internet` sandbox: the
+    /// install's own attachment, private ingress and the closed switch. A `none` sandbox's body
+    /// with that attachment added is refused.
+    #[test]
+    fn the_verifier_accepts_the_controllers_internet_template_body() {
+        use alien_core::gcp_sandbox_gateway::{attachment_path, resource_name, suffix};
+        use alien_verifier::cloud_write::resource::check_sandbox_template;
+        let attachment = attachment_path(
+            "proj",
+            "us-central1",
+            &resource_name("pfx", suffix::ATTACHMENT),
+        );
+        let sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
+        let body = build_template_body(
+            &sandbox,
+            "pfx-agent-sbx",
+            &deployment_config(None, None),
+            Some(&attachment),
+        )
+        .expect("an internet sandbox builds a body with its attachment");
+        let wire = serde_json::to_value(&body).expect("the template body serializes");
+        assert_eq!(
+            wire["egressControlConfig"]["internetAccess"],
+            serde_json::json!(false)
+        );
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &wire)
+            .expect("the controller's own internet body");
+        check_sandbox_template(&sandbox, "pfx", "other", "us-central1", "123", &wire)
+            .expect_err("an attachment in a project the verifier does not write to");
+
+        let none = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        let mut none_body = serde_json::to_value(
+            build_template_body(&none, "pfx-agent-sbx", &deployment_config(None, None), None)
+                .expect("a none sandbox builds a body"),
+        )
+        .expect("the template body serializes");
+        none_body["egressControlConfig"]["networkAttachment"] = serde_json::json!(attachment);
+        none_body["ingressControlConfig"] =
+            serde_json::json!({ "enablePrivateServiceConnect": true });
+        check_sandbox_template(&none, "pfx", "proj", "us-central1", "123", &none_body)
+            .expect_err("a none sandbox with the install's attachment");
+    }
+
     /// The verifier signs off on exactly the body the controller builds, disk ceiling and agent
     /// port included, and refuses the same body with a different disk ceiling or an extra key.
     #[test]
@@ -2413,19 +2452,22 @@ mod tests {
             wire["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"],
             serde_json::json!(disk)
         );
-        check_sandbox_template(&sandbox, "pfx", "123", &wire).expect("the controller's own body");
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &wire)
+            .expect("the controller's own body");
 
         let mut other_disk = wire.clone();
         other_disk["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"] =
             serde_json::json!("1Gi");
-        check_sandbox_template(&sandbox, "pfx", "123", &other_disk)
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &other_disk)
             .expect_err("a disk ceiling that is not the signed one");
         let mut extra = wire.clone();
         extra["customContainerEnvironment"]["resources"]["limits"]["gpu"] = serde_json::json!("1");
-        check_sandbox_template(&sandbox, "pfx", "123", &extra).expect_err("an extra limit");
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &extra)
+            .expect_err("an extra limit");
         let mut other_port = wire;
         other_port["customContainerEnvironment"]["ports"][0]["port"] = serde_json::json!(8080);
-        check_sandbox_template(&sandbox, "pfx", "123", &other_port).expect_err("another port");
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &other_port)
+            .expect_err("another port");
     }
 
     /// The preview ports the signed sandbox declares are the ones the verifier lets the template
@@ -2443,14 +2485,16 @@ mod tests {
         )
         .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
-        check_sandbox_template(&sandbox, "pfx", "123", &wire).expect("the controller's own body");
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &wire)
+            .expect("the controller's own body");
 
         let mut extra = wire.clone();
         extra["customContainerEnvironment"]["ports"]
             .as_array_mut()
             .expect("ports")
             .push(serde_json::json!({"port": 9999, "protocol": "TCP"}));
-        check_sandbox_template(&sandbox, "pfx", "123", &extra).expect_err("an unsigned port");
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &extra)
+            .expect_err("an unsigned port");
 
         // `:execute` goes to the first declared port, so the agent's port must be the first.
         let mut sorted = wire.clone();
@@ -2458,7 +2502,7 @@ mod tests {
             .as_array_mut()
             .expect("ports")
             .sort_by_key(|port| port["port"].as_i64());
-        check_sandbox_template(&sandbox, "pfx", "123", &sorted)
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &sorted)
             .expect_err("the agent's port is not first");
 
         let mut missing = wire;
@@ -2466,7 +2510,7 @@ mod tests {
             .as_array_mut()
             .expect("ports")
             .remove(0);
-        check_sandbox_template(&sandbox, "pfx", "123", &missing)
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &missing)
             .expect_err("a signed port left out");
     }
 

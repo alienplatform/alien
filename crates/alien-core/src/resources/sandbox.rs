@@ -251,11 +251,14 @@ impl SandboxEgress {
     #[deprecated(note = "use SandboxEgress::None")]
     pub const Deny: Self = Self::None;
 
-    /// Backend switch; hostname rules must be handled by a backend matcher.
+    /// Agent Platform's own internet switch for this mode; hostname rules must be handled by a
+    /// backend matcher. `internet` keeps the switch closed: its only way out is the network
+    /// attachment into the deployment's VPC, where the egress gateway applies the rules, so
+    /// nothing may bypass it through the cloud's open internet.
     pub fn internet_access_switch(&self) -> Option<bool> {
         match self {
-            Self::None => Some(false),
-            Self::Internet | Self::Allow => Some(true),
+            Self::None | Self::Internet => Some(false),
+            Self::Allow => Some(true),
             Self::AllowDomains { .. } => None,
         }
     }
@@ -801,6 +804,13 @@ pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
 }
 
 impl Sandbox {
+    /// Whether a Google Cloud deployment of this sandbox needs the edge-signing identity: the
+    /// edge checks a credential it signs on every call through a preview port, and on every call
+    /// at all to an `internet` sandbox, whose private ingress answers only to that credential.
+    pub fn needs_gcp_edge_signer(&self) -> bool {
+        !self.preview_ports.is_empty() || self.egress == SandboxEgress::Internet
+    }
+
     pub(crate) fn setup_digest_value(&self) -> serde_json::Value {
         match &self.egress {
             SandboxEgress::None => serde_json::json!({"mode":"deny"}),
@@ -3277,6 +3287,11 @@ mod tests {
     fn internet_access_switch_maps_only_the_two_expressible_modes() {
         assert_eq!(SandboxEgress::Allow.internet_access_switch(), Some(true));
         assert_eq!(SandboxEgress::None.internet_access_switch(), Some(false));
+        assert_eq!(
+            SandboxEgress::Internet.internet_access_switch(),
+            Some(false),
+            "internet leaves only through the gateway, never the cloud's open switch"
+        );
         assert_eq!(
             SandboxEgress::AllowDomains {
                 domains: vec!["api.example.com".to_string()]

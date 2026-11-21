@@ -161,7 +161,8 @@ async fn engine_grants_for(
         .collect())
 }
 
-/// Creates the signing identity (when preview ports are declared) and places every grant the
+/// Creates the signing identity (when the sandbox needs one: preview ports, or `internet`'s
+/// private ingress) and places every grant the
 /// package places on the engine. Safe to repeat: a retry finds each piece in place.
 ///
 /// `record` is updated before each cloud write so a failure part-way still lets teardown remove

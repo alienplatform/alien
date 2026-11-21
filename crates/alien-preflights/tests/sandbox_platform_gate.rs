@@ -227,8 +227,17 @@ async fn gcp_plans_internet_and_an_allowlist_default() {
     let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
     let mut declared = sandbox(None);
     declared.egress = SandboxEgress::Internet;
+    // A Google Cloud internet sandbox needs a profile that holds execute on it.
+    let granted = |sandbox: Sandbox| {
+        let mut stack = stack_with(sandbox);
+        stack.permissions.profiles.insert(
+            "operator".to_string(),
+            PermissionProfile::new().resource("agent", ["sandbox/execute"]),
+        );
+        stack
+    };
     let result = PreflightRunner::new()
-        .run_compile_time_checks(&stack_with(declared.clone()), Platform::Gcp)
+        .run_compile_time_checks(&granted(declared.clone()), Platform::Gcp)
         .await
         .expect("preflight runs");
     assert!(result.success, "{result:?}");
@@ -237,7 +246,7 @@ async fn gcp_plans_internet_and_an_allowlist_default() {
         allow: vec!["api.example.com".into()],
     });
     let result = PreflightRunner::new()
-        .run_compile_time_checks(&stack_with(declared), Platform::Gcp)
+        .run_compile_time_checks(&granted(declared), Platform::Gcp)
         .await
         .expect("preflight runs");
     assert!(result.success, "{result:?}");

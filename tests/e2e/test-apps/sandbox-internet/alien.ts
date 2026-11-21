@@ -13,4 +13,9 @@ const agents = new alien.Sandbox("agents")
   .lifecycle({})
   .build()
 
-export default new alien.Stack("sandbox-internet").add(agents, "frozen").build()
+// On Google Cloud an internet sandbox answers only to an edge credential signed for an identity
+// that holds `sandbox/execute` on it, so the plan requires a profile that does.
+export default new alien.Stack("sandbox-internet")
+  .add(agents, "frozen")
+  .permissions({ profiles: { operator: { agents: ["sandbox/execute"] } } })
+  .build()

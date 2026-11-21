@@ -655,6 +655,16 @@ Limits, stated plainly:
   and removes it on teardown. Callers outside the VPC cannot run commands in these sandboxes.
 - **One port.** Only one TCP port is measured to cross from the sandbox tenant into the VPC, so
   the gateways answer sandboxes on that port (a setup value) and redirect it to the proxy.
+- **Who may connect to the attachment.** The attachment accepts connections automatically
+  (`ACCEPT_AUTOMATIC`). Compute Engine can limit an attachment to listed producer projects, but
+  the Agent Platform tenant project that connects is Google's, differs per project and is known
+  only once it connects, so setup cannot list it in advance. What bounds the attachment instead:
+  it exists only in the deployment's VPC, its subnet is reserved for it, and the firewall lets that
+  subnet reach only the gateways' proxy port and denies and logs everything else from it.
+- **Who may use an `internet` sandbox.** It answers only through the private endpoint, to the
+  same edge credential preview uses, so setup creates the signing identity for every `internet`
+  sandbox, preview ports or not, and a stack must grant `sandbox/execute` on it to the profile that
+  uses it (the plan refuses one that does not).
 
 ## Preview on GCP
 

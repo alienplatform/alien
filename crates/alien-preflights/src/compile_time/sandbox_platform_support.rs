@@ -119,6 +119,21 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                         sandbox.id()
                     ));
                 }
+                // An internet sandbox on Google Cloud answers only through the deployment's private
+                // endpoint, to a credential signed for an identity that holds execute on it: with
+                // nobody holding execute, nobody could use the sandbox at all.
+                if platform == Platform::Gcp
+                    && sandbox.egress == SandboxEgress::Internet
+                    && !stack_grants_execute(stack, sandbox.id())
+                {
+                    return Some(format!(
+                        "Sandbox '{}': an internet sandbox on Google Cloud is reached only through \
+                         the deployment's private endpoint, with a credential signed for an \
+                         identity that holds `sandbox/execute` on it. Grant `sandbox/execute` on \
+                         the sandbox to the permission profile that uses it",
+                        sandbox.id()
+                    ));
+                }
                 // The edge credential is the caller's execute right, so a preview nobody holds
                 // execute for would have no one to sign it, and one that someone else could hold
                 // would be command access handed out as if it were port access.
@@ -822,11 +837,38 @@ mod tests {
         }
 
         let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
+        let mut granted = stack.clone();
+        granted.permissions.profiles.insert(
+            "worker".to_string(),
+            alien_core::permissions::PermissionProfile::new()
+                .resource("agent", ["sandbox/execute"]),
+        );
         let allowed = SandboxPlatformSupportCheck
-            .check(&stack, Platform::Gcp)
+            .check(&granted, Platform::Gcp)
             .await
             .unwrap();
         assert!(allowed.success, "{:?}", allowed.errors);
+    }
+
+    /// With the switch on, a Google Cloud internet sandbox nobody holds execute on is refused:
+    /// its private ingress answers only to a credential signed for an execute holder, so nobody
+    /// could use it. Preview ports are not needed for that credential.
+    #[tokio::test]
+    async fn a_gcp_internet_sandbox_needs_an_execute_holder() {
+        let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
+        let stack = stack_with(sandbox("agent", None, SandboxEgress::Internet));
+        let refused = SandboxPlatformSupportCheck
+            .check(&stack, Platform::Gcp)
+            .await
+            .unwrap();
+        assert!(!refused.success);
+        assert!(
+            refused.errors.iter().any(|e| e.contains("sandbox/execute")
+                && e.contains("private endpoint")
+                && e.contains("'agent'")),
+            "{:?}",
+            refused.errors
+        );
     }
 
     /// `alien build`, `alien release` and the Terraform/CloudFormation render all stop a Google
@@ -851,8 +893,14 @@ mod tests {
         }
 
         let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
+        let mut granted = stack.clone();
+        granted.permissions.profiles.insert(
+            "worker".to_string(),
+            alien_core::permissions::PermissionProfile::new()
+                .resource("agent", ["sandbox/execute"]),
+        );
         runner
-            .run_build_time_preflights(&stack, Platform::Gcp)
+            .run_build_time_preflights(&granted, Platform::Gcp)
             .await
             .expect("build passes with the switch on");
     }
