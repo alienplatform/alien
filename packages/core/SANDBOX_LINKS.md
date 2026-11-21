@@ -131,4 +131,7 @@ links keeps today's shared network and has no gateway.
   outbound access; create a new session.
 - The gateway's signing key exists only in the `alien dev` process. A restart removes every
   session, gateway and session network of the previous run.
+- A link added to or removed from the stack reaches running sessions within about 15
+  seconds: the gateway container is replaced with the new links, which closes every tunnel
+  the old one held, and the running sessions keep their outbound access through the new one.
 - Tested on Linux Docker Engine. Docker Desktop on macOS is untested.
