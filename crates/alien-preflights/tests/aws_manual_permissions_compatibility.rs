@@ -9,6 +9,11 @@ use iam_policy::{evaluate, wildcard_match, Decision, Request};
 use serde_json::json;
 use std::collections::BTreeMap;
 
+/// The one grant `vault/data-write` added after the legacy release: a value the vault binding
+/// creates is tagged with its vault markers, so writing a value includes tagging it. It applies
+/// to the same parameters as `ssm:PutParameter`, which the test checks before comparing the rest.
+const VAULT_MARKER_TAGGING: &str = "ssm:AddTagsToResource";
+
 #[tokio::test]
 async fn legacy_manual_profiles_preserve_iam_and_resource_scoped_grants() {
     let baseline: BTreeMap<String, BTreeMap<String, Vec<AwsIamStatement>>> = serde_json::from_str(
@@ -25,6 +30,23 @@ async fn legacy_manual_profiles_preserve_iam_and_resource_scoped_grants() {
         );
         assert!(current.contains_key("uploads") && current.contains_key("secrets"));
         for (scope, statements) in &current {
+            if scope == "secrets" {
+                let tagging: Vec<_> = statements
+                    .iter()
+                    .filter(|statement| statement.action.iter().any(|a| a == VAULT_MARKER_TAGGING))
+                    .collect();
+                assert!(
+                    !tagging.is_empty(),
+                    "{name}/secrets: vault/data-write no longer allows marking new values"
+                );
+                for statement in tagging {
+                    assert!(
+                        statement.effect == "Allow"
+                            && statement.action.iter().any(|a| a == "ssm:PutParameter"),
+                        "{name}/secrets: marker tagging must share the PutParameter statement and its resources"
+                    );
+                }
+            }
             let policy = |statements: &[AwsIamStatement]| {
                 let statements: Vec<_> = statements
                     .iter()
@@ -39,6 +61,12 @@ async fn legacy_manual_profiles_preserve_iam_and_resource_scoped_grants() {
                                         wildcard_match(&service.to_ascii_lowercase(), "iam")
                                     })
                             });
+                        }
+                        // Checked above: the marker tagging grant is intended on the vault scope.
+                        if scope == "secrets" {
+                            statement
+                                .action
+                                .retain(|action| action != VAULT_MARKER_TAGGING);
                         }
                         (!statement.action.is_empty()).then_some(statement)
                     })
