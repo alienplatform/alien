@@ -869,7 +869,12 @@ async fn probe_private_ingress(
             .map(str::to_string)
             .with_context(|| format!("the binding names no {key}"))
     };
-    let engine = field("engine")?;
+    // The client takes the engine id; the binding names the engine's full resource name.
+    let engine = field("engine")?
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_string();
     let template = field("template")?;
     let signer = field("previewServiceAccount")?;
     let http = reqwest::Client::new();
