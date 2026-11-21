@@ -1,4 +1,7 @@
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    time::Duration,
+};
 use tracing::{info, warn};
 
 use crate::core::{
@@ -69,6 +72,11 @@ pub struct AwsRemoteStackManagementController {
     /// controllers from before revisions were recorded.
     #[serde(default)]
     pub(crate) management_permissions_revision: Option<String>,
+    /// A digest of each management permission set's body, by set id, as of the recorded
+    /// revision. Lets setup drift name the sets whose content changed under an unchanged id.
+    /// Absent on installs from before it was recorded.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) management_permission_set_digests: BTreeMap<String, String>,
     /// Reads of the install's signing settings in a row that AWS could not answer. Named so a
     /// user's retry of a failed step starts counting again.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -211,6 +219,8 @@ impl AwsRemoteStackManagementController {
 
         self.management_permissions_applied = true;
         self.management_permissions_revision = super::management_permissions_revision(ctx)?;
+        self.management_permission_set_digests =
+            super::management_permission_set_digests(ctx.desired_stack)?;
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -316,6 +326,8 @@ impl AwsRemoteStackManagementController {
             "Cross-account management IAM role policies updated successfully"
         );
         self.management_permissions_revision = super::management_permissions_revision(ctx)?;
+        self.management_permission_set_digests =
+            super::management_permission_set_digests(ctx.desired_stack)?;
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -654,15 +666,22 @@ fn emit_aws_remote_stack_management_heartbeat(
 /// keeping the previous ones until then. So an updating, failed-update or failed-refresh network
 /// still names its subnets.
 pub(crate) fn aws_network_scope(ctx: &ResourceControllerContext<'_>) -> Option<AwsNetworkScope> {
+    aws_network_scope_of(ctx.desired_stack, ctx.state)
+}
+
+/// [`aws_network_scope`] from the stack and state alone, so setup drift can be judged without a
+/// controller context.
+pub(crate) fn aws_network_scope_of(
+    desired_stack: &alien_core::Stack,
+    state: &alien_core::StackState,
+) -> Option<AwsNetworkScope> {
     use crate::core::state_utils::StackResourceStateExt;
 
-    let (network_id, network) = ctx
-        .desired_stack
+    let (network_id, network) = desired_stack
         .resources
         .iter()
         .find_map(|(id, entry)| entry.config.downcast_ref::<Network>().map(|n| (id, n)))?;
-    let controller = ctx
-        .state
+    let controller = state
         .resources
         .get(network_id)
         .filter(|state| {
@@ -1544,6 +1563,7 @@ impl AwsRemoteStackManagementController {
             role_name: Some(role_name.to_string()),
             management_permissions_applied: true,
             management_permissions_revision: None,
+            management_permission_set_digests: BTreeMap::new(),
             wait_for_signing_read_iterations: 0,
             permissions_boundary_arn: None,
             permissions_boundary_document: None,
