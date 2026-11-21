@@ -122,6 +122,110 @@ fn link_address_spaces() -> impl Iterator<Item = Ipv4Net> {
         .map(|&(address, prefix)| Ipv4Net::new_assert(address, prefix))
 }
 
+/// A resource a sandbox may link: its internal endpoint as the egress gateway reaches it.
+///
+/// One answer per resource type. A type without an endpoint inside the deployment's network
+/// is not linkable and does not implement this.
+pub trait InternalEndpoints {
+    /// The ports the resource serves inside the deployment, or why it serves none.
+    fn internal_ports(&self) -> Result<Vec<u16>, String>;
+}
+
+impl InternalEndpoints for crate::Container {
+    fn internal_ports(&self) -> Result<Vec<u16>, String> {
+        let mut ports: Vec<u16> = self.ports.iter().map(|port| port.port).collect();
+        ports.sort_unstable();
+        ports.dedup();
+        if ports.is_empty() {
+            return Err("it declares no port, so it has no internal endpoint".into());
+        }
+        Ok(ports)
+    }
+}
+
+/// The linkable resource `id` in `stack` and its internal ports, or why it cannot be linked.
+pub fn internal_ports(stack: &crate::Stack, id: &str) -> Result<Vec<u16>, String> {
+    let entry = stack
+        .resources
+        .get(id)
+        .ok_or_else(|| "no such resource in the stack".to_string())?;
+    if crate::sandbox_egress::is_managed_gateway(stack, id) {
+        return Err("it is the deployment's egress gateway".into());
+    }
+    if let Some(container) = entry.config.downcast_ref::<crate::Container>() {
+        return container.internal_ports();
+    }
+    Err(format!(
+        "a {} is not a linkable service; link a Container with a declared port",
+        entry.config.resource_type()
+    ))
+}
+
+/// Why `platform` cannot route a sandbox's gateway to a linked service, if it cannot.
+pub fn platform_refusal(platform: crate::Platform) -> Option<&'static str> {
+    match platform {
+        crate::Platform::Aws | crate::Platform::Kubernetes | crate::Platform::Local => None,
+        crate::Platform::Gcp => Some(
+            "links need the deployment's egress gateway, and Google Cloud sandboxes have none: \
+             their outbound traffic leaves through Google's network and cannot reach the \
+             deployment's private network",
+        ),
+        crate::Platform::Azure => Some(
+            "links are not available on Azure in this release: the gateway runs on VMs outside \
+             the container network",
+        ),
+        _ => Some("links are not available on this platform"),
+    }
+}
+
+/// Checks a sandbox's declared links against the stack and the platform at plan time.
+pub fn validate_sandbox_links(
+    stack: &crate::Stack,
+    sandbox: &crate::Sandbox,
+    platform: crate::Platform,
+) -> Result<(), String> {
+    if sandbox.gateway_links.is_empty() {
+        return Ok(());
+    }
+    if let Some(reason) = platform_refusal(platform) {
+        return Err(reason.into());
+    }
+    if sandbox.egress != crate::SandboxEgress::Internet {
+        return Err(
+            "links go through the deployment's egress gateway and need egress `internet`".into(),
+        );
+    }
+    if sandbox.gateway_links.len() > MAX_SANDBOX_LINKS {
+        return Err(format!("at most {MAX_SANDBOX_LINKS} links are allowed"));
+    }
+    if !crate::sandbox_egress::gateway_image_serves_links(
+        crate::sandbox_egress::planned_gateway_image(stack),
+    ) {
+        return Err(
+            "the egress gateway image this release installs cannot enforce links; \
+             a later release enables them"
+                .into(),
+        );
+    }
+    for link in &sandbox.gateway_links {
+        internal_ports(stack, &link.id)
+            .map_err(|reason| format!("link '{}': {reason}", link.id))?;
+    }
+    Ok(())
+}
+
+/// Every service some sandbox of `stack` links, with its internal ports. The gateway's own
+/// network rules open exactly these.
+pub fn gateway_link_targets(stack: &crate::Stack) -> std::collections::BTreeMap<String, Vec<u16>> {
+    stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<crate::Sandbox>())
+        .filter(|sandbox| sandbox.egress == crate::SandboxEgress::Internet)
+        .flat_map(|sandbox| &sandbox.gateway_links)
+        .filter_map(|link| Some((link.id.clone(), internal_ports(stack, &link.id).ok()?)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,5 +291,55 @@ mod tests {
             mutate(&mut link);
             assert!(link.validate().is_err(), "{link:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod builder_tests {
+    use crate::{Container, ContainerCode, ResourceSpec, Sandbox, SandboxCode, SandboxEgress};
+
+    #[test]
+    fn link_records_each_service_once_and_a_sandbox_without_links_serializes_unchanged() {
+        let api = Container::new("api".into())
+            .code(ContainerCode::Image {
+                image: "example.com/api:1".into(),
+            })
+            .permissions("execution".into())
+            .cpu(ResourceSpec {
+                min: "1".into(),
+                desired: "1".into(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".into(),
+                desired: "1Gi".into(),
+            })
+            .port(8080)
+            .build();
+        let build = |linked: bool| {
+            let builder = Sandbox::new("agents".into());
+            let builder = if linked {
+                builder.link(&api).link(&api)
+            } else {
+                builder
+            };
+            builder
+                .code(SandboxCode::Image {
+                    image: "ubuntu".into(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(Default::default())
+                .build()
+        };
+        let linked = build(true);
+        assert_eq!(linked.gateway_links.len(), 1);
+        assert_eq!(linked.gateway_links[0].id, "api");
+        // Links are not lifecycle dependencies: the linked service may link the sandbox.
+        assert!(crate::ResourceDefinition::get_dependencies(&linked).is_empty());
+        let json = serde_json::to_value(&linked).unwrap();
+        assert_eq!(json["gatewayLinks"][0]["id"], "api");
+        let plain = serde_json::to_value(build(false)).unwrap();
+        assert!(plain.get("gatewayLinks").is_none());
+        assert_eq!(serde_json::from_value::<Sandbox>(json).unwrap(), linked);
     }
 }
