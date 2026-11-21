@@ -391,7 +391,21 @@ impl AzureSandboxController {
                 });
             }
             self.egress_network_verified = false;
-            super::azure_egress::validate_network(ctx).await?;
+            if super::egress::azure_gateway_links(ctx).is_empty() {
+                super::azure_egress::validate_network(ctx).await?;
+            } else {
+                // A linked Container's load balancer address can arrive after this sandbox is
+                // Running (links are not dependencies), so the owner republishes; an unchanged
+                // configuration writes nothing. Stacks without links keep the check alone.
+                super::azure_egress::publish_config(
+                    ctx,
+                    self.egress.as_ref(),
+                    self.egress_public_key.as_ref(),
+                    &mut self.egress_config_digest,
+                    &mut self.egress_replica_secret_ready,
+                )
+                .await?;
+            }
             self.egress_network_verified = true;
         }
 

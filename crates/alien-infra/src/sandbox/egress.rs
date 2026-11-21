@@ -859,10 +859,15 @@ pub(crate) async fn publish_azure_config(
     let peers = serde_json::json!({
         "static": gateway_ips.iter().map(|ip| format!("{ip}:3129")).collect::<Vec<_>>()
     });
-    let Some(value) = gateway_config(ctx, key, vpc_cidrs, peers) else {
+    let Some(mut value) = gateway_config(ctx, key, vpc_cidrs, peers) else {
         *published = None;
         return Ok(());
     };
+    // Omitted without links, so a stack without them publishes the same configuration.
+    let links = azure_gateway_links(ctx);
+    if !links.is_empty() {
+        value["links"] = serde_json::to_value(links).expect("links serialize");
+    }
     let vault = deployment_vault(ctx).await?;
     if !*replica_secret_ready {
         create_replica_secret(vault.as_ref()).await?;
@@ -875,6 +880,28 @@ pub(crate) async fn publish_azure_config(
         published,
     )
     .await
+}
+
+/// The Azure gateway reaches a linked Container at the static frontend IP of the internal load
+/// balancer its controller puts in front of it, recorded in the Container's outputs. A Container
+/// without that output yet is left out, and the next publish adds it.
+#[cfg(feature = "azure")]
+pub(crate) fn azure_gateway_links(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+) -> std::collections::BTreeMap<String, Vec<alien_core::sandbox_links::GatewayLink>> {
+    alien_core::sandbox_links::addressed_gateway_links(
+        ctx.desired_stack,
+        ctx.resource_prefix,
+        |id| {
+            ctx.state
+                .resources
+                .get(id)?
+                .outputs
+                .as_ref()?
+                .downcast_ref::<alien_core::ContainerOutputs>()?
+                .link_address
+        },
+    )
 }
 
 /// A sandbox controller that keeps the deployment signing key's public half in its state.

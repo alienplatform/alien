@@ -331,6 +331,41 @@ pub fn cluster_gateway_links(
         .collect()
 }
 
+/// Every internet sandbox's links where the deployment owns a fixed address for each linked
+/// Container (on Azure, its internal load balancer's static frontend IP), keyed by audience
+/// `<prefix>/<id>`. Each link keeps the overlay name `<id>.svc` and the declared ports, carries
+/// that one address, and admits only it (`<address>/32`). A link whose Container has no address
+/// yet is left out until it has one. Empty for a stack without links.
+pub fn addressed_gateway_links(
+    stack: &crate::Stack,
+    resource_prefix: &str,
+    address_of: impl Fn(&str) -> Option<Ipv4Addr>,
+) -> std::collections::BTreeMap<String, Vec<GatewayLink>> {
+    stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<crate::Sandbox>())
+        .filter(|sandbox| sandbox.egress == crate::SandboxEgress::Internet)
+        .filter_map(|sandbox| {
+            let links: Vec<_> = sandbox
+                .gateway_links
+                .iter()
+                .filter_map(|link| {
+                    let address = address_of(&link.id)?;
+                    let link = GatewayLink {
+                        id: link.id.clone(),
+                        host: format!("{}.svc", link.id.to_ascii_lowercase()),
+                        ports: internal_ports(stack, &link.id).ok()?,
+                        ranges: vec![Ipv4Net::new_assert(address, 32)],
+                        addresses: vec![address],
+                    };
+                    link.validate().is_ok().then_some(link)
+                })
+                .collect();
+            (!links.is_empty()).then(|| (format!("{resource_prefix}/{}", sandbox.id), links))
+        })
+        .collect()
+}
+
 /// The bindings a sandbox's commands receive for its compute-cluster links: each linked Container's
 /// overlay URLs, never a load balancer or public URL.
 pub fn cluster_link_bindings(
@@ -618,5 +653,71 @@ mod azure_tests {
         assert!(azure_link_refusal(&stack, "web")
             .unwrap()
             .contains("public endpoint"));
+    }
+}
+
+#[cfg(test)]
+mod addressed_tests {
+    use super::addressed_gateway_links;
+    use crate::{
+        Container, ContainerCode, ResourceLifecycle, ResourceSpec, Sandbox, SandboxCode,
+        SandboxEgress, Stack,
+    };
+
+    #[test]
+    fn addressed_links_carry_the_owned_address_and_admit_only_it() {
+        let container = |id: &str| {
+            Container::new(id.into())
+                .code(ContainerCode::Image {
+                    image: "api".into(),
+                })
+                .cpu(ResourceSpec {
+                    min: "1".into(),
+                    desired: "1".into(),
+                })
+                .memory(ResourceSpec {
+                    min: "1Gi".into(),
+                    desired: "1Gi".into(),
+                })
+                .permissions("default".into())
+                .port(8080)
+                .build()
+        };
+        let (api, billing) = (container("api"), container("billing"));
+        let sandbox = Sandbox::new("agents".into())
+            .link(&api)
+            .link(&billing)
+            .code(SandboxCode::Image {
+                image: "ubuntu".into(),
+                bundled_from: None,
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(Default::default())
+            .build();
+        let stack = Stack::new("s".into())
+            .add(api, ResourceLifecycle::Live)
+            .add(billing, ResourceLifecycle::Live)
+            .add(sandbox, ResourceLifecycle::Live)
+            .build();
+        // billing has no address yet; a metadata address is never accepted.
+        let links = addressed_gateway_links(&stack, "prefix", |id| match id {
+            "api" => Some("10.0.2.9".parse().unwrap()),
+            _ => None,
+        });
+        let agents = &links["prefix/agents"];
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].host, "api.svc");
+        assert_eq!(agents[0].ports, vec![8080]);
+        assert_eq!(
+            agents[0].addresses,
+            vec!["10.0.2.9".parse::<std::net::Ipv4Addr>().unwrap()]
+        );
+        assert_eq!(agents[0].ranges, vec!["10.0.2.9/32".parse().unwrap()]);
+        assert!(agents[0].validate().is_ok());
+        assert!(addressed_gateway_links(&stack, "prefix", |_| Some(
+            "169.254.169.254".parse().unwrap()
+        ))
+        .is_empty());
+        assert!(addressed_gateway_links(&stack, "prefix", |_| None).is_empty());
     }
 }
