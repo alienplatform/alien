@@ -22,6 +22,11 @@
 //! `gcloud` opens. The relay and its firewall rule carry the run's resource prefix and are
 //! deleted before the deployment is torn down, on every exit path the test controls.
 //!
+//! The SDK writes each grant to every gateway replica at its VPC address, the same list the
+//! sandbox's agent dials, so the test cannot rename the replicas. It gives each replica address
+//! to the local loopback interface (`sudo ip addr replace <ip>/32 dev lo`, removed at the end) and
+//! binds one tunnel per replica to `<ip>:<admin port>`, relayed to that replica's admin port.
+//!
 //! Run by hand, against the test project only (it creates network resources):
 //!
 //! ```text
@@ -72,6 +77,7 @@ const RELAY_TAG: &str = "alien-live-relay";
 /// Google's documented source range for IAP TCP forwarding.
 const IAP_RANGE: &str = "35.235.240.0/20";
 const RELAY_ENDPOINT_PORT: u16 = 10000;
+/// The first replica's admin port on the relay; replica `i` is `RELAY_ADMIN_PORT + i`.
 const RELAY_ADMIN_PORT: u16 = 10001;
 /// The service account of the test app's `operator` profile.
 const WORKLOAD_IDENTITY: &str = "operator-sa";
@@ -176,8 +182,19 @@ print("updateEgress-op", call("POST", "/", {"v": 1, "op": "updateEgress", "token
 print("PUT-v1-egress", call("PUT", "/v1/egress", {"token": "x", "policy": "internet"}))
 "#;
 
-/// The relay's boot script: forwards each local port to one address inside the VPC.
-fn relay_script(endpoint: &str, admin: &str) -> String {
+/// The relay's boot script: forwards each local port to one address inside the VPC. The admin
+/// port of replica `i` is `RELAY_ADMIN_PORT + i`.
+fn relay_script(endpoint: &str, admins: &[String]) -> String {
+    let admin_relays: String = admins
+        .iter()
+        .enumerate()
+        .map(|(i, admin)| {
+            format!(
+                "threading.Thread(target=serve, args=({}, \"{admin}\"), daemon=True).start()\n",
+                RELAY_ADMIN_PORT + i as u16
+            )
+        })
+        .collect();
     format!(
         r#"#!/usr/bin/env python3
 import socket, threading
@@ -205,7 +222,7 @@ def serve(port, target):
         threading.Thread(target=pipe, args=(client, upstream), daemon=True).start()
         threading.Thread(target=pipe, args=(upstream, client), daemon=True).start()
 threading.Thread(target=serve, args=({RELAY_ENDPOINT_PORT}, "{endpoint}"), daemon=True).start()
-serve({RELAY_ADMIN_PORT}, "{admin}")
+{admin_relays}threading.Event().wait()
 "#
     )
 }
@@ -421,7 +438,10 @@ async fn create_relay(
             ip_protocol: Some("tcp".into()),
             ports: vec![
                 RELAY_ENDPOINT_PORT.to_string(),
-                RELAY_ADMIN_PORT.to_string(),
+                format!(
+                    "{RELAY_ADMIN_PORT}-{}",
+                    RELAY_ADMIN_PORT + deployed.gateway_ips.len() as u16 - 1
+                ),
             ],
         }],
         ..Default::default()
@@ -461,7 +481,11 @@ async fn create_relay(
                 key: Some("startup-script".into()),
                 value: Some(relay_script(
                     &deployed.private_endpoint,
-                    &format!("{}:{}", deployed.gateway_ips[0], plan::ADMIN_PORT),
+                    &deployed
+                        .gateway_ips
+                        .iter()
+                        .map(|ip| format!("{ip}:{}", plan::ADMIN_PORT))
+                        .collect::<Vec<_>>(),
                 )),
             }],
             ..Default::default()
@@ -615,18 +639,75 @@ async fn act_as_workload(
     }
 }
 
+/// The gateway replicas' VPC addresses, held by the loopback interface while the test runs so
+/// the SDK's writes to each replica reach that replica's tunnel. Removed on drop.
+struct LoopbackAliases(Vec<String>);
+
+impl LoopbackAliases {
+    fn add(ips: &[String]) -> anyhow::Result<Self> {
+        let mut added = Vec::new();
+        for ip in ips {
+            let ip: std::net::Ipv4Addr = ip.parse()?;
+            let status = std::process::Command::new("sudo")
+                .args([
+                    "-n",
+                    "ip",
+                    "addr",
+                    "replace",
+                    &format!("{ip}/32"),
+                    "dev",
+                    "lo",
+                ])
+                .status()
+                .context("sudo ip addr replace")?;
+            anyhow::ensure!(
+                status.success(),
+                "could not give {ip} to the loopback interface (needs passwordless sudo)"
+            );
+            added.push(ip.to_string());
+        }
+        Ok(Self(added))
+    }
+}
+
+impl Drop for LoopbackAliases {
+    fn drop(&mut self) {
+        for ip in &self.0 {
+            let _ = std::process::Command::new("sudo")
+                .args(["-n", "ip", "addr", "del", &format!("{ip}/32"), "dev", "lo"])
+                .status();
+        }
+    }
+}
+
 /// An IAP tunnel from a local port to one relay port, open until dropped.
 ///
 /// `gcloud` checks the backend once and exits when the relay is not listening yet (IAP answers
 /// 4003 while the VM boots), so a tunnel that exits is started again until the deadline.
 async fn tunnel(relay: &Relay, port: u16) -> anyhow::Result<(tokio::process::Child, u16)> {
+    tunnel_at(relay, port, None).await
+}
+
+/// `tunnel`, bound to `local` when given (an address the loopback interface holds), else to a
+/// free port on 127.0.0.1.
+async fn tunnel_at(
+    relay: &Relay,
+    port: u16,
+    local: Option<std::net::SocketAddrV4>,
+) -> anyhow::Result<(tokio::process::Child, u16)> {
     let deadline = Instant::now() + Duration::from_secs(600);
     let mut attempts = 0;
     while Instant::now() < deadline {
         attempts += 1;
-        let local = std::net::TcpListener::bind("127.0.0.1:0")?
-            .local_addr()?
-            .port();
+        let local = match local {
+            Some(local) => local,
+            None => std::net::SocketAddrV4::new(
+                std::net::Ipv4Addr::LOCALHOST,
+                std::net::TcpListener::bind("127.0.0.1:0")?
+                    .local_addr()?
+                    .port(),
+            ),
+        };
         let mut gcloud = tokio::process::Command::new("gcloud");
         if let Some(path) = gcloud_token_file() {
             gcloud.arg(format!("--access-token-file={}", path.display()));
@@ -637,7 +718,7 @@ async fn tunnel(relay: &Relay, port: u16) -> anyhow::Result<(tokio::process::Chi
                 "start-iap-tunnel",
                 &relay.vm,
                 &port.to_string(),
-                &format!("--local-host-port=127.0.0.1:{local}"),
+                &format!("--local-host-port={local}"),
                 &format!("--zone={}", relay.zone),
                 &format!("--project={}", gcp_config().project_id),
             ])
@@ -646,11 +727,8 @@ async fn tunnel(relay: &Relay, port: u16) -> anyhow::Result<(tokio::process::Chi
             .context("start gcloud compute start-iap-tunnel")?;
         // Wait until the local port accepts, or gcloud gives up on this attempt.
         while Instant::now() < deadline {
-            if tokio::net::TcpStream::connect(("127.0.0.1", local))
-                .await
-                .is_ok()
-            {
-                return Ok((child, local));
+            if tokio::net::TcpStream::connect(local).await.is_ok() {
+                return Ok((child, local.port()));
             }
             if child.try_wait()?.is_some() {
                 break;
@@ -715,11 +793,11 @@ fn provider(
     deployed: &Deployed,
     workload: GcpClientConfig,
     endpoint_port: u16,
-    admin_port: u16,
 ) -> anyhow::Result<BindingsProvider> {
     let mut binding = deployed.binding.clone();
     binding["privateEndpoint"] = serde_json::json!(format!("127.0.0.1:{endpoint_port}"));
-    let admin = format!("http://127.0.0.1:{admin_port}");
+    // Every replica's admin address is tunneled at its own VPC address (see the module docs).
+    let admin = format!("http://{}:{}", deployed.gateway_ips[0], plan::ADMIN_PORT);
     let proxy = format!(
         "http://{}:{}",
         deployed.gateway_ips[0],
@@ -874,9 +952,16 @@ async fn gcp_internet_sandbox_egress_goes_through_the_gateway_only(ctx: &mut Gcp
         Ok(()) => {
             async {
                 let (_endpoint_tunnel, endpoint_port) = tunnel(&relay, RELAY_ENDPOINT_PORT).await?;
-                let (_admin_tunnel, admin_port) = tunnel(&relay, RELAY_ADMIN_PORT).await?;
+                let _aliases = LoopbackAliases::add(&deployed.gateway_ips)?;
+                let mut _admin_tunnels = Vec::new();
+                for (i, ip) in deployed.gateway_ips.iter().enumerate() {
+                    let local = std::net::SocketAddrV4::new(ip.parse()?, plan::ADMIN_PORT);
+                    let (child, _) =
+                        tunnel_at(&relay, RELAY_ADMIN_PORT + i as u16, Some(local)).await?;
+                    _admin_tunnels.push(child);
+                }
                 let workload = act_as_workload(&deployed, &mut proof).await?;
-                let provider = provider(&deployed, workload, endpoint_port, admin_port)?;
+                let provider = provider(&deployed, workload, endpoint_port)?;
                 let sandbox = provider
                     .load_sandbox(SANDBOX)
                     .await
