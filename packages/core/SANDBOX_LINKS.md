@@ -78,22 +78,43 @@ commands do not receive their bindings.
 | AWS | supported | The container's overlay name `<id>.svc`, within the compute cluster's overlay range. Only the gateway gets a path to the linked container's ports. |
 | Local (`alien dev`) | supported | `<id>.svc` on the local deployment network (see below). |
 | Google Cloud | not available yet | Planning refuses links with this reason. |
-| Azure | not available yet | Planning refuses links for now. When they become available, the linked container gets an internal load balancer with a static private address in the deployment's network, and the gateway reaches the service at that one address. |
+| Azure | supported | The linked container gets an internal load balancer with a static private address in the deployment's private subnet, and the gateway reaches the service at that one address. |
 
 Planning also refuses links while the deployment installs a gateway image that predates them.
 Stacks without links are unchanged on every platform: the same templates, the same gateway
 configuration and the same bindings.
 
+### Limits
+
+- One sandbox resource links at most 16 services, and all sandboxes of a deployment together
+  link at most 16 distinct services.
+- A linked service declares at most 16 ports, and none of them may be port 53: the gateway
+  answers DNS itself. Planning refuses other links with the reason.
+- A deployment whose Operator predates links does not take a release that declares them (or a
+  policy naming `link:<resource-id>`): the release is refused with the Operator version it
+  needs, and the deployment keeps its current release.
+- On a compute cluster whose control plane predates links, updating the egress gateway with
+  links fails until the cluster is updated, instead of running the gateway without them.
+
+### Removing a link
+
+Removing a link from the stack removes it from the gateway's configuration on the next
+heartbeat. New connections to the service are refused from then on, and tunnels already open
+to it are closed by the gateway's periodic check, within about 30 seconds.
+
 ### Azure
 
-When links are available on Azure, these limits apply:
+These limits apply on Azure:
 
 - A linked container has exactly one port and no public endpoint: it joins one load balancer
   through one host port. Planning refuses other containers with the reason.
 - Adding a link to a running container rolls its replicas onto one shared host port, then
   creates the load balancer.
-- Removing the last link stops the gateway from reaching the container at once. The idle
-  internal load balancer stays until the container is replaced.
+- Removing the last link stops the gateway from reaching the container on the next heartbeat.
+  The idle internal load balancer stays until the container is replaced.
+- Inside the deployment's own virtual network, the linked container's host port is reachable
+  like that of any load-balanced container. Deployments with internet sandboxes refuse
+  virtual network peering, and sandboxes reach the container only through the gateway.
 
 ### Local development
 
