@@ -177,7 +177,7 @@ pub(crate) async fn set_up_engine_access(
     let mut grants: Vec<(String, String)> = Vec::new();
     let mut signer_email = None;
 
-    if !sandbox.preview_ports.is_empty() {
+    if sandbox.needs_gcp_edge_signer() {
         let iam = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
         let account_id = preview_signer_account_id(ctx.resource_prefix, &sandbox.id);
         let email = format!(

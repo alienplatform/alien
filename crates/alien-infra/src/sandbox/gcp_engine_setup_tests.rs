@@ -251,6 +251,29 @@ async fn executor_seeded_as(
     remote: bool,
     controller: GcpAgentPlatformTemplateController,
 ) -> SingleControllerExecutor {
+    // A remote caller is delivered only a sandbox with egress allow and no preview ports.
+    let resource = if remote {
+        sandbox(vec![], alien_core::SandboxEgress::Allow)
+    } else {
+        sandbox(vec![8080], alien_core::SandboxEgress::None)
+    };
+    executor_for(
+        resource, authority, iam, platform, setup_run, management, remote, controller,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn executor_for(
+    resource: Sandbox,
+    authority: InitialSetupAuthority,
+    iam: MockIamApi,
+    platform: MockAgentPlatformApi,
+    setup_run: bool,
+    management: bool,
+    remote: bool,
+    controller: GcpAgentPlatformTemplateController,
+) -> SingleControllerExecutor {
     let iam = Arc::new(iam);
     let platform = Arc::new(platform);
     let mut provider = MockPlatformServiceProvider::new();
@@ -261,12 +284,7 @@ async fn executor_seeded_as(
         .expect_get_gcp_agent_platform_client()
         .returning(move |_| Ok(platform.clone()));
     let mut builder = SingleControllerExecutor::builder()
-        // A remote caller is delivered only a sandbox with egress allow and no preview ports.
-        .resource(if remote {
-            sandbox(vec![], alien_core::SandboxEgress::Allow)
-        } else {
-            sandbox(vec![8080], alien_core::SandboxEgress::None)
-        })
+        .resource(resource)
         .resource_prefix("test")
         .resource_lifecycle(ResourceLifecycle::Frozen)
         .controller(controller)
@@ -780,17 +798,33 @@ mod differential {
         perms
     }
 
+    /// The sandboxes the package and direct setup are compared on.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Case {
+        /// Preview ports: the signer signs the preview edge credential.
+        Preview,
+        /// Published for remote use, no preview ports: no signer.
+        Remote,
+        /// `internet` with no preview ports: its private ingress answers only to the edge
+        /// credential, so the signer is still created.
+        Internet,
+    }
+
+    impl Case {
+        fn sandbox(self) -> Sandbox {
+            match self {
+                Case::Preview => sandbox(vec![8080], SandboxEgress::None),
+                Case::Remote => sandbox(vec![], SandboxEgress::Allow),
+                Case::Internet => sandbox(vec![], SandboxEgress::Internet),
+            }
+        }
+    }
+
     /// The grants the package renders for the stack: engine-scoped members and the signer's
     /// account-scoped members, read from the generated blocks.
-    fn rendered(remote: bool) -> Placed {
-        let sandbox = sandbox(
-            if remote { vec![] } else { vec![8080] },
-            if remote {
-                SandboxEgress::Allow
-            } else {
-                SandboxEgress::None
-            },
-        );
+    fn rendered(case: Case) -> Placed {
+        let remote = case == Case::Remote;
+        let sandbox = case.sandbox();
         let builder = Stack::new("acme".to_string())
             .add(
                 GcpAgentPlatformEngine::new(GcpAgentPlatformEngine::id_for_sandbox("box")).build(),
@@ -957,11 +991,41 @@ mod differential {
         }
     }
 
-    async fn direct(remote: bool) -> Placed {
+    async fn direct(case: Case) -> Placed {
         let calls = Arc::new(Mutex::new(Calls::default()));
         let (iam, platform) = clients(&calls);
-        let mut executor = executor_full(iam, platform, true, true, remote).await;
-        executor.run_until_terminal().await.expect("create runs");
+        if case == Case::Internet {
+            // An internet template needs the deployment's gateway wiring before it reaches the
+            // engine, which this controller test has no network for; the engine access is the
+            // same call the controller makes, on the same context.
+            let executor = executor_for(
+                case.sandbox(),
+                InitialSetupAuthority::DirectSetup,
+                iam,
+                platform,
+                true,
+                true,
+                false,
+                GcpAgentPlatformTemplateController::default(),
+            )
+            .await;
+            let mut record = Default::default();
+            executor.with_context(|ctx| {
+                futures::executor::block_on(
+                    crate::sandbox::gcp_engine_setup::set_up_engine_access(
+                        ctx,
+                        &case.sandbox(),
+                        "eng",
+                        &mut record,
+                    ),
+                )
+                .expect("engine access is placed")
+            });
+        } else {
+            let mut executor =
+                executor_full(iam, platform, true, true, case == Case::Remote).await;
+            executor.run_until_terminal().await.expect("create runs");
+        }
         let calls = calls.lock().unwrap();
         placed_directly(&calls)
     }
@@ -970,17 +1034,23 @@ mod differential {
     /// setup grants the same identities the same permissions, and nothing else.
     #[tokio::test]
     async fn direct_setup_grants_what_the_package_renders() {
-        for remote in [false, true] {
-            let package = rendered(remote);
+        for case in [Case::Preview, Case::Remote, Case::Internet] {
+            let package = rendered(case);
             assert!(
                 !package.engine.is_empty(),
-                "the comparison is empty (remote={remote}), so it proves nothing"
+                "the comparison is empty ({case:?}), so it proves nothing"
             );
-            let direct = direct(remote).await;
-            assert_eq!(
-                direct, package,
-                "direct setup and the package differ (remote={remote})"
-            );
+            let direct = direct(case).await;
+            assert_eq!(direct, package, "direct setup and the package differ ({case:?})");
         }
+    }
+
+    /// An internet sandbox without preview ports gets the signer from both: the private endpoint
+    /// is unusable without it.
+    #[tokio::test]
+    async fn an_internet_sandbox_without_preview_ports_gets_the_signer_from_both() {
+        let package = rendered(Case::Internet);
+        assert_eq!(package.signer_accounts, 1, "{package:?}");
+        assert_eq!(direct(Case::Internet).await.signer_accounts, 1);
     }
 }
