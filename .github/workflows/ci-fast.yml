@@ -170,6 +170,7 @@ jobs:
               - 'examples/**'
               - 'tests/e2e/test-apps/**'
               - '.github/actions/setup-rust/**'
+              - '.github/actions/setup-sccache/**'
               - '.github/workflows/ci-fast.yml'
               - '.github/workflows/ci-fork.yml'
               # The image contract tests read the Dockerfiles as text, so a change
@@ -207,6 +208,7 @@ jobs:
               - 'examples/pnpm-lock.yaml'
               - 'examples/pnpm-workspace.yaml'
               - 'examples/basic-worker-ts/**'
+              - '.github/actions/setup-sccache/**'
               - '.github/workflows/ci-fast.yml'
             python:
               - 'Cargo.lock'
@@ -231,6 +233,7 @@ jobs:
             typescript:
               - 'mise*.toml'
               - 'rust-toolchain.toml'
+              - '.github/actions/setup-sccache/**'
               - '.github/workflows/ci-fast.yml'
               - '.github/workflows/ci-fork.yml'
               # `pnpm format-and-lint` runs Biome from the repository root.
@@ -332,10 +335,7 @@ jobs:
         # alien-hooks-runtime's tests build their hooks module for wasm32-wasip1.
         run: rustup target add wasm32-wasip1
 
-      - uses: mozilla-actions/sccache-action@v0.0.11
-        continue-on-error: true
-        with:
-          version: v0.16.0
+      - uses: ./.github/actions/setup-sccache
 
       - uses: taiki-e/install-action@nextest
 
@@ -575,6 +575,10 @@ jobs:
         run: |
           ./scripts/smoke-sandbox-agent.test.sh
 
+      - name: Compiler cache statistics
+        if: always()
+        run: sccache --show-stats || true
+
   cli-extensions:
     name: CLI extensions (${{ matrix.partition }}/3)
     needs: [pr-conventions, changes]
@@ -636,6 +640,11 @@ jobs:
         # alien-hooks-runtime's tests build their hooks module for wasm32-wasip1.
         run: rustup target add wasm32-wasip1
 
+      # No RUSTC_WRAPPER here, unlike the other Rust jobs. The dev zone test runs
+      # `alien dev`, which builds the extension controller inside its 1200 s
+      # deadline and then waits about 15 more minutes before the zone runs
+      # (ALIEN-3134). With the wrapper, that nested build is slow enough to pass
+      # the deadline. Put the wrapper back once ALIEN-3134 is fixed.
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
@@ -767,10 +776,7 @@ jobs:
         with:
           mold-version: 2.42.1
 
-      - uses: mozilla-actions/sccache-action@v0.0.11
-        continue-on-error: true
-        with:
-          version: v0.16.0
+      - uses: ./.github/actions/setup-sccache
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -1088,6 +1094,8 @@ jobs:
 
       - uses: taiki-e/install-action@nextest
 
+      - uses: ./.github/actions/setup-sccache
+
       # Rust on aarch64 Linux links with GNU ld by default; mold is much faster.
       - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # main
         with:
@@ -1124,6 +1132,10 @@ jobs:
         run: |
           cargo nextest run --locked -p alien-local -p alien-worker-runtime \
             --test worker_integration --test container_app
+
+      - name: Compiler cache statistics
+        if: always()
+        run: sccache --show-stats || true
 
   # The published linux-gnu addons must load on older base images (Debian 12, Amazon Linux 2023,
   # RHEL 9). Builds them the way release.yml does and checks the glibc floor plus a real load.
