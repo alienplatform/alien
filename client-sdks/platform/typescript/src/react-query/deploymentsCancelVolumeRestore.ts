@@ -68,7 +68,7 @@ export function useDeploymentsCancelVolumeRestoreMutation(
 }
 
 export function mutationKeyDeploymentsCancelVolumeRestore(): MutationKey {
-  return ["@alienplatform/platform-api", "deployments", "cancelVolumeRestore"];
+  return ["@alienplatform/platform-api", "Deployments", "cancelVolumeRestore"];
 }
 
 export function buildDeploymentsCancelVolumeRestoreMutation(

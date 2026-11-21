@@ -68,7 +68,7 @@ export function useDeploymentsMoveMutation(
 }
 
 export function mutationKeyDeploymentsMove(): MutationKey {
-  return ["@alienplatform/platform-api", "deployments", "move"];
+  return ["@alienplatform/platform-api", "Deployments", "move"];
 }
 
 export function buildDeploymentsMoveMutation(

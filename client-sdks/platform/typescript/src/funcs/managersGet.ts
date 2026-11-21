@@ -96,6 +96,7 @@ async function $do(
   const path = pathToFunc("/v1/managers/{id}")(pathParams);
 
   const query = encodeFormQuery({
+    "includeCounts": payload.includeCounts,
     "workspace": client._options.workspace,
   });
 

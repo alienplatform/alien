@@ -8,7 +8,7 @@ Immutable Release whose schema validated first-party inputs for this platform an
 import { ManagerRetryResponseValidatedReleaseSelection } from "@alienplatform/platform-api/models";
 
 let value: ManagerRetryResponseValidatedReleaseSelection = {
-  releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+  releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
   releaseChannel: "<value>",
   platform: "gcp",
 };
@@ -18,6 +18,6 @@ let value: ManagerRetryResponseValidatedReleaseSelection = {
 
 | Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      | Example                                                                          |
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `releaseId`                                                                      | *string*                                                                         | :heavy_check_mark:                                                               | Unique identifier for the release.                                               | rel_WbhQgksrawSKIpEN0NAssHX9                                                     |
+| `releaseId`                                                                      | *string*                                                                         | :heavy_check_mark:                                                               | Unique identifier for the release.                                               | rel_WbhQgksrawSKIpEN0NAssHX9E2Su                                                 |
 | `releaseChannel`                                                                 | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |                                                                                  |
 | `platform`                                                                       | [models.ManagerRetryResponsePlatform](../models/managerretryresponseplatform.md) | :heavy_check_mark:                                                               | Represents the target cloud platform.                                            |                                                                                  |

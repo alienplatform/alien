@@ -16,6 +16,10 @@ export type CreateDeploymentGroupTokenResponse = {
    * Formatted deployment link
    */
   deploymentLink: string;
+  /**
+   * When the setup link and its API key expire
+   */
+  expiresAt: Date;
 };
 
 /** @internal */
@@ -25,6 +29,7 @@ export const CreateDeploymentGroupTokenResponse$inboundSchema: z.ZodType<
 > = z.object({
   token: z.string(),
   deploymentLink: z.string(),
+  expiresAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 
 export function createDeploymentGroupTokenResponseFromJSON(

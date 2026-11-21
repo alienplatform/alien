@@ -6,7 +6,7 @@
 import { UpdateManagerDomainBinding } from "@alienplatform/platform-api/models";
 
 let value: UpdateManagerDomainBinding = {
-  domainId: "dom_469m0agk8luj4s16sakmmpdd",
+  domainId: "dom_469m0agk8luj4s16sakmmpddz07x",
 };
 ```
 
@@ -14,4 +14,4 @@ let value: UpdateManagerDomainBinding = {
 
 | Field                             | Type                              | Required                          | Description                       | Example                           |
 | --------------------------------- | --------------------------------- | --------------------------------- | --------------------------------- | --------------------------------- |
-| `domainId`                        | *string*                          | :heavy_minus_sign:                | Unique identifier for the domain. | dom_469m0agk8luj4s16sakmmpdd      |
+| `domainId`                        | *string*                          | :heavy_minus_sign:                | Unique identifier for the domain. | dom_469m0agk8luj4s16sakmmpddz07x  |

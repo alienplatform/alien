@@ -19,6 +19,18 @@ export type DeploymentInstallationMethod = ClosedEnum<
   typeof DeploymentInstallationMethod
 >;
 
+/**
+ * How the installation registers. cloud-record-v1: a verified setup record. enrollment-key-v1: Kubernetes Terraform with a one-use, two-hour setup key. Saved when the deployment's first credential is issued and never changed.
+ */
+export const RegistrationMode = {
+  CloudRecordV1: "cloud-record-v1",
+  EnrollmentKeyV1: "enrollment-key-v1",
+} as const;
+/**
+ * How the installation registers. cloud-record-v1: a verified setup record. enrollment-key-v1: Kubernetes Terraform with a one-use, two-hour setup key. Saved when the deployment's first credential is issued and never changed.
+ */
+export type RegistrationMode = ClosedEnum<typeof RegistrationMode>;
+
 export const DeploymentInstallationTarget = {
   Aws: "aws",
   Gcp: "gcp",
@@ -36,12 +48,21 @@ export type DeploymentInstallationTerraform = {
   hcl: string;
   moduleDownloadUrl?: string | undefined;
   isAzureTarget: boolean;
+  /**
+   * The bucket a verified module creates for its setup record. Set with registrationMode cloud-record-v1.
+   */
+  setupRecordBucket?: string | undefined;
 };
 
 export type DeploymentInstallationHelm = {
   command: string;
+  upgradeCommand?: string | undefined;
   managerUrl: string;
   values?: string | undefined;
+  /**
+   * The chart takes a one-use operator enrollment code. Ask the manager's helm-values route for one; older charts get a token.
+   */
+  takesEnrollmentCode?: boolean | undefined;
 };
 
 export type DeploymentInstallationLinux = {
@@ -81,11 +102,17 @@ export type GoogleOauth = {
 
 export type DeploymentInstallation = {
   method: DeploymentInstallationMethod;
+  /**
+   * How the installation registers. cloud-record-v1: a verified setup record. enrollment-key-v1: Kubernetes Terraform with a one-use, two-hour setup key. Saved when the deployment's first credential is issued and never changed.
+   */
+  registrationMode?: RegistrationMode | undefined;
   preparationId?: string | undefined;
   managerUrl?: string | undefined;
   region?: string | undefined;
   stackName?: string | undefined;
   launchUrl?: string | undefined;
+  verifyCommand?: string | undefined;
+  registerCommand?: string | undefined;
   terraform?: DeploymentInstallationTerraform | undefined;
   helm?: DeploymentInstallationHelm | undefined;
   cli?: DeploymentInstallationCli | undefined;
@@ -96,6 +123,11 @@ export type DeploymentInstallation = {
 export const DeploymentInstallationMethod$inboundSchema: z.ZodEnum<
   typeof DeploymentInstallationMethod
 > = z.enum(DeploymentInstallationMethod);
+
+/** @internal */
+export const RegistrationMode$inboundSchema: z.ZodEnum<
+  typeof RegistrationMode
+> = z.enum(RegistrationMode);
 
 /** @internal */
 export const DeploymentInstallationTarget$inboundSchema: z.ZodEnum<
@@ -111,6 +143,7 @@ export const DeploymentInstallationTerraform$inboundSchema: z.ZodType<
   hcl: z.string(),
   moduleDownloadUrl: z.string().optional(),
   isAzureTarget: z.boolean(),
+  setupRecordBucket: z.string().optional(),
 });
 
 export function deploymentInstallationTerraformFromJSON(
@@ -129,8 +162,10 @@ export const DeploymentInstallationHelm$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   command: z.string(),
+  upgradeCommand: z.string().optional(),
   managerUrl: z.string(),
   values: z.string().optional(),
+  takesEnrollmentCode: z.boolean().optional(),
 });
 
 export function deploymentInstallationHelmFromJSON(
@@ -269,11 +304,14 @@ export const DeploymentInstallation$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   method: DeploymentInstallationMethod$inboundSchema,
+  registrationMode: RegistrationMode$inboundSchema.optional(),
   preparationId: z.string().optional(),
   managerUrl: z.string().optional(),
   region: z.string().optional(),
   stackName: z.string().optional(),
   launchUrl: z.string().optional(),
+  verifyCommand: z.string().optional(),
+  registerCommand: z.string().optional(),
   terraform: z.lazy(() => DeploymentInstallationTerraform$inboundSchema)
     .optional(),
   helm: z.lazy(() => DeploymentInstallationHelm$inboundSchema).optional(),

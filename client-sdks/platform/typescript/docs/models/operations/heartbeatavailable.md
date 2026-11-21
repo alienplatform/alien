@@ -20,35 +20,18 @@ let value: HeartbeatAvailable = {
     controllerPlatform: "gcp",
     data: {
       data: {
-        imageIdentifier: "<value>",
         status: {
-          collectionIssues: [
-            {
-              message: "<value>",
-              reason: "forbidden",
-              severity: "info",
-              source: "<value>",
-            },
-          ],
-          health: "healthy",
-          lifecycle: "updating",
-          partial: true,
-          stale: true,
+          collectionIssues: [],
+          health: "unhealthy",
+          lifecycle: "failed",
+          partial: false,
+          stale: false,
         },
-        backend: "awsMicrovm",
       },
-      resourceType: "sandbox",
+      resourceType: "<value>",
     },
-    observedAt: new Date("2024-04-26T23:19:48.455Z"),
-    raw: [
-      {
-        body: "<value>",
-        collectedAt: new Date("2025-01-29T23:35:36.058Z"),
-        format: "json",
-        source: "<value>",
-        truncated: true,
-      },
-    ],
+    observedAt: new Date("2024-03-08T08:46:36.237Z"),
+    raw: [],
     resourceId: "<id>",
     resourceType: "<value>",
   },

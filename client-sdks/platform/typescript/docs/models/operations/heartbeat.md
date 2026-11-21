@@ -10,44 +10,30 @@ let value: Heartbeat = {
   controllerPlatform: "machines",
   data: {
     data: {
-      assignedMachines: 349166,
-      capacityGroup: "<value>",
-      commandSupported: true,
-      daemonInstances: [
-        {
-          name: "<value>",
-          ready: false,
-          replicaId: "<id>",
-        },
-      ],
-      desiredMachines: 24926,
-      events: [],
-      healthyInstances: 426500,
-      horizonClusterId: "<id>",
-      horizonStatus: "<value>",
-      latestUpdateTimestamp: "<value>",
+      capacityGroups: [],
+      name: "<value>",
+      nodes: {},
+      providerFleets: [],
       status: {
-        collectionIssues: [],
-        health: "unhealthy",
-        lifecycle: "stopped",
+        collectionIssues: [
+          {
+            message: "<value>",
+            reason: "timed-out",
+            severity: "error",
+            source: "<value>",
+          },
+        ],
+        health: "degraded",
+        lifecycle: "running",
         partial: true,
         stale: false,
       },
-      unavailableInstances: 461497,
-      backend: "machines",
+      backend: "azure",
     },
-    resourceType: "daemon",
+    resourceType: "compute-cluster",
   },
-  observedAt: new Date("2024-11-22T15:55:34.023Z"),
-  raw: [
-    {
-      body: "<value>",
-      collectedAt: new Date("2025-01-29T23:35:36.058Z"),
-      format: "json",
-      source: "<value>",
-      truncated: true,
-    },
-  ],
+  observedAt: new Date("2026-01-21T00:49:16.597Z"),
+  raw: [],
   resourceId: "<id>",
   resourceType: "<value>",
 };
@@ -59,7 +45,7 @@ let value: Heartbeat = {
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `backend`                                                                                                                                                  | [operations.BackendEnum](../../models/operations/backendenum.md)                                                                                           | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |
 | `controllerPlatform`                                                                                                                                       | [operations.ControllerPlatform](../../models/operations/controllerplatform.md)                                                                             | :heavy_check_mark:                                                                                                                                         | Represents the target cloud platform.                                                                                                                      |
-| `data`                                                                                                                                                     | *operations.DataUnion19*                                                                                                                                   | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |
+| `data`                                                                                                                                                     | *operations.DataUnion20*                                                                                                                                   | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |
 | `deploymentId`                                                                                                                                             | *string*                                                                                                                                                   | :heavy_minus_sign:                                                                                                                                         | N/A                                                                                                                                                        |
 | `observedAt`                                                                                                                                               | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date)                                                              | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |
 | `raw`                                                                                                                                                      | [operations.Raw](../../models/operations/raw.md)[]                                                                                                         | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |

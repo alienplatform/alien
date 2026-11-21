@@ -67,5 +67,5 @@ export function buildDeploymentsGetInputsQuery(
 }
 
 export function queryKeyDeploymentsGetInputs(id: string): QueryKey {
-  return ["@alienplatform/platform-api", "deployments", "getInputs", id];
+  return ["@alienplatform/platform-api", "Deployments", "getInputs", id];
 }

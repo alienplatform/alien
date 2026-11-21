@@ -16,13 +16,13 @@ let value: DataAwsBedrock = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
+        reason: "timed-out",
         severity: "warning",
         source: "<value>",
       },
     ],
     health: "unhealthy",
-    lifecycle: "running",
+    lifecycle: "deleting",
     partial: false,
     stale: false,
   },
@@ -36,5 +36,5 @@ let value: DataAwsBedrock = {
 | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
 | `availability`                                                                                                           | [operations.Availability1](../../models/operations/availability1.md)                                                     | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `region`                                                                                                                 | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
-| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus66](../../models/operations/getresourcedeploymentdetaildatastatus66.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus70](../../models/operations/getresourcedeploymentdetaildatastatus70.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `backend`                                                                                                                | *"awsBedrock"*                                                                                                           | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |

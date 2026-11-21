@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Refresh workspace domain verification.
+ * Refresh workspace domain verification. Removing the challenge CNAME blocks new issuance; a matching, unexpired certificate keeps serving until it expires. Deleting the domain stops serving its custom hostnames immediately.
  */
 export function domainsRefresh(
   client: AlienCore,

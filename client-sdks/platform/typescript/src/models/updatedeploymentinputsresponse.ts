@@ -236,6 +236,24 @@ export type UpdateDeploymentInputsResponseValidationUnion =
   | string;
 
 /**
+ * A boolean input condition controlling whether another input applies.
+ */
+export type UpdateDeploymentInputsResponseWhen = {
+  /**
+   * Boolean value for which this input applies.
+   */
+  equals: boolean;
+  /**
+   * ID of an unconditional boolean input in the same stack.
+   */
+  input: string;
+};
+
+export type UpdateDeploymentInputsResponseWhenUnion =
+  | UpdateDeploymentInputsResponseWhen
+  | string;
+
+/**
  * Stack input definition serialized into a release stack.
  */
 export type UpdateDeploymentInputsResponseInput = {
@@ -289,6 +307,18 @@ export type UpdateDeploymentInputsResponseInput = {
     | string
     | null
     | undefined;
+  when?: UpdateDeploymentInputsResponseWhen | string | null | undefined;
+};
+
+export type UpdateDeploymentInputsResponseUpdatedBy = {
+  id: string | null;
+  displayName: string | null;
+};
+
+export type UpdateDeploymentInputsResponseHeld = {
+  digest: string;
+  updatedAt: Date;
+  updatedBy: UpdateDeploymentInputsResponseUpdatedBy;
 };
 
 export const UpdateDeploymentInputsResponseOutcome = {
@@ -309,6 +339,14 @@ export type UpdateDeploymentInputsResponse = {
    * Input IDs that currently have a value, including redacted secrets.
    */
   providedInputIds: Array<string>;
+  /**
+   * Answers the manager stores, by input id: when and who. `values` holds an empty string for them; the value is read from the manager with the value-access endpoint.
+   */
+  held?: { [k: string]: UpdateDeploymentInputsResponseHeld } | undefined;
+  /**
+   * Every visible input the manager stores, answered or not. Send these as `inputValueRefs`, never as `inputValues`.
+   */
+  heldInputIds?: Array<string> | undefined;
   runtimeUpdateRequested: boolean;
   outcome: UpdateDeploymentInputsResponseOutcome;
   operation: DeploymentUpdateOperationSummary | null;
@@ -622,6 +660,51 @@ export function updateDeploymentInputsResponseValidationUnionFromJSON(
 }
 
 /** @internal */
+export const UpdateDeploymentInputsResponseWhen$inboundSchema: z.ZodType<
+  UpdateDeploymentInputsResponseWhen,
+  unknown
+> = z.object({
+  equals: z.boolean(),
+  input: z.string(),
+});
+
+export function updateDeploymentInputsResponseWhenFromJSON(
+  jsonString: string,
+): SafeParseResult<UpdateDeploymentInputsResponseWhen, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      UpdateDeploymentInputsResponseWhen$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'UpdateDeploymentInputsResponseWhen' from JSON`,
+  );
+}
+
+/** @internal */
+export const UpdateDeploymentInputsResponseWhenUnion$inboundSchema: z.ZodType<
+  UpdateDeploymentInputsResponseWhenUnion,
+  unknown
+> = z.union([
+  z.lazy(() => UpdateDeploymentInputsResponseWhen$inboundSchema),
+  z.string(),
+]);
+
+export function updateDeploymentInputsResponseWhenUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  UpdateDeploymentInputsResponseWhenUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      UpdateDeploymentInputsResponseWhenUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'UpdateDeploymentInputsResponseWhenUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const UpdateDeploymentInputsResponseInput$inboundSchema: z.ZodType<
   UpdateDeploymentInputsResponseInput,
   unknown
@@ -661,6 +744,12 @@ export const UpdateDeploymentInputsResponseInput$inboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  when: z.nullable(
+    z.union([
+      z.lazy(() => UpdateDeploymentInputsResponseWhen$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
 });
 
 export function updateDeploymentInputsResponseInputFromJSON(
@@ -671,6 +760,54 @@ export function updateDeploymentInputsResponseInputFromJSON(
     (x) =>
       UpdateDeploymentInputsResponseInput$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'UpdateDeploymentInputsResponseInput' from JSON`,
+  );
+}
+
+/** @internal */
+export const UpdateDeploymentInputsResponseUpdatedBy$inboundSchema: z.ZodType<
+  UpdateDeploymentInputsResponseUpdatedBy,
+  unknown
+> = z.object({
+  id: z.nullable(z.string()),
+  displayName: z.nullable(z.string()),
+});
+
+export function updateDeploymentInputsResponseUpdatedByFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  UpdateDeploymentInputsResponseUpdatedBy,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      UpdateDeploymentInputsResponseUpdatedBy$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'UpdateDeploymentInputsResponseUpdatedBy' from JSON`,
+  );
+}
+
+/** @internal */
+export const UpdateDeploymentInputsResponseHeld$inboundSchema: z.ZodType<
+  UpdateDeploymentInputsResponseHeld,
+  unknown
+> = z.object({
+  digest: z.string(),
+  updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  updatedBy: z.lazy(() =>
+    UpdateDeploymentInputsResponseUpdatedBy$inboundSchema
+  ),
+});
+
+export function updateDeploymentInputsResponseHeldFromJSON(
+  jsonString: string,
+): SafeParseResult<UpdateDeploymentInputsResponseHeld, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      UpdateDeploymentInputsResponseHeld$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'UpdateDeploymentInputsResponseHeld' from JSON`,
   );
 }
 
@@ -689,6 +826,11 @@ export const UpdateDeploymentInputsResponse$inboundSchema: z.ZodType<
   ),
   values: z.record(z.string(), StackInputValueRequest$inboundSchema),
   providedInputIds: z.array(z.string()),
+  held: z.record(
+    z.string(),
+    z.lazy(() => UpdateDeploymentInputsResponseHeld$inboundSchema),
+  ).optional(),
+  heldInputIds: z.array(z.string()).optional(),
   runtimeUpdateRequested: z.boolean(),
   outcome: UpdateDeploymentInputsResponseOutcome$inboundSchema,
   operation: z.nullable(DeploymentUpdateOperationSummary$inboundSchema),

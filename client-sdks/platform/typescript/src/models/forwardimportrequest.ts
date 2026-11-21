@@ -43,11 +43,11 @@ export type ForwardImportRequestSetupItem = ClosedEnum<
 export type ForwardImportRequest = {
   mode?: ForwardImportRequestMode | undefined;
   /**
-   * Project ID or name. Required for user-session callers.
+   * Project ID or name. Required for user-session callers; a deployment token sends none.
    */
   project?: string | undefined;
   /**
-   * Required for user-session callers. Deployment-group tokens use their own group automatically.
+   * Required for user-session callers. Deployment-group tokens use their own group automatically; a deployment token registers only its own deployment and sends none.
    */
   deploymentGroupId?: string | undefined;
   managerId?: string | undefined;

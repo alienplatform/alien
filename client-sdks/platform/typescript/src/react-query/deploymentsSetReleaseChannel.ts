@@ -66,7 +66,7 @@ export function useDeploymentsSetReleaseChannelMutation(
 }
 
 export function mutationKeyDeploymentsSetReleaseChannel(): MutationKey {
-  return ["@alienplatform/platform-api", "deployments", "setReleaseChannel"];
+  return ["@alienplatform/platform-api", "Deployments", "setReleaseChannel"];
 }
 
 export function buildDeploymentsSetReleaseChannelMutation(

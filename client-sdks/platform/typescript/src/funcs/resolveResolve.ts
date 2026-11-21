@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Resolve manager for a project and platform
+ * Resolve the instance for a project and platform
  *
  * @remarks
  * Returns the manager URL for a given project and platform. The project can be provided as a query parameter, or derived from the token's scope (project-scoped, deployment-group-scoped, or deployment-scoped tokens carry an implicit project). This is the single entry point for all CLI tools to discover which manager to talk to.
@@ -166,8 +166,8 @@ async function $do(
     | SDKValidationError
   >(
     M.json(200, models.ResolveResponse$inboundSchema),
-    M.jsonErr([400, 404], errors.APIError$inboundSchema),
-    M.jsonErr(503, errors.APIError$inboundSchema),
+    M.jsonErr([400, 403, 404], errors.APIError$inboundSchema),
+    M.jsonErr([500, 503], errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),
   )(response, req, { extraFields: responseFields });

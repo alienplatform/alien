@@ -6,7 +6,7 @@
 import { DispatchCommandRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: DispatchCommandRequest = {
-  id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
+  id: "cmd_2sxjXxvOYct7IohT3ukliAzf7Nzb",
 };
 ```
 
@@ -14,5 +14,5 @@ let value: DispatchCommandRequest = {
 
 | Field                                                                   | Type                                                                    | Required                                                                | Description                                                             | Example                                                                 |
 | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `id`                                                                    | *string*                                                                | :heavy_check_mark:                                                      | Unique identifier for the command.                                      | cmd_2sxjXxvOYct7IohT3ukliAzf                                            |
+| `id`                                                                    | *string*                                                                | :heavy_check_mark:                                                      | Unique identifier for the command.                                      | cmd_2sxjXxvOYct7IohT3ukliAzf7Nzb                                        |
 | `dispatchCommandRequest`                                                | [models.DispatchCommandRequest](../../models/dispatchcommandrequest.md) | :heavy_minus_sign:                                                      | N/A                                                                     |                                                                         |

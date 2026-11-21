@@ -70,7 +70,7 @@ export function useSetupLinksCreateMutation(
 }
 
 export function mutationKeySetupLinksCreate(): MutationKey {
-  return ["@alienplatform/platform-api", "setupLinks", "create"];
+  return ["@alienplatform/platform-api", "setup-links", "create"];
 }
 
 export function buildSetupLinksCreateMutation(

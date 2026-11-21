@@ -14,7 +14,9 @@ import { projectsConfigureRemoteSandbox } from "../funcs/projectsConfigureRemote
 import { projectsConfigureSource } from "../funcs/projectsConfigureSource.js";
 import { projectsCreate } from "../funcs/projectsCreate.js";
 import { projectsCreateFromTemplate } from "../funcs/projectsCreateFromTemplate.js";
+import { projectsCreateProjectValueAccess } from "../funcs/projectsCreateProjectValueAccess.js";
 import { projectsDelete } from "../funcs/projectsDelete.js";
+import { projectsDisableCapability } from "../funcs/projectsDisableCapability.js";
 import { projectsEnsureSandboxBaseImageRepository } from "../funcs/projectsEnsureSandboxBaseImageRepository.js";
 import { projectsGet } from "../funcs/projectsGet.js";
 import { projectsGetActiveRelease } from "../funcs/projectsGetActiveRelease.js";
@@ -25,6 +27,7 @@ import { projectsGetDeploymentLinkSetup } from "../funcs/projectsGetDeploymentLi
 import { projectsGetDeploymentPortalDomain } from "../funcs/projectsGetDeploymentPortalDomain.js";
 import { projectsGetEncryptionUsage } from "../funcs/projectsGetEncryptionUsage.js";
 import { projectsGetGcpOAuthProvider } from "../funcs/projectsGetGcpOAuthProvider.js";
+import { projectsGetProtectedSetupRelease } from "../funcs/projectsGetProtectedSetupRelease.js";
 import { projectsGetRemoteOperatorSummary } from "../funcs/projectsGetRemoteOperatorSummary.js";
 import { projectsGetSandboxMetrics } from "../funcs/projectsGetSandboxMetrics.js";
 import { projectsGetTemplateUrls } from "../funcs/projectsGetTemplateUrls.js";
@@ -39,6 +42,22 @@ import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class Projects extends ClientSDK {
+  /**
+   * Value access for a project (not available yet)
+   */
+  async createProjectValueAccess(
+    id: string,
+    valueAccessRequest?: models.ValueAccessRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.ValueAccessResponse> {
+    return unwrapAsync(projectsCreateProjectValueAccess(
+      this,
+      id,
+      valueAccessRequest,
+      options,
+    ));
+  }
+
   /**
    * Retrieve all projects.
    */
@@ -230,6 +249,20 @@ export class Projects extends ClientSDK {
   }
 
   /**
+   * The release a protected setup installs when it registers without a release ID (a protected Terraform module is signed before its release exists): the channel's current release if it is signed for the platform and channel and has the setup's fingerprint, else the newest such release. The manager registers protected Terraform modules against it.
+   */
+  async getProtectedSetupRelease(
+    request: operations.GetProjectProtectedSetupReleaseRequest,
+    options?: RequestOptions,
+  ): Promise<models.Release> {
+    return unwrapAsync(projectsGetProtectedSetupRelease(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
    * Preview which customer model connections a configuration change may affect.
    */
   async previewModelsImpact(
@@ -257,6 +290,20 @@ export class Projects extends ClientSDK {
       this,
       idOrName,
       requestBody,
+      options,
+    ));
+  }
+
+  /**
+   * Turn off one of a Project's features. Refused while deployments of that feature (or, for models, direct provider connections) still exist, so turning it off never strands a customer's resources.
+   */
+  async disableCapability(
+    request: operations.DisableProjectCapabilityRequest,
+    options?: RequestOptions,
+  ): Promise<models.ProjectCapabilities> {
+    return unwrapAsync(projectsDisableCapability(
+      this,
+      request,
       options,
     ));
   }

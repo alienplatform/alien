@@ -9,7 +9,7 @@ let value: GroupBuckets = {
   capability: "remoteSandbox",
   enabled: false,
   state: "not-connected",
-  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
   observation: {
     provider: "<value>",
     platform: "test",
@@ -33,7 +33,7 @@ let value: GroupBuckets = {
 | `capability`                                                       | [models.BucketsCapability](../models/bucketscapability.md)         | :heavy_check_mark:                                                 | N/A                                                                |                                                                    |
 | `enabled`                                                          | *boolean*                                                          | :heavy_check_mark:                                                 | N/A                                                                |                                                                    |
 | `state`                                                            | [models.BucketsState](../models/bucketsstate.md)                   | :heavy_check_mark:                                                 | N/A                                                                |                                                                    |
-| `deploymentId`                                                     | *string*                                                           | :heavy_check_mark:                                                 | Unique identifier for the deployment.                              | dep_0c29fq4a2yjb7kx3smwdgxlc                                       |
+| `deploymentId`                                                     | *string*                                                           | :heavy_check_mark:                                                 | Unique identifier for the deployment.                              | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f                                   |
 | `source`                                                           | [models.BucketsSource](../models/bucketssource.md)                 | :heavy_minus_sign:                                                 | N/A                                                                |                                                                    |
 | `sandboxUpdate`                                                    | [models.BucketsSandboxUpdate](../models/bucketssandboxupdate.md)   | :heavy_minus_sign:                                                 | N/A                                                                |                                                                    |
 | `observation`                                                      | [models.BucketsObservation](../models/bucketsobservation.md)       | :heavy_check_mark:                                                 | N/A                                                                |                                                                    |

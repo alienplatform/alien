@@ -17,7 +17,7 @@ let value: CreateSetupRegistrationOperationRequestKubernetes = {};
 
 ## Fields
 
-| Field                                                         | Type                                                          | Required                                                      | Description                                                   |
-| ------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- |
-| `cluster`                                                     | *models.CreateSetupRegistrationOperationRequestClusterUnion*  | :heavy_minus_sign:                                            | N/A                                                           |
-| `exposure`                                                    | *models.CreateSetupRegistrationOperationRequestExposureUnion* | :heavy_minus_sign:                                            | N/A                                                           |
+| Field                                                        | Type                                                         | Required                                                     | Description                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| `cluster`                                                    | *models.CreateSetupRegistrationOperationRequestClusterUnion* | :heavy_minus_sign:                                           | N/A                                                          |
+| `exposure`                                                   | *models.CreateSetupRegistrationOperationRequestExposure*     | :heavy_minus_sign:                                           | N/A                                                          |

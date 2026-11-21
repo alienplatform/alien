@@ -9,7 +9,7 @@ import { RotateAwsVirtualKeyCredentialResponse } from "@alienplatform/platform-a
 
 let value: RotateAwsVirtualKeyCredentialResponse = {
   virtualKey: {
-    id: "vkey_0p9nwqgtftugsoey99lqyqq",
+    id: "vkey_0p9nwqgtftugsoey99lqyqq8eq8z",
     projectId: "<id>",
     status: "provisioning",
     externalKeyId: "<id>",
