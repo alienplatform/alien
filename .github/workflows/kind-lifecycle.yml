@@ -217,8 +217,28 @@ jobs:
         env:
           ALIEN_SANDBOX_RBAC_KIND_CONTEXT: kind-alien-product-lifecycle
         run: |
-          cargo test --locked -p alien-helm --test sandbox_rbac_kind -- \
-            --ignored --nocapture --test-threads=1
+          # The installs name the `gvisor` runtime class, and the chart's network policy probe
+          # (a pre-install hook) runs its pods in it. Kind has no gVisor, so the class maps to
+          # runc here: this test checks the chart's RBAC, and the probe already passed on this
+          # cluster in the default runtime above.
+          trap 'kubectl --context "$ALIEN_SANDBOX_RBAC_KIND_CONTEXT" delete runtimeclass gvisor --ignore-not-found' EXIT
+          kubectl --context "$ALIEN_SANDBOX_RBAC_KIND_CONTEXT" apply -f - <<'EOF'
+          apiVersion: node.k8s.io/v1
+          kind: RuntimeClass
+          metadata:
+            name: gvisor
+          handler: runc
+          EOF
+          if ! cargo test --locked -p alien-helm --test sandbox_rbac_kind -- \
+            --ignored --nocapture --test-threads=1; then
+            # The test deletes its namespaces on the way out without waiting; show the probe
+            # jobs' pods and logs before they go.
+            for namespace in alien-sandbox-rbac-a alien-sandbox-rbac-b alien-sandbox-rbac-c; do
+              kubectl --context "$ALIEN_SANDBOX_RBAC_KIND_CONTEXT" -n "$namespace" get jobs,pods,events || true
+              kubectl --context "$ALIEN_SANDBOX_RBAC_KIND_CONTEXT" -n "$namespace" logs -l job-name --all-containers --prefix --tail=200 || true
+            done
+            exit 1
+          fi
 
       - name: Kubernetes sandbox sessions on a real API server
         env:

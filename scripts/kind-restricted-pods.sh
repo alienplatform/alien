@@ -149,6 +149,17 @@ kube_images=()
 for example in "$root"/examples/*/; do
   name="$(basename "$example")"
   [ -f "$example/alien.ts" ] || continue
+  # An example that imports an extension's `generated/` module (written by `alien extensions
+  # build`, not committed) cannot evaluate here. Skip it only when it declares no container or
+  # daemon, the only resources this check renders; otherwise fail rather than leave it unchecked.
+  if grep -qE "from \"\./[^\"]*/generated\"" "$example/alien.ts"; then
+    if grep -qE "alien\.(Container|Daemon)\b" "$example/alien.ts"; then
+      echo "example $name: imports a built extension and declares a container or daemon; this check cannot render it" >&2
+      exit 1
+    fi
+    echo "example $name: skipped, it imports a built extension and declares no container or daemon"
+    continue
+  fi
   cp "$example/alien.ts" "$sdk/$name.ts"
   (cd "$sdk" && "$bun_bin" -e "const c = await import('./$name.ts'); console.log(JSON.stringify(c.default))") \
     >"$work/$name.stack.json" 2>"$work/$name.stack.err" || {
