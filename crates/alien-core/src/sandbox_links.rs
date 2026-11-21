@@ -226,6 +226,81 @@ pub fn gateway_link_targets(stack: &crate::Stack) -> std::collections::BTreeMap<
         .collect()
 }
 
+/// A linked Container as a gateway reaches it on a compute cluster: its overlay name
+/// `<id>.svc`, its declared ports, and the overlay range of the cluster it runs in. `None` when
+/// it is not linkable, has no cluster yet, or its cluster's overlay is not a private range.
+pub fn cluster_gateway_link(stack: &crate::Stack, id: &str) -> Option<GatewayLink> {
+    let ports = internal_ports(stack, id).ok()?;
+    let container = stack
+        .resources
+        .get(id)?
+        .config
+        .downcast_ref::<crate::Container>()?;
+    let cluster = stack
+        .resources
+        .get(container.cluster.as_deref()?)?
+        .config
+        .downcast_ref::<crate::ComputeCluster>()?;
+    let range: Ipv4Net = cluster.container_cidr().parse().ok()?;
+    is_link_range(range).then(|| GatewayLink {
+        id: id.to_string(),
+        host: format!("{}.svc", id.to_ascii_lowercase()),
+        ports,
+        ranges: vec![range],
+    })
+}
+
+/// Every internet sandbox's compute-cluster links, keyed by its audience `<prefix>/<id>`. Empty for a
+/// stack without links, so its gateway configuration does not change.
+pub fn cluster_gateway_links(
+    stack: &crate::Stack,
+    resource_prefix: &str,
+) -> std::collections::BTreeMap<String, Vec<GatewayLink>> {
+    stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<crate::Sandbox>())
+        .filter(|sandbox| sandbox.egress == crate::SandboxEgress::Internet)
+        .filter_map(|sandbox| {
+            let links: Vec<_> = sandbox
+                .gateway_links
+                .iter()
+                .filter_map(|link| cluster_gateway_link(stack, &link.id))
+                .collect();
+            (!links.is_empty()).then(|| (format!("{resource_prefix}/{}", sandbox.id), links))
+        })
+        .collect()
+}
+
+/// The bindings a sandbox's commands receive for its compute-cluster links: each linked Container's
+/// overlay URLs, never a load balancer or public URL.
+pub fn cluster_link_bindings(
+    stack: &crate::Stack,
+    sandbox: &crate::Sandbox,
+) -> std::collections::BTreeMap<String, crate::bindings::ContainerBinding> {
+    use crate::bindings::{BindingValue, ContainerBinding, HorizonContainerBinding};
+    sandbox
+        .gateway_links
+        .iter()
+        .filter_map(|link| {
+            let link = cluster_gateway_link(stack, &link.id)?;
+            let url = |port: u16| format!("http://{}:{port}", link.host);
+            Some((
+                link.id.clone(),
+                ContainerBinding::Horizon(HorizonContainerBinding {
+                    container_name: BindingValue::value(link.id.clone()),
+                    internal_url: BindingValue::value(url(link.ports[0])),
+                    public_url: None,
+                    internal_urls: link
+                        .ports
+                        .iter()
+                        .map(|&port| (port, BindingValue::value(url(port))))
+                        .collect(),
+                }),
+            ))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,6 +371,7 @@ mod tests {
 
 #[cfg(test)]
 mod builder_tests {
+    use super::{cluster_gateway_links, cluster_link_bindings, GatewayLink};
     use crate::{Container, ContainerCode, ResourceSpec, Sandbox, SandboxCode, SandboxEgress};
 
     #[test]
@@ -341,5 +417,87 @@ mod builder_tests {
         let plain = serde_json::to_value(build(false)).unwrap();
         assert!(plain.get("gatewayLinks").is_none());
         assert_eq!(serde_json::from_value::<Sandbox>(json).unwrap(), linked);
+    }
+
+    #[test]
+    fn cluster_links_name_the_overlay_service_inside_its_cluster_range() {
+        use crate::{
+            CapacityGroup, ComputeCluster, Container, ContainerCode, ResourceLifecycle,
+            ResourceSpec, SandboxCode, SandboxEgress, Stack,
+        };
+        let cluster = |cidr: &str| {
+            ComputeCluster::new("compute".into())
+                .capacity_group(CapacityGroup {
+                    group_id: "apps".into(),
+                    instance_type: Some("m7g.large".into()),
+                    profile: None,
+                    min_size: 1,
+                    max_size: 1,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                    data_disk_gib_range: None,
+                })
+                .container_cidr(cidr.into())
+                .build()
+        };
+        let api = Container::new("api".into())
+            .code(ContainerCode::Image {
+                image: "api".into(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".into(),
+                desired: "1".into(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".into(),
+                desired: "1Gi".into(),
+            })
+            .permissions("default".into())
+            .cluster("compute".into())
+            .port(8080)
+            .build();
+        let sandbox = |id: &str, linked: bool| {
+            let builder = crate::Sandbox::new(id.into());
+            let builder = if linked { builder.link(&api) } else { builder };
+            builder
+                .code(SandboxCode::Image {
+                    image: "ubuntu".into(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(Default::default())
+                .build()
+        };
+        let stack = |cidr: &str, linked: bool| {
+            Stack::new("s".into())
+                .add(cluster(cidr), ResourceLifecycle::Frozen)
+                .add(api.clone(), ResourceLifecycle::Live)
+                .add(sandbox("agents", linked), ResourceLifecycle::Live)
+                .add(sandbox("plain", false), ResourceLifecycle::Live)
+                .build()
+        };
+        let linked = stack("10.244.0.0/16", true);
+        let links = cluster_gateway_links(&linked, "p");
+        assert_eq!(links.keys().collect::<Vec<_>>(), ["p/agents"]);
+        assert_eq!(
+            links["p/agents"],
+            vec![GatewayLink {
+                id: "api".into(),
+                host: "api.svc".into(),
+                ports: vec![8080],
+                ranges: vec!["10.244.0.0/16".parse().unwrap()],
+            }]
+        );
+        links["p/agents"][0].validate().unwrap();
+        let bindings = cluster_link_bindings(&linked, &sandbox("agents", true));
+        let binding = &bindings["api"];
+        assert_eq!(
+            binding.get_internal_url().as_deref(),
+            Some("http://api.svc:8080")
+        );
+        assert!(binding.get_public_url().is_none());
+        // Without links nothing is published; a public overlay is never a link range.
+        assert!(cluster_gateway_links(&stack("10.244.0.0/16", false), "p").is_empty());
+        assert!(cluster_gateway_links(&stack("11.244.0.0/16", true), "p").is_empty());
     }
 }
