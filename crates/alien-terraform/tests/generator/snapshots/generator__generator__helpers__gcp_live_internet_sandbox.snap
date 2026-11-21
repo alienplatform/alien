@@ -1,0 +1,1954 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 7.37"
+    }
+    google-beta = {
+      source  = "hashicorp/google-beta"
+      version = ">= 6.0"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = ">= 0.9"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.7.2"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
+}
+
+variable "name" {
+  type        = string
+  description = "Deployment name, unique within the deployment group: 2-100 lowercase letters, numbers, and single hyphens. Shown in setup and cloud IAM review metadata."
+
+  validation {
+    condition     = length(var.name) >= 2 && length(var.name) <= 100 && can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.name)) && !startswith(var.name, "ag-")
+    error_message = "name must be 2-100 characters of lowercase letters, numbers, and single hyphens; start and end with a letter or number; and not start with \"ag-\"."
+  }
+}
+
+variable "token" {
+  type        = string
+  description = "Not used: this module does not register the deployment."
+  default     = null
+  sensitive   = true
+}
+
+variable "management_url" {
+  type        = string
+  description = "Optional management endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "deployment_model" {
+  type        = string
+  description = "How runtime updates are delivered after setup."
+  default     = "push"
+
+  validation {
+    condition     = contains(["push", "pull"], var.deployment_model)
+    error_message = "deployment_model must be one of: push, pull."
+  }
+}
+
+variable "advanced_settings_json" {
+  type        = string
+  description = "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "advanced_settings_overlay_json" {
+  type        = string
+  description = "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "endpoint_access" {
+  type        = string
+  description = "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup."
+  default     = "internet"
+
+  validation {
+    condition     = contains(["internet", "private"], var.endpoint_access)
+    error_message = "endpoint_access must be one of: internet, private."
+  }
+}
+
+variable "updates_mode" {
+  type        = string
+  description = "How application updates are delivered after setup."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "approval-required"], var.updates_mode)
+    error_message = "updates_mode must be one of: auto, approval-required."
+  }
+}
+
+variable "telemetry_mode" {
+  type        = string
+  description = "How logs, metrics, and traces are collected."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["off", "auto", "approval-required"], var.telemetry_mode)
+    error_message = "telemetry_mode must be one of: off, auto, approval-required."
+  }
+}
+
+variable "heartbeats_mode" {
+  type        = string
+  description = "Whether runtime health checks are enabled."
+  default     = "on"
+
+  validation {
+    condition     = contains(["off", "on"], var.heartbeats_mode)
+    error_message = "heartbeats_mode must be one of: off, on."
+  }
+}
+
+variable "gcp_project" {
+  type        = string
+  description = "GCP project ID."
+}
+
+variable "gcp_region" {
+  type        = string
+  description = "GCP region."
+  default     = "us-central1"
+}
+
+variable "deployment_id" {
+  type        = string
+  description = "Immutable deployment ID reserved by the management service before setup."
+}
+
+variable "managing_oidc_issuer" {
+  type        = string
+  description = "OIDC issuer of the management identity."
+}
+
+variable "managing_oidc_subject" {
+  type        = string
+  description = "Exact immutable subject of the management identity."
+}
+
+variable "managing_service_account_email" {
+  type        = string
+  description = "Management service account metadata; federation controls remote access."
+  default     = ""
+}
+
+variable "gcp_manage_custom_roles" {
+  type        = bool
+  description = "Whether this module creates the GCP project custom roles it binds. Set to false when those roles are managed outside this stack."
+  default     = true
+}
+
+variable "gcp_custom_role_prefix" {
+  type        = string
+  description = "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix."
+  default     = ""
+}
+
+variable "network_mode" {
+  type        = string
+  description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
+  default     = "create-new"
+}
+
+variable "network_cidr" {
+  type        = string
+  description = "CIDR for a newly-created network. Empty uses 10.44.0.0/16."
+  default     = ""
+}
+
+variable "availability_zones" {
+  type        = number
+  description = "Reserved for cross-cloud network-mode parity. GCP creates one regional subnet."
+  default     = 2
+}
+
+variable "network_name" {
+  type        = string
+  description = "Existing VPC network name. Required when network is use-existing."
+  default     = ""
+}
+
+variable "subnet_name" {
+  type        = string
+  description = "Existing subnet name. Required when network is use-existing."
+  default     = ""
+}
+
+variable "network_region" {
+  type        = string
+  description = "Existing subnet region. Empty uses gcp_region."
+  default     = ""
+}
+
+=== providers.tf ===
+provider "google" {
+  project = var.gcp_project
+  region  = var.gcp_region
+}
+
+provider "google-beta" {
+  project = var.gcp_project
+  region  = var.gcp_region
+}
+
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
+=== locals.tf ===
+locals {
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  gcp_custom_role_prefix       = var.gcp_custom_role_prefix != "" ? substr(replace(lower(var.gcp_custom_role_prefix), "-", "_"), 0, 18) : length(replace(lower(local.resource_prefix), "-", "_")) <= 18 ? replace(lower(local.resource_prefix), "-", "_") : format("%s_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 9), substr(sha256(local.resource_prefix), 0, 8))
+  deployment_platform          = "gcp"
+  deployment_target            = "gcp"
+  deployment_region            = var.gcp_region
+  deployment_management_config = var.deployment_model == "push" ? { platform = "gcp", projectId = var.gcp_project, serviceAccountEmail = var.managing_service_account_email, federationTrust = var.managing_oidc_issuer != "" ? { issuer = var.managing_oidc_issuer, subject = var.managing_oidc_subject } : null } : null
+  advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.network_cidr == "" ? null : var.network_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-gcp", networkName = var.network_name, subnetName = var.subnet_name, region = var.network_region == "" ? var.gcp_region : var.network_region }) : jsonencode({ type = "use-default" })) })
+  deployment_resources = [
+    {
+      id   = "agents"
+      type = "sandbox"
+      importData = {
+        region = var.gcp_region
+      }
+    },
+    {
+      id   = "default-network"
+      type = "network"
+      importData = {
+        projectId       = var.gcp_project
+        vpcSelfLink     = var.network_mode == "create-new" ? google_compute_network.default_network[0].self_link : data.google_compute_network.default_network[0].self_link
+        vpcName         = var.network_mode == "create-new" ? google_compute_network.default_network[0].name : data.google_compute_network.default_network[0].name
+        subnetSelfLinks = var.network_mode == "create-new" ? [google_compute_subnetwork.default_network_workload[0].self_link] : [data.google_compute_subnetwork.default_network_existing_subnet[0].self_link]
+        cidrBlock       = var.network_mode == "create-new" ? google_compute_subnetwork.default_network_workload[0].ip_cidr_range : data.google_compute_subnetwork.default_network_existing_subnet[0].ip_cidr_range
+        routerSelfLink  = var.network_mode == "create-new" ? google_compute_router.default_network_router[0].self_link : null
+        natName         = var.network_mode == "create-new" ? google_compute_router_nat.default_network_nat[0].name : null
+        isByoVpc        = var.network_mode != "create-new"
+        sandboxNetwork = {
+          networkAttachment = "projects/${var.gcp_project}/regions/${var.gcp_region}/networkAttachments/${google_compute_network_attachment.default_network_sbx_attachment.name}"
+          attachmentCidr    = google_compute_subnetwork.default_network_sbx_attachment.ip_cidr_range
+          gatewayCidr       = google_compute_subnetwork.default_network_sbx_gateway.ip_cidr_range
+          gatewayIps = [
+            google_compute_instance.default_network_sbx_gateway_0.network_interface[0].network_ip,
+            google_compute_instance.default_network_sbx_gateway_1.network_interface[0].network_ip
+          ]
+          proxyPort = 22
+          vpcCidrs = [
+            var.network_mode == "create-new" ? google_compute_subnetwork.default_network_workload[0].ip_cidr_range : data.google_compute_subnetwork.default_network_existing_subnet[0].ip_cidr_range,
+            google_compute_subnetwork.default_network_sbx_attachment.ip_cidr_range,
+            google_compute_subnetwork.default_network_sbx_gateway.ip_cidr_range
+          ]
+        }
+      }
+    },
+    {
+      id   = "management"
+      type = "remote-stack-management"
+      importData = {
+        federation = {
+          projectNumber       = split("/", google_iam_workload_identity_pool.management_manager.name)[1]
+          poolId              = google_iam_workload_identity_pool.management_manager.workload_identity_pool_id
+          providerId          = "manager"
+          serviceAccountEmail = google_service_account.management.email
+          assertionAudience   = "urn:deployment-access:v1:${sha256("gcp-deployment-access-v1:${base64encode(var.deployment_id)}:${base64encode("remote-stack-management")}")}"
+          trust = {
+            issuer  = var.managing_oidc_issuer
+            subject = var.managing_oidc_subject
+          }
+        }
+        projectId                    = var.gcp_project
+        projectNumber                = data.google_project.current.number
+        serviceAccountEmail          = google_service_account.management.email
+        serviceAccountUniqueId       = google_service_account.management.unique_id
+        managementPermissionsApplied = true
+      }
+    },
+    {
+      id   = "secrets"
+      type = "vault"
+      importData = {
+        projectId    = var.gcp_project
+        secretPrefix = "${local.resource_prefix}-secrets"
+      }
+    },
+    {
+      id   = "agents-engine"
+      type = "gcp_agent_platform_engine"
+      importData = {
+        engineId = google_vertex_ai_reasoning_engine.agents_engine.name
+      }
+    },
+    {
+      id   = "enable-aiplatform"
+      type = "service_activation"
+      importData = {
+        projectId   = var.gcp_project
+        serviceName = google_project_service.enable_aiplatform.service
+        activated   = true
+      }
+    },
+    {
+      id   = "enable-artifact-registry"
+      type = "service_activation"
+      importData = {
+        projectId   = var.gcp_project
+        serviceName = google_project_service.enable_artifact_registry.service
+        activated   = true
+      }
+    },
+    {
+      id   = "enable-cloud-quotas"
+      type = "service_activation"
+      importData = {
+        projectId   = var.gcp_project
+        serviceName = google_project_service.enable_cloud_quotas.service
+        activated   = true
+      }
+    },
+    {
+      id   = "enable-cloud-resource-manager"
+      type = "service_activation"
+      importData = {
+        projectId   = var.gcp_project
+        serviceName = google_project_service.enable_cloud_resource_manager.service
+        activated   = true
+      }
+    },
+    {
+      id   = "enable-compute-engine"
+      type = "service_activation"
+      importData = {
+        projectId   = var.gcp_project
+        serviceName = google_project_service.enable_compute_engine.service
+        activated   = true
+      }
+    },
+    {
+      id   = "enable-iam"
+      type = "service_activation"
+      importData = {
+        projectId   = var.gcp_project
+        serviceName = google_project_service.enable_iam.service
+        activated   = true
+      }
+    },
+    {
+      id   = "enable-iam-credentials"
+      type = "service_activation"
+      importData = {
+        projectId   = var.gcp_project
+        serviceName = google_project_service.enable_iam_credentials.service
+        activated   = true
+      }
+    },
+    {
+      id   = "enable-secret-manager"
+      type = "service_activation"
+      importData = {
+        projectId   = var.gcp_project
+        serviceName = google_project_service.enable_secret_manager.service
+        activated   = true
+      }
+    },
+    {
+      id   = "enable-security-token-service"
+      type = "service_activation"
+      importData = {
+        projectId   = var.gcp_project
+        serviceName = google_project_service.enable_security_token_service.service
+        activated   = true
+      }
+    }
+  ]
+}
+
+=== retained-data.json ===
+[]
+
+=== retain-data.py ===
+#!/usr/bin/env python3
+"""Detach the generated retention inventory, keeping a recovery receipt.
+
+The inventory lists every retained data resource (storage, key-value tables, registries,
+Redis, PostgreSQL) and its KMS keys on each cloud. Access grants stay managed for destroy.
+"""
+import argparse
+import json
+import os
+import re
+from pathlib import Path
+import subprocess
+import tempfile
+
+
+def tf(*args):
+    return subprocess.check_output([CLI, *args], text=True)
+
+
+def save(path, value):
+    # Publish only a complete, durable record, without replacing an earlier one.
+    # An interrupted write must not leave an empty intent that cannot be recovered.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(value, output, indent=2)
+            output.flush()
+            os.fsync(output.fileno())
+        os.link(temporary, path)
+        descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        if temporary is not None:
+            temporary.unlink()
+
+
+
+def protect_dynamodb_ttl(state, selected):
+    """Use the installer's AWS credentials; never detach while TTL can still run."""
+    addresses = {item['address'] for item in selected}
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed' or resource.get('type') != 'aws_dynamodb_table':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            if base + suffix not in addresses:
+                continue
+            attributes = instance.get('attributes', {})
+            arn = attributes.get('arn', '')
+            match = re.fullmatch(r'arn:(aws(?:-us-gov|-cn)?):dynamodb:([a-z0-9-]+):([0-9]{12}):table/([a-zA-Z0-9_.-]+)', arn)
+            if not match or attributes.get('id') != match[4]:
+                raise RuntimeError('Refresh the exact DynamoDB table ARN before retention; nothing detached')
+            def aws(operation, *arguments):
+                try:
+                    result = subprocess.run(
+                        ['aws', 'dynamodb', operation, '--region', match[2], '--table-name', arn,
+                         *arguments, '--output', 'json', '--no-cli-pager'],
+                        capture_output=True, text=True)
+                except FileNotFoundError as error:
+                    raise RuntimeError('DynamoDB retention requires AWS CLI with the installer credentials; nothing detached') from error
+                if result.returncode != 0:
+                    message = result.stderr.strip()
+                    # DynamoDB rejects a TTL change while the previous one, including the one at
+                    # table creation, is still processing, which takes up to an hour.
+                    if 'Time to live has been modified multiple times within a fixed interval' in message:
+                        raise RuntimeError('DynamoDB is still processing an earlier TTL change on this table, which takes up to an hour. Wait and rerun this retention command; nothing detached')
+                    raise RuntimeError(f'DynamoDB {operation} failed: {message}. Retention needs the installer credentials with DescribeTable, DescribeTimeToLive and UpdateTimeToLive permissions; nothing detached')
+                return json.loads(result.stdout)
+            observed = aws('describe-table').get('Table', {})
+            if observed.get('TableArn') != arn:
+                raise RuntimeError('DynamoDB account/table identity changed; nothing detached')
+            ttl = aws('describe-time-to-live').get('TimeToLiveDescription', {})
+            if ttl.get('TimeToLiveStatus') == 'ENABLED':
+                attribute = ttl.get('AttributeName')
+                if not isinstance(attribute, str) or not attribute:
+                    raise RuntimeError('DynamoDB TTL attribute is unknown; nothing detached')
+                aws('update-time-to-live', '--time-to-live-specification',
+                    json.dumps({'Enabled': False, 'AttributeName': attribute}))
+                ttl = aws('describe-time-to-live').get('TimeToLiveDescription', {})
+            if ttl.get('TimeToLiveStatus') != 'DISABLED':
+                raise RuntimeError('DynamoDB TTL is not confirmed DISABLED. Wait for its transition and rerun this retention command; nothing detached')
+
+
+def installed_inventory(state, module):
+    markers = [resource for resource in state.get('resources', [])
+               if resource.get('mode') == 'managed'
+               and resource.get('type') == 'terraform_data'
+               and resource.get('name') == 'retention_inventory'
+               and resource.get('module', '') == module]
+    if len(markers) != 1 or len(markers[0].get('instances', [])) != 1:
+        raise RuntimeError('Installed retention inventory is unavailable. Upgrade the original resource configuration in place before whole-setup teardown; nothing detached')
+    instance = markers[0]['instances'][0]
+    inventory = instance.get('attributes', {}).get('input', {}).get('value')
+    if (instance.get('deposed') or not isinstance(inventory, dict)
+            or inventory.get('version') != 1
+            or not isinstance(inventory.get('addresses'), list)
+            or not all(isinstance(address, str) for address in inventory['addresses'])):
+        raise RuntimeError('Invalid installed retention inventory; nothing detached')
+    return inventory['addresses']
+
+
+def verify_installed_inventory(state, manifest, module):
+    if installed_inventory(state, module) != manifest:
+        raise RuntimeError('Generated manifest does not match the installed retention inventory; nothing detached')
+
+
+def azure_expiry_guard(state, selected):
+    """Only delete actions that may affect detached blob data block retention."""
+    accounts = set()
+    containers = {}
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            if base + suffix not in selected:
+                continue
+            attributes = instance['attributes']
+            if resource['type'] == 'azurerm_storage_account':
+                accounts.add(attributes['id'].lower())
+            elif resource['type'] == 'azurerm_storage_container':
+                account = attributes.get('storage_account_id')
+                name = attributes.get('name')
+                if not account:
+                    # AzureRM keeps storage_account_id null when the installed
+                    # resource uses storage_account_name. Its resource_manager_id
+                    # still contains the complete account and container identity.
+                    identity = re.fullmatch(
+                        r'(/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Storage/storageAccounts/[^/]+)/blobServices/default/containers/([^/]+)',
+                        attributes.get('resource_manager_id') or '', re.IGNORECASE)
+                    if (identity and identity[2] == name
+                            and identity[1].rsplit('/', 1)[1].lower()
+                            == (attributes.get('storage_account_name') or '').lower()):
+                        account = identity[1]
+                if not account or not name:
+                    raise RuntimeError('Cannot identify retained Azure container account/name; refresh or upgrade the installed package before detachment')
+                containers.setdefault(account.lower(), set()).add(name)
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed' or resource['type'] != 'azurerm_storage_management_policy':
+            continue
+        for instance in resource.get('instances', []):
+            attributes = instance['attributes']
+            account = attributes.get('storage_account_id', '').lower()
+            if account not in accounts and account not in containers:
+                continue
+            for rule in attributes.get('rule', []):
+                if not rule.get('enabled', True):
+                    continue
+                filters = rule.get('filters') or []
+                prefixes = [prefix for entry in filters for prefix in entry.get('prefix_match') or []]
+                if (account not in accounts and prefixes
+                        and not any(prefix.startswith(name + '/') or (name + '/').startswith(prefix)
+                                    for name in containers[account] for prefix in prefixes)):
+                    continue
+                # Provider state uses -1/null for unset age fields. Tag filters
+                # cannot prove safety: retained blobs may acquire matching tags.
+                actions = rule.get('actions')
+                if not isinstance(actions, list) or not actions:
+                    raise RuntimeError('Unknown applicable Azure lifecycle action; nothing detached')
+                for action in actions:
+                    for kind, blocks in action.items():
+                        if kind not in ('base_blob', 'snapshot', 'version'):
+                            raise RuntimeError('Unknown applicable Azure lifecycle action; nothing detached')
+                        for block in blocks or []:
+                            if any(key.startswith('delete') and value is not None and value != -1
+                                   for key, value in block.items()):
+                                raise RuntimeError('Disable Azure storage lifecycle delete rules affecting retained data, apply; nothing detached')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--detach', action='store_true', help='confirm detachment before whole-setup teardown')
+    parser.add_argument('--module-address', default='', help='exact installed child module address')
+    parser.add_argument('--receipt-dir', type=Path, required=True, help='private recovery directory outside the module')
+    args = parser.parse_args()
+    if os.name != "posix":
+        raise RuntimeError("Use Linux, macOS, or a WSL Linux filesystem for private recovery receipts; native Windows is not supported")
+    manifest_path = Path(__file__).with_name('retained-data.json')
+    manifest = json.loads(manifest_path.read_text())
+    if not isinstance(manifest, list) or not all(isinstance(address, str) for address in manifest):
+        raise RuntimeError('Invalid recovery inventory; nothing detached')
+    prefix = args.module_address + '.' if args.module_address else ''
+    addresses = {prefix + address for address in manifest}
+    # A failed read must abort, never masquerade as an empty installation.
+    state = json.loads(tf('state', 'pull'))
+    if state.get('version') != 4 or not state.get('lineage') or not isinstance(state.get('serial'), int):
+        raise RuntimeError('Unsupported or incomplete Terraform state; nothing detached')
+    verify_installed_inventory(state, manifest, args.module_address)
+    selected = []
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        if base not in addresses:
+            continue
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            resource_id = instance['attributes'].get('id')
+            if not resource_id:
+                raise RuntimeError('Cannot detach a resource without a recovery ID: ' + base + suffix)
+            if resource['type'] == 'google_storage_bucket':
+                rules = instance['attributes'].get('lifecycle_rule') or []
+                if any(action.get('type') == 'Delete' for rule in rules for action in rule.get('action', [])):
+                    raise RuntimeError('Remove Cloud Storage delete lifecycle rules and apply before retaining ' + base + suffix + '; nothing detached')
+            if resource['type'] == 'azurerm_storage_container':
+                if instance['attributes'].get('container_access_type') != 'private':
+                    raise RuntimeError('Set Azure container publicRead=false and apply before retaining ' + base + suffix + '; nothing detached')
+            selected.append({'address': base + suffix, 'id': resource_id})
+    azure_expiry_guard(state, {item['address'] for item in selected})
+    print(json.dumps(selected, indent=2))
+    if not args.detach:
+        return
+    os.umask(0o077)
+    args.receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if args.receipt_dir.stat().st_mode & 0o077:
+        raise RuntimeError('Receipt directory must be private (mode 0700)')
+    # One immutable receipt per attempt preserves IDs across partial failures/retries.
+    attempt = Path(tempfile.mkdtemp(prefix='detach-', dir=args.receipt_dir))
+    save(attempt / 'state-before.json', state)
+    save(attempt / 'retained.json', selected)
+    save(attempt / 'manifest.json', manifest)
+    save(attempt / 'source.json', {'directory': str(Path.cwd()), 'lineage': state.get('lineage'), 'serial': state.get('serial'), 'module': args.module_address})
+    # Keep the exact inventory before touching cloud expiry, and stop before any state
+    # removal until every selected table confirms DISABLED. A retry re-reads AWS.
+    protect_dynamodb_ttl(state, selected)
+    # Check for a concurrent writer between inventory and mutation. Terraform locks
+    # the state mutation itself. Operators must serialize this entire teardown with
+    # other Terraform runs, just as they do for a multi-command import procedure.
+    current = json.loads(tf('state', 'pull'))
+    if (current.get('lineage'), current.get('serial')) != (state.get('lineage'), state.get('serial')):
+        raise RuntimeError('Terraform state changed; no resources detached. Retry after the other run finishes.')
+    if selected:
+        subprocess.run([CLI, 'state', 'rm', '-lock-timeout=60s', *[item['address'] for item in selected]], check=True)
+    save(attempt / 'state-after.json', json.loads(tf('state', 'pull')))
+    print('Recovery receipt: ' + str(attempt))
+    print('Data is retained. Access has NOT yet been revoked. Run and review terraform plan -destroy, then apply that destroy plan. Do not run an ordinary apply after detaching.')
+
+
+if __name__ == '__main__':
+    CLI = os.environ.get('TF_CLI', 'terraform')
+    if CLI not in ('terraform', 'tofu'):
+        raise SystemExit('TF_CLI must be terraform or tofu')
+    main()
+
+=== agents.tf ===
+resource "google_project_iam_custom_role" "gcp_role_sandbox_templates" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_sandbox_templates", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Sandbox templates"
+  description = "Used by ${local.deployment_name}. Allows creating, reading and deleting environment templates, which set a sandbox's image and internet access, under the selected reasoning engine. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "aiplatform.sandboxEnvironmentTemplates.create",
+    "aiplatform.sandboxEnvironmentTemplates.delete",
+    "aiplatform.sandboxEnvironmentTemplates.get",
+    "aiplatform.sandboxEnvironmentTemplates.list"
+  ]
+}
+
+resource "google_vertex_ai_reasoning_engine_iam_member" "gcp_role_sandbox_templates_agents_engine_templates_0" {
+  provider         = google-beta
+  reasoning_engine = google_vertex_ai_reasoning_engine.agents_engine.name
+  role             = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sandbox_templates[0].name : format("projects/%s/roles/role_%s_sandbox_templates", var.gcp_project, local.gcp_custom_role_prefix)
+  member           = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_artifact_registry_repository" "agents_image" {
+  project       = var.gcp_project
+  location      = var.gcp_region
+  repository_id = replace(lower(format("%s-agents-img", local.resource_prefix)), "_", "-")
+  format        = "DOCKER"
+  description   = "Image of sandbox 'agents'"
+  labels = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents"
+    "resource-type" = "sandbox"
+  }
+  depends_on = [
+    google_project_service.enable_artifact_registry,
+    google_vertex_ai_reasoning_engine.agents_engine,
+    google_project_iam_custom_role.gcp_role_create_secret_manager_secrets,
+    google_project_iam_custom_role.gcp_role_write_secret_manager_values,
+    google_project_iam_member.gcp_role_create_secret_manager_secrets_management_secrets_vault_data_write_binding_0,
+    google_project_iam_member.secretmanager_secretversionadder_management_secrets_vault_data_write_binding_1,
+    google_project_iam_member.gcp_role_write_secret_manager_values_management_secrets_vault_data_write_binding_2,
+    google_project_iam_member.secretmanager_viewer_management_secrets_vault_heartbeat_binding_0,
+    google_compute_network.default_network,
+    google_compute_subnetwork.default_network_workload,
+    google_compute_router.default_network_router,
+    google_compute_router_nat.default_network_nat,
+    google_compute_firewall.default_network_internal,
+    google_compute_subnetwork.default_network_sbx_attachment,
+    google_compute_network_attachment.default_network_sbx_attachment,
+    google_project_service_identity.default_network_sbx_aiplatform_agent,
+    google_project_iam_custom_role.default_network_sbx_attachment,
+    google_project_iam_member.default_network_sbx_attachment_agent,
+    time_sleep.default_network_sbx_role_propagation,
+    google_compute_subnetwork.default_network_sbx_gateway,
+    google_compute_router.default_network_sbx_gateway_router,
+    google_compute_router_nat.default_network_sbx_gateway_nat,
+    google_compute_firewall.default_network_sbx_allow_proxy,
+    google_compute_firewall.default_network_sbx_allow_admin,
+    google_compute_firewall.default_network_sbx_deny_attachment,
+    google_service_account.default_network_sbx_gateway,
+    google_project_iam_member.default_network_sbx_gateway_secrets,
+    google_compute_instance.default_network_sbx_gateway_0,
+    google_compute_instance.default_network_sbx_gateway_1,
+    google_service_account.management,
+    google_project_iam_custom_role.gcp_role_container_heartbeat,
+    google_project_iam_member.gcp_role_container_heartbeat_management_binding_0,
+    google_project_iam_custom_role.gcp_role_container_provision_inspect_clo_810962d4,
+    google_project_iam_custom_role.gcp_role_container_provision_inspect_clo_57427f21,
+    google_project_iam_custom_role.gcp_role_container_provision_inspect_clo_931128e1,
+    google_project_iam_member.gcp_role_container_provision_inspect_clo_810962d4_management_binding_0,
+    google_project_iam_member.gcp_role_container_provision_inspect_clo_57427f21_management_binding_1,
+    google_project_iam_member.gcp_role_container_provision_inspect_clo_931128e1_management_binding_2,
+    google_project_iam_custom_role.gcp_role_network_heartbeat,
+    google_project_iam_member.gcp_role_network_heartbeat_management_binding_0,
+    google_project_iam_custom_role.gcp_role_sandbox_heartbeat,
+    google_project_iam_member.gcp_role_sandbox_heartbeat_management_binding_0,
+    google_project_iam_custom_role.gcp_role_sandbox_management,
+    google_project_iam_member.gcp_role_sandbox_management_management_binding_0,
+    google_project_iam_custom_role.gcp_role_manage_sandbox_private_endpoint,
+    google_project_iam_member.gcp_role_manage_sandbox_private_endpoint_management_binding_0,
+    google_project_iam_member.serviceusage_serviceusageviewer_management_binding_0,
+    google_project_iam_member.secretmanager_viewer_management_binding_0,
+    google_iam_workload_identity_pool.management_manager,
+    google_iam_workload_identity_pool_provider.management_manager,
+    google_service_account_iam_member.management_manager
+  ]
+
+  docker_config {
+    immutable_tags = true
+  }
+
+  cleanup_policies {
+    id     = "delete-untagged"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "UNTAGGED"
+      older_than = "604800s"
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(replace(lower(format("%s-agents-img", local.resource_prefix)), "_", "-")) <= 63
+      error_message = "The image repository name of sandbox 'agents' (resource_prefix, the sandbox id and '-img') is longer than the 63 characters Artifact Registry allows. Use a shorter resource_prefix."
+    }
+  }
+}
+
+resource "google_project_iam_custom_role" "gcp_role_sandbox_image_write" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_sandbox_image_write", local.gcp_custom_role_prefix)
+  title       = "Copy a sandbox image into its repository"
+  description = "Read, upload and tag in a sandbox image repository. Cannot delete."
+  stage       = "GA"
+  permissions = [
+    "artifactregistry.repositories.get",
+    "artifactregistry.repositories.downloadArtifacts",
+    "artifactregistry.repositories.uploadArtifacts",
+    "artifactregistry.tags.create",
+    "artifactregistry.tags.get",
+    "artifactregistry.tags.list",
+    "artifactregistry.versions.get"
+  ]
+}
+
+resource "google_artifact_registry_repository_iam_member" "agents_image_write" {
+  project    = var.gcp_project
+  location   = google_artifact_registry_repository.agents_image.location
+  repository = google_artifact_registry_repository.agents_image.name
+  role       = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sandbox_image_write[0].name : format("projects/%s/roles/role_%s_sandbox_image_write", var.gcp_project, local.gcp_custom_role_prefix)
+  member     = "serviceAccount:${google_service_account.management.email}"
+}
+
+=== default_network.tf ===
+variable "default_network_sbx_gateway_machine_type" {
+  type        = string
+  default     = "e2-standard-2"
+  description = "Compute Engine machine type of the two egress gateway VMs. Use one with at least 2 vCPUs and 4 GiB of memory that your project has quota for."
+}
+
+data "google_compute_network" "default_network" {
+  count   = var.network_mode != "create-new" ? 1 : 0
+  name    = var.network_mode == "use-default" ? "default" : var.network_name
+  project = var.gcp_project
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+data "google_compute_subnetwork" "default_network_existing_subnet" {
+  count   = var.network_mode != "create-new" ? 1 : 0
+  name    = var.network_mode == "use-default" ? "default" : var.subnet_name
+  project = var.gcp_project
+  region  = var.network_mode == "use-default" || var.network_region == "" ? var.gcp_region : var.network_region
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+data "google_project" "default_network_sbx_project" {
+  project_id = var.gcp_project
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+data "google_compute_zones" "default_network_sbx" {
+  project = var.gcp_project
+  region  = var.gcp_region
+  status  = "UP"
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_network" "default_network" {
+  count                   = var.network_mode == "create-new" ? 1 : 0
+  name                    = trim(substr("${local.resource_prefix}-default-network", 0, 63), "-")
+  project                 = var.gcp_project
+  auto_create_subnetworks = false
+  routing_mode            = "REGIONAL"
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_subnetwork" "default_network_workload" {
+  count                    = var.network_mode == "create-new" ? 1 : 0
+  name                     = trim(substr("${local.resource_prefix}-default-network-workload", 0, 63), "-")
+  project                  = var.gcp_project
+  region                   = var.gcp_region
+  ip_cidr_range            = "10.44.0.0/16"
+  network                  = google_compute_network.default_network[0].id
+  private_ip_google_access = true
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_router" "default_network_router" {
+  count   = var.network_mode == "create-new" ? 1 : 0
+  name    = trim(substr("${local.resource_prefix}-default-network-router", 0, 63), "-")
+  project = var.gcp_project
+  region  = var.gcp_region
+  network = google_compute_network.default_network[0].id
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_router_nat" "default_network_nat" {
+  count                              = var.network_mode == "create-new" ? 1 : 0
+  name                               = trim(substr("${local.resource_prefix}-default-network-nat", 0, 63), "-")
+  project                            = var.gcp_project
+  region                             = var.gcp_region
+  router                             = google_compute_router.default_network_router[0].name
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "LIST_OF_SUBNETWORKS"
+
+  log_config {
+    enable = true
+    filter = "ERRORS_ONLY"
+  }
+
+  subnetwork {
+    name = google_compute_subnetwork.default_network_workload[0].self_link
+    source_ip_ranges_to_nat = [
+      "ALL_IP_RANGES"
+    ]
+  }
+
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_firewall" "default_network_internal" {
+  count     = var.network_mode == "create-new" ? 1 : 0
+  name      = trim(substr("${local.resource_prefix}-default-network-internal", 0, 63), "-")
+  project   = var.gcp_project
+  network   = google_compute_network.default_network[0].id
+  direction = "INGRESS"
+  source_ranges = [
+    "10.44.0.0/16"
+  ]
+
+  allow {
+    protocol = "all"
+  }
+
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_subnetwork" "default_network_sbx_attachment" {
+  name          = trim(substr("${local.resource_prefix}-sbx-attachment", 0, 63), "-")
+  project       = var.gcp_project
+  region        = var.gcp_region
+  ip_cidr_range = "192.168.250.0/28"
+  network       = var.network_mode == "create-new" ? google_compute_network.default_network[0].id : data.google_compute_network.default_network[0].id
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_network_attachment" "default_network_sbx_attachment" {
+  name                  = trim(substr("${local.resource_prefix}-sbx-attachment", 0, 63), "-")
+  project               = var.gcp_project
+  region                = var.gcp_region
+  connection_preference = "ACCEPT_AUTOMATIC"
+  subnetworks = [
+    google_compute_subnetwork.default_network_sbx_attachment.self_link
+  ]
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_project_service_identity" "default_network_sbx_aiplatform_agent" {
+  provider = google-beta
+  project  = var.gcp_project
+  service  = "aiplatform.googleapis.com"
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_project_iam_custom_role" "default_network_sbx_attachment" {
+  role_id     = replace("${local.resource_prefix}_sandbox_attachment", "-", "_")
+  title       = "Alien sandbox network attachment"
+  description = "Lets Agent Platform connect sandboxes to the network attachment"
+  project     = var.gcp_project
+  permissions = [
+    "compute.networkAttachments.get",
+    "compute.networkAttachments.update"
+  ]
+}
+
+resource "google_project_iam_member" "default_network_sbx_attachment_agent" {
+  project = var.gcp_project
+  role    = google_project_iam_custom_role.default_network_sbx_attachment.name
+  member  = "serviceAccount:service-${data.google_project.default_network_sbx_project.number}@gcp-sa-aiplatform.iam.gserviceaccount.com"
+  depends_on = [
+    google_project_service_identity.default_network_sbx_aiplatform_agent
+  ]
+}
+
+resource "time_sleep" "default_network_sbx_role_propagation" {
+  create_duration = "180s"
+  depends_on = [
+    google_project_iam_member.default_network_sbx_attachment_agent,
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_subnetwork" "default_network_sbx_gateway" {
+  name                     = trim(substr("${local.resource_prefix}-sbx-gateway", 0, 63), "-")
+  project                  = var.gcp_project
+  region                   = var.gcp_region
+  ip_cidr_range            = "192.168.251.0/27"
+  network                  = var.network_mode == "create-new" ? google_compute_network.default_network[0].id : data.google_compute_network.default_network[0].id
+  private_ip_google_access = true
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_router" "default_network_sbx_gateway_router" {
+  name    = trim(substr("${local.resource_prefix}-sbx-gateway-router", 0, 63), "-")
+  project = var.gcp_project
+  region  = var.gcp_region
+  network = var.network_mode == "create-new" ? google_compute_network.default_network[0].id : data.google_compute_network.default_network[0].id
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_router_nat" "default_network_sbx_gateway_nat" {
+  name                               = trim(substr("${local.resource_prefix}-sbx-gateway-nat", 0, 63), "-")
+  project                            = var.gcp_project
+  region                             = var.gcp_region
+  router                             = google_compute_router.default_network_sbx_gateway_router.name
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "LIST_OF_SUBNETWORKS"
+
+  subnetwork {
+    name = google_compute_subnetwork.default_network_sbx_gateway.self_link
+    source_ip_ranges_to_nat = [
+      "ALL_IP_RANGES"
+    ]
+  }
+
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_firewall" "default_network_sbx_allow_proxy" {
+  name      = trim(substr("${local.resource_prefix}-sbx-allow-proxy", 0, 63), "-")
+  project   = var.gcp_project
+  network   = var.network_mode == "create-new" ? google_compute_network.default_network[0].id : data.google_compute_network.default_network[0].id
+  direction = "INGRESS"
+  priority  = 900
+  source_ranges = [
+    google_compute_subnetwork.default_network_sbx_attachment.ip_cidr_range
+  ]
+  target_tags = [
+    "alien-sandbox-gateway"
+  ]
+
+  allow {
+    protocol = "tcp"
+    ports = [
+      "22"
+    ]
+  }
+
+  log_config {
+    metadata = "INCLUDE_ALL_METADATA"
+  }
+
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_firewall" "default_network_sbx_allow_admin" {
+  name      = trim(substr("${local.resource_prefix}-sbx-allow-admin", 0, 63), "-")
+  project   = var.gcp_project
+  network   = var.network_mode == "create-new" ? google_compute_network.default_network[0].id : data.google_compute_network.default_network[0].id
+  direction = "INGRESS"
+  priority  = 900
+  source_ranges = [
+    google_compute_subnetwork.default_network_sbx_gateway.ip_cidr_range,
+    var.network_mode == "create-new" ? google_compute_subnetwork.default_network_workload[0].ip_cidr_range : data.google_compute_subnetwork.default_network_existing_subnet[0].ip_cidr_range
+  ]
+  target_tags = [
+    "alien-sandbox-gateway"
+  ]
+
+  allow {
+    protocol = "tcp"
+    ports = [
+      "3129"
+    ]
+  }
+
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_firewall" "default_network_sbx_deny_attachment" {
+  name      = trim(substr("${local.resource_prefix}-sbx-deny-attachment", 0, 63), "-")
+  project   = var.gcp_project
+  network   = var.network_mode == "create-new" ? google_compute_network.default_network[0].id : data.google_compute_network.default_network[0].id
+  direction = "INGRESS"
+  priority  = 1000
+  source_ranges = [
+    google_compute_subnetwork.default_network_sbx_attachment.ip_cidr_range
+  ]
+
+  deny {
+    protocol = "all"
+  }
+
+  log_config {
+    metadata = "INCLUDE_ALL_METADATA"
+  }
+
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_service_account" "default_network_sbx_gateway" {
+  account_id   = trim(substr("sbx-gw-${local.resource_prefix}", 0, 30), "-")
+  project      = var.gcp_project
+  display_name = "Alien sandbox egress gateway"
+  depends_on = [
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_project_iam_member" "default_network_sbx_gateway_secrets" {
+  project = var.gcp_project
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.default_network_sbx_gateway.email}"
+
+  condition {
+    title      = "gateway secrets only"
+    expression = "resource.name.startsWith(\"projects/${data.google_project.default_network_sbx_project.number}/secrets/${local.resource_prefix}-secrets-sandbox-egress-gateway-config/\") || resource.name.startsWith(\"projects/${data.google_project.default_network_sbx_project.number}/secrets/${local.resource_prefix}-secrets-sandbox-egress-replica-secret/\")"
+  }
+}
+
+resource "google_compute_instance" "default_network_sbx_gateway_0" {
+  name         = trim(substr("${local.resource_prefix}-sbx-gateway-0", 0, 63), "-")
+  project      = var.gcp_project
+  zone         = data.google_compute_zones.default_network_sbx.names[0]
+  machine_type = var.default_network_sbx_gateway_machine_type
+  tags = [
+    "alien-sandbox-gateway"
+  ]
+
+  boot_disk {
+    initialize_params {
+      image = "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64"
+      size  = 20
+    }
+  }
+
+  network_interface {
+    subnetwork = google_compute_subnetwork.default_network_sbx_gateway.self_link
+    network_ip = cidrhost(google_compute_subnetwork.default_network_sbx_gateway.ip_cidr_range, 10)
+  }
+
+  service_account {
+    email = google_service_account.default_network_sbx_gateway.email
+    scopes = [
+      "cloud-platform"
+    ]
+  }
+
+  shielded_instance_config {
+    enable_secure_boot          = true
+    enable_vtpm                 = true
+    enable_integrity_monitoring = true
+  }
+
+  metadata = {
+    "block-project-ssh-keys" = "true"
+    "enable-oslogin"         = "TRUE"
+  }
+  metadata_startup_script = format("#!/bin/bash\nset -u\nfor i in $(seq 1 30); do apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io iptables && break; sleep 10; done\nfor i in $(seq 1 30); do docker pull ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1 && break; sleep 10; done\numask 077\ncat > /etc/alien-egress-gateway.env <<'ENV'\nALIEN_DEPLOYMENT_TYPE=gcp\nGCP_PROJECT_ID=%s\nGCP_REGION=%s\nALIEN_SECRETS_BINDING=%s\nRUST_LOG=warn\nENV\ncat > /etc/systemd/system/alien-egress-gateway.service <<'UNIT'\n[Unit]\nDescription=Alien egress gateway\nAfter=docker.service network-online.target\nRequires=docker.service\n[Service]\nRestart=always\nRestartSec=3\nExecStartPre=-/usr/bin/docker rm -f gateway\nExecStartPre=/bin/sh -c 'iptables -t nat -C PREROUTING -s 192.168.250.0/28 -p tcp --dport 22 -j REDIRECT --to-ports 3128 || iptables -t nat -I PREROUTING 1 -s 192.168.250.0/28 -p tcp --dport 22 -j REDIRECT --to-ports 3128'\nExecStart=/usr/bin/docker run --name gateway --env-file /etc/alien-egress-gateway.env --user 1000:1000 --cap-drop ALL --memory 2g --security-opt no-new-privileges --read-only --tmpfs /tmp -p 3128:3128 -p 3129:3129 ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1\n[Install]\nWantedBy=multi-user.target\nUNIT\nsystemctl daemon-reload\nsystemctl enable alien-egress-gateway.service\nsystemctl restart alien-egress-gateway.service\n", var.gcp_project, var.gcp_region, jsonencode({ service = "secret-manager", vaultPrefix = "${local.resource_prefix}-secrets" }))
+  depends_on = [
+    google_compute_router_nat.default_network_sbx_gateway_nat,
+    google_project_iam_member.default_network_sbx_gateway_secrets,
+    google_project_service.enable_compute_engine
+  ]
+}
+
+resource "google_compute_instance" "default_network_sbx_gateway_1" {
+  name         = trim(substr("${local.resource_prefix}-sbx-gateway-1", 0, 63), "-")
+  project      = var.gcp_project
+  zone         = data.google_compute_zones.default_network_sbx.names[1]
+  machine_type = var.default_network_sbx_gateway_machine_type
+  tags = [
+    "alien-sandbox-gateway"
+  ]
+
+  boot_disk {
+    initialize_params {
+      image = "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64"
+      size  = 20
+    }
+  }
+
+  network_interface {
+    subnetwork = google_compute_subnetwork.default_network_sbx_gateway.self_link
+    network_ip = cidrhost(google_compute_subnetwork.default_network_sbx_gateway.ip_cidr_range, 11)
+  }
+
+  service_account {
+    email = google_service_account.default_network_sbx_gateway.email
+    scopes = [
+      "cloud-platform"
+    ]
+  }
+
+  shielded_instance_config {
+    enable_secure_boot          = true
+    enable_vtpm                 = true
+    enable_integrity_monitoring = true
+  }
+
+  metadata = {
+    "block-project-ssh-keys" = "true"
+    "enable-oslogin"         = "TRUE"
+  }
+  metadata_startup_script = format("#!/bin/bash\nset -u\nfor i in $(seq 1 30); do apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io iptables && break; sleep 10; done\nfor i in $(seq 1 30); do docker pull ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1 && break; sleep 10; done\numask 077\ncat > /etc/alien-egress-gateway.env <<'ENV'\nALIEN_DEPLOYMENT_TYPE=gcp\nGCP_PROJECT_ID=%s\nGCP_REGION=%s\nALIEN_SECRETS_BINDING=%s\nRUST_LOG=warn\nENV\ncat > /etc/systemd/system/alien-egress-gateway.service <<'UNIT'\n[Unit]\nDescription=Alien egress gateway\nAfter=docker.service network-online.target\nRequires=docker.service\n[Service]\nRestart=always\nRestartSec=3\nExecStartPre=-/usr/bin/docker rm -f gateway\nExecStartPre=/bin/sh -c 'iptables -t nat -C PREROUTING -s 192.168.250.0/28 -p tcp --dport 22 -j REDIRECT --to-ports 3128 || iptables -t nat -I PREROUTING 1 -s 192.168.250.0/28 -p tcp --dport 22 -j REDIRECT --to-ports 3128'\nExecStart=/usr/bin/docker run --name gateway --env-file /etc/alien-egress-gateway.env --user 1000:1000 --cap-drop ALL --memory 2g --security-opt no-new-privileges --read-only --tmpfs /tmp -p 3128:3128 -p 3129:3129 ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1\n[Install]\nWantedBy=multi-user.target\nUNIT\nsystemctl daemon-reload\nsystemctl enable alien-egress-gateway.service\nsystemctl restart alien-egress-gateway.service\n", var.gcp_project, var.gcp_region, jsonencode({ service = "secret-manager", vaultPrefix = "${local.resource_prefix}-secrets" }))
+  depends_on = [
+    google_compute_router_nat.default_network_sbx_gateway_nat,
+    google_project_iam_member.default_network_sbx_gateway_secrets,
+    google_project_service.enable_compute_engine
+  ]
+}
+
+=== management.tf ===
+data "google_project" "current" {
+  project_id = var.gcp_project
+}
+
+resource "google_service_account" "management" {
+  project      = var.gcp_project
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-management", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-management", local.resource_prefix)), "_", "-")), 0, 8))
+  display_name = "${local.deployment_name}: Management service account"
+  description  = "Management cloud identity for ${local.deployment_name}. Resource prefix: ${local.resource_prefix}."
+}
+
+resource "google_project_iam_custom_role" "gcp_role_container_heartbeat" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_container_heartbeat", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Container heartbeat"
+  description = "Used by ${local.deployment_name}. Allows readonly health monitoring for containers and their cloud infrastructure (LB target health, volume status). Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "compute.backendServices.get",
+    "compute.disks.get"
+  ]
+}
+
+resource "google_project_iam_member" "gcp_role_container_heartbeat_management_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_container_heartbeat[0].name : format("projects/%s/roles/role_%s_container_heartbeat", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_custom_role" "gcp_role_container_provision_inspect_clo_810962d4" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_container_provision_inspect_clo_810962d4", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Container provision - Inspect Cloud Networking 73c"
+  description = "Used by ${local.deployment_name}. Allows creating container infrastructure (load balancers, volumes, certificates). Derived from AwsContainerController, GcpContainerController, AzureContainerController API calls. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "compute.backendServices.create",
+    "compute.backendServices.delete",
+    "compute.backendServices.get",
+    "compute.backendServices.update",
+    "compute.backendServices.use",
+    "compute.globalAddresses.create",
+    "compute.globalAddresses.delete",
+    "compute.globalAddresses.get",
+    "compute.globalAddresses.use",
+    "compute.globalForwardingRules.create",
+    "compute.globalForwardingRules.delete",
+    "compute.globalForwardingRules.get",
+    "compute.healthChecks.create",
+    "compute.healthChecks.delete",
+    "compute.healthChecks.get",
+    "compute.healthChecks.update",
+    "compute.healthChecks.useReadOnly",
+    "compute.networkEndpointGroups.create",
+    "compute.networkEndpointGroups.delete",
+    "compute.networkEndpointGroups.get",
+    "compute.networkEndpointGroups.use",
+    "compute.sslCertificates.create",
+    "compute.sslCertificates.delete",
+    "compute.sslCertificates.get",
+    "compute.targetHttpsProxies.create",
+    "compute.targetHttpsProxies.delete",
+    "compute.targetHttpsProxies.get",
+    "compute.targetHttpsProxies.use",
+    "compute.targetTcpProxies.create",
+    "compute.targetTcpProxies.delete",
+    "compute.targetTcpProxies.use",
+    "compute.urlMaps.create",
+    "compute.urlMaps.delete",
+    "compute.urlMaps.get",
+    "compute.urlMaps.use",
+    "compute.zones.list"
+  ]
+}
+
+resource "google_project_iam_custom_role" "gcp_role_container_provision_inspect_clo_57427f21" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_container_provision_inspect_clo_57427f21", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Container provision - Inspect Cloud Networking 13f"
+  description = "Used by ${local.deployment_name}. Allows creating container infrastructure (load balancers, volumes, certificates). Derived from AwsContainerController, GcpContainerController, AzureContainerController API calls. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "compute.disks.create",
+    "compute.disks.delete",
+    "compute.disks.get",
+    "compute.disks.resize",
+    "compute.zones.list"
+  ]
+}
+
+resource "google_project_iam_custom_role" "gcp_role_container_provision_inspect_clo_931128e1" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_container_provision_inspect_clo_931128e1", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Container provision - Inspect Cloud Networking Ff6"
+  description = "Used by ${local.deployment_name}. Allows creating container infrastructure (load balancers, volumes, certificates). Derived from AwsContainerController, GcpContainerController, AzureContainerController API calls. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "compute.disks.addResourcePolicies",
+    "compute.disks.createSnapshot",
+    "compute.disks.removeResourcePolicies",
+    "compute.regionOperations.get",
+    "compute.resourcePolicies.create",
+    "compute.resourcePolicies.delete",
+    "compute.resourcePolicies.get",
+    "compute.resourcePolicies.use",
+    "compute.snapshots.create",
+    "compute.snapshots.delete",
+    "compute.snapshots.get",
+    "compute.snapshots.list",
+    "compute.snapshots.setLabels",
+    "compute.snapshots.useReadOnly",
+    "compute.zoneOperations.get"
+  ]
+}
+
+resource "google_project_iam_member" "gcp_role_container_provision_inspect_clo_810962d4_management_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_container_provision_inspect_clo_810962d4[0].name : format("projects/%s/roles/role_%s_container_provision_inspect_clo_810962d4", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_member" "gcp_role_container_provision_inspect_clo_57427f21_management_binding_1" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_container_provision_inspect_clo_57427f21[0].name : format("projects/%s/roles/role_%s_container_provision_inspect_clo_57427f21", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_member" "gcp_role_container_provision_inspect_clo_931128e1_management_binding_2" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_container_provision_inspect_clo_931128e1[0].name : format("projects/%s/roles/role_%s_container_provision_inspect_clo_931128e1", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_custom_role" "gcp_role_network_heartbeat" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_network_heartbeat", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Network heartbeat"
+  description = "Used by ${local.deployment_name}. Allows reading network metadata needed to monitor and consume imported network infrastructure. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "compute.firewalls.get",
+    "compute.networks.get",
+    "compute.routers.get",
+    "compute.subnetworks.get"
+  ]
+}
+
+resource "google_project_iam_member" "gcp_role_network_heartbeat_management_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_network_heartbeat[0].name : format("projects/%s/roles/role_%s_network_heartbeat", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_custom_role" "gcp_role_sandbox_heartbeat" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_sandbox_heartbeat", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Sandbox heartbeat"
+  description = "Used by ${local.deployment_name}. Allows reading sandbox parent state. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "aiplatform.sandboxEnvironmentTemplates.get"
+  ]
+}
+
+resource "google_project_iam_member" "gcp_role_sandbox_heartbeat_management_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sandbox_heartbeat[0].name : format("projects/%s/roles/role_%s_sandbox_heartbeat", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_custom_role" "gcp_role_sandbox_management" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_sandbox_management", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Sandbox management"
+  description = "Used by ${local.deployment_name}. Allows creating and terminating sandboxes (no access to sandbox contents). Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "aiplatform.sandboxEnvironments.create",
+    "aiplatform.sandboxEnvironments.delete",
+    "aiplatform.sandboxEnvironments.get",
+    "aiplatform.sandboxEnvironments.list",
+    "aiplatform.sandboxEnvironments.pause",
+    "aiplatform.sandboxEnvironments.resume",
+    "aiplatform.sandboxEnvironments.snapshot"
+  ]
+}
+
+resource "google_project_iam_member" "gcp_role_sandbox_management_management_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sandbox_management[0].name : format("projects/%s/roles/role_%s_sandbox_management", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_custom_role" "gcp_role_manage_sandbox_private_endpoint" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_manage_sandbox_private_endpoint", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Manage Sandbox Private Endpoint"
+  description = "Used by ${local.deployment_name}. Read the project's sandbox placement and manage the private endpoint Internet sandboxes are reached through. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "aiplatform.reasoningEngines.list",
+    "aiplatform.sandboxEnvironments.create",
+    "aiplatform.sandboxEnvironments.delete",
+    "aiplatform.sandboxEnvironments.get",
+    "aiplatform.sandboxEnvironments.list",
+    "compute.addresses.create",
+    "compute.addresses.createInternal",
+    "compute.addresses.delete",
+    "compute.addresses.deleteInternal",
+    "compute.addresses.get",
+    "compute.addresses.use",
+    "compute.addresses.useInternal",
+    "compute.forwardingRules.create",
+    "compute.forwardingRules.delete",
+    "compute.forwardingRules.get",
+    "compute.forwardingRules.pscCreate",
+    "compute.forwardingRules.pscDelete",
+    "compute.networkAttachments.get",
+    "compute.networkAttachments.list",
+    "compute.networks.use",
+    "compute.regionOperations.get",
+    "compute.subnetworks.use"
+  ]
+}
+
+resource "google_project_iam_member" "gcp_role_manage_sandbox_private_endpoint_management_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_manage_sandbox_private_endpoint[0].name : format("projects/%s/roles/role_%s_manage_sandbox_private_endpoint", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_member" "serviceusage_serviceusageviewer_management_binding_0" {
+  project = var.gcp_project
+  role    = "roles/serviceusage.serviceUsageViewer"
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_member" "secretmanager_viewer_management_binding_0" {
+  project = var.gcp_project
+  role    = "roles/secretmanager.viewer"
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_iam_workload_identity_pool" "management_manager" {
+  project                   = var.gcp_project
+  workload_identity_pool_id = "deployment-${substr(sha256("gcp-deployment-access-v1:${base64encode(var.deployment_id)}:${base64encode("remote-stack-management")}"), 0, 20)}"
+  display_name              = "Deployment access"
+  description               = "Deployment identity pool. Scope: urn:deployment-access:v1:${sha256("gcp-deployment-access-v1:${base64encode(var.deployment_id)}:${base64encode("remote-stack-management")}")}"
+}
+
+resource "google_iam_workload_identity_pool_provider" "management_manager" {
+  project                            = var.gcp_project
+  workload_identity_pool_id          = google_iam_workload_identity_pool.management_manager.workload_identity_pool_id
+  workload_identity_pool_provider_id = "manager"
+  attribute_mapping = {
+    "google.subject" = "assertion.sub"
+  }
+  attribute_condition = "assertion.sub == ${jsonencode(var.managing_oidc_subject)}"
+
+  oidc {
+    issuer_uri = var.managing_oidc_issuer
+    allowed_audiences = [
+      "urn:deployment-access:v1:${sha256("gcp-deployment-access-v1:${base64encode(var.deployment_id)}:${base64encode("remote-stack-management")}")}"
+    ]
+  }
+}
+
+resource "google_service_account_iam_member" "management_manager" {
+  service_account_id = google_service_account.management.id
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.management_manager.name}/subject/${var.managing_oidc_subject}"
+  depends_on = [
+    google_iam_workload_identity_pool_provider.management_manager
+  ]
+}
+
+=== secrets.tf ===
+resource "google_project_iam_custom_role" "gcp_role_create_secret_manager_secrets" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_create_secret_manager_secrets", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Create Secret Manager Secrets"
+  description = "Used by ${local.deployment_name}. Create application-owned Secret Manager secrets. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "secretmanager.secrets.create"
+  ]
+}
+
+resource "google_project_iam_custom_role" "gcp_role_write_secret_manager_values" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_write_secret_manager_values", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Write Secret Manager Values"
+  description = "Used by ${local.deployment_name}. Add values to application-owned Secret Manager secrets and delete those secrets during cleanup. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "secretmanager.secrets.delete",
+    "secretmanager.secrets.get"
+  ]
+}
+
+resource "google_project_iam_member" "gcp_role_create_secret_manager_secrets_management_secrets_vault_data_write_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_create_secret_manager_secrets[0].name : format("projects/%s/roles/role_%s_create_secret_manager_secrets", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_member" "secretmanager_secretversionadder_management_secrets_vault_data_write_binding_1" {
+  project = var.gcp_project
+  role    = "roles/secretmanager.secretVersionAdder"
+  member  = "serviceAccount:${google_service_account.management.email}"
+
+  condition {
+    title       = "ResourceVaultSecrets"
+    description = "Limit to ResourceVaultSecrets"
+    expression  = "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-secrets-\") && !resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-deployer-secrets-\")"
+  }
+}
+
+resource "google_project_iam_member" "gcp_role_write_secret_manager_values_management_secrets_vault_data_write_binding_2" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_write_secret_manager_values[0].name : format("projects/%s/roles/role_%s_write_secret_manager_values", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+
+  condition {
+    title       = "ResourceVaultSecrets"
+    description = "Limit to ResourceVaultSecrets"
+    expression  = "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-secrets-\") && !resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-deployer-secrets-\")"
+  }
+}
+
+resource "google_project_iam_member" "secretmanager_viewer_management_secrets_vault_heartbeat_binding_0" {
+  project = var.gcp_project
+  role    = "roles/secretmanager.viewer"
+  member  = "serviceAccount:${google_service_account.management.email}"
+
+  condition {
+    title       = "ResourceVaultSecretsHeartbeat"
+    description = "Limit to ResourceVaultSecretsHeartbeat"
+    expression  = "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-secrets-\")"
+  }
+}
+
+=== agents_engine.tf ===
+resource "google_vertex_ai_reasoning_engine" "agents_engine" {
+  provider     = google-beta
+  region       = var.gcp_region
+  display_name = "${local.resource_prefix}-agents-engine"
+  labels = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents-engine"
+    "resource-type" = "sandbox-engine"
+  }
+  depends_on = [
+    google_service_account.management,
+    google_project_iam_custom_role.gcp_role_container_heartbeat,
+    google_project_iam_member.gcp_role_container_heartbeat_management_binding_0,
+    google_project_iam_custom_role.gcp_role_container_provision_inspect_clo_810962d4,
+    google_project_iam_custom_role.gcp_role_container_provision_inspect_clo_57427f21,
+    google_project_iam_custom_role.gcp_role_container_provision_inspect_clo_931128e1,
+    google_project_iam_member.gcp_role_container_provision_inspect_clo_810962d4_management_binding_0,
+    google_project_iam_member.gcp_role_container_provision_inspect_clo_57427f21_management_binding_1,
+    google_project_iam_member.gcp_role_container_provision_inspect_clo_931128e1_management_binding_2,
+    google_project_iam_custom_role.gcp_role_network_heartbeat,
+    google_project_iam_member.gcp_role_network_heartbeat_management_binding_0,
+    google_project_iam_custom_role.gcp_role_sandbox_heartbeat,
+    google_project_iam_member.gcp_role_sandbox_heartbeat_management_binding_0,
+    google_project_iam_custom_role.gcp_role_sandbox_management,
+    google_project_iam_member.gcp_role_sandbox_management_management_binding_0,
+    google_project_iam_custom_role.gcp_role_manage_sandbox_private_endpoint,
+    google_project_iam_member.gcp_role_manage_sandbox_private_endpoint_management_binding_0,
+    google_project_iam_member.serviceusage_serviceusageviewer_management_binding_0,
+    google_project_iam_member.secretmanager_viewer_management_binding_0,
+    google_iam_workload_identity_pool.management_manager,
+    google_iam_workload_identity_pool_provider.management_manager,
+    google_service_account_iam_member.management_manager
+  ]
+}
+
+=== enable_aiplatform.tf ===
+resource "google_project_service" "enable_aiplatform" {
+  project                    = var.gcp_project
+  service                    = "aiplatform.googleapis.com"
+  disable_on_destroy         = false
+  disable_dependent_services = false
+}
+
+=== enable_artifact_registry.tf ===
+resource "google_project_service" "enable_artifact_registry" {
+  project                    = var.gcp_project
+  service                    = "artifactregistry.googleapis.com"
+  disable_on_destroy         = false
+  disable_dependent_services = false
+}
+
+=== enable_cloud_quotas.tf ===
+resource "google_project_service" "enable_cloud_quotas" {
+  project                    = var.gcp_project
+  service                    = "cloudquotas.googleapis.com"
+  disable_on_destroy         = false
+  disable_dependent_services = false
+}
+
+=== enable_cloud_resource_manager.tf ===
+resource "google_project_service" "enable_cloud_resource_manager" {
+  project                    = var.gcp_project
+  service                    = "cloudresourcemanager.googleapis.com"
+  disable_on_destroy         = false
+  disable_dependent_services = false
+}
+
+=== enable_compute_engine.tf ===
+resource "google_project_service" "enable_compute_engine" {
+  project                    = var.gcp_project
+  service                    = "compute.googleapis.com"
+  disable_on_destroy         = false
+  disable_dependent_services = false
+}
+
+=== enable_iam.tf ===
+resource "google_project_service" "enable_iam" {
+  project                    = var.gcp_project
+  service                    = "iam.googleapis.com"
+  disable_on_destroy         = false
+  disable_dependent_services = false
+}
+
+=== enable_iam_credentials.tf ===
+resource "google_project_service" "enable_iam_credentials" {
+  project                    = var.gcp_project
+  service                    = "iamcredentials.googleapis.com"
+  disable_on_destroy         = false
+  disable_dependent_services = false
+}
+
+=== enable_secret_manager.tf ===
+resource "google_project_service" "enable_secret_manager" {
+  project                    = var.gcp_project
+  service                    = "secretmanager.googleapis.com"
+  disable_on_destroy         = false
+  disable_dependent_services = false
+}
+
+=== enable_security_token_service.tf ===
+resource "google_project_service" "enable_security_token_service" {
+  project                    = var.gcp_project
+  service                    = "sts.googleapis.com"
+  disable_on_destroy         = false
+  disable_dependent_services = false
+}
+
+=== iam_propagation.tf ===
+resource "time_sleep" "gcp_iam_propagation" {
+  create_duration = "120s"
+  depends_on = [
+    google_vertex_ai_reasoning_engine_iam_member.gcp_role_sandbox_templates_agents_engine_templates_0,
+    google_project_iam_member.default_network_sbx_attachment_agent,
+    google_project_iam_member.default_network_sbx_gateway_secrets,
+    google_project_iam_member.gcp_role_container_heartbeat_management_binding_0,
+    google_project_iam_member.gcp_role_container_provision_inspect_clo_810962d4_management_binding_0,
+    google_project_iam_member.gcp_role_container_provision_inspect_clo_57427f21_management_binding_1,
+    google_project_iam_member.gcp_role_container_provision_inspect_clo_931128e1_management_binding_2,
+    google_project_iam_member.gcp_role_network_heartbeat_management_binding_0,
+    google_project_iam_member.gcp_role_sandbox_heartbeat_management_binding_0,
+    google_project_iam_member.gcp_role_sandbox_management_management_binding_0,
+    google_project_iam_member.gcp_role_manage_sandbox_private_endpoint_management_binding_0,
+    google_project_iam_member.serviceusage_serviceusageviewer_management_binding_0,
+    google_project_iam_member.secretmanager_viewer_management_binding_0,
+    google_service_account_iam_member.management_manager,
+    google_project_iam_member.gcp_role_create_secret_manager_secrets_management_secrets_vault_data_write_binding_0,
+    google_project_iam_member.secretmanager_secretversionadder_management_secrets_vault_data_write_binding_1,
+    google_project_iam_member.gcp_role_write_secret_manager_values_management_secrets_vault_data_write_binding_2,
+    google_project_iam_member.secretmanager_viewer_management_secrets_vault_heartbeat_binding_0
+  ]
+}
+
+=== registration.tf ===
+resource "terraform_data" "deployment_registration" {
+  input = {
+    platform                    = local.deployment_platform
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 2
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    management_url              = var.management_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    inputValues                 = {}
+  }
+  depends_on = [
+    google_project_iam_custom_role.gcp_role_sandbox_templates,
+    google_vertex_ai_reasoning_engine_iam_member.gcp_role_sandbox_templates_agents_engine_templates_0,
+    google_artifact_registry_repository.agents_image,
+    google_project_iam_custom_role.gcp_role_sandbox_image_write,
+    google_artifact_registry_repository_iam_member.agents_image_write,
+    google_compute_network.default_network,
+    google_compute_subnetwork.default_network_workload,
+    google_compute_router.default_network_router,
+    google_compute_router_nat.default_network_nat,
+    google_compute_firewall.default_network_internal,
+    google_compute_subnetwork.default_network_sbx_attachment,
+    google_compute_network_attachment.default_network_sbx_attachment,
+    google_project_service_identity.default_network_sbx_aiplatform_agent,
+    google_project_iam_custom_role.default_network_sbx_attachment,
+    google_project_iam_member.default_network_sbx_attachment_agent,
+    time_sleep.default_network_sbx_role_propagation,
+    google_compute_subnetwork.default_network_sbx_gateway,
+    google_compute_router.default_network_sbx_gateway_router,
+    google_compute_router_nat.default_network_sbx_gateway_nat,
+    google_compute_firewall.default_network_sbx_allow_proxy,
+    google_compute_firewall.default_network_sbx_allow_admin,
+    google_compute_firewall.default_network_sbx_deny_attachment,
+    google_service_account.default_network_sbx_gateway,
+    google_project_iam_member.default_network_sbx_gateway_secrets,
+    google_compute_instance.default_network_sbx_gateway_0,
+    google_compute_instance.default_network_sbx_gateway_1,
+    google_service_account.management,
+    google_project_iam_custom_role.gcp_role_container_heartbeat,
+    google_project_iam_member.gcp_role_container_heartbeat_management_binding_0,
+    google_project_iam_custom_role.gcp_role_container_provision_inspect_clo_810962d4,
+    google_project_iam_custom_role.gcp_role_container_provision_inspect_clo_57427f21,
+    google_project_iam_custom_role.gcp_role_container_provision_inspect_clo_931128e1,
+    google_project_iam_member.gcp_role_container_provision_inspect_clo_810962d4_management_binding_0,
+    google_project_iam_member.gcp_role_container_provision_inspect_clo_57427f21_management_binding_1,
+    google_project_iam_member.gcp_role_container_provision_inspect_clo_931128e1_management_binding_2,
+    google_project_iam_custom_role.gcp_role_network_heartbeat,
+    google_project_iam_member.gcp_role_network_heartbeat_management_binding_0,
+    google_project_iam_custom_role.gcp_role_sandbox_heartbeat,
+    google_project_iam_member.gcp_role_sandbox_heartbeat_management_binding_0,
+    google_project_iam_custom_role.gcp_role_sandbox_management,
+    google_project_iam_member.gcp_role_sandbox_management_management_binding_0,
+    google_project_iam_custom_role.gcp_role_manage_sandbox_private_endpoint,
+    google_project_iam_member.gcp_role_manage_sandbox_private_endpoint_management_binding_0,
+    google_project_iam_member.serviceusage_serviceusageviewer_management_binding_0,
+    google_project_iam_member.secretmanager_viewer_management_binding_0,
+    google_iam_workload_identity_pool.management_manager,
+    google_iam_workload_identity_pool_provider.management_manager,
+    google_service_account_iam_member.management_manager,
+    google_project_iam_custom_role.gcp_role_create_secret_manager_secrets,
+    google_project_iam_custom_role.gcp_role_write_secret_manager_values,
+    google_project_iam_member.gcp_role_create_secret_manager_secrets_management_secrets_vault_data_write_binding_0,
+    google_project_iam_member.secretmanager_secretversionadder_management_secrets_vault_data_write_binding_1,
+    google_project_iam_member.gcp_role_write_secret_manager_values_management_secrets_vault_data_write_binding_2,
+    google_project_iam_member.secretmanager_viewer_management_secrets_vault_heartbeat_binding_0,
+    google_vertex_ai_reasoning_engine.agents_engine,
+    google_project_service.enable_aiplatform,
+    google_project_service.enable_artifact_registry,
+    google_project_service.enable_cloud_quotas,
+    google_project_service.enable_cloud_resource_manager,
+    google_project_service.enable_compute_engine,
+    google_project_service.enable_iam,
+    google_project_service.enable_iam_credentials,
+    google_project_service.enable_secret_manager,
+    google_project_service.enable_security_token_service,
+    time_sleep.gcp_iam_propagation
+  ]
+
+  lifecycle {
+    precondition {
+      condition     = try(local.deployment_settings.setupManagement, "manual") == "manual"
+      error_message = format("This setup module was built for manual setup, but the settings request %s setup. Regenerate the setup artifact for the requested setup management.", nonsensitive(sensitive(try(local.deployment_settings.setupManagement == "manual", true))) ? "manual" : nonsensitive(sensitive(try(local.deployment_settings.setupManagement == "automatic", false))) ? "automatic" : "invalid")
+    }
+  }
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "gcp"
+  description = "Terraform module target."
+}
+
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 2
+  description = "Setup registration payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Deployment registration management configuration JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Deployment registration settings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Deployment registration resource metadata JSON."
+}
+
+=== README.md ===
+# Deployment setup - gcpint
+
+Target: `gcp`.
+
+This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.
+
+## Resources
+
+Names and purpose are authored documentation. Setup components below are derived from this module; review their `.tf` files for permissions and deletion policies. Frozen resources are setup-owned; Live resources are runtime-owned.
+
+| Name | ID | Purpose | Lifecycle | Setup components |
+| --- | --- | --- | --- | --- |
+| agents | agents |  | Frozen | google\_project\_iam\_custom\_role.gcp\_role\_sandbox\_templates, google\_vertex\_ai\_reasoning\_engine\_iam\_member.gcp\_role\_sandbox\_templates\_agents\_engine\_templates\_0, google\_artifact\_registry\_repository.agents\_image, google\_project\_iam\_custom\_role.gcp\_role\_sandbox\_image\_write, google\_artifact\_registry\_repository\_iam\_member.agents\_image\_write |
+| Network | default-network | Provides the network and subnet connections used by application resources. | Frozen | google\_compute\_network.default\_network, google\_compute\_subnetwork.default\_network\_workload, google\_compute\_router.default\_network\_router, google\_compute\_router\_nat.default\_network\_nat, google\_compute\_firewall.default\_network\_internal, google\_compute\_subnetwork.default\_network\_sbx\_attachment, google\_compute\_network\_attachment.default\_network\_sbx\_attachment, google\_project\_service\_identity.default\_network\_sbx\_aiplatform\_agent, google\_project\_iam\_custom\_role.default\_network\_sbx\_attachment, google\_project\_iam\_member.default\_network\_sbx\_attachment\_agent, time\_sleep.default\_network\_sbx\_role\_propagation, google\_compute\_subnetwork.default\_network\_sbx\_gateway, google\_compute\_router.default\_network\_sbx\_gateway\_router, google\_compute\_router\_nat.default\_network\_sbx\_gateway\_nat, google\_compute\_firewall.default\_network\_sbx\_allow\_proxy, google\_compute\_firewall.default\_network\_sbx\_allow\_admin, google\_compute\_firewall.default\_network\_sbx\_deny\_attachment, google\_service\_account.default\_network\_sbx\_gateway, google\_project\_iam\_member.default\_network\_sbx\_gateway\_secrets, google\_compute\_instance.default\_network\_sbx\_gateway\_0, google\_compute\_instance.default\_network\_sbx\_gateway\_1 |
+| Sandbox egress gateway | sandbox-egress-gateway | Routes sandbox internet traffic through the configured egress policy. | Live |  |
+| Management identity | management | Grants ongoing management access within the deployment boundary. | Frozen | google\_service\_account.management, google\_project\_iam\_custom\_role.gcp\_role\_container\_heartbeat, google\_project\_iam\_member.gcp\_role\_container\_heartbeat\_management\_binding\_0, google\_project\_iam\_custom\_role.gcp\_role\_container\_provision\_inspect\_clo\_810962d4, google\_project\_iam\_custom\_role.gcp\_role\_container\_provision\_inspect\_clo\_57427f21, google\_project\_iam\_custom\_role.gcp\_role\_container\_provision\_inspect\_clo\_931128e1, google\_project\_iam\_member.gcp\_role\_container\_provision\_inspect\_clo\_810962d4\_management\_binding\_0, google\_project\_iam\_member.gcp\_role\_container\_provision\_inspect\_clo\_57427f21\_management\_binding\_1, google\_project\_iam\_member.gcp\_role\_container\_provision\_inspect\_clo\_931128e1\_management\_binding\_2, google\_project\_iam\_custom\_role.gcp\_role\_network\_heartbeat, google\_project\_iam\_member.gcp\_role\_network\_heartbeat\_management\_binding\_0, google\_project\_iam\_custom\_role.gcp\_role\_sandbox\_heartbeat, google\_project\_iam\_member.gcp\_role\_sandbox\_heartbeat\_management\_binding\_0, google\_project\_iam\_custom\_role.gcp\_role\_sandbox\_management, google\_project\_iam\_member.gcp\_role\_sandbox\_management\_management\_binding\_0, google\_project\_iam\_custom\_role.gcp\_role\_manage\_sandbox\_private\_endpoint, google\_project\_iam\_member.gcp\_role\_manage\_sandbox\_private\_endpoint\_management\_binding\_0, google\_project\_iam\_member.serviceusage\_serviceusageviewer\_management\_binding\_0, google\_project\_iam\_member.secretmanager\_viewer\_management\_binding\_0, google\_iam\_workload\_identity\_pool.management\_manager, google\_iam\_workload\_identity\_pool\_provider.management\_manager, google\_service\_account\_iam\_member.management\_manager |
+| Application secrets | secrets | Stores secrets delivered to application workloads. | Frozen | google\_project\_iam\_custom\_role.gcp\_role\_create\_secret\_manager\_secrets, google\_project\_iam\_custom\_role.gcp\_role\_write\_secret\_manager\_values, google\_project\_iam\_member.gcp\_role\_create\_secret\_manager\_secrets\_management\_secrets\_vault\_data\_write\_binding\_0, google\_project\_iam\_member.secretmanager\_secretversionadder\_management\_secrets\_vault\_data\_write\_binding\_1, google\_project\_iam\_member.gcp\_role\_write\_secret\_manager\_values\_management\_secrets\_vault\_data\_write\_binding\_2, google\_project\_iam\_member.secretmanager\_viewer\_management\_secrets\_vault\_heartbeat\_binding\_0 |
+| Agent Platform engine (agents) | agents-engine | Hosts this sandbox in Google Cloud Agent Platform. | Frozen | google\_vertex\_ai\_reasoning\_engine.agents\_engine |
+| Vertex AI API | enable-aiplatform | Enables Vertex AI API for this deployment. | Frozen | google\_project\_service.enable\_aiplatform |
+| Artifact Registry API | enable-artifact-registry | Enables Artifact Registry API for this deployment. | Frozen | google\_project\_service.enable\_artifact\_registry |
+| Cloud Quotas API | enable-cloud-quotas | Enables Cloud Quotas API for this deployment. | Frozen | google\_project\_service.enable\_cloud\_quotas |
+| Cloud Resource Manager API | enable-cloud-resource-manager | Enables Cloud Resource Manager API for this deployment. | Frozen | google\_project\_service.enable\_cloud\_resource\_manager |
+| Compute Engine API | enable-compute-engine | Enables Compute Engine API for this deployment. | Frozen | google\_project\_service.enable\_compute\_engine |
+| Identity and Access Management (IAM) API | enable-iam | Enables Identity and Access Management (IAM) API for this deployment. | Frozen | google\_project\_service.enable\_iam |
+| IAM Service Account Credentials API | enable-iam-credentials | Enables IAM Service Account Credentials API for this deployment. | Frozen | google\_project\_service.enable\_iam\_credentials |
+| Secret Manager API | enable-secret-manager | Enables Secret Manager API for this deployment. | Frozen | google\_project\_service.enable\_secret\_manager |
+| Security Token Service API | enable-security-token-service | Enables Security Token Service API for this deployment. | Frozen | google\_project\_service.enable\_security\_token\_service |
+
+## Inputs
+
+Required:
+
+- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.
+
+Common optional settings:
+
+- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
+- `management_url`: optional management endpoint used by pull-style runtimes.
+- `deployment_model`: `push` or `pull`.
+- `updates_mode`: `auto` or `approval-required`.
+- `telemetry_mode`: `off`, `auto`, or `approval-required`.
+- `heartbeats_mode`: `off` or `on`.
+- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.
+- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.
+
+GCP settings:
+
+- `gcp_project`: target GCP project ID.
+- `gcp_region`: target GCP region.
+- `managing_service_account_email`: management service account metadata.
+- `deployment_id`: immutable deployment ID reserved before setup.
+- `managing_oidc_issuer` and `managing_oidc_subject`: exact management identity trusted by the customer-owned pool.
+- `gcp_manage_custom_roles`: whether this module creates project custom roles.
+- `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.
+
+Network settings:
+
+- `network_mode`: `create-new`, `use-existing`, or `use-default`.
+- `network_cidr`, `availability_zones`: used with `create-new`.
+- `network_name`, `subnet_name`, `network_region`: required with `use-existing`.
+
+## Run
+
+Use your organization's normal backend and approval workflow. A typical local review looks like:
+
+```bash
+export TF_VAR_name="gcpint"
+terraform init
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+## Registration
+
+This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.
+
+## Outputs
+
+- `deployment_management_config`: management endpoint and credential-boundary metadata.
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.
+- `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
+- `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.
+- `deployment_id`: emitted only when Terraform performs registration.
+## Retain GCP setup data during uninstall
+
+Setup-owned Cloud Storage buckets, Firestore databases, Artifact Registry repositories, Memorystore Redis instances and Cloud SQL PostgreSQL databases are protected against replacement and destroy, including empty resources. Memorystore retention includes its service-connection policy, which GCP will not delete while the instance exists. Cloud SQL retention includes the SQL database, login, password secret and version. Encryption keys, their key rings and Cloud Storage's service-agent encryption grant survive with encrypted buckets. Application, public-read and management IAM grants remain managed for removal.
+
+Apply the current package to the existing installation before uninstalling. Delete the deployment first and wait until its status is `teardown-required`, `retention-required` or `deleted`; that removes the runtime workloads. Use Python 3 on Linux or macOS, or Windows through WSL with receipts on its Linux filesystem, and the original Terraform backend, workspace and working directory. Serialize this procedure with other Terraform runs. For a child module add `--module-address 'module.<name>'`, including any module instance index.
+
+```bash
+python3 ./retain-data.py --receipt-dir /secure/path/retained-setup
+python3 ./retain-data.py --receipt-dir /secure/path/retained-setup --detach
+terraform plan -destroy -out=uninstall.tfplan
+terraform apply uninstall.tfplan
+```
+
+Review the destroy plan before applying: retained data must be absent from its delete list, while owned IAM grants, service accounts and Cloud SQL PSC consumer endpoints are removed. Detachment alone does not revoke access. Existing external grants are outside this setup's ownership and require a separate access review. Cloud SQL remains private; reconnecting requires an administrator to authorize a new private endpoint and access to the retained credential. The consumer VPC, subnet and endpoint are not storage dependencies of the Cloud SQL instance and are not retained.
+
+Cloud Storage lifecycle expiry is part of the bucket itself. Before detaching, remove delete rules from the declaration and apply that change. The helper refuses to detach a bucket whose Terraform state still contains delete rules. Refresh the installed state before this procedure so provider-side changes are included.
+
+Receipts include exact addresses, IDs, state lineage and full before/after Terraform state, which may contain secrets. Keep them private and backed up. Retries preserve earlier receipts. After whole-setup detachment do not run ordinary `terraform apply`, which would try to recreate resources. To resume management, restore declarations, import each retained instance at its recorded address and ID, and review an in-place plan. Never overwrite newer state with an old full state file.
+
+
+
+Retained databases, storage, repositories, secrets and keys continue to incur charges. Explicit erasure is a separate administrator operation after access revocation: use the exact recorded cloud IDs, including object/secret versions and images, and verify no retained data needs a key before destroying key versions. Cloud SQL's Terraform deletion protection can be disabled in a deliberately reimported configuration before explicit deletion. This workflow covers the GCP setup resources listed above; runtime-owned resources require their own retention procedure.
+
+=== retention-inventory.tf ===
+resource "terraform_data" "retention_inventory" {
+  input = {
+    version   = 1
+    addresses = []
+  }
+}

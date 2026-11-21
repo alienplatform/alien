@@ -35,7 +35,7 @@ pub fn internet_egress_available() -> bool {
     INTERNET_EGRESS_AVAILABLE || test_switch::forced()
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-gcp-internet-egress"))]
 mod test_switch {
     use std::cell::Cell;
 
@@ -65,14 +65,14 @@ mod test_switch {
     }
 }
 
-#[cfg(not(any(test, feature = "test-utils")))]
+#[cfg(not(any(test, feature = "test-gcp-internet-egress")))]
 mod test_switch {
     pub(super) fn forced() -> bool {
         false
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-gcp-internet-egress"))]
 pub use test_switch::{enable_internet_egress_for_test, InternetEgressForTest};
 
 /// Range of the attachment's own subnet. Sandbox traffic enters the VPC from addresses in it. A

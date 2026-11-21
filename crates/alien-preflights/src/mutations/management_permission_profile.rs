@@ -501,6 +501,10 @@ fn management_profile_contains(
 
 /// Generates the default management permission profile from resource ownership
 /// and feature settings.
+/// The set that lets management create and delete the private endpoint of Google Cloud
+/// `internet` sandboxes.
+pub(crate) const GCP_SANDBOX_PRIVATE_ENDPOINT: &str = "sandbox/private-endpoint";
+
 pub(crate) fn generate_auto_management_profile(
     stack: &Stack,
     stack_state: &StackState,
@@ -759,6 +763,14 @@ pub(crate) fn generate_auto_management_profile(
                 &mut resource_permission_set_ids,
             );
         }
+    }
+
+    // The template controller creates the private endpoint Google Cloud `internet` sandboxes are
+    // reached through, whether a direct setup runs it or the manager does after a Terraform setup.
+    // Project-scoped, because the endpoint does not exist at setup time. Only a stack with such a
+    // sandbox gets it, so no other stack's management role changes.
+    if platform == Platform::Gcp && alien_core::sandbox_egress::has_internet_sandbox(stack) {
+        permission_set_ids.insert(GCP_SANDBOX_PRIVATE_ENDPOINT.to_string());
     }
 
     if automatic_aws {
@@ -2026,6 +2038,55 @@ mod tests {
                             .any(|permission| permission.id() == permission_id)
                     });
                     assert_eq!(granted, notifying && lifecycle == ResourceLifecycle::Live);
+                }
+            }
+        }
+    }
+
+    /// The private endpoint grant goes only to a Google Cloud stack with an `internet` sandbox,
+    /// Frozen (a Terraform setup, where the manager runs the template controller) or Live. A `none` or `allow` sandbox, or any other cloud, keeps the same management
+    /// profile as before it existed.
+    #[tokio::test]
+    async fn private_endpoint_permission_is_only_for_gcp_internet_sandboxes() {
+        use alien_core::{Sandbox, SandboxCode, SandboxEgress};
+        for platform in [Platform::Gcp, Platform::Aws, Platform::Azure] {
+            for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
+                for egress in [
+                    SandboxEgress::None,
+                    SandboxEgress::Allow,
+                    SandboxEgress::Internet,
+                ] {
+                    let sandbox = Sandbox::new("agents".into())
+                        .code(SandboxCode::Image {
+                            image: "us-central1-docker.pkg.dev/p/r/agents:1".into(),
+                            bundled_from: None,
+                        })
+                        .egress(egress.clone())
+                        .lifecycle(Default::default())
+                        .build();
+                    let stack = Stack::new("test".into()).add(sandbox, lifecycle).build();
+                    let config = DeploymentConfig::builder()
+                        .stack_settings(StackSettings::default())
+                        .environment_variables(empty_env_snapshot())
+                        .allow_frozen_changes(false)
+                        .external_bindings(ExternalBindings::default())
+                        .build();
+                    let prepared = ManagementPermissionProfileMutation
+                        .mutate(stack, &StackState::new(platform), &config)
+                        .await
+                        .unwrap();
+                    let granted = prepared.management().profile().is_some_and(|profile| {
+                        profile
+                            .0
+                            .values()
+                            .flatten()
+                            .any(|g| g.id() == GCP_SANDBOX_PRIVATE_ENDPOINT)
+                    });
+                    assert_eq!(
+                        granted,
+                        platform == Platform::Gcp && egress == SandboxEgress::Internet,
+                        "{platform:?} {lifecycle:?} {egress:?}"
+                    );
                 }
             }
         }

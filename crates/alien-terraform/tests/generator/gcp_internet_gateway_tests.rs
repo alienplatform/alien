@@ -1,6 +1,6 @@
 //! The GCP `internet` sandbox's gateway wiring, checked on the rendered module (parsed HCL).
 
-use super::helpers::{prepare_for_target, render};
+use super::helpers::{prepare_for_target, render, snapshot_module};
 use alien_core::{
     ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
     StackSettings,
@@ -224,4 +224,46 @@ async fn the_rendered_firewalls_match_the_fixture_direct_setup_is_checked_agains
     ))
     .unwrap();
     assert_eq!(facts, fixture);
+}
+
+async fn snapshot_stack(egress: SandboxEgress, lifecycle: ResourceLifecycle, name: &str) {
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "us-central1-docker.pkg.dev/p/r/agents:1".to_string(),
+            bundled_from: None,
+        })
+        .egress(egress)
+        .lifecycle(SandboxLifecyclePolicy::default())
+        .build();
+    let stack = Stack::new("gcpint".to_string())
+        .add(sandbox, lifecycle)
+        .build();
+    let prepared = prepare_for_target(stack, TerraformTarget::Gcp).await;
+    let module = render(&prepared, TerraformTarget::Gcp, StackSettings::default());
+    snapshot_module(name, &module);
+}
+
+/// A Live `none` sandbox: its management role holds `sandbox/provision` and nothing for the
+/// private endpoint, and no gateway wiring is rendered.
+#[tokio::test]
+async fn a_live_none_sandbox_module_snapshot() {
+    snapshot_stack(
+        SandboxEgress::None,
+        ResourceLifecycle::Live,
+        "gcp_live_none_sandbox",
+    )
+    .await;
+}
+
+/// The module the flipped release renders for a Live `internet` sandbox: the gateway wiring and
+/// the private endpoint grant beside `sandbox/provision`.
+#[tokio::test]
+async fn a_live_internet_sandbox_module_snapshot() {
+    let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
+    snapshot_stack(
+        SandboxEgress::Internet,
+        ResourceLifecycle::Live,
+        "gcp_live_internet_sandbox",
+    )
+    .await;
 }
