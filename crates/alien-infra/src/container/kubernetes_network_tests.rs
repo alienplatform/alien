@@ -97,6 +97,52 @@ fn cluster_members_and_linkers_gain_reach_and_unlink_revokes_it() {
 }
 
 #[test]
+fn the_gateway_reaches_a_container_a_sandbox_links_in_another_cluster() {
+    let target = container("target", "primary");
+    let mut stack = source_stack(&target);
+    let gateway = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+    stack.resources.extend(
+        Stack::new("gateway".into())
+            .add(
+                container(gateway, "gateway-cluster"),
+                ResourceLifecycle::Live,
+            )
+            .build()
+            .resources,
+    );
+    assert!(!allowed_sources(&target, &stack).contains(gateway));
+    stack
+        .resources
+        .get_mut("session-source")
+        .unwrap()
+        .config
+        .downcast_mut::<alien_core::Sandbox>()
+        .unwrap()
+        .gateway_links
+        .push(ResourceRef::new(
+            Container::RESOURCE_TYPE,
+            target.id.clone(),
+        ));
+    // The gateway joins the target's sources; nothing else does.
+    assert_eq!(
+        allowed_sources(&target, &stack),
+        [
+            "cluster-member",
+            "linked",
+            gateway,
+            "session-source",
+            "target",
+            "worker"
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    );
+    let unlinked = container("unlinked", "other");
+    assert!(!allowed_sources(&unlinked, &stack).contains(gateway));
+}
+
+#[test]
 fn missing_sources_deny_ingress_and_foreign_deployments_cannot_own_policy() {
     let target = container("target", "primary");
     let harness = KubernetesManifestTestHarness::new(Resource::new(target.clone()), vec![]);

@@ -34,7 +34,24 @@ pub(super) fn allowed_sources(config: &Container, stack: &Stack) -> BTreeSet<Str
                 .is_some_and(|other| other.cluster == config.cluster);
         member.then(|| id.clone())
     });
-    linked.chain(cluster_members).collect()
+    // A sandbox's link reaches this Container through the managed gateway, which may sit in
+    // another cluster, so the gateway's pods need the same ports.
+    let gateway = stack
+        .resources()
+        .any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<alien_core::Sandbox>()
+                .is_some_and(|sandbox| {
+                    sandbox.egress == alien_core::SandboxEgress::Internet
+                        && sandbox
+                            .gateway_links
+                            .iter()
+                            .any(|link| link.id == config.id)
+                })
+        })
+        .then(|| alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.to_string());
+    linked.chain(cluster_members).chain(gateway).collect()
 }
 
 /// The namespace a linking Sandbox's pods run in, when the chart sets one.
