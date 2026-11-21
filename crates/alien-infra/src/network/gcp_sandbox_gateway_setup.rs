@@ -755,8 +755,10 @@ async fn remove_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_gcp_clients::gcp::compute::{MockComputeApi, Zone, ZoneList};
-    use alien_gcp_clients::gcp::iam::{MockIamApi, Role};
+    use alien_gcp_clients::gcp::compute::{
+        MockComputeApi, NetworkAttachment, Router, Subnetwork, Zone, ZoneList,
+    };
+    use alien_gcp_clients::gcp::iam::{CreateRoleRequest, MockIamApi, Role};
     use alien_gcp_clients::gcp::longrunning::Operation as LongOperation;
     use alien_gcp_clients::gcp::resource_manager::{MockResourceManagerApi, Project};
     use alien_gcp_clients::gcp::service_usage::MockServiceUsageApi;
@@ -799,8 +801,35 @@ mod tests {
     /// Everything the run creates, in order.
     type Log = Arc<Mutex<Vec<String>>>;
 
+    /// Every request a run sends, as sent.
+    #[derive(Default)]
+    struct Sent {
+        subnets: Vec<Subnetwork>,
+        attachments: Vec<NetworkAttachment>,
+        routers: Vec<Router>,
+        roles: Vec<(String, CreateRoleRequest)>,
+        accounts: Vec<(String, CreateServiceAccountRequest)>,
+        bindings: Vec<Binding>,
+        identities: Vec<String>,
+        vms: Vec<(String, Instance)>,
+    }
+
+    type Recorder = Arc<Mutex<Sent>>;
+
     fn world(
         log: Log,
+    ) -> (
+        MockComputeApi,
+        MockIamApi,
+        MockResourceManagerApi,
+        MockServiceUsageApi,
+    ) {
+        recording_world(log, Default::default())
+    }
+
+    fn recording_world(
+        log: Log,
+        sent: Recorder,
     ) -> (
         MockComputeApi,
         MockIamApi,
@@ -841,31 +870,38 @@ mod tests {
             })
         });
         let l = log.clone();
+        let r = sent.clone();
         compute
             .expect_insert_subnetwork()
             .returning(move |_, subnet| {
+                r.lock().unwrap().subnets.push(subnet.clone());
                 l.lock()
                     .unwrap()
                     .push(format!("subnet {}", subnet.name.unwrap()));
                 Ok(done())
             });
         let l = log.clone();
+        let r = sent.clone();
         compute
             .expect_insert_network_attachment()
             .returning(move |_, a| {
+                r.lock().unwrap().attachments.push(a.clone());
                 l.lock()
                     .unwrap()
                     .push(format!("attachment {}", a.name.unwrap()));
                 Ok(done())
             });
         let l = log.clone();
-        compute.expect_insert_router().returning(move |_, r| {
+        let r = sent.clone();
+        compute.expect_insert_router().returning(move |_, router| {
+            r.lock().unwrap().routers.push(router.clone());
             l.lock()
                 .unwrap()
-                .push(format!("router {}", r.name.unwrap()));
+                .push(format!("router {}", router.name.unwrap()));
             Ok(done())
         });
         let l = log.clone();
+        let r = sent.clone();
         compute.expect_insert_firewall().returning(move |f| {
             l.lock()
                 .unwrap()
@@ -873,7 +909,9 @@ mod tests {
             Ok(done())
         });
         let l = log.clone();
+        let r = sent.clone();
         compute.expect_insert_instance().returning(move |zone, vm| {
+            r.lock().unwrap().vms.push((zone.clone(), vm.clone()));
             l.lock()
                 .unwrap()
                 .push(format!("vm {} {zone}", vm.name.unwrap()));
@@ -892,7 +930,9 @@ mod tests {
         let mut iam = MockIamApi::new();
         iam.expect_get_role().returning(|_| Err(not_found()));
         let l = log.clone();
-        iam.expect_create_role().returning(move |id, _| {
+        let r = sent.clone();
+        iam.expect_create_role().returning(move |id, request| {
+            r.lock().unwrap().roles.push((id.clone(), request));
             l.lock().unwrap().push(format!("role {id}"));
             Ok(Role::builder().build())
         });
@@ -900,10 +940,13 @@ mod tests {
             .withf(|name| name == "sbx-gw-acme@proj.iam.gserviceaccount.com")
             .returning(|_| Err(not_found()));
         let l = log.clone();
-        iam.expect_create_service_account().returning(move |id, _| {
-            l.lock().unwrap().push(format!("account {id}"));
-            Ok(ServiceAccount::builder().build())
-        });
+        let r = sent.clone();
+        iam.expect_create_service_account()
+            .returning(move |id, request| {
+                r.lock().unwrap().accounts.push((id.clone(), request));
+                l.lock().unwrap().push(format!("account {id}"));
+                Ok(ServiceAccount::builder().build())
+            });
 
         let mut manager = MockResourceManagerApi::new();
         manager.expect_get_project_metadata().returning(|_| {
@@ -916,10 +959,12 @@ mod tests {
             .expect_get_project_iam_policy()
             .returning(|_, _| Ok(IamPolicy::builder().build()));
         let l = log.clone();
+        let r = sent.clone();
         manager
             .expect_set_project_iam_policy()
             .returning(move |_, policy, _| {
                 let last = policy.bindings.last().unwrap();
+                r.lock().unwrap().bindings.push(last.clone());
                 l.lock().unwrap().push(format!(
                     "binding {} {} {}",
                     last.role,
@@ -931,9 +976,11 @@ mod tests {
 
         let mut usage = MockServiceUsageApi::new();
         let l = log;
+        let r = sent;
         usage
             .expect_generate_service_identity()
             .returning(move |service| {
+                r.lock().unwrap().identities.push(service.clone());
                 l.lock().unwrap().push(format!("identity {service}"));
                 Ok(
                     serde_json::from_value::<LongOperation>(serde_json::json!({"done": true}))
@@ -1018,6 +1065,199 @@ mod tests {
         );
         // The wait for the binding to take hold is the documented length.
         assert!(now >= 1_000 + plan::ROLE_PROPAGATION_SECONDS as i64);
+    }
+
+    /// The last path segment of a link: the facts name resources, not URLs.
+    fn leaf(link: &str) -> String {
+        link.rsplit('/').next().unwrap_or(link).to_string()
+    }
+
+    fn api_text<T: Serialize>(value: &T) -> String {
+        serde_json::to_value(value)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// Every request direct setup sends, reduced to the facts in the shared fixture the
+    /// Terraform module is checked against in `alien-terraform`
+    /// (`gcp_internet_gateway_tests.rs`). A difference in any name, range, NAT setting, role,
+    /// binding, account or VM between the two setup surfaces fails one of the two tests.
+    #[tokio::test]
+    async fn every_request_matches_the_fixture_the_terraform_module_is_checked_against() {
+        use serde_json::json;
+        let sent: Recorder = Default::default();
+        let (compute, iam, manager, usage) = recording_world(Default::default(), sent.clone());
+        let clients = Clients {
+            compute: &compute,
+            iam: &iam,
+            resource_manager: &manager,
+            service_usage: &usage,
+        };
+        let mut progress = SetupProgress::default();
+        let mut now = 1_000;
+        let mut finished = false;
+        for _ in 0..80 {
+            let inputs = Inputs {
+                secrets: &[
+                    crate::sandbox::egress::GATEWAY_CONFIG,
+                    alien_core::sandbox_egress::SANDBOX_EGRESS_REPLICA_SECRET,
+                ],
+                ..inputs(now)
+            };
+            if let Step::Done(_) = step(&clients, &inputs, &mut progress).await.unwrap() {
+                finished = true;
+                break;
+            }
+            now += 5;
+        }
+        assert!(finished);
+        let network = inputs(0).placement.network;
+        let vpc = |link: &Option<String>| {
+            assert_eq!(link.as_deref(), Some(network));
+            "vpc"
+        };
+        let sent = sent.lock().unwrap();
+        let subnets: Vec<_> = sent
+            .subnets
+            .iter()
+            .map(|s| {
+                json!({
+                    "name": s.name,
+                    "network": vpc(&s.network),
+                    "cidr": s.ip_cidr_range,
+                    "private_google_access": s.private_ip_google_access.unwrap_or(false),
+                })
+            })
+            .collect();
+        let [attachment] = sent.attachments.as_slice() else {
+            panic!("one attachment")
+        };
+        let [router] = sent.routers.as_slice() else {
+            panic!("one router")
+        };
+        let [nat] = router.nats.as_slice() else {
+            panic!("one NAT")
+        };
+        let [(role_id, role)] = sent.roles.as_slice() else {
+            panic!("one role")
+        };
+        let [(account_id, account)] = sent.accounts.as_slice() else {
+            panic!("one account")
+        };
+        let [role_binding, secret_binding] = sent.bindings.as_slice() else {
+            panic!("two bindings")
+        };
+        let [identity] = sent.identities.as_slice() else {
+            panic!("one service identity")
+        };
+        let condition = secret_binding.condition.as_ref().expect("a condition");
+        let zones = ["us-central1-a", "us-central1-b"];
+        let vms: Vec<_> = sent
+            .vms
+            .iter()
+            .map(|(zone, vm)| {
+                let disk = vm.disks[0].initialize_params.as_ref().unwrap();
+                let shielded = vm.shielded_instance_config.as_ref().unwrap();
+                let items = &vm.metadata.as_ref().unwrap().items;
+                let value = |key: &str| {
+                    items
+                        .iter()
+                        .find(|item| item.key.as_deref() == Some(key))
+                        .and_then(|item| item.value.clone())
+                        .unwrap()
+                };
+                assert_eq!(
+                    value("startup-script"),
+                    plan::startup_script(
+                        "registry.example/gw@sha256:abc",
+                        "proj",
+                        "us-central1",
+                        "acme-secrets"
+                    )
+                );
+                let metadata: serde_json::Map<String, serde_json::Value> = items
+                    .iter()
+                    .filter(|item| item.key.as_deref() != Some("startup-script"))
+                    .map(|item| {
+                        (
+                            item.key.clone().unwrap(),
+                            json!(item.value.clone().unwrap()),
+                        )
+                    })
+                    .collect();
+                let nic = &vm.network_interfaces[0];
+                assert_eq!(vm.network_interfaces.len(), 1);
+                json!({
+                    "name": vm.name,
+                    "zone": zones.iter().position(|z| z == zone).expect("a known zone"),
+                    "machine_type": leaf(vm.machine_type.as_deref().unwrap()),
+                    "tags": vm.tags.as_ref().unwrap().items,
+                    "image": disk.source_image,
+                    "disk_gb": disk.disk_size_gb.as_deref().unwrap().parse::<u32>().unwrap(),
+                    "subnet": leaf(nic.subnetwork.as_deref().unwrap()),
+                    "ip": nic.network_i_p,
+                    "service_account": vm.service_accounts[0].email,
+                    "scopes": vm.service_accounts[0].scopes,
+                    "shielded": {
+                        "secure_boot": shielded.enable_secure_boot,
+                        "vtpm": shielded.enable_vtpm,
+                        "integrity_monitoring": shielded.enable_integrity_monitoring,
+                    },
+                    "metadata": metadata,
+                    "startup_script": "the shared script for project proj, region us-central1, vault prefix acme-secrets",
+                })
+            })
+            .collect();
+        let facts = json!({
+            "subnets": subnets,
+            "attachment": {
+                "name": attachment.name,
+                "connection_preference": attachment.connection_preference,
+                "subnets": attachment.subnetworks.iter().map(|s| leaf(s)).collect::<Vec<_>>(),
+            },
+            "router": {
+                "name": router.name,
+                "network": vpc(&router.network),
+                "nat": {
+                    "name": nat.name,
+                    "ip_allocate": api_text(&nat.nat_ip_allocate_option),
+                    "source": api_text(&nat.source_subnetwork_ip_ranges_to_nat),
+                    "subnets": nat.subnetworks.iter().map(|s| json!({
+                        "subnet": leaf(s.name.as_deref().unwrap()),
+                        "ranges": s.source_ip_ranges_to_nat.iter().map(api_text).collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                },
+            },
+            "service_identity": identity,
+            "role": {
+                "id": role_id,
+                "title": role.role.title,
+                "description": role.role.description,
+                "permissions": role.role.included_permissions,
+            },
+            "role_binding": {
+                "role": role_binding.role,
+                "member": role_binding.members.join(","),
+            },
+            "gateway_account": {
+                "id": account_id,
+                "display_name": account.service_account.display_name,
+            },
+            "secret_binding": {
+                "role": secret_binding.role,
+                "member": secret_binding.members.join(","),
+                "title": condition.title,
+                "expression": condition.expression,
+            },
+            "vms": vms,
+        });
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../alien-core/tests/fixtures/gcp_gateway_setup.json"
+        ))
+        .unwrap();
+        assert_eq!(facts, fixture);
     }
 
     #[tokio::test]
