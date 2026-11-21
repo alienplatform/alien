@@ -16,7 +16,16 @@ const agents = new alien.Sandbox("agents")
 // On Google Cloud an internet sandbox answers only to an edge credential signed for an identity
 // that holds `sandbox/execute` on it, so the plan requires a profile that does. The test calls the
 // sandbox as this workload, which also creates and deletes sandboxes: `sandbox/management`.
+// Creating or updating a sandbox signs its gateway policy with the deployment's egress signing
+// key, which the workload reads from the secrets vault: `vault/data-read` on `secrets`.
 export default new alien.Stack("sandbox-internet")
   .add(agents, "frozen")
-  .permissions({ profiles: { operator: { agents: ["sandbox/execute", "sandbox/management"] } } })
+  .permissions({
+    profiles: {
+      operator: {
+        agents: ["sandbox/execute", "sandbox/management"],
+        secrets: ["vault/data-read"],
+      },
+    },
+  })
   .build()
