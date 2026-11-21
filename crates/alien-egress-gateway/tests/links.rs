@@ -231,3 +231,77 @@ async fn fixed_link_addresses_must_lie_in_the_link_ranges() {
         ["10.244.7.9".parse::<std::net::Ipv4Addr>().unwrap()]
     );
 }
+
+/// The 30-second sweep closes an open linked tunnel once the configuration stops declaring that
+/// link, and once the link's ranges no longer admit the address the tunnel is connected to. A
+/// tunnel whose link and address are still declared stays open.
+#[tokio::test]
+async fn the_sweep_closes_a_linked_tunnel_after_an_unlink_or_a_range_change() {
+    let key = KeyPair::from_seed(Seed::new([42; 32]));
+    let directory = tempfile::tempdir().unwrap();
+    let bindings = Arc::new(
+        Bindings::from_env_map(HashMap::from([
+            ("ALIEN_DEPLOYMENT_TYPE".into(), "local".into()),
+            (
+                "ALIEN_SECRETS_BINDING".into(),
+                json!({"service":"local-vault","dataDir":directory.path(),"vaultName":"secrets"})
+                    .to_string(),
+            ),
+        ]))
+        .unwrap(),
+    );
+    let path = directory.path().join("config.json");
+    let write = |config: &Value| std::fs::write(&path, config.to_string()).unwrap();
+    let linked = config(&key);
+    write(&linked);
+    let gateway = runtime::build(
+        &linked.to_string(),
+        bindings.clone(),
+        Arc::new(AtomicU64::new(0)),
+        Arc::new(AtomicU64::new(0)),
+    )
+    .await
+    .unwrap();
+    apply(&gateway, &key, AUD, "open", &Policy::Internet);
+    let live = runtime::LiveGateway::refreshing(gateway, runtime::ConfigSource::File(path.clone()));
+    let registry = live.snapshot().unwrap().connections.clone();
+    let open = |peer: &str| {
+        let (permit, cancelled) = registry
+            .register(
+                claims(AUD, "open"),
+                Some(target("api.svc:8080")),
+                Arc::new(alien_egress_gateway::io::Counters::default()),
+            )
+            .unwrap();
+        permit
+            .record_peer(peer.parse().unwrap(), Some("api".into()))
+            .unwrap();
+        (permit, cancelled)
+    };
+
+    // Declared link, address inside its range: the sweep keeps it.
+    let (_kept, kept) = open("10.244.0.5");
+    registry.revalidate(&live).await;
+    assert_eq!(*kept.borrow(), None);
+
+    // The link's ranges move away from the connected address: closed.
+    let mut moved = linked.clone();
+    moved["links"][AUD][0]["ranges"] = json!(["10.245.0.0/16"]);
+    write(&moved);
+    live.refresh(&bindings).await.unwrap();
+    registry.revalidate(&live).await;
+    assert_eq!(*kept.borrow(), Some("policy revoked or unavailable"));
+
+    // The link is removed from the configuration: a tunnel opened before is closed.
+    write(&linked);
+    live.refresh(&bindings).await.unwrap();
+    let (_unlinked, unlinked) = open("10.244.0.6");
+    registry.revalidate(&live).await;
+    assert_eq!(*unlinked.borrow(), None);
+    let mut removed = linked.clone();
+    removed.as_object_mut().unwrap().remove("links");
+    write(&removed);
+    live.refresh(&bindings).await.unwrap();
+    registry.revalidate(&live).await;
+    assert_eq!(*unlinked.borrow(), Some("policy revoked or unavailable"));
+}
