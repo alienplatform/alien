@@ -146,6 +146,9 @@ pub(super) async fn initialize_key(
         },
         kid: key.kid.clone(),
         admin_ca_pem: None,
+        // Links are refused on Google Cloud at plan time (`sandbox_links::platform_refusal`)
+        // while its internet sandboxes are not available; the change that allows them fills this.
+        links: std::collections::BTreeMap::new(),
         replicas: Some(SandboxEgressReplicas {
             dns: String::new(),
             addresses: network.gateway_ips.clone(),
@@ -179,10 +182,12 @@ pub(super) async fn publish_config(
             ))
         }
     };
+    // No private ranges: they only place link targets, and Google Cloud refuses links for now.
     egress::publish_azure_config(
         ctx,
         key,
         &network.vpc_cidrs,
+        &[],
         &network.gateway_ips,
         published,
         replica_secret_ready,
