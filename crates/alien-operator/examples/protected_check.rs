@@ -98,7 +98,6 @@ async fn main() {
     };
     let target = TargetDeployment {
         signed_config: None,
-        installed_setup_fingerprint: None,
         release_info: info,
         config: DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
