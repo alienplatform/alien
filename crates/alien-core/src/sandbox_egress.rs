@@ -44,6 +44,25 @@ pub const NO_CONFIG_FILE_GATEWAY_DIGESTS: &[&str] =
 pub const NO_ADMIN_PROTOCOL_GATEWAY_DIGESTS: &[&str] =
     &["sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1"];
 
+/// Gateway images pinned before gateways read `links`. Their configuration refuses unknown
+/// fields, so one of them refuses a configuration with links as a whole rather than ignoring
+/// them. Planning refuses a sandbox link while the planned gateway is one of these. The list
+/// never grows.
+pub const NO_LINKS_GATEWAY_DIGESTS: &[&str] = &[
+    "sha256:dbac794afe2185a8ce025d92ec05a5878d6367ae9380eccc2c3dfc4d55f1c59c",
+    "sha256:1dc14128e34426b84c7a02228a6de790ea092b156776c3f2688b9843b26fc924",
+    "sha256:7a3a66b0894c05fca445cbf5fd71e351cd8a9a98c40744acad4496b59574bdbd",
+    "sha256:f0e47d06eea327bc27fdc1238dae6a8938572db0c1d139495d00dd5623b657dd",
+    "sha256:b252a1b423b95385e5df0c57a37daae6937daa274e3c7783c71704584b18483d",
+    "sha256:8538880f99141888e54bedc7d290194dfee5bfe11910266b309dde53de2601b0",
+    "sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1",
+];
+
+/// Whether a gateway running `image` enforces sandbox links.
+pub fn gateway_image_serves_links(image: &str) -> bool {
+    !is_pinned_to(image, NO_LINKS_GATEWAY_DIGESTS)
+}
+
 fn is_pinned_to(image: &str, digests: &[&str]) -> bool {
     digests
         .iter()

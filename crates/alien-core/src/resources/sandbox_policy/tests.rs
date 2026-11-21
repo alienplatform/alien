@@ -128,3 +128,35 @@ proptest! {
         prop_assert!(!normalized.allows(&other,port).unwrap());
     }
 }
+#[test]
+fn link_entries_narrow_declared_links_and_never_match_destinations() {
+    let narrowed = allow(&["link:api", "example.com"]);
+    narrowed.validate().unwrap();
+    assert!(narrowed.allows_link("api"));
+    assert!(!narrowed.allows_link("other"));
+    // `internet` keeps the declared ceiling; an empty allowlist keeps nothing.
+    assert!(EgressPolicy::Internet.allows_link("api"));
+    assert!(!allow(&[]).allows_link("api"));
+    assert!(!allow(&["api.svc", "*.example.com"]).allows_link("api"));
+    // A link entry never authorizes a host or an address, and a host is never a link.
+    assert!(!narrowed.allows("api.example.net", 443).unwrap());
+    assert!(EgressPolicy::Internet.allows("link", 80).is_err());
+    assert_eq!(
+        allow(&["link:api", "B.example.com"])
+            .canonical_json()
+            .unwrap(),
+        br#"{"allow":["b.example.com","link:api"]}"#
+    );
+    for target in [
+        "link:",
+        "link:API",
+        "link:api:8080",
+        "link:a--b",
+        "link:-a",
+        "link:a.b",
+    ] {
+        assert!(allow(&[target]).validate().is_err(), "{target}");
+    }
+    // An id the stack does not link is not an error: a stack may drop a link later.
+    allow(&["link:removed-service"]).validate().unwrap();
+}

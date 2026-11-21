@@ -18,10 +18,11 @@ use tokio::{
 
 use crate::{
     config::Config,
+    config::GatewayLink,
     connections::{Connections, IdentityPermit, SourcePermit},
     error::{denied, invalid, unavailable, Result},
     io::{Counters, Metered, Prefixed},
-    policy::{check_addresses, PolicyExt, Target},
+    policy::{check_addresses, check_link_addresses, PolicyExt, Target},
     protocol::{read_client_hello, request_target, MAX_HEADERS, MAX_HEADER_BYTES},
     store::PolicyStore,
     token::{self, Claims},
@@ -52,12 +53,23 @@ pub struct Gateway {
 }
 
 impl Gateway {
-    /// Authorize the authenticated identity against its currently stored policy.
-    pub async fn authorize(&self, claims: &Claims, target: &Target) -> Result<()> {
+    /// Authorize the authenticated identity against its currently stored policy. Returns the
+    /// declared link the target names, which the connection may then reach inside the
+    /// deployment.
+    pub async fn authorize(&self, claims: &Claims, target: &Target) -> Result<Option<GatewayLink>> {
         if !self.config.audiences.contains(&claims.aud) {
             return Err(denied("unknown audience"));
         }
         let policy = self.policies.resolve(&claims.aud, &claims.sub).await?;
+        if let Some(link) = self.config.link(&claims.aud, &target.host, target.port) {
+            // The stack's links are the ceiling; the sandbox's policy can only narrow them.
+            if !policy.allows_link(&link.id) {
+                return Err(alien_error::AlienError::new(
+                    crate::error::ErrorData::PolicyDenied,
+                ));
+            }
+            return Ok(Some(link.clone()));
+        }
         if !policy.permits(target) {
             if matches!(target.port, 25 | 465 | 587) {
                 return Err(denied(
@@ -68,12 +80,18 @@ impl Gateway {
                 crate::error::ErrorData::PolicyDenied,
             ));
         }
-        Ok(())
+        Ok(None)
     }
 
     /// Resolve once, validate every returned address, then dial a validated socket address.
-    /// The connect operation cannot resolve the name a second time.
-    pub async fn connect(&self, target: &Target, identity: &IdentityPermit) -> Result<TcpStream> {
+    /// The connect operation cannot resolve the name a second time. A linked target's answers
+    /// must all fall in the link's ranges; every other target's must all be public.
+    pub async fn connect(
+        &self,
+        target: &Target,
+        identity: &IdentityPermit,
+        link: Option<&GatewayLink>,
+    ) -> Result<TcpStream> {
         let _dns = identity
             .dns
             .try_acquire()
@@ -100,10 +118,11 @@ impl Gateway {
             .collect()
         };
         drop(_dns);
-        check_addresses(
-            &addresses.iter().map(SocketAddr::ip).collect::<Vec<_>>(),
-            &self.config.denied_ranges,
-        )?;
+        let resolved: Vec<_> = addresses.iter().map(SocketAddr::ip).collect();
+        match link {
+            Some(link) => check_link_addresses(&resolved, link)?,
+            None => check_addresses(&resolved, &self.config.denied_ranges)?,
+        }
         let timer = self.connections.connect_latency.start();
         let stream = crate::dial::connect(&addresses)
             .await
@@ -116,6 +135,7 @@ impl Gateway {
                 .into_alien_error()
                 .context(unavailable("read connected destination"))?
                 .ip(),
+            link.map(|link| link.id.clone()),
         )?;
         stream
             .set_nodelay(true)
@@ -201,6 +221,8 @@ struct Audit {
     host: String,
     port: u16,
     allowed: bool,
+    /// The declared link the connection reached, if any.
+    link: Option<String>,
 }
 
 async fn connection(stream: TcpStream, gateway: Arc<Gateway>, source: SourcePermit) {
@@ -331,19 +353,23 @@ async fn authorized_proxy(
         }
         return Ok(());
     };
-    if let Err(error) = gateway.authorize(claims, &target).await {
-        refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
-        return Err(error);
-    }
+    let link = match gateway.authorize(claims, &target).await {
+        Ok(link) => link,
+        Err(error) => {
+            refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
+            return Err(error);
+        }
+    };
+    audit.link = link.as_ref().map(|link| link.id.clone());
     if !connect {
-        let upstream = gateway.connect(&target, identity).await?;
+        let upstream = gateway.connect(&target, identity, link.as_ref()).await?;
         audit.allowed = true;
         log_open(audit);
         return crate::http_proxy::forward(Prefixed::new(input, stream), upstream, target, None)
             .await;
     }
     // Resolve before acknowledging, so denied ranges receive an explicit gateway denial.
-    let mut upstream = match gateway.connect(&target, identity).await {
+    let mut upstream = match gateway.connect(&target, identity, link.as_ref()).await {
         Ok(stream) => stream,
         Err(error) => {
             refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
@@ -439,12 +465,14 @@ async fn authorized_proxy(
 
 fn log_open(audit: &Audit) {
     tracing::info!(connectionEvent = "open", aud = %audit.aud, sub = %audit.sub,
-        host = %audit.host, port = audit.port, decision = "allow", "egress connection");
+        host = %audit.host, port = audit.port, link = audit.link.as_deref(), decision = "allow",
+        "egress connection");
 }
 
 fn log_close(audit: &Audit, allowed: bool, reason: &str, counters: &Counters, elapsed: Duration) {
     tracing::info!(connectionEvent = "close", aud = %audit.aud, sub = %audit.sub,
-        host = %audit.host, port = audit.port, decision = if allowed { "allow" } else { "deny" },
+        host = %audit.host, port = audit.port, link = audit.link.as_deref(),
+        decision = if allowed { "allow" } else { "deny" },
         closeReason = %reason, reason = %reason, bytesUp = counters.up.load(Ordering::Relaxed),
         bytesDown = counters.down.load(Ordering::Relaxed), durationMs = elapsed.as_millis() as u64,
         "egress connection");
@@ -607,6 +635,7 @@ mod audit_log_tests {
             host: "allowed.test".into(),
             port: 443,
             allowed: true,
+            link: None,
         };
         let counters = Counters::default();
         counters.up.store(10, Ordering::Relaxed);
