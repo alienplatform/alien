@@ -23,7 +23,7 @@ sandbox-process = ["tokio/process", "tokio/io-util", "tokio/time", "tokio/macros
 
 [dependencies]
 idna = { workspace = true }
-ipnet = { workspace = true }
+ipnet = { workspace = true, features = ["serde"] }
 psl = { workspace = true }
 lognorm = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

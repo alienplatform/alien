@@ -804,3 +804,28 @@ fn collect_ports(value: &serde_json::Value, rules: &mut usize) {
         _ => {}
     }
 }
+
+/// Links change no setup template: a sandbox that links a container renders exactly the template
+/// the same stack renders without the link. The gateway reaches linked services only through
+/// runtime configuration.
+#[tokio::test]
+async fn a_linked_sandbox_renders_the_same_setup_template() {
+    let source = stack(Shape::SandboxAndContainer, SandboxEgress::Internet);
+    let prepared = prepare_for_setup_template(source.clone(), &settings()).await;
+    let link = |stack: &Stack| {
+        let mut stack = stack.clone();
+        stack
+            .resources
+            .get_mut("agents")
+            .expect("sandbox")
+            .config
+            .downcast_mut::<Sandbox>()
+            .expect("sandbox config")
+            .gateway_links = vec![ResourceRef::new(Container::RESOURCE_TYPE, "api")];
+        stack
+    };
+    let plain = to_yaml(&render(&prepared, &source, settings(), "links").unwrap()).unwrap();
+    let linked =
+        to_yaml(&render(&link(&prepared), &link(&source), settings(), "links").unwrap()).unwrap();
+    assert_eq!(plain, linked);
+}

@@ -180,6 +180,12 @@ pub(crate) const SANDBOX_IMAGE_PERMISSIONS: Feature = feature(
     Action::Refuse,
     "mounts, direct connections and pause or resume steps the developer declared; older Operators cannot parse them",
 );
+pub(crate) const SANDBOX_LINKS: Feature = feature(
+    "services linked to sandboxes",
+    "3.3.72",
+    Action::Refuse,
+    "older Operators cannot parse the links or `link:` policy entries, and would reject the whole target",
+);
 pub(crate) const REDIS: Feature = feature(
     "Redis resources",
     "3.3.59",
@@ -237,6 +243,7 @@ pub(crate) const FEATURES: &[&Feature] = &[
     &SANDBOX_POLICY,
     &SANDBOX_IMAGE_USER,
     &SANDBOX_IMAGE_PERMISSIONS,
+    &SANDBOX_LINKS,
     &REDIS,
     &SIGNING_VERIFIER,
     &AZURE_SANDBOX_INTERNET,
@@ -421,6 +428,14 @@ pub(crate) fn apply(
             }
             if sandbox.declares_image_permissions() {
                 refuse(&SANDBOX_IMAGE_PERMISSIONS);
+            }
+            if !sandbox.gateway_links.is_empty()
+                || sandbox
+                    .default_policy
+                    .as_ref()
+                    .is_some_and(|policy| policy.names_links())
+            {
+                refuse(&SANDBOX_LINKS);
             }
         } else if config.resource_type() == alien_core::Redis::RESOURCE_TYPE {
             refuse(&REDIS);
@@ -661,6 +676,77 @@ mod tests {
             assert!(refused_for(stack, Some(NEXT_RELEASE)).is_empty());
         }
         assert!(refused_for(&declared(Default::default(), None), None).is_empty());
+    }
+
+    /// An Operator before links parses a sandbox with strict field checks, so the field this
+    /// release adds fails the whole target. Reproduced with the current parser, which refuses
+    /// unknown fields the same way, on the field name an older one does not know.
+    #[test]
+    fn sandbox_links_are_refused_for_operators_that_cannot_parse_them() {
+        let api = container();
+        let sandbox = |linked: bool, policy: Option<alien_core::EgressPolicy>| {
+            let mut sandbox = Sandbox::new("agents".to_string())
+                .code(alien_core::SandboxCode::Image {
+                    image: "s3://bundles/agents.zip".to_string(),
+                    bundled_from: None,
+                })
+                .egress(alien_core::SandboxEgress::Internet)
+                .lifecycle(Default::default());
+            if linked {
+                sandbox = sandbox.link(&api);
+            }
+            let mut sandbox = sandbox.build();
+            sandbox.default_policy = policy;
+            Stack::new("app".to_string())
+                .add(api.clone(), ResourceLifecycle::Live)
+                .add(sandbox, ResourceLifecycle::Live)
+                .build()
+        };
+        let linked = sandbox(true, None);
+        let sent = serde_json::to_value(
+            linked
+                .resources()
+                .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>()),
+        )
+        .unwrap();
+        assert_eq!(
+            sent["gatewayLinks"],
+            serde_json::json!([{"type": "container", "id": "c"}]),
+            "{sent}"
+        );
+        let mut older = sent.clone();
+        older["gatewayLinkz"] = older["gatewayLinks"].take();
+        older.as_object_mut().unwrap().remove("gatewayLinks");
+        let error = serde_json::from_value::<Sandbox>(older)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown field `gatewayLinkz`"), "{error}");
+
+        let narrowed = sandbox(
+            false,
+            Some(alien_core::EgressPolicy::Allow {
+                allow: vec!["example.com".into(), "link:c".into()],
+            }),
+        );
+        for stack in [&linked, &narrowed] {
+            for version in [Some("3.3.35"), Some("3.3.70"), Some("3.3.71")] {
+                assert_eq!(
+                    refused_for(stack, version),
+                    ["services linked to sandboxes"],
+                    "{version:?}"
+                );
+            }
+            assert!(refused_for(stack, Some(NEXT_RELEASE)).is_empty());
+        }
+        // A sandbox without links or link entries is delivered as before.
+        let plain = sandbox(
+            false,
+            Some(alien_core::EgressPolicy::Allow {
+                allow: vec!["example.com".into()],
+            }),
+        );
+        assert!(refused_for(&plain, Some("3.3.70")).is_empty());
+        assert!(refused_for(&sandbox(false, None), None).is_empty());
     }
 
     #[test]
@@ -1051,7 +1137,13 @@ mod tests {
                 )
                 .build()
         };
-        for version in [None, Some("3.3.31"), Some("3.3.62"), Some("3.3.68"), Some("3.3.69")] {
+        for version in [
+            None,
+            Some("3.3.31"),
+            Some("3.3.62"),
+            Some("3.3.68"),
+            Some("3.3.69"),
+        ] {
             assert_eq!(
                 refused_for(&queue(true), version),
                 ["queue dead-letter targets"],

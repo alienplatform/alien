@@ -77,6 +77,7 @@ async fn every_provider_refuses_requested_policy_without_a_gateway_before_io() {
                         manager_url: value("http://127.0.0.1:1"),
                         sandbox_key: value("box"),
                         token_path: value(&token.path().display().to_string()),
+                        links: Default::default(),
                     },
                 )
                 .await

@@ -15,7 +15,7 @@ use tokio::sync::{watch, Semaphore};
 use crate::{
     error::{unavailable, ErrorData, Result},
     io::Counters,
-    policy::{check_addresses, PolicyExt, Target},
+    policy::{check_addresses, check_link_addresses, PolicyExt, Target},
     runtime::LiveGateway,
     token::Claims,
 };
@@ -47,6 +47,8 @@ struct Session {
     claims: Claims,
     target: Option<Target>,
     peer: Option<IpAddr>,
+    /// Id of the declared link the session reached, if any.
+    link: Option<String>,
     counters: Arc<Counters>,
     cancel: watch::Sender<Option<&'static str>>,
 }
@@ -121,6 +123,7 @@ impl Connections {
                 claims,
                 target,
                 peer: None,
+                link: None,
                 counters,
                 cancel,
             },
@@ -192,16 +195,34 @@ impl Connections {
                         _ => None,
                     };
                     for session in sessions {
-                        let policy_allowed = policy.as_ref().is_some_and(|policy| {
-                            session
-                                .target
-                                .as_ref()
-                                .is_none_or(|target| policy.permits(target))
+                        // A linked session stays open only while the current configuration
+                        // still declares the same link for its target and the policy keeps it.
+                        let link = session.link.as_ref().and_then(|id| {
+                            let gateway = gateway.as_ref()?;
+                            let target = session.target.as_ref()?;
+                            gateway
+                                .config
+                                .link(&identity.0, &target.host, target.port)
+                                .filter(|link| &link.id == id)
                         });
-                        let address_allowed = session.peer.is_none_or(|address| {
-                            gateway.as_ref().is_some_and(|gateway| {
-                                check_addresses(&[address], &gateway.config.denied_ranges).is_ok()
-                            })
+                        let policy_allowed =
+                            policy
+                                .as_ref()
+                                .is_some_and(|policy| match (&session.link, link) {
+                                    (Some(_), Some(link)) => policy.allows_link(&link.id),
+                                    (Some(_), None) => false,
+                                    (None, _) => session
+                                        .target
+                                        .as_ref()
+                                        .is_none_or(|target| policy.permits(target)),
+                                });
+                        let address_allowed = session.peer.is_none_or(|address| match link {
+                            Some(link) => check_link_addresses(&[address], link).is_ok(),
+                            None => gateway.as_ref().is_some_and(|gateway| {
+                                session.link.is_none()
+                                    && check_addresses(&[address], &gateway.config.denied_ranges)
+                                        .is_ok()
+                            }),
                         });
                         if !policy_allowed || !address_allowed {
                             session
@@ -231,7 +252,7 @@ impl Connections {
 }
 impl IdentityPermit {
     /// Retain the actual checked peer for live address-range revocation, including named targets.
-    pub fn record_peer(&self, address: IpAddr) -> Result<()> {
+    pub fn record_peer(&self, address: IpAddr, link: Option<String>) -> Result<()> {
         let mut identities = self
             .registry
             .identities
@@ -242,6 +263,7 @@ impl IdentityPermit {
             .and_then(|group| group.sessions.get_mut(&self.id))
             .ok_or_else(|| AlienError::new(unavailable("connection registration missing")))?;
         session.peer = Some(address);
+        session.link = link;
         Ok(())
     }
 }

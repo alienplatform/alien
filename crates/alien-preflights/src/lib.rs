@@ -407,6 +407,7 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(
             compile_time::sandbox_platform_support::SandboxPlatformSupportCheck,
         ));
+        registry.add_compile_time_check(Box::new(compile_time::sandbox_links::SandboxLinksCheck));
         registry.add_compile_time_check(Box::new(
             compile_time::sandbox_grants_placeable::SandboxGrantsPlaceableCheck,
         ));

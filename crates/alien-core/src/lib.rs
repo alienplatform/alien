@@ -59,6 +59,7 @@ pub mod sandbox_egress;
 pub mod sandbox_identity;
 pub mod sandbox_image;
 pub mod sandbox_image_permissions;
+pub mod sandbox_links;
 pub mod sandbox_setup_inputs;
 pub mod sandbox_setup_parity;
 pub mod sandbox_signal;

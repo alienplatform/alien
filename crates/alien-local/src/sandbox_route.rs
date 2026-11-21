@@ -20,7 +20,9 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
 use crate::error::{ErrorData, Result};
-use crate::sandbox_manager::{LocalSandboxManager, SandboxOutput, SandboxSessionConfig};
+use crate::sandbox_manager::{
+    LocalSandboxManager, SandboxEgressMode, SandboxOutput, SandboxSessionConfig,
+};
 use alien_error::{AlienError, IntoAlienError};
 
 /// Bearer token file for one sandbox, inside the deployment state directory.
@@ -196,6 +198,14 @@ impl SandboxRoute {
         previous: Option<&str>,
     ) -> Result<Self> {
         let routes = ROUTES.get_or_init(|| Mutex::new(HashMap::new()));
+
+        // The template's links also reach the sessions already running, through their gateway.
+        let links = if template.egress == SandboxEgressMode::Allow {
+            template.links.clone()
+        } else {
+            Vec::new()
+        };
+        manager.apply_links(sandbox, &links).await?;
 
         {
             let serving = routes.lock().expect("no panic holds this lock");

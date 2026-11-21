@@ -689,6 +689,20 @@ impl SandboxHandle {
             .map_err(map_alien_error)
     }
 
+    /// Internal URL of linked service `id` on `port`, as this sandbox resource's commands reach
+    /// it through the egress gateway, or `null` when the resource does not link `id` or the
+    /// service does not serve `port`.
+    #[napi]
+    pub fn link_url(&self, id: String, port: u32) -> napi::Result<Option<String>> {
+        let port = u16::try_from(port).map_err(|_| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("port {port} is not a valid TCP port"),
+            )
+        })?;
+        Ok(self.inner.link_url(&id, port))
+    }
+
     /// Resumes a paused sandbox. Requires the `pauseResume` capability.
     #[napi]
     pub async fn resume(&self, sandbox_id: String) -> napi::Result<()> {
