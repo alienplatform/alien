@@ -218,7 +218,7 @@ pub(crate) const EXTENSIONS: Feature = feature(
 );
 pub(crate) const GCP_SANDBOX_INTERNET: Feature = feature(
     "internet egress for GCP sandboxes",
-    "3.3.71",
+    "3.3.72",
     Action::Refuse,
     "the setup-created gateway's binding carries the port sandboxes dial, which older Operators reject, and they have no GCP gateway to enforce the rules",
 );
