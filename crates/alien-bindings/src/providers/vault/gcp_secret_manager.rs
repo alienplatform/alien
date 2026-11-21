@@ -1,6 +1,6 @@
 use crate::error::{ErrorData, Result};
 use crate::traits::SecretPresence;
-use alien_error::{Context, ContextError};
+use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::secret_manager::{
     AddSecretVersionRequest, AutomaticReplication, Replication, ReplicationPolicy, Secret,
     SecretManagerApi, SecretManagerClient, SecretPayload, SecretVersionState,
@@ -265,6 +265,75 @@ impl crate::traits::Vault for GcpSecretManagerVault {
                 resource_id: None,
             })),
         }
+    }
+
+    /// Creates the secret resource, which fails when one by this name exists, then writes its
+    /// first version. An existing secret is left unchanged.
+    async fn create_secret(&self, secret_name: &str, value: &str) -> Result<()> {
+        let secret_resource = self.secret_resource_name(secret_name);
+        let full_secret_name = self.full_secret_name(secret_name);
+        let replication = Replication::builder()
+            .replication_policy(ReplicationPolicy::Automatic(
+                AutomaticReplication::builder().build(),
+            ))
+            .build();
+        match self
+            .client
+            .create_secret(
+                full_secret_name.clone(),
+                Secret::builder().replication(replication).build(),
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                return Err(AlienError::new(ErrorData::VaultSecretAlreadyExists {
+                    vault: self.vault_prefix.clone(),
+                    secret_name: secret_name.to_string(),
+                }));
+            }
+            Err(e) => {
+                return Err(e.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create secret '{}'", secret_resource),
+                    resource_id: None,
+                }))
+            }
+        }
+        let request = AddSecretVersionRequest::builder()
+            .payload(
+                SecretPayload::builder()
+                    .data(base64_standard.encode(value))
+                    .build(),
+            )
+            .build();
+        let mut last_error = None;
+        for attempt in 0..3u64 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(100 * attempt)).await;
+            }
+            match self
+                .client
+                .add_secret_version(full_secret_name.clone(), request.clone())
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) => last_error = Some(e),
+            }
+        }
+        Err(last_error
+            .expect("the loop ran")
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to add the first version to secret '{}'",
+                    secret_resource
+                ),
+                resource_id: None,
+            }))
     }
 
     /// Delete a secret

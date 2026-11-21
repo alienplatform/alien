@@ -33,8 +33,8 @@ pub use gcp::{
     GcpBuildImportData, GcpComputeClusterImportData, GcpKeyImportData, GcpKvImportData,
     GcpMemorystoreImportData, GcpNetworkImportData, GcpPostgresImportData, GcpQueueImportData,
     GcpRemoteBindingsImportData, GcpRemoteStackManagementImportData, GcpSandboxImportData,
-    GcpServiceAccountImportData, GcpServiceActivationImportData, GcpStorageImportData,
-    GcpVaultImportData, GcpWorkerImportData,
+    GcpSandboxNetwork, GcpServiceAccountImportData, GcpServiceActivationImportData,
+    GcpStorageImportData, GcpVaultImportData, GcpWorkerImportData,
 };
 pub use kubernetes_cluster::{
     AzureApplicationGatewayForContainersBootstrap, KubernetesClusterImportData,

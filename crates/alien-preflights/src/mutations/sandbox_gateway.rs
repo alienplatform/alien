@@ -31,7 +31,7 @@ impl StackMutation for SandboxGatewayMutation {
     fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
         matches!(
             state.platform,
-            Platform::Aws | Platform::Kubernetes | Platform::Azure
+            Platform::Aws | Platform::Kubernetes | Platform::Azure | Platform::Gcp
         ) && stack.resources().any(|(_, entry)| {
             entry
                 .config

@@ -261,6 +261,25 @@ pub struct EgressControlConfig {
     /// Whether the sandbox may reach the public internet
     #[serde(skip_serializing_if = "Option::is_none")]
     pub internet_access: Option<bool>,
+    /// Full resource path of the customer VPC network attachment (`projects/{project}/regions/
+    /// {region}/networkAttachments/{name}`) whose subnet the sandbox's egress enters the VPC
+    /// through. The short name form has not been shown to work. Setting it, together with
+    /// `ingressControlConfig`, places the project's sandbox tenant on Private Service Connect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_attachment: Option<String>,
+    /// Preview fields not modelled above, kept rather than dropped.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Private ingress (PSC-E) of a template: the sandbox router is reachable only through a Private
+/// Service Connect endpoint in the customer's VPC. The API refuses a network attachment without it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngressControlConfig {
+    /// Expose the sandbox router through Private Service Connect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_private_service_connect: Option<bool>,
     /// Preview fields not modelled above, kept rather than dropped.
     #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, serde_json::Value>,
@@ -282,6 +301,9 @@ pub struct SandboxEnvironmentTemplate {
     /// Egress policy
     #[serde(skip_serializing_if = "Option::is_none")]
     pub egress_control_config: Option<EgressControlConfig>,
+    /// Private ingress. Absent for a default-placement template; the API answers `null` for one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress_control_config: Option<IngressControlConfig>,
     /// Lifecycle state, e.g. `ACTIVE`; unset on a create request
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
@@ -320,6 +342,10 @@ pub struct ConnectionInfo {
     /// Short-lived proxy bearer token; never log it
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_token: Option<String>,
+    /// Private Service Connect service attachment a sandbox with private ingress is reached
+    /// through. One serves every sandbox of the tenant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_attachment: Option<String>,
 }
 
 impl Debug for ConnectionInfo {
@@ -330,6 +356,7 @@ impl Debug for ConnectionInfo {
                 "routing_token",
                 &self.routing_token.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("service_attachment", &self.service_attachment)
             .finish()
     }
 }
@@ -1813,6 +1840,7 @@ mod tests {
         let info = ConnectionInfo {
             load_balancer_hostname: Some("host".to_string()),
             routing_token: Some("super-secret-token".to_string()),
+            service_attachment: None,
         };
         let rendered = format!("{info:?}");
         assert!(!rendered.contains("super-secret-token"), "{rendered}");
@@ -1848,8 +1876,10 @@ mod tests {
                 }),
                 egress_control_config: Some(EgressControlConfig {
                     internet_access: Some(true),
+                    network_attachment: None,
                     extra: serde_json::Map::new(),
                 }),
+                ingress_control_config: None,
                 state: None,
                 extra: serde_json::Map::new(),
             }

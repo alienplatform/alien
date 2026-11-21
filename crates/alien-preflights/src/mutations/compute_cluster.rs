@@ -214,11 +214,11 @@ impl StackMutation for ComputeClusterMutation {
             return true;
         }
 
-        // On Azure the managed egress gateway is two VMs that setup creates; its Container is
+        // On Azure and GCP the managed egress gateway is two VMs that setup creates; its Container is
         // only the declaration of the gateway image and needs no cluster.
         let has_containers = stack.resources.iter().any(|(id, entry)| {
             entry.config.resource_type().as_ref() == "container"
-                && !(stack_state.platform == Platform::Azure
+                && !(matches!(stack_state.platform, Platform::Azure | Platform::Gcp)
                     && alien_core::sandbox_egress::is_managed_gateway(stack, id))
         });
         // Also fire for daemons that reference a managed compute cluster on cloud
