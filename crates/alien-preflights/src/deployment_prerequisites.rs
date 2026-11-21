@@ -362,15 +362,15 @@ fn is_cloud_platform(platform: Platform) -> bool {
     matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
 }
 
-/// Containers that need a managed container backend. On GCP the managed egress gateway is a
-/// declaration only: setup runs it on its own VMs, so it needs no backend.
+/// Containers that need a managed container backend. On GCP and Azure the managed egress gateway
+/// is a declaration only: setup runs it on its own VMs, so it needs no backend.
 fn containers_requiring_backend(stack: &Stack, platform: Platform) -> Vec<String> {
     stack
         .resources()
         .filter(|(resource_id, entry)| {
             (entry.config.downcast_ref::<Container>().is_some()
                 || entry.config.downcast_ref::<ComputeCluster>().is_some())
-                && !(platform == Platform::Gcp
+                && !(matches!(platform, Platform::Gcp | Platform::Azure)
                     && alien_core::sandbox_egress::is_managed_gateway(stack, resource_id))
         })
         .map(|(resource_id, _)| resource_id.clone())
@@ -1971,40 +1971,38 @@ mod tests {
         assert!(result.success);
     }
 
-    /// On GCP setup runs the gateway on its own VMs: its declaration needs no container backend,
-    /// while any application container beside it still does. Azure is unchanged.
+    /// On GCP and Azure setup runs the gateway on its own VMs: its declaration needs no container
+    /// backend, while any application container beside it still does.
     #[tokio::test]
-    async fn managed_container_backend_exempts_the_gcp_gateway_declaration_only() {
+    async fn managed_container_backend_exempts_the_gcp_gateway_declaration() {
+        assert_gateway_declaration_needs_no_backend(Platform::Gcp).await;
+    }
+
+    #[tokio::test]
+    async fn managed_container_backend_exempts_the_azure_gateway_declaration() {
+        assert_gateway_declaration_needs_no_backend(Platform::Azure).await;
+    }
+
+    async fn assert_gateway_declaration_needs_no_backend(platform: Platform) {
         let config = deployment_config();
         let check = ManagedContainerBackendRequiredCheck;
-        let gcp = prepared(
-            sandbox_stack(alien_core::SandboxEgress::Internet),
-            Platform::Gcp,
-        )
-        .await;
-        assert!(gcp
+        let stack = prepared(sandbox_stack(alien_core::SandboxEgress::Internet), platform).await;
+        assert!(stack
             .resources
             .contains_key(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID));
-        assert!(!check.should_run(&gcp, &stack_state(Platform::Gcp), &config));
+        assert!(!check.should_run(&stack, &stack_state(platform), &config));
 
-        let mut with_app = gcp.clone();
+        let mut with_app = stack.clone();
         with_app
             .resources
             .insert("api".to_string(), create_container_entry("api"));
-        assert!(check.should_run(&with_app, &stack_state(Platform::Gcp), &config));
+        assert!(check.should_run(&with_app, &stack_state(platform), &config));
         let result = check
-            .check(&with_app, &stack_state(Platform::Gcp), &config)
+            .check(&with_app, &stack_state(platform), &config)
             .await
             .unwrap();
         assert!(!result.success);
         assert!(result.errors[0].contains("Found container resources: api."));
-
-        let azure = prepared(
-            sandbox_stack(alien_core::SandboxEgress::Internet),
-            Platform::Azure,
-        )
-        .await;
-        assert!(check.should_run(&azure, &stack_state(Platform::Azure), &config));
     }
 
     #[tokio::test]
