@@ -53,6 +53,7 @@ NO_SETUP_CHECK = {
     "crates/alien-operator/src/self_update.rs": "comment",
     "crates/alien-preflights/src/compatibility/frozen_resources_unchanged.rs": "error text",
     "crates/alien-signing/src/release.rs": "comment",
+    "crates/alien-terraform/tests/erase_vault_data.rs": "Terraform state fixture",
     "crates/alien-terraform/tests/generator/k8s_overlay_tests.rs": "asserts on generated text",
     "crates/alien-test/README.md": "describes the command",
     "crates/alien-test/src/cleanup.rs": "uninstalls",

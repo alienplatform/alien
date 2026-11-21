@@ -46,6 +46,8 @@ pub trait SsmApi: Send + Sync + std::fmt::Debug {
     async fn put_parameter(&self, request: PutParameterRequest) -> Result<PutParameterResponse>;
     async fn get_parameter(&self, request: GetParameterRequest) -> Result<GetParameterResponse>;
     async fn delete_parameter(&self, name: &str) -> Result<()>;
+    /// Adds tags to an existing parameter (`AddTagsToResource`).
+    async fn add_parameter_tags(&self, name: &str, tags: Vec<SsmTag>) -> Result<()>;
     async fn get_parameters(&self, request: GetParametersRequest) -> Result<GetParametersResponse>;
     async fn describe_parameters(
         &self,
@@ -114,6 +116,25 @@ impl SsmClient {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.send_json_retrying(
+            target,
+            body,
+            operation,
+            resource,
+            crate::aws::aws_request_utils::is_transient_json_error,
+        )
+        .await
+    }
+
+    /// Like `send_json`, retrying only the errors for which `retry_when` is true.
+    async fn send_json_retrying<T: DeserializeOwned + Send + 'static>(
+        &self,
+        target: &str,
+        body: String,
+        operation: &str,
+        resource: &str,
+        retry_when: fn(&alien_error::AlienError<ErrorData>) -> bool,
+    ) -> Result<T> {
         self.credentials.ensure_fresh().await?;
         let url = self.get_base_url();
 
@@ -126,8 +147,12 @@ impl SsmClient {
             .content_sha256(&body)
             .body(body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+        let result = crate::aws::aws_request_utils::sign_send_json_retrying_when(
+            builder,
+            &self.sign_config(),
+            retry_when,
+        )
+        .await;
 
         // Parameters and secrets travel in these bodies, in both directions.
         alien_client_core::redact_secret_bodies(Self::map_result(
@@ -299,8 +324,22 @@ impl SsmApi for SsmClient {
                 ),
             },
         )?;
-        self.send_json("PutParameter", body, "PutParameter", &request.name)
-            .await
+        // A create (no overwrite) that SSM accepted and whose answer was lost would fail on the
+        // retry as "already exists", so it is only sent again when SSM rate-limited it.
+        let retry_when: fn(&alien_error::AlienError<ErrorData>) -> bool =
+            if request.overwrite == Some(true) {
+                crate::aws::aws_request_utils::is_transient_json_error
+            } else {
+                crate::aws::aws_request_utils::is_json_throttling
+            };
+        self.send_json_retrying(
+            "PutParameter",
+            body,
+            "PutParameter",
+            &request.name,
+            retry_when,
+        )
+        .await
     }
 
     async fn get_parameter(&self, request: GetParameterRequest) -> Result<GetParameterResponse> {
@@ -328,6 +367,33 @@ impl SsmApi for SsmClient {
         // DeleteParameter returns an empty response on success
         let _: serde_json::Value = self
             .send_json("DeleteParameter", body, "DeleteParameter", name)
+            .await?;
+        Ok(())
+    }
+
+    async fn add_parameter_tags(&self, name: &str, tags: Vec<SsmTag>) -> Result<()> {
+        let request = AddTagsToResourceRequest {
+            resource_type: "Parameter".to_string(),
+            resource_id: name.to_string(),
+            tags,
+        };
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize AddTagsToResourceRequest for '{}'",
+                    name
+                ),
+            },
+        )?;
+        let _: serde_json::Value = self
+            // A refusal (the identity may not add tags) is final; only transient errors retry.
+            .send_json_retrying(
+                "AddTagsToResource",
+                body,
+                "AddTagsToResource",
+                name,
+                crate::aws::aws_request_utils::is_transient_json_error,
+            )
             .await?;
         Ok(())
     }
@@ -499,6 +565,15 @@ pub struct GetParameterRequest {
 pub struct GetParameterResponse {
     /// The parameter information.
     pub parameter: Option<Parameter>,
+}
+
+/// Request to add tags to a parameter.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct AddTagsToResourceRequest {
+    resource_type: String,
+    resource_id: String,
+    tags: Vec<SsmTag>,
 }
 
 /// Request to delete a parameter.
@@ -888,4 +963,61 @@ pub struct CloudWatchOutputConfig {
     pub cloud_watch_log_group_name: Option<String>,
     /// Whether CloudWatch output is enabled.
     pub cloud_watch_output_enabled: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ServiceOverrides;
+    use alien_core::{AwsClientConfig, AwsCredentials};
+    use httpmock::prelude::*;
+    use std::collections::HashMap;
+
+    fn client(server: &MockServer) -> SsmClient {
+        let config = AwsClientConfig {
+            account_id: "111122223333".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access-key".to_string(),
+                secret_access_key: "test-secret-key".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(ServiceOverrides {
+                endpoints: HashMap::from([("ssm".to_string(), server.base_url())]),
+            }),
+        };
+        SsmClient::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(config),
+        )
+    }
+
+    /// A write SSM rejected for a reason that will not change is sent once, not retried.
+    #[tokio::test]
+    async fn a_non_retryable_error_is_sent_once() {
+        let server = MockServer::start_async().await;
+        let put = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("X-Amz-Target", "AmazonSSM.PutParameter");
+                then.status(400).json_body(serde_json::json!({
+                    "__type": "AccessDeniedException",
+                    "message": "not allowed"
+                }));
+            })
+            .await;
+        let request = PutParameterRequest::builder()
+            .name("app-secrets-key".to_string())
+            .value("v".to_string())
+            .parameter_type("SecureString".to_string())
+            .overwrite(true)
+            .build();
+
+        let _error = client(&server)
+            .put_parameter(request)
+            .await
+            .expect_err("the refusal is returned");
+
+        put.assert_hits(1);
+    }
 }

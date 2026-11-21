@@ -35,7 +35,7 @@ const OLDEST_OPERATOR: &str = "3.3.31";
 /// (`.github/scripts/bump-next-release.sh`); CI fails when it is not newer than
 /// the latest tag. Feature gates always carry a literal version: for a feature
 /// not yet released, write this value, never the constant itself.
-pub(crate) const NEXT_RELEASE: &str = "3.3.71";
+pub(crate) const NEXT_RELEASE: &str = "3.3.72";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Action {

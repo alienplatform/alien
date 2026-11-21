@@ -446,6 +446,9 @@ pub(crate) fn render_terraform_module(
     let mut shared_locals: IndexMap<String, Expression> = IndexMap::new();
     let mut gated = crate::gating::GatedAddresses::default();
     let mut deployer_secrets_vault_binding: Option<Expression> = None;
+    // Vaults this module sets up on a Kubernetes target, for the erase helper. A vault the
+    // installer binds to infrastructure of their own never reaches the emit loop.
+    let mut module_vault_ids: Vec<(String, String)> = Vec::new();
     // The chart's `infrastructure` entries for resources this module creates.
     let mut chart_infrastructure: Vec<(Option<String>, String, Expression)> = Vec::new();
     // Resources this module doesn't create: the installer supplies their bindings.
@@ -567,6 +570,14 @@ pub(crate) fn render_terraform_module(
         let local_contributions = std::mem::take(&mut fragment.locals);
         shared_locals.extend(local_contributions);
         per_resource.insert(resource_id.clone(), fragment);
+        if target.is_kubernetes()
+            && resource_type.as_ref() == alien_core::Vault::RESOURCE_TYPE.as_ref()
+        {
+            module_vault_ids.push((
+                resource_id.to_string(),
+                labels.get(resource_id).cloned().unwrap_or_default(),
+            ));
+        }
 
         if resource_id.as_str() == alien_core::DEPLOYER_SECRETS_VAULT_ID {
             deployer_secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
@@ -937,6 +948,18 @@ pub(crate) fn render_terraform_module(
         );
     }
 
+    let has_erase_vault_helper = target.is_kubernetes() && !module_vault_ids.is_empty();
+    if has_erase_vault_helper {
+        files.insert(
+            "erase-vault-data.json".into(),
+            erase_vault_data_config(target, &module_vault_ids)?,
+        );
+        files.insert(
+            "erase-vault-data.py".into(),
+            include_str!("templates/erase-vault-data.py").to_string(),
+        );
+    }
+
     if emits_azure_kv_tables {
         files.insert("import-kv-tables.py".into(), import_kv_tables_helper()?);
     }
@@ -1042,6 +1065,7 @@ pub(crate) fn render_terraform_module(
             emits_azapi_resource,
             emits_azure_kv_tables,
             profile,
+            has_erase_vault_helper,
         ),
     );
 
@@ -1089,6 +1113,12 @@ pub(crate) fn render_terraform_module(
             if let Some(readme) = files.get_mut("README.md") {
                 readme.push_str(include_str!("templates/retained-data-s3-notifications.md"));
             }
+        }
+    }
+
+    if has_erase_vault_helper {
+        if let Some(readme) = files.get_mut("README.md") {
+            readme.push_str(&erase_vault_data_readme(target));
         }
     }
 
@@ -6285,6 +6315,7 @@ fn readme_md(
     emits_azapi_resource: bool,
     emits_azure_kv_tables: bool,
     profile: alien_core::SetupConfigurationProfile,
+    erase_vault_helper: bool,
 ) -> String {
     let protected = stack_settings.signing.is_some();
     let required_env = if protected {
@@ -6418,6 +6449,7 @@ fn readme_md(
             readme_kubernetes_operations(
                 target,
                 installs_helm_chart(registration.is_some(), helm_install.is_some()),
+                erase_vault_helper,
             )
         })
         .unwrap_or_default();
@@ -6683,15 +6715,19 @@ fn readme_kubernetes_inputs(
     )
 }
 
-fn readme_kubernetes_operations(target: TerraformTarget, helm_values_output: bool) -> String {
+fn readme_kubernetes_operations(
+    target: TerraformTarget,
+    helm_values_output: bool,
+    erase_vault_helper: bool,
+) -> String {
     match target {
         TerraformTarget::Eks => format!(
             "{}{}",
             "\n\n## Kubernetes Operations\n\nBefore inspecting the cluster, verify that your AWS CLI points at the target account, not the management account:\n\n```bash\nAWS_PROFILE=<target-profile> aws sts get-caller-identity\nterraform output kubernetes_update_kubeconfig_command\nAWS_PROFILE=<target-profile> aws eks update-kubeconfig --region $(terraform output -raw deployment_region) --name $(terraform output -raw kubernetes_kube_context) --alias $(terraform output -raw kubernetes_kube_context)\nkubectl --context $(terraform output -raw kubernetes_kube_context) -n $(terraform output -raw kubernetes_namespace) get pods,pvc,svc,ingress,events\n```\n\nTreat live `kubectl patch` changes as diagnostics only. Durable fixes belong in the generated package, Helm values, or deployment configuration.",
-            readme_kubernetes_destroy_order(helm_values_output),
+            readme_kubernetes_destroy_order(helm_values_output, erase_vault_helper),
         ),
         TerraformTarget::Gke | TerraformTarget::Aks => {
-            readme_kubernetes_destroy_order(helm_values_output)
+            readme_kubernetes_destroy_order(helm_values_output, erase_vault_helper)
         }
         _ => String::new(),
     }
@@ -6703,21 +6739,39 @@ fn installs_helm_chart(has_registration: bool, has_helm_install: bool) -> bool {
     has_registration && has_helm_install
 }
 
-fn readme_kubernetes_destroy_order(helm_values_output: bool) -> String {
+fn readme_kubernetes_destroy_order(helm_values_output: bool, erase_vault_helper: bool) -> String {
     let recover_step_2 = if helm_values_output {
         "Install the chart again with the values from `terraform output -raw helm_values` (the output is sensitive) and `--set management.enrollmentCode=<code> --set management.audience=<audience>`. If those values set `management.token`, add `--set-string management.token=`. If they set `management.enrollmentCodeSecret.name`, add `--set-string management.enrollmentCodeSecret.name=`. The chart refuses either one next to a new code. Run this `helm` command yourself, also when Terraform installs the chart (`helm_install_enabled = true`)."
     } else {
         "Install the chart again with the same values you used for the original install, plus `--set management.enrollmentCode=<code> --set management.audience=<audience>`. If those values set `management.token`, add `--set-string management.token=`. If they set `management.enrollmentCodeSecret.name`, add `--set-string management.enrollmentCodeSecret.name=`. The chart refuses either one next to a new code."
     };
-    let (install_branch, steps_intro) = if helm_values_output {
+    let (erase_hint, erase_step, helm_step, destroy_step) = if erase_vault_helper {
         (
-            "If `helm_install_enabled = true`, delete the deployment first and wait until its status is `teardown-required`, `retention-required` or `deleted`. Then run `terraform destroy`. It uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure. If the deployment still has retained data, `terraform destroy` can stop first and name this order; it removes nothing when it stops.\n\n",
-            "If `helm_install_enabled = false`, follow these steps in order:\n\n",
+            " If you chose to erase data, run `erase-vault-data.py` after the delete finishes and before `terraform destroy` (see the vault values section of this README).",
+            "2. If you chose to erase data, run `erase-vault-data.py` after the delete finishes and before `terraform destroy`: preview first, then `--confirm` (see the vault values section of this README).\n",
+            "3. Uninstall the Helm release yourself and confirm the cleanup job completed. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.\n",
+            "4. Run `terraform destroy`.",
         )
     } else {
-        ("", "Follow these steps in order:\n\n")
+        (
+            "",
+            "",
+            "2. Uninstall the Helm release yourself and confirm the cleanup job completed. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.\n",
+            "3. Run `terraform destroy`.",
+        )
     };
-    format!("\n\n## Destroy Order\n\nDeleting the deployment needs the Operator running: the Operator removes the runtime resources. Never uninstall the Operator Helm release before the deployment reaches `teardown-required`, `retention-required` or `deleted`, or the delete stays `delete-pending` and cannot finish.\n\n{install_branch}{steps_intro}1. Delete the deployment and wait until its status is `teardown-required`, `retention-required` or `deleted`.\n2. Uninstall the Helm release yourself and confirm the cleanup job completed. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.\n3. Run `terraform destroy`.\n\nIf you uninstalled the chart before the delete finished, the deployment stays `delete-pending`, because no Operator is running to finish it. To recover:\n\n1. Ask your vendor for a new enrollment code for the deployment and the manager audience that comes with it. The code works once and expires after one hour.\n2. {recover_step_2}\n3. Wait until the Operator enrolls, finishes the delete and the status is `teardown-required`, `retention-required` or `deleted`. The new code replaces the old Operator identity, so an Operator that is still running stops working.\n4. Continue in the order above: `helm uninstall`, then the retained data detach if this README has that section, then `terraform destroy`.")
+    let (install_branch, steps_intro) = if helm_values_output {
+        (
+            format!("If `helm_install_enabled = true`, delete the deployment first and wait until its status is `teardown-required`, `retention-required` or `deleted`. Then run `terraform destroy`. It uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure. If the deployment still has retained data, `terraform destroy` can stop first and name this order; it removes nothing when it stops.{erase_hint}\n\n"),
+            "If `helm_install_enabled = false`, follow these steps in order:\n\n".to_string(),
+        )
+    } else {
+        (
+            String::new(),
+            "Follow these steps in order:\n\n".to_string(),
+        )
+    };
+    format!("\n\n## Destroy Order\n\nDeleting the deployment needs the Operator running: the Operator removes the runtime resources. Never uninstall the Operator Helm release before the deployment reaches `teardown-required`, `retention-required` or `deleted`, or the delete stays `delete-pending` and cannot finish.\n\n{install_branch}{steps_intro}1. Delete the deployment and wait until its status is `teardown-required`, `retention-required` or `deleted`.\n{erase_step}{helm_step}{destroy_step}\n\nIf you uninstalled the chart before the delete finished, the deployment stays `delete-pending`, because no Operator is running to finish it. To recover:\n\n1. Ask your vendor for a new enrollment code for the deployment and the manager audience that comes with it. The code works once and expires after one hour.\n2. {recover_step_2}\n3. Wait until the Operator enrolls, finishes the delete and the status is `teardown-required`, `retention-required` or `deleted`. The new code replaces the old Operator identity, so an Operator that is still running stops working.\n4. Continue in the order above: `helm uninstall`, then the retained data detach if this README has that section, then `terraform destroy`.")
 }
 
 /// The marker in the Ids this package gives each notifying bucket's queue configurations,
@@ -6756,6 +6810,71 @@ fn import_kv_tables_helper() -> Result<String> {
         crate::emitters::azure::kv::TABLE_API_VERSION,
         1,
     ))
+}
+
+/// The README section for the erase helper. On Azure the Key Vault is retained setup data and the
+/// helper never deletes it; it deletes (and, without purge protection, purges) the secrets in it.
+fn erase_vault_data_readme(target: TerraformTarget) -> String {
+    let (store, cloud, cli, scope, account, checked) = match target {
+        TerraformTarget::Gke => (
+            "GCP Secret Manager",
+            "GCP",
+            "`gcloud`",
+            "--project <project>",
+            "project and account",
+            "GCP project",
+        ),
+        TerraformTarget::Eks => (
+            "AWS SSM Parameter Store",
+            "AWS",
+            "`aws`",
+            "--region <region>",
+            "account",
+            "AWS account and region",
+        ),
+        _ => return include_str!("templates/erase-vault-data-azure.md").to_string(),
+    };
+    include_str!("templates/erase-vault-data.md")
+        .replace("{{STORE}}", store)
+        .replace("{{CLOUD}}", cloud)
+        .replace("{{CLI}}", cli)
+        .replace("{{SCOPE}}", scope)
+        .replace("{{ACCOUNT}}", account)
+        .replace("{{CHECKED}}", checked)
+}
+
+/// `erase-vault-data.json`: what the erase helper may touch. Only the vaults this module sets up,
+/// by id; the helper adds the installed resource prefix to get each vault's name prefix. On Azure
+/// each vault is its own Key Vault, so the file also records the exact Terraform address of it.
+fn erase_vault_data_config(target: TerraformTarget, vaults: &[(String, String)]) -> Result<String> {
+    let cloud = match target {
+        TerraformTarget::Gke => "gcp",
+        TerraformTarget::Eks => "aws",
+        _ => "azure",
+    };
+    let vault_ids: Vec<&String> = vaults
+        .iter()
+        .map(|(id, _)| id)
+        .filter(|id| id.as_str() != alien_core::DEPLOYER_SECRETS_VAULT_ID)
+        .collect();
+    let mut config = serde_json::json!({
+        "version": 1,
+        "cloud": cloud,
+        "vault_ids": vault_ids,
+        "deployer_secrets_vault_id": alien_core::DEPLOYER_SECRETS_VAULT_ID,
+    });
+    if cloud == "azure" {
+        config["azure_key_vaults"] = vaults
+            .iter()
+            .map(|(id, label)| (id.clone(), format!("azurerm_key_vault.{label}").into()))
+            .collect::<serde_json::Map<String, serde_json::Value>>()
+            .into();
+    }
+    serde_json::to_string_pretty(&config)
+        .into_alien_error()
+        .context(ErrorData::GenericError {
+            message: "Could not serialize the erase helper configuration".into(),
+        })
 }
 
 /// The retention helper. Packages that retain an S3 bucket notification also remove the
