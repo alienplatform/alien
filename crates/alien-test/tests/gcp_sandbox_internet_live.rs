@@ -893,27 +893,37 @@ async fn probe_private_ingress(
         )
         .await
         .map_err(|error| anyhow::anyhow!("probe create: {error}"))?;
+    // A listing carries no routing token; read each listed sandbox to get it.
     let deadline = Instant::now() + Duration::from_secs(300);
     let (name, routing, attachment) = loop {
         let found = platform
             .list_sandboxes_by_display_names(&engine, &[display.clone()])
             .await
             .map_err(|error| anyhow::anyhow!("probe list: {error}"))?;
-        let ready = found.into_iter().find_map(|sandbox| {
-            let info = sandbox.connection_info.clone()?;
-            let token = info.routing_token.clone()?;
-            (sandbox.state.as_deref() == Some("STATE_RUNNING")).then(|| {
+        let mut ready = None;
+        for listed in found {
+            let Some(name) = listed.name.clone() else {
+                continue;
+            };
+            let id = name.rsplit('/').next().unwrap_or_default().to_string();
+            let Ok(sandbox) = platform.get_sandbox(&engine, &id).await else {
+                continue;
+            };
+            let Some(info) = sandbox.connection_info.clone() else {
+                continue;
+            };
+            let Some(token) = info.routing_token.clone() else {
+                continue;
+            };
+            if sandbox.state.as_deref() == Some("STATE_RUNNING") {
                 let raw = serde_json::to_value(&info).unwrap_or_default();
-                (
-                    sandbox.name.clone().unwrap_or_default(),
-                    token,
-                    raw["serviceAttachment"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string(),
-                )
-            })
-        });
+                let attachment = raw["serviceAttachment"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                ready = Some((name, token, attachment));
+            }
+        }
         if let Some(ready) = ready {
             break ready;
         }
@@ -945,17 +955,37 @@ async fn probe_private_ingress(
             .map_err(|error| format!("sign: {error}"))
         }
     };
-    let mut variants: Vec<(&str, Result<String, String>)> = vec![
-        (
-            "jwt aud=aiplatform",
-            jwt("https://aiplatform.googleapis.com/".into()).await,
-        ),
-        ("jwt aud=endpoint url", jwt(endpoint_url).await),
-        ("jwt aud=service attachment", jwt(attachment.clone()).await),
-        ("jwt aud=sandbox resource name", jwt(name.clone()).await),
-    ];
+    // Six fresh JWTs of the shape the SDK signs: whether the edge refuses only some, and each
+    // one's signing key id (`kid`, public), tell an intermittent refusal from a wrong shape.
+    let mut variants: Vec<(String, Result<String, String>)> = Vec::new();
+    for attempt in 1..=6 {
+        let signed = jwt("https://aiplatform.googleapis.com/".into()).await;
+        let kid = signed
+            .as_ref()
+            .ok()
+            .and_then(|token| token.split('.').next())
+            .and_then(|header| {
+                use base64::Engine as _;
+                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .decode(header)
+                    .ok()
+            })
+            .and_then(|header| serde_json::from_slice::<serde_json::Value>(&header).ok())
+            .and_then(|header| header["kid"].as_str().map(str::to_string))
+            .unwrap_or_default();
+        variants.push((format!("jwt aud=aiplatform #{attempt} kid={kid}"), signed));
+    }
+    variants.push(("jwt aud=endpoint url".to_string(), jwt(endpoint_url).await));
     variants.push((
-        "signer access token",
+        "jwt aud=service attachment".to_string(),
+        jwt(attachment.clone()).await,
+    ));
+    variants.push((
+        "jwt aud=sandbox resource name".to_string(),
+        jwt(name.clone()).await,
+    ));
+    variants.push((
+        "signer access token".to_string(),
         iam.generate_access_token(
             signer.clone(),
             GenerateAccessTokenRequest {
@@ -969,7 +999,7 @@ async fn probe_private_ingress(
         .map_err(|error| format!("access token: {error}")),
     ));
     variants.push((
-        "signer id token aud=aiplatform",
+        "signer id token aud=aiplatform".to_string(),
         iam.generate_id_token(
             signer.clone(),
             GenerateIdTokenRequest {
