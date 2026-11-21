@@ -78,11 +78,22 @@ commands do not receive their bindings.
 | AWS | supported | The container's overlay name `<id>.svc`, within the compute cluster's overlay range. Only the gateway gets a path to the linked container's ports. |
 | Local (`alien dev`) | supported | `<id>.svc` on the local deployment network (see below). |
 | Google Cloud | not available yet | Planning refuses links with this reason. |
-| Azure | not available in this release | Planning refuses links; Azure internet sandboxes are not available in this release either. |
+| Azure | not available yet | Planning refuses links for now. When they become available, the linked container gets an internal load balancer with a static private address in the deployment's network, and the gateway reaches the service at that one address. |
 
 Planning also refuses links while the deployment installs a gateway image that predates them.
 Stacks without links are unchanged on every platform: the same templates, the same gateway
 configuration and the same bindings.
+
+### Azure
+
+When links are available on Azure, these limits apply:
+
+- A linked container has exactly one port and no public endpoint: it joins one load balancer
+  through one host port. Planning refuses other containers with the reason.
+- Adding a link to a running container rolls its replicas onto one shared host port, then
+  creates the load balancer.
+- Removing the last link stops the gateway from reaching the container at once. The idle
+  internal load balancer stays until the container is replaced.
 
 ### Local development
 
