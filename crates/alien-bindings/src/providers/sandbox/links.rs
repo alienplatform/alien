@@ -22,6 +22,7 @@ use alien_error::AlienError;
 #[derive(Debug)]
 pub struct LinkedSandbox {
     inner: Arc<dyn Sandbox>,
+    links: BTreeMap<String, alien_core::bindings::ContainerBinding>,
     env: BTreeMap<String, String>,
 }
 
@@ -45,12 +46,27 @@ pub fn with_links(
         })?;
         env.insert(env_var, value);
     }
-    Ok(Arc::new(LinkedSandbox { inner, env }))
+    Ok(Arc::new(LinkedSandbox {
+        inner,
+        links: links.clone(),
+        env,
+    }))
 }
 
 impl LinkedSandbox {
     fn deliver(&self, operation: &str, request: RunCommandRequest) -> Result<RunCommandRequest> {
         deliver(&self.env, operation, request)
+    }
+}
+
+fn link_url(
+    links: &BTreeMap<String, alien_core::bindings::ContainerBinding>,
+    id: &str,
+    port: u16,
+) -> Option<String> {
+    match links.get(id)?.internal_urls().get(&port)? {
+        alien_core::bindings::BindingValue::Value(url) => Some(url.clone()),
+        _ => None,
     }
 }
 
@@ -163,6 +179,9 @@ impl Sandbox for LinkedSandbox {
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
         self.inner.terminate(sandbox_id).await
     }
+    fn link_url(&self, id: &str, port: u16) -> Option<String> {
+        link_url(&self.links, id, port)
+    }
     /// The provider underneath, so a caller that downcasts to it still finds it.
     fn as_any(&self) -> &dyn std::any::Any {
         self.inner.as_any()
@@ -225,6 +244,16 @@ mod tests {
         let binding: ContainerBinding =
             serde_json::from_str(&delivered.env["ALIEN_API_BINDING"]).unwrap();
         assert_eq!(binding, api()["api"]);
+    }
+
+    #[test]
+    fn the_parent_reads_a_link_url_by_id_and_port() {
+        assert_eq!(
+            link_url(&api(), "api", 8080).as_deref(),
+            Some("http://api.ns.svc.cluster.local:8080")
+        );
+        assert_eq!(link_url(&api(), "api", 9090), None);
+        assert_eq!(link_url(&api(), "other", 8080), None);
     }
 
     #[test]

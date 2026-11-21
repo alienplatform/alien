@@ -1742,6 +1742,14 @@ pub trait Sandbox: Binding {
     async fn terminate(&self, sandbox_id: &str) -> Result<()>;
 
     /// Get a reference to this object as `Any` for dynamic casting
+    /// Internal URL of linked service `id` on `port`, as the sandbox's commands reach it
+    /// through the egress gateway. `None` when this sandbox resource does not link `id` or the
+    /// service does not serve `port`. The same binding reaches every command as
+    /// `ALIEN_<ID>_BINDING`.
+    fn link_url(&self, _id: &str, _port: u16) -> Option<String> {
+        None
+    }
+
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
