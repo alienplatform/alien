@@ -519,10 +519,16 @@ pub(crate) async fn publish_aws_config(
     // A sandbox that does not own the entry publishes nothing and forgets its digest: the owner
     // may rewrite the entry, so the digest says nothing about what is stored if this sandbox
     // becomes the owner again.
-    let Some(value) = gateway_config(ctx, key, &facts.vpc_cidrs, aws_gateway_peers()) else {
+    let Some(mut value) = gateway_config(ctx, key, &facts.vpc_cidrs, aws_gateway_peers()) else {
         *published = None;
         return Ok(());
     };
+    // Omitted without links, so a stack without them publishes the same configuration.
+    let links =
+        alien_core::sandbox_links::cluster_gateway_links(ctx.desired_stack, ctx.resource_prefix);
+    if !links.is_empty() {
+        value["links"] = serde_json::to_value(links).expect("links serialize");
+    }
     if !*replica_secret_ready
         && gateway_runs(
             ctx,
