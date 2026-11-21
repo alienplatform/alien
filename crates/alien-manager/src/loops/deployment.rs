@@ -2086,7 +2086,12 @@ impl RunnerConfigSources<'_> {
             if config.input_values.is_empty() {
                 config.input_values = deployment.input_values.clone();
             }
-            config.installed_setup_fingerprint = deployment.setup_fingerprint.clone();
+            // Only the v1 fingerprint is comparable with the release's
+            // `setupFingerprints` value; any other version is ignored.
+            config.installed_setup_fingerprint = match deployment.setup_fingerprint_version {
+                Some(1) => deployment.setup_fingerprint.clone(),
+                _ => None,
+            };
             config.manager_url = Some(self.config.base_url());
             config.native_image_host = native_image_host;
             config
@@ -2130,7 +2135,10 @@ impl RunnerConfigSources<'_> {
                 deletion_policy: Default::default(),
                 release_statements: None,
                 signed_config: None,
-                installed_setup_fingerprint: deployment.setup_fingerprint.clone(),
+                installed_setup_fingerprint: match deployment.setup_fingerprint_version {
+                    Some(1) => deployment.setup_fingerprint.clone(),
+                    _ => None,
+                },
             }
         };
         Ok(config)
