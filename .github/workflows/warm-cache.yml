@@ -16,7 +16,14 @@ concurrency:
 
 jobs:
   warm:
-    name: Warm Rust cache
+    name: Warm Rust cache (${{ matrix.part }})
+    # The check and the test binaries build on separate runners. Building the test binaries after
+    # the full check in one job took the 16 GB runner to its memory limit while the large test
+    # binaries linked, and the job was killed (exit 143).
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [check, test binaries]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
@@ -74,9 +81,11 @@ jobs:
         run: pnpm exec turbo run build --filter=@alienplatform/sdk --filter=@alienplatform/commands
 
       - name: Check every package and target
+        if: matrix.part == 'check'
         run: cargo check --workspace --all-targets --features alien-manager/openapi,alien-bindings/platform-sdk --locked
 
       - name: Build the test binaries
+        if: matrix.part == 'test binaries'
         env:
           CARGO_PROFILE_DEV_DEBUG: "0"
         run: cargo test --workspace --no-run --features alien-manager/openapi,alien-bindings/platform-sdk,alien-client-core/no-retry-delay --locked
