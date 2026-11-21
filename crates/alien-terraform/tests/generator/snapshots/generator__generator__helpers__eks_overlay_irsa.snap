@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 262
 expression: buf
 ---
 === versions.tf ===
@@ -967,13 +966,18 @@ Treat live `kubectl patch` changes as diagnostics only. Durable fixes belong in 
 
 Deleting the deployment needs the Operator running: the Operator removes the runtime resources. Never uninstall the Operator Helm release before the deployment reaches `teardown-required`, `retention-required` or `deleted`, or the delete stays `delete-pending` and cannot finish.
 
-If `helm_install_enabled = true`, delete the deployment first and wait until its status is `teardown-required`, `retention-required` or `deleted`. Then run `terraform destroy`. It uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure. If the deployment still has retained data, `terraform destroy` can stop first and name this order; it removes nothing when it stops.
-
-If `helm_install_enabled = false`, follow these steps in order:
+Follow these steps in order:
 
 1. Delete the deployment and wait until its status is `teardown-required`, `retention-required` or `deleted`.
 2. Uninstall the Helm release yourself and confirm the cleanup job completed. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.
 3. Run `terraform destroy`.
+
+If you uninstalled the chart before the delete finished, the deployment stays `delete-pending`, because no Operator is running to finish it. To recover:
+
+1. Ask your vendor for a new enrollment code for the deployment and the manager audience that comes with it. The code works once and expires after one hour.
+2. Install the chart again with the same values you used for the original install, plus `--set management.enrollmentCode=<code> --set management.audience=<audience>`. If those values set `management.token`, add `--set-string management.token=`. If they set `management.enrollmentCodeSecret.name`, add `--set-string management.enrollmentCodeSecret.name=`. The chart refuses either one next to a new code.
+3. Wait until the Operator enrolls, finishes the delete and the status is `teardown-required`, `retention-required` or `deleted`. The new code replaces the old Operator identity, so an Operator that is still running stops working.
+4. Continue in the order above: `helm uninstall`, then the retained data detach if this README has that section, then `terraform destroy`.
 ## Retain AWS setup data during uninstall
 
 Setup-owned S3 buckets, DynamoDB tables, ECR repositories, ElastiCache Redis and Aurora PostgreSQL are protected against replacement and destroy. This includes empty resources. Their KMS keys survive with them. For Redis that is the replication group, its AUTH-token secret, and the subnet group, parameter group and security group AWS will not delete while the group exists. For Aurora that is the cluster (with its managed password secret), the writer instance, and the same three supporting resources. When the setup created the network, its VPC and private subnets are kept too, because the retained network interfaces live there; an existing or default VPC is never touched. Application and management IAM grants, alarms, gateways, route tables and security-group rules are removed during teardown. Aurora keeps no automatic final snapshot: take one yourself before erasing it. Apply this package to the existing installation before teardown; older state may still allow destructive deletion. Removing data declarations from an installed configuration is not supported by this helper. `prevent_destroy` protection disappears when a block is removed; keep the installed declarations until whole-setup detachment. Never bypass protection to force a replacement.

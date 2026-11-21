@@ -728,8 +728,11 @@ pub(crate) fn render_terraform_module(
     let network_vars = network_extra_variables(stack, &labels);
     let include_kubernetes_provider = target.is_kubernetes()
         && (has_resource_type(&per_resource, "kubernetes_manifest") || product_remote_operator);
-    let include_helm_provider =
-        target.is_kubernetes() && options.registration.is_some() && options.helm_install.is_some();
+    let include_helm_provider = target.is_kubernetes()
+        && installs_helm_chart(
+            options.registration.is_some(),
+            options.helm_install.is_some(),
+        );
     // All three azapi resource kinds: the sandbox group is a plain `azapi_resource`, and a
     // missing provider block fails at `terraform init` rather than at plan, which reads as a
     // broken package rather than a missing declaration.
@@ -3520,7 +3523,8 @@ fn variables_body(
             )));
         }
     }
-    if target.is_kubernetes() && registration.is_some() && helm_install.is_some() {
+    if target.is_kubernetes() && installs_helm_chart(registration.is_some(), helm_install.is_some())
+    {
         blocks.push(nested(bool_variable_block(
             "helm_install_enabled",
             "Whether this module installs the runtime Helm chart after registering the deployment.",
@@ -6410,7 +6414,12 @@ fn readme_md(
     }
     let kubernetes_operations = target
         .is_kubernetes()
-        .then(|| readme_kubernetes_operations(target))
+        .then(|| {
+            readme_kubernetes_operations(
+                target,
+                installs_helm_chart(registration.is_some(), helm_install.is_some()),
+            )
+        })
         .unwrap_or_default();
     // The two things an Azure approver stops on — a preview API version and a validation check
     // turned off — documented in the artifact, not only in the source. Keyed off what was
@@ -6642,8 +6651,8 @@ fn readme_kubernetes_inputs(
         }
         _ => "",
     };
-    let guard_note = " If the deployment still has retained data, `terraform destroy` stops first, before removing anything, and names the order to follow. First delete the deployment and wait until its status is `teardown-required`, `retention-required` or `deleted`; this removes the data the runtime owns, erased or kept as you chose. The delete needs the Operator running, so with `helm_install_enabled = false` uninstall the chart only after that status. Data this setup owns stays protected from `terraform destroy`: when this README has a section on retaining setup data during uninstall, detach that data as it describes, then run `terraform destroy` again (after the chart is uninstalled, when you installed it yourself), and erase the detached data afterwards by its recorded IDs if you chose to erase it. A setup installed from an older module needs one `terraform apply` with this module before it has that protection; until then destroy removes the Helm release first and can stop on retained data after the Operator is gone; if destroy was run first, contact your vendor.";
-    let helm = if has_registration && helm_install.is_some() {
+    let guard_note = " If the deployment still has retained data, `terraform destroy` stops first, before removing anything, and names the order to follow. First delete the deployment and wait until its status is `teardown-required`, `retention-required` or `deleted`; this removes the data the runtime owns, erased or kept as you chose. The delete needs the Operator running, so with `helm_install_enabled = false` uninstall the chart only after that status. Data this setup owns stays protected from `terraform destroy`: when this README has a section on retaining setup data during uninstall, detach that data as it describes, then run `terraform destroy` again (after the chart is uninstalled, when you installed it yourself), and erase the detached data afterwards by its recorded IDs if you chose to erase it. A setup installed from an older module needs one `terraform apply` with this module before it has that protection; until then destroy removes the Helm release first and can stop on retained data after the Operator is gone; if destroy was run first, see \"If you uninstalled the chart before the delete finished\" in the Destroy Order section.";
+    let helm = if installs_helm_chart(has_registration, helm_install.is_some()) {
         if product_remote_operator {
             let collector_token_requirement = if requires_remote_operator_collector_token {
                 "`remote_operator_collector_token` is required before Terraform can create or update the enabled Remote Operator credentials Secret because this chart includes log collection."
@@ -6674,22 +6683,41 @@ fn readme_kubernetes_inputs(
     )
 }
 
-fn readme_kubernetes_operations(target: TerraformTarget) -> String {
+fn readme_kubernetes_operations(target: TerraformTarget, helm_values_output: bool) -> String {
     match target {
         TerraformTarget::Eks => format!(
             "{}{}",
             "\n\n## Kubernetes Operations\n\nBefore inspecting the cluster, verify that your AWS CLI points at the target account, not the management account:\n\n```bash\nAWS_PROFILE=<target-profile> aws sts get-caller-identity\nterraform output kubernetes_update_kubeconfig_command\nAWS_PROFILE=<target-profile> aws eks update-kubeconfig --region $(terraform output -raw deployment_region) --name $(terraform output -raw kubernetes_kube_context) --alias $(terraform output -raw kubernetes_kube_context)\nkubectl --context $(terraform output -raw kubernetes_kube_context) -n $(terraform output -raw kubernetes_namespace) get pods,pvc,svc,ingress,events\n```\n\nTreat live `kubectl patch` changes as diagnostics only. Durable fixes belong in the generated package, Helm values, or deployment configuration.",
-            readme_kubernetes_destroy_order(),
+            readme_kubernetes_destroy_order(helm_values_output),
         ),
         TerraformTarget::Gke | TerraformTarget::Aks => {
-            readme_kubernetes_destroy_order().to_string()
+            readme_kubernetes_destroy_order(helm_values_output)
         }
         _ => String::new(),
     }
 }
 
-fn readme_kubernetes_destroy_order() -> &'static str {
-    "\n\n## Destroy Order\n\nDeleting the deployment needs the Operator running: the Operator removes the runtime resources. Never uninstall the Operator Helm release before the deployment reaches `teardown-required`, `retention-required` or `deleted`, or the delete stays `delete-pending` and cannot finish.\n\nIf `helm_install_enabled = true`, delete the deployment first and wait until its status is `teardown-required`, `retention-required` or `deleted`. Then run `terraform destroy`. It uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure. If the deployment still has retained data, `terraform destroy` can stop first and name this order; it removes nothing when it stops.\n\nIf `helm_install_enabled = false`, follow these steps in order:\n\n1. Delete the deployment and wait until its status is `teardown-required`, `retention-required` or `deleted`.\n2. Uninstall the Helm release yourself and confirm the cleanup job completed. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.\n3. Run `terraform destroy`."
+/// Whether the module registers the deployment and installs the Helm chart. It adds the
+/// `helm_install_enabled` input and the `helm_values` output exactly then.
+fn installs_helm_chart(has_registration: bool, has_helm_install: bool) -> bool {
+    has_registration && has_helm_install
+}
+
+fn readme_kubernetes_destroy_order(helm_values_output: bool) -> String {
+    let recover_step_2 = if helm_values_output {
+        "Install the chart again with the values from `terraform output -raw helm_values` (the output is sensitive) and `--set management.enrollmentCode=<code> --set management.audience=<audience>`. If those values set `management.token`, add `--set-string management.token=`. If they set `management.enrollmentCodeSecret.name`, add `--set-string management.enrollmentCodeSecret.name=`. The chart refuses either one next to a new code. Run this `helm` command yourself, also when Terraform installs the chart (`helm_install_enabled = true`)."
+    } else {
+        "Install the chart again with the same values you used for the original install, plus `--set management.enrollmentCode=<code> --set management.audience=<audience>`. If those values set `management.token`, add `--set-string management.token=`. If they set `management.enrollmentCodeSecret.name`, add `--set-string management.enrollmentCodeSecret.name=`. The chart refuses either one next to a new code."
+    };
+    let (install_branch, steps_intro) = if helm_values_output {
+        (
+            "If `helm_install_enabled = true`, delete the deployment first and wait until its status is `teardown-required`, `retention-required` or `deleted`. Then run `terraform destroy`. It uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure. If the deployment still has retained data, `terraform destroy` can stop first and name this order; it removes nothing when it stops.\n\n",
+            "If `helm_install_enabled = false`, follow these steps in order:\n\n",
+        )
+    } else {
+        ("", "Follow these steps in order:\n\n")
+    };
+    format!("\n\n## Destroy Order\n\nDeleting the deployment needs the Operator running: the Operator removes the runtime resources. Never uninstall the Operator Helm release before the deployment reaches `teardown-required`, `retention-required` or `deleted`, or the delete stays `delete-pending` and cannot finish.\n\n{install_branch}{steps_intro}1. Delete the deployment and wait until its status is `teardown-required`, `retention-required` or `deleted`.\n2. Uninstall the Helm release yourself and confirm the cleanup job completed. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.\n3. Run `terraform destroy`.\n\nIf you uninstalled the chart before the delete finished, the deployment stays `delete-pending`, because no Operator is running to finish it. To recover:\n\n1. Ask your vendor for a new enrollment code for the deployment and the manager audience that comes with it. The code works once and expires after one hour.\n2. {recover_step_2}\n3. Wait until the Operator enrolls, finishes the delete and the status is `teardown-required`, `retention-required` or `deleted`. The new code replaces the old Operator identity, so an Operator that is still running stops working.\n4. Continue in the order above: `helm uninstall`, then the retained data detach if this README has that section, then `terraform destroy`.")
 }
 
 /// The marker in the Ids this package gives each notifying bucket's queue configurations,

@@ -833,13 +833,18 @@ This module exposes `deployment_management_config`, `deployment_stack_settings`,
 
 Deleting the deployment needs the Operator running: the Operator removes the runtime resources. Never uninstall the Operator Helm release before the deployment reaches `teardown-required`, `retention-required` or `deleted`, or the delete stays `delete-pending` and cannot finish.
 
-If `helm_install_enabled = true`, delete the deployment first and wait until its status is `teardown-required`, `retention-required` or `deleted`. Then run `terraform destroy`. It uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure. If the deployment still has retained data, `terraform destroy` can stop first and name this order; it removes nothing when it stops.
-
-If `helm_install_enabled = false`, follow these steps in order:
+Follow these steps in order:
 
 1. Delete the deployment and wait until its status is `teardown-required`, `retention-required` or `deleted`.
 2. Uninstall the Helm release yourself and confirm the cleanup job completed. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.
 3. Run `terraform destroy`.
+
+If you uninstalled the chart before the delete finished, the deployment stays `delete-pending`, because no Operator is running to finish it. To recover:
+
+1. Ask your vendor for a new enrollment code for the deployment and the manager audience that comes with it. The code works once and expires after one hour.
+2. Install the chart again with the same values you used for the original install, plus `--set management.enrollmentCode=<code> --set management.audience=<audience>`. If those values set `management.token`, add `--set-string management.token=`. If they set `management.enrollmentCodeSecret.name`, add `--set-string management.enrollmentCodeSecret.name=`. The chart refuses either one next to a new code.
+3. Wait until the Operator enrolls, finishes the delete and the status is `teardown-required`, `retention-required` or `deleted`. The new code replaces the old Operator identity, so an Operator that is still running stops working.
+4. Continue in the order above: `helm uninstall`, then the retained data detach if this README has that section, then `terraform destroy`.
 ## Retain GCP setup data during uninstall
 
 Setup-owned Cloud Storage buckets, Firestore databases, Artifact Registry repositories, Memorystore Redis instances and Cloud SQL PostgreSQL databases are protected against replacement and destroy, including empty resources. Memorystore retention includes its service-connection policy, which GCP will not delete while the instance exists. Cloud SQL retention includes the SQL database, login, password secret and version. Encryption keys, their key rings and Cloud Storage's service-agent encryption grant survive with encrypted buckets. Application, public-read and management IAM grants remain managed for removal.
