@@ -612,6 +612,7 @@ impl AwsSandboxController {
                 .expect("key initialized above");
             self.egress = Some(alien_core::bindings::SandboxEgressBinding::Gateway(
                 alien_core::bindings::SandboxEgressGateway {
+                    links: Default::default(),
                     container: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
                     audience: format!("{}/{}", ctx.resource_prefix, config.id),
                     signing_key: alien_core::bindings::SandboxEgressSigningKey {

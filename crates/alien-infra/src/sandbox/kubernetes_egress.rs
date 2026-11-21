@@ -149,6 +149,7 @@ pub(super) async fn configure(
         }
     }
     Ok(SandboxEgressBinding::Gateway(SandboxEgressGateway {
+        links: link_bindings(ctx, sandbox, namespace)?,
         container: SANDBOX_EGRESS_GATEWAY_ID.into(),
         audience: format!("{}/{}", ctx.resource_prefix, sandbox.id),
         signing_key: SandboxEgressSigningKey {
@@ -184,6 +185,43 @@ pub(super) fn link_host(
         "{}.{namespace}.svc.{domain}",
         kubernetes_resource_name(&ctx.resource_prefix, id)
     ))
+}
+
+/// The bindings `sandbox`'s commands receive for its links: each linked Container's internal
+/// URLs under the name the gateway accepts. Derived from the stack, never from the target's
+/// outputs, so a sandbox does not wait on a service that may itself link it.
+fn link_bindings(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+    namespace: &str,
+) -> Result<BTreeMap<String, alien_core::bindings::ContainerBinding>> {
+    use alien_core::bindings::{BindingValue, ContainerBinding, KubernetesContainerBinding};
+    let mut bindings = BTreeMap::new();
+    for link in &sandbox.gateway_links {
+        let Ok(ports) = alien_core::sandbox_links::internal_ports(ctx.desired_stack, &link.id)
+        else {
+            continue;
+        };
+        let host = link_host(ctx, namespace, &link.id)?;
+        bindings.insert(
+            link.id.clone(),
+            ContainerBinding::Kubernetes(KubernetesContainerBinding {
+                name: BindingValue::value(link.id.clone()),
+                namespace: BindingValue::value(namespace.to_string()),
+                service_name: BindingValue::value(kubernetes_resource_name(
+                    &ctx.resource_prefix,
+                    &link.id,
+                )),
+                service_port: BindingValue::value(ports[0]),
+                public_url: None,
+                internal_urls: ports
+                    .iter()
+                    .map(|&port| (port, BindingValue::value(format!("http://{host}:{port}"))))
+                    .collect(),
+            }),
+        );
+    }
+    Ok(bindings)
 }
 
 /// Each internet sandbox's links, keyed by its audience. A linked Service's name may resolve
@@ -1103,6 +1141,22 @@ mod tests {
         for link in links.values().flatten() {
             link.validate().unwrap();
         }
+        // The sandbox's commands get the same name the gateway accepts.
+        let (linking, _) = linking_stack();
+        let bindings = link_bindings(&ctx, &linking, "test-ns").unwrap();
+        let alien_core::bindings::ContainerBinding::Kubernetes(api) = &bindings["api"] else {
+            panic!("Kubernetes binding")
+        };
+        assert_eq!(
+            api.internal_urls[&9090],
+            alien_core::bindings::BindingValue::value(
+                "http://api.test-ns.svc.corp.example:9090".to_string()
+            )
+        );
+        assert!(api.public_url.is_none());
+        assert!(link_bindings(&ctx, &internet_sandbox("other"), "test-ns")
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

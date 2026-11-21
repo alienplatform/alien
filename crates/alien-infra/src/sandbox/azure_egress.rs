@@ -65,6 +65,7 @@ pub(super) async fn initialize_key(
     }
     let key = public_key.as_ref().expect("key initialized above");
     Ok(SandboxEgressBinding::Gateway(SandboxEgressGateway {
+        links: Default::default(),
         container: sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
         audience: format!("{}/{}", ctx.resource_prefix, config.id),
         signing_key: SandboxEgressSigningKey {

@@ -2084,8 +2084,11 @@ impl BindingsProviderApi for BindingsProvider {
         } else {
             None
         };
+        let links = gateway
+            .map(|config| config.links.clone())
+            .unwrap_or_default();
 
-        match binding {
+        let sandbox = match binding {
             #[cfg(feature = "local")]
             SandboxBinding::Local(local_binding) => {
                 use crate::providers::sandbox::local::LocalSandbox;
@@ -2259,7 +2262,8 @@ impl BindingsProviderApi for BindingsProvider {
                     );
                 }
 
-                Ok(Arc::new(sandbox))
+                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(sandbox);
+                Ok(sandbox)
             }
             #[cfg(feature = "aws")]
             SandboxBinding::Aws(aws_binding) => {
@@ -2401,7 +2405,8 @@ impl BindingsProviderApi for BindingsProvider {
             SandboxBinding::Kubernetes(_) => Err(not_built("kubernetes")),
             #[cfg(not(feature = "local"))]
             SandboxBinding::Local(_) => Err(not_built("local")),
-        }
+        }?;
+        crate::providers::sandbox::links::with_links(sandbox, &links)
     }
 }
 

@@ -131,6 +131,11 @@ pub struct SandboxEgressGateway {
     /// replicates writes itself behind one admin address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replicas: Option<SandboxEgressReplicas>,
+    /// Bindings of the services this sandbox resource links, by resource id. Each carries the
+    /// service's internal URLs only, which the gateway reaches inside the deployment. Every
+    /// command a sandbox runs receives them as `ALIEN_<ID>_BINDING`. Omitted without links.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub links: std::collections::BTreeMap<String, super::ContainerBinding>,
 }
 
 /// Ready gateway replicas a policy write must reach.

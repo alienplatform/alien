@@ -36,6 +36,7 @@ pub mod kubernetes;
 pub mod local;
 
 pub(crate) mod egress;
+pub mod links;
 #[cfg(any(feature = "aws", feature = "gcp"))]
 mod refusal;
 
