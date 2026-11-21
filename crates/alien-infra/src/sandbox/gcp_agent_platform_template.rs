@@ -570,6 +570,11 @@ async fn check_project_placement(
     sandbox_id: &str,
     attachment: Option<&str>,
 ) -> Result<()> {
+    // While Google Cloud `internet` is not available no template asks for Private Service
+    // Connect, so a default-network template is created exactly as before, with no extra reads.
+    if attachment.is_none() && !alien_core::gcp_sandbox_gateway::internet_egress_available() {
+        return Ok(());
+    }
     let gcp_config = ctx.get_gcp_config()?;
     let wanted = if attachment.is_some() {
         Placement::PrivateServiceConnect
@@ -3086,6 +3091,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_default_sandbox_is_refused_before_the_template_in_a_psc_project() {
+        // A default template is checked against the project's placement once `internet` is
+        // available; before that nothing can have pinned a project to Private Service Connect.
+        let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
         use alien_gcp_clients::gcp::compute::{
             NetworkAttachment, NetworkAttachmentConnectedEndpoint,
         };
