@@ -30,7 +30,7 @@ pub const DEFAULT_PLACEMENT_IS_PERMANENT: &str = "this sandbox uses Google's def
      deleted. To use egress `internet` later, deploy to a new project.";
 
 /// Whether Google Cloud sandboxes may declare egress `internet`: the switch, or a test that
-/// turned it on for its own thread.
+/// turned it on for its own thread or its whole process.
 pub fn internet_egress_available() -> bool {
     INTERNET_EGRESS_AVAILABLE || test_switch::forced()
 }
@@ -38,13 +38,24 @@ pub fn internet_egress_available() -> bool {
 #[cfg(any(test, feature = "test-gcp-internet-egress"))]
 mod test_switch {
     use std::cell::Cell;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     thread_local! {
         static FORCED: Cell<bool> = const { Cell::new(false) };
     }
 
+    static FORCED_FOR_PROCESS: AtomicBool = AtomicBool::new(false);
+
     pub(super) fn forced() -> bool {
-        FORCED.with(Cell::get)
+        FORCED.with(Cell::get) || FORCED_FOR_PROCESS.load(Ordering::SeqCst)
+    }
+
+    /// Turns Google Cloud internet egress on for every thread of this process, for good: the
+    /// live test, whose build, manager and controllers run on the runtime's worker threads, plans
+    /// and deploys the stack the flipped release would. Never used by unit tests, which share a
+    /// process and must see the switch off.
+    pub fn enable_internet_egress_for_process() {
+        FORCED_FOR_PROCESS.store(true, Ordering::SeqCst);
     }
 
     /// Keeps the switch on for the current thread until it is dropped.
@@ -73,7 +84,9 @@ mod test_switch {
 }
 
 #[cfg(any(test, feature = "test-gcp-internet-egress"))]
-pub use test_switch::{enable_internet_egress_for_test, InternetEgressForTest};
+pub use test_switch::{
+    enable_internet_egress_for_process, enable_internet_egress_for_test, InternetEgressForTest,
+};
 
 /// Range of the attachment's own subnet. Sandbox traffic enters the VPC from addresses in it. A
 /// regular subnet of at least /28 that is not 100.64.0.0/20 or 240.0.0.0/4.
