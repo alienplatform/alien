@@ -362,11 +362,19 @@ fn is_cloud_platform(platform: Platform) -> bool {
     matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
 }
 
-fn stack_requires_managed_container_backend(stack: &Stack) -> bool {
-    stack.resources().any(|(_, entry)| {
-        entry.config.downcast_ref::<Container>().is_some()
-            || entry.config.downcast_ref::<ComputeCluster>().is_some()
-    })
+/// Containers that need a managed container backend. On GCP the managed egress gateway is a
+/// declaration only: setup runs it on its own VMs, so it needs no backend.
+fn containers_requiring_backend(stack: &Stack, platform: Platform) -> Vec<String> {
+    stack
+        .resources()
+        .filter(|(resource_id, entry)| {
+            (entry.config.downcast_ref::<Container>().is_some()
+                || entry.config.downcast_ref::<ComputeCluster>().is_some())
+                && !(platform == Platform::Gcp
+                    && alien_core::sandbox_egress::is_managed_gateway(stack, resource_id))
+        })
+        .map(|(resource_id, _)| resource_id.clone())
+        .collect()
 }
 
 /// Public HTTP containers whose domain Alien generates. Resources listed in
@@ -488,32 +496,21 @@ impl DeploymentPrerequisiteCheck for ManagedContainerBackendRequiredCheck {
         stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> bool {
-        is_cloud_platform(stack_state.platform) && stack_requires_managed_container_backend(stack)
+        is_cloud_platform(stack_state.platform)
+            && !containers_requiring_backend(stack, stack_state.platform).is_empty()
     }
 
     async fn check(
         &self,
         stack: &Stack,
-        _stack_state: &StackState,
+        stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<CheckResult> {
         if matches!(config.compute_backend, Some(ComputeBackend::Horizon(_))) {
             return Ok(CheckResult::success());
         }
 
-        let resources = stack
-            .resources()
-            .filter_map(|(resource_id, entry)| {
-                if entry.config.downcast_ref::<Container>().is_some()
-                    || entry.config.downcast_ref::<ComputeCluster>().is_some()
-                {
-                    Some(resource_id.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
+        let resources = containers_requiring_backend(stack, stack_state.platform).join(", ");
 
         Ok(CheckResult::failed(vec![format!(
             "Cloud container deployments require a managed container backend. \
@@ -1972,6 +1969,42 @@ mod tests {
             .unwrap();
 
         assert!(result.success);
+    }
+
+    /// On GCP setup runs the gateway on its own VMs: its declaration needs no container backend,
+    /// while any application container beside it still does. Azure is unchanged.
+    #[tokio::test]
+    async fn managed_container_backend_exempts_the_gcp_gateway_declaration_only() {
+        let config = deployment_config();
+        let check = ManagedContainerBackendRequiredCheck;
+        let gcp = prepared(
+            sandbox_stack(alien_core::SandboxEgress::Internet),
+            Platform::Gcp,
+        )
+        .await;
+        assert!(gcp
+            .resources
+            .contains_key(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID));
+        assert!(!check.should_run(&gcp, &stack_state(Platform::Gcp), &config));
+
+        let mut with_app = gcp.clone();
+        with_app
+            .resources
+            .insert("api".to_string(), create_container_entry("api"));
+        assert!(check.should_run(&with_app, &stack_state(Platform::Gcp), &config));
+        let result = check
+            .check(&with_app, &stack_state(Platform::Gcp), &config)
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.errors[0].contains("Found container resources: api."));
+
+        let azure = prepared(
+            sandbox_stack(alien_core::SandboxEgress::Internet),
+            Platform::Azure,
+        )
+        .await;
+        assert!(check.should_run(&azure, &stack_state(Platform::Azure), &config));
     }
 
     #[tokio::test]
