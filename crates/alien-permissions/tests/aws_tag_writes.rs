@@ -118,6 +118,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                             "arn:aws:iam::${awsAccountId}:instance-profile/",
                             "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/",
                             "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/",
+                            "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/",
                             "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:",
                             "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:",
                             "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:",
@@ -459,5 +460,30 @@ fn build_log_group_creation_comes_with_retention_on_the_deployment_groups() {
             Decision::NotAllowed,
             "{binding:?}: another deployment's"
         );
+    }
+}
+
+/// A vault value is marked with tags when it is created, and `PutParameter` with tags needs
+/// `ssm:AddTagsToResource`. The grant reaches the same parameters as the write, no more.
+#[test]
+fn vault_data_write_tags_exactly_the_parameters_it_writes() {
+    for target in [BindingTarget::Stack, BindingTarget::Resource] {
+        let policy = policy("vault/data-write", target);
+        let statement = |action: &str| {
+            let found = policy
+                .statement
+                .iter()
+                .filter(|statement| {
+                    statement.effect == "Allow" && statement.action.iter().any(|a| a == action)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(found.len(), 1, "{target}: {action}");
+            found[0]
+        };
+        let put = statement("ssm:PutParameter");
+        let tag = statement("ssm:AddTagsToResource");
+        assert_eq!(put.resource, tag.resource, "{target}");
+        assert_eq!(put.condition, tag.condition, "{target}");
+        assert!(!tag.resource.is_empty());
     }
 }
