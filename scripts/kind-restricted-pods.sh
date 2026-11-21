@@ -150,11 +150,19 @@ for example in "$root"/examples/*/; do
   name="$(basename "$example")"
   [ -f "$example/alien.ts" ] || continue
   # An example that imports an extension's `generated/` module (written by `alien extensions
-  # build`, not committed) cannot evaluate here. Skip it only when it declares no container or
-  # daemon, the only resources this check renders; otherwise fail rather than leave it unchecked.
+  # build`, not committed) cannot evaluate here. Only the examples named below are skipped, each
+  # read by hand to declare no container or daemon (the only resources this check renders). Any
+  # other such example fails the run rather than go unchecked; so does a listed one that comes to
+  # name a container or daemon in any form.
   if grep -qE "from \"\./[^\"]*/generated\"" "$example/alien.ts"; then
-    if grep -qE "alien\.(Container|Daemon)\b" "$example/alien.ts"; then
-      echo "example $name: imports a built extension and declares a container or daemon; this check cannot render it" >&2
+    case "$name" in
+      dataplane-with-extension) ;;
+      *)
+        echo "example $name: imports a built extension, so this check cannot render it; check its containers and daemons by hand and add it to the skip list" >&2
+        exit 1 ;;
+    esac
+    if grep -qE "\b(Container|Daemon)\b" "$example/alien.ts"; then
+      echo "example $name: is on the skip list but names a container or daemon; this check cannot render it" >&2
       exit 1
     fi
     echo "example $name: skipped, it imports a built extension and declares no container or daemon"
