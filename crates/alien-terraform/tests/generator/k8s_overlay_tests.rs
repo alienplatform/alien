@@ -3461,3 +3461,74 @@ fn the_modules_that_install_the_chart_are_formatted_and_valid() {
         }
     }
 }
+
+/// A Kubernetes module that sets up vaults carries the erase helper for exactly those vaults,
+/// and the README puts it between the delete and `terraform destroy`. Cloud modules and
+/// modules without a vault carry none.
+#[test]
+fn kubernetes_modules_with_vaults_carry_the_erase_helper_for_their_own_vaults() {
+    let stack = |with_vaults: bool| {
+        let mut builder = Stack::new("erase-helper".to_string()).add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        );
+        if with_vaults {
+            for id in ["secrets", "secrets-x", "deployer-secrets"] {
+                builder = builder.add(
+                    Vault::new(id.to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                );
+            }
+        }
+        builder.build()
+    };
+    for (target, cloud, store) in [
+        (TerraformTarget::Gke, "gcp", "GCP Secret Manager"),
+        (TerraformTarget::Eks, "aws", "AWS SSM Parameter Store"),
+        (TerraformTarget::Aks, "azure", "Key Vault Secrets Officer"),
+    ] {
+        let module = render(&stack(true), target, StackSettings::default());
+        let config: serde_json::Value =
+            serde_json::from_str(module.get("erase-vault-data.json").expect("config")).unwrap();
+        assert_eq!(
+            config,
+            serde_json::json!({
+                "version": 1,
+                "cloud": cloud,
+                "vault_ids": ["secrets", "secrets-x"],
+                "deployer_secrets_vault_id": "deployer-secrets",
+            }),
+            "{target:?}"
+        );
+        assert_eq!(
+            module.get("erase-vault-data.py").unwrap(),
+            include_str!("../../src/templates/erase-vault-data.py")
+        );
+        let readme = module.get("README.md").unwrap();
+        assert!(readme.contains(store), "{target:?}\n{readme}");
+        assert!(
+            readme.contains("run `erase-vault-data.py` after the delete finishes and before `terraform destroy`"),
+            "{target:?}"
+        );
+        assert!(readme.contains("--confirm"));
+        if target == TerraformTarget::Aks {
+            assert!(readme.contains("--include-deployer-secrets"));
+            assert!(readme.contains("purge_blocked_until"));
+            assert!(!readme.contains("never deletes any"));
+        } else {
+            assert!(readme.contains("--include-unmarked"));
+            assert!(readme.contains("Values written before this module version carry no marker"));
+        }
+
+        let without = render(&stack(false), target, StackSettings::default());
+        assert!(without.get("erase-vault-data.py").is_none(), "{target:?}");
+        assert!(!without
+            .get("README.md")
+            .unwrap()
+            .contains("erase-vault-data.py"));
+    }
+    for target in [TerraformTarget::Gcp, TerraformTarget::Aws] {
+        let module = render(&stack(true), target, StackSettings::default());
+        assert!(module.get("erase-vault-data.py").is_none(), "{target:?}");
+    }
+}

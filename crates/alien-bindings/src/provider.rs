@@ -1146,8 +1146,11 @@ impl BindingsProviderApi for BindingsProvider {
                         "Failed to extract vault_prefix from ParameterStore binding",
                     ))?;
 
-                let vault: Arc<dyn Vault> =
-                    Arc::new(AwsParameterStoreVault::new(client, vault_prefix));
+                let vault: Arc<dyn Vault> = Arc::new(AwsParameterStoreVault::new(
+                    client,
+                    vault_prefix,
+                    binding_name.to_string(),
+                ));
                 Ok(vault)
             }
             #[cfg(not(feature = "aws"))]
@@ -1224,6 +1227,7 @@ impl BindingsProviderApi for BindingsProvider {
                     client,
                     vault_prefix,
                     gcp_config.project_id.clone(),
+                    binding_name.to_string(),
                 ));
                 Ok(vault)
             }

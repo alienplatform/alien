@@ -46,6 +46,8 @@ pub trait SsmApi: Send + Sync + std::fmt::Debug {
     async fn put_parameter(&self, request: PutParameterRequest) -> Result<PutParameterResponse>;
     async fn get_parameter(&self, request: GetParameterRequest) -> Result<GetParameterResponse>;
     async fn delete_parameter(&self, name: &str) -> Result<()>;
+    /// Adds tags to an existing parameter (`AddTagsToResource`).
+    async fn add_parameter_tags(&self, name: &str, tags: Vec<SsmTag>) -> Result<()>;
     async fn get_parameters(&self, request: GetParametersRequest) -> Result<GetParametersResponse>;
     async fn describe_parameters(
         &self,
@@ -114,6 +116,19 @@ impl SsmClient {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.send_json_retrying(target, body, operation, resource, |_| true)
+            .await
+    }
+
+    /// Like `send_json`, retrying only the errors for which `retry_when` is true.
+    async fn send_json_retrying<T: DeserializeOwned + Send + 'static>(
+        &self,
+        target: &str,
+        body: String,
+        operation: &str,
+        resource: &str,
+        retry_when: fn(&alien_error::AlienError<ErrorData>) -> bool,
+    ) -> Result<T> {
         self.credentials.ensure_fresh().await?;
         let url = self.get_base_url();
 
@@ -127,7 +142,12 @@ impl SsmClient {
             .body(body.clone());
 
         let result =
-            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+            crate::aws::aws_request_utils::sign_send_json_retrying_when(
+                builder,
+                &self.sign_config(),
+                retry_when,
+            )
+            .await;
 
         // Parameters and secrets travel in these bodies, in both directions.
         alien_client_core::redact_secret_bodies(Self::map_result(
@@ -332,6 +352,33 @@ impl SsmApi for SsmClient {
         Ok(())
     }
 
+    async fn add_parameter_tags(&self, name: &str, tags: Vec<SsmTag>) -> Result<()> {
+        let request = AddTagsToResourceRequest {
+            resource_type: "Parameter".to_string(),
+            resource_id: name.to_string(),
+            tags,
+        };
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize AddTagsToResourceRequest for '{}'",
+                    name
+                ),
+            },
+        )?;
+        let _: serde_json::Value = self
+            // A refusal (the identity may not add tags) is final; only transient errors retry.
+            .send_json_retrying(
+                "AddTagsToResource",
+                body,
+                "AddTagsToResource",
+                name,
+                crate::aws::aws_request_utils::is_transient_json_error,
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn get_parameters(&self, request: GetParametersRequest) -> Result<GetParametersResponse> {
         let names_str = request.names.join(", ");
         let body = serde_json::to_string(&request).into_alien_error().context(
@@ -499,6 +546,15 @@ pub struct GetParameterRequest {
 pub struct GetParameterResponse {
     /// The parameter information.
     pub parameter: Option<Parameter>,
+}
+
+/// Request to add tags to a parameter.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct AddTagsToResourceRequest {
+    resource_type: String,
+    resource_id: String,
+    tags: Vec<SsmTag>,
 }
 
 /// Request to delete a parameter.
