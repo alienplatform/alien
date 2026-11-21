@@ -7,6 +7,11 @@
 //! earlier by-name comparison missed it. Drift is **recommended**: callers show it and offer the
 //! setup update; none pauses a release for it.
 
+#[cfg(feature = "aws")]
+mod boundary_audit;
+#[cfg(feature = "aws")]
+pub use boundary_audit::{hand_added_policies_under_new_boundary, HandAddedPolicy};
+
 use std::collections::BTreeMap;
 
 use alien_core::{

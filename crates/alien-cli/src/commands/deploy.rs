@@ -2607,11 +2607,22 @@ async fn deploy_task_with_environment(
         return Ok(());
     }
 
+    let mut boundary_note: Option<String> = None;
     if drift_offered {
         steps.println(&format!(
             "Setup is behind the current release:\n{}",
             describe_setup_drift(&setup_drift)
         ));
+        if direct_setup && platform == Platform::Aws {
+            if let (Some(aws), Some(state)) =
+                (client_config.aws_config(), installed_stack_state.as_ref())
+            {
+                boundary_note = hand_added_policy_note(aws, state).await;
+            }
+        }
+        if let Some(note) = boundary_note.as_deref() {
+            steps.println(note);
+        }
         if !args.yes {
             crate::interaction::InteractionMode::current(false).require_prompt(
                 "Setup is behind. Pass --yes to run the setup update without asking.",
@@ -3147,6 +3158,9 @@ async fn deploy_task_with_environment(
 
     drop(steps);
     println!("{}", success_line("Deployment is running."));
+    if let Some(note) = boundary_note.as_deref() {
+        println!("{}", dim_label(note));
+    }
     println!(
         "{} {} ({})",
         dim_label("Deployment"),
@@ -3649,6 +3663,19 @@ fn existing_deployment_plan(
             _ => {}
         }
     }
+    // A setup update this CLI ran on a direct setup that stopped part way leaves an installed
+    // deployment in an initial-setup status. It has no target release, so a first install would
+    // fail with "Target release required" and strand it: re-run the setup update.
+    if !platform_mode
+        && direct_setup
+        && has_installed_release
+        && matches!(
+            status,
+            DeploymentStatus::InitialSetup | DeploymentStatus::InitialSetupFailed
+        )
+    {
+        return ExistingDeploymentPlan::SetupUpdate { retry: true };
+    }
     if matches!(
         status,
         DeploymentStatus::Pending
@@ -3729,6 +3756,48 @@ fn installed_setup_drift(
     })
 }
 
+/// Names the hand-added policies on roles that this setup update puts under the permissions
+/// boundary, read with the credentials the setup run already uses. `None` when there are none.
+/// A denied read is said in one line and never blocks the update.
+async fn hand_added_policy_note(
+    aws: &alien_aws_clients::AwsClientConfig,
+    state: &alien_core::StackState,
+) -> Option<String> {
+    let credentials = match alien_aws_clients::AwsCredentialProvider::from_config(aws.clone()).await
+    {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            return Some(format!(
+                "Could not check the service-account roles for hand-added policies: {error}"
+            ))
+        }
+    };
+    let iam = alien_aws_clients::iam::IamClient::new(reqwest::Client::new(), credentials);
+    match alien_infra::hand_added_policies_under_new_boundary(&iam, state).await {
+        Err(reason) => Some(format!(
+            "Could not check the service-account roles for hand-added policies ({reason}); continuing."
+        )),
+        Ok(found) if found.is_empty() => None,
+        Ok(found) => {
+            let mut roles: Vec<(String, Vec<String>)> = Vec::new();
+            for item in found {
+                match roles.iter_mut().find(|(role, _)| *role == item.role) {
+                    Some((_, policies)) => policies.push(item.policy),
+                    None => roles.push((item.role, vec![item.policy])),
+                }
+            }
+            let list = roles
+                .iter()
+                .map(|(role, policies)| format!("{role}: {}", policies.join(", ")))
+                .collect::<Vec<_>>()
+                .join("; ");
+            Some(format!(
+                "These roles get a permissions boundary. Hand-added policies on them will stop granting anything outside it: {list}"
+            ))
+        }
+    }
+}
+
 /// One line per reason.
 fn describe_setup_drift(reasons: &[alien_core::SetupDriftReason]) -> String {
     reasons
@@ -3741,7 +3810,7 @@ fn describe_setup_drift(reasons: &[alien_core::SetupDriftReason]) -> String {
 /// Why a deployment with nothing to do is current.
 fn setup_current_note(direct_setup: bool) -> String {
     if direct_setup {
-        "Setup is current: the management permissions match this CLI and no flow log is missing."
+        "Setup is current: the recorded management permissions match this CLI and no flow log is recorded as missing. Changes made by hand in the cloud account are not checked."
             .to_string()
     } else {
         "Setup is current as far as this CLI can tell: no denied grant is recorded.".to_string()
@@ -5076,6 +5145,28 @@ mod tests {
             ),
             Runtime
         );
+    }
+
+    #[test]
+    fn a_direct_setup_update_that_stopped_part_way_is_retried_as_a_setup_update() {
+        use ExistingDeploymentPlan::*;
+        for status in [
+            DeploymentStatus::InitialSetup,
+            DeploymentStatus::InitialSetupFailed,
+        ] {
+            // Installed (has a release): setup update, not a first install without a target.
+            assert_eq!(
+                existing_deployment_plan(&status, None, false, true, true, false),
+                SetupUpdate { retry: true },
+                "{status:?}"
+            );
+            // Never installed: still a first install.
+            assert_eq!(
+                existing_deployment_plan(&status, None, false, false, true, false),
+                InitialSetup,
+                "{status:?}"
+            );
+        }
     }
 
     #[test]
