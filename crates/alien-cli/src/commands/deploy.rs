@@ -2607,22 +2607,30 @@ async fn deploy_task_with_environment(
         return Ok(());
     }
 
+    // Hand-added policies that go silent under the permissions boundary: listed before a
+    // drift-offered update asks, and on a retry of an interrupted setup update (which has no
+    // drift list but installs the same boundary).
     let mut boundary_note: Option<String> = None;
+    if direct_setup
+        && platform == Platform::Aws
+        && matches!(plan, ExistingDeploymentPlan::SetupUpdate { .. })
+    {
+        if let (Some(aws), Some(state)) =
+            (client_config.aws_config(), installed_stack_state.as_ref())
+        {
+            boundary_note = hand_added_policy_note(aws, state).await;
+        }
+    }
     if drift_offered {
         steps.println(&format!(
             "Setup is behind the current release:\n{}",
             describe_setup_drift(&setup_drift)
         ));
-        if direct_setup && platform == Platform::Aws {
-            if let (Some(aws), Some(state)) =
-                (client_config.aws_config(), installed_stack_state.as_ref())
-            {
-                boundary_note = hand_added_policy_note(aws, state).await;
-            }
-        }
-        if let Some(note) = boundary_note.as_deref() {
-            steps.println(note);
-        }
+    }
+    if let Some(note) = boundary_note.as_deref() {
+        steps.println(note);
+    }
+    if drift_offered {
         if !args.yes {
             crate::interaction::InteractionMode::current(false).require_prompt(
                 "Setup is behind. Pass --yes to run the setup update without asking.",
