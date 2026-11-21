@@ -58,6 +58,7 @@ use alien_gcp_clients::gcp::compute::{
     AttachedDisk, AttachedDiskInitializeParams, ComputeApi, ComputeClient, Firewall,
     FirewallAllowed, FirewallDirection, Instance, Metadata, MetadataItem, NetworkInterface, Tags,
 };
+use alien_gcp_clients::gcp::iam::{Binding, GenerateAccessTokenRequest, IamApi, IamClient};
 use alien_test::{DeploymentModel, TestApp};
 use anyhow::{bail, Context};
 use futures::StreamExt;
@@ -72,6 +73,9 @@ const RELAY_TAG: &str = "alien-live-relay";
 const IAP_RANGE: &str = "35.235.240.0/20";
 const RELAY_ENDPOINT_PORT: u16 = 10000;
 const RELAY_ADMIN_PORT: u16 = 10001;
+/// The service account of the test app's `operator` profile.
+const WORKLOAD_IDENTITY: &str = "operator-sa";
+const TOKEN_CREATOR: &str = "roles/iam.serviceAccountTokenCreator";
 
 struct GcpInternetSandbox {
     ctx: alien_test::TestContext,
@@ -291,6 +295,9 @@ struct Deployed {
     zone: String,
     network: String,
     gateway_subnet: String,
+    /// The `operator` profile's identity: it holds `sandbox/execute` and may sign as the edge
+    /// signer, so the test calls the sandbox as this identity, as a workload would.
+    workload_email: String,
 }
 
 async fn deployed(
@@ -341,6 +348,12 @@ async fn deployed(
         .map(|replicas| replicas.addresses.clone())
         .filter(|addresses| !addresses.is_empty())
         .context("the binding names no gateway replicas")?;
+    let workload_email = state
+        .resources
+        .get(WORKLOAD_IDENTITY)
+        .and_then(|resource| resource.internal_state.as_ref())
+        .and_then(|internal| find_string(internal, "serviceAccountEmail"))
+        .with_context(|| format!("{WORKLOAD_IDENTITY} has no service account email"))?;
     let resource_prefix = state.resource_prefix.clone();
     let vm = plan::resource_name(&resource_prefix, &plan::suffix::vm(0));
     let region = gcp_config().region;
@@ -368,6 +381,7 @@ async fn deployed(
                 zone,
                 network: nic.network.clone().context("no network")?,
                 gateway_subnet: nic.subnetwork.clone().context("no subnetwork")?,
+                workload_email,
             });
         }
     }
@@ -494,6 +508,113 @@ async fn delete_relay(compute: &ComputeClient, relay: &Relay, proof: &mut Proof)
     }
 }
 
+/// The first string under `key` (camelCase or snake_case) anywhere in a controller's state.
+fn find_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    let snake: String = key
+        .chars()
+        .flat_map(|c| {
+            if c.is_ascii_uppercase() {
+                vec!['_', c.to_ascii_lowercase()]
+            } else {
+                vec![c]
+            }
+        })
+        .collect();
+    match value {
+        serde_json::Value::Object(map) => map
+            .get(key)
+            .or_else(|| map.get(&snake))
+            .and_then(|found| found.as_str().map(str::to_string))
+            .or_else(|| map.values().find_map(|nested| find_string(nested, key))),
+        serde_json::Value::Array(items) => items.iter().find_map(|item| find_string(item, key)),
+        _ => None,
+    }
+}
+
+/// The principal the test's own credentials belong to.
+async fn caller_email() -> anyhow::Result<String> {
+    let gcp = alien_test::config::TestConfig::from_env()
+        .gcp_target
+        .context("GOOGLE_TARGET_* is set")?;
+    if let Some(token) = gcp.access_token {
+        let info: serde_json::Value = reqwest::Client::new()
+            .get("https://oauth2.googleapis.com/tokeninfo")
+            .query(&[("access_token", token)])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        return info["email"]
+            .as_str()
+            .map(str::to_string)
+            .context("the target token names no email (it needs the email scope)");
+    }
+    let key = std::env::var("GOOGLE_TARGET_SERVICE_ACCOUNT_KEY")?;
+    let key: serde_json::Value = serde_json::from_str(&key).context("parse the key")?;
+    key["client_email"]
+        .as_str()
+        .map(str::to_string)
+        .context("the key names no client_email")
+}
+
+/// Client settings that act as the deployment's workload identity. The test's principal is
+/// let mint tokens for that one account only (a binding on the account, gone with it at
+/// teardown), so every sandbox call is made with the workload's own grants.
+async fn act_as_workload(
+    deployed: &Deployed,
+    proof: &mut Proof,
+) -> anyhow::Result<GcpClientConfig> {
+    let caller = format!("serviceAccount:{}", caller_email().await?);
+    let iam = IamClient::new(reqwest::Client::new(), gcp_config());
+    let account = deployed.workload_email.clone();
+    let mut policy = iam
+        .get_service_account_iam_policy(account.clone())
+        .await
+        .map_err(|error| anyhow::anyhow!("read the workload account policy: {error}"))?;
+    match policy.bindings.iter_mut().find(|b| b.role == TOKEN_CREATOR) {
+        Some(binding) if binding.members.contains(&caller) => {}
+        Some(binding) => binding.members.push(caller.clone()),
+        None => policy.bindings.push(Binding {
+            role: TOKEN_CREATOR.to_string(),
+            members: vec![caller.clone()],
+            condition: None,
+        }),
+    }
+    iam.set_service_account_iam_policy(account.clone(), policy)
+        .await
+        .map_err(|error| anyhow::anyhow!("let the test act as the workload: {error}"))?;
+    proof.note(format!("[workload] {caller} may act as {account}"));
+    // IAM changes take a while to apply; mint until one is accepted.
+    let deadline = Instant::now() + Duration::from_secs(300);
+    loop {
+        match iam
+            .generate_access_token(
+                account.clone(),
+                GenerateAccessTokenRequest {
+                    scope: vec!["https://www.googleapis.com/auth/cloud-platform".to_string()],
+                    delegates: None,
+                    lifetime: Some("3600s".to_string()),
+                },
+            )
+            .await
+        {
+            Ok(token) => {
+                let mut config = gcp_config();
+                config.credentials = GcpCredentials::AccessToken {
+                    token: token.access_token,
+                };
+                return Ok(config);
+            }
+            Err(error) if Instant::now() < deadline => {
+                let _ = error;
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+            Err(error) => bail!("mint a workload token: {error}"),
+        }
+    }
+}
+
 /// An IAP tunnel from a local port to one relay port, open until dropped.
 ///
 /// `gcloud` checks the backend once and exits when the relay is not listening yet (IAP answers
@@ -592,6 +713,7 @@ fn gcloud_token_file() -> Option<&'static std::path::Path> {
 /// tunnels.
 fn provider(
     deployed: &Deployed,
+    workload: GcpClientConfig,
     endpoint_port: u16,
     admin_port: u16,
 ) -> anyhow::Result<BindingsProvider> {
@@ -628,7 +750,7 @@ fn provider(
             gateway,
         ),
     ]);
-    BindingsProvider::new(ClientConfig::Gcp(Box::new(gcp_config())), bindings)
+    BindingsProvider::new(ClientConfig::Gcp(Box::new(workload)), bindings)
         .map_err(|error| anyhow::anyhow!("bindings: {error}"))
 }
 
@@ -753,7 +875,8 @@ async fn gcp_internet_sandbox_egress_goes_through_the_gateway_only(ctx: &mut Gcp
             async {
                 let (_endpoint_tunnel, endpoint_port) = tunnel(&relay, RELAY_ENDPOINT_PORT).await?;
                 let (_admin_tunnel, admin_port) = tunnel(&relay, RELAY_ADMIN_PORT).await?;
-                let provider = provider(&deployed, endpoint_port, admin_port)?;
+                let workload = act_as_workload(&deployed, &mut proof).await?;
+                let provider = provider(&deployed, workload, endpoint_port, admin_port)?;
                 let sandbox = provider
                     .load_sandbox(SANDBOX)
                     .await
