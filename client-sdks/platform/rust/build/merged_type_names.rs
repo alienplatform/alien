@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::openapi_filter::POSITION_MARKER;
 
-/// Adds `pub type <Old> = <Merged>;` to `types` of `merged` for every type of `unmerged` that
+/// Adds `pub use self::<Merged> as <Old>;` to `types` of `merged` for every type of `unmerged` that
 /// `merged` no longer has, and the same to `types::builder` for builder types. `unmerged` and
 /// `positioned` are the clients generated from the marked copies. Returns the number of
 /// aliases.
@@ -153,9 +153,12 @@ fn own_position(docs: &str) -> Option<String> {
     (!position.is_empty()).then(|| position.to_string())
 }
 
+/// A re-export, not a `type` alias: a re-export also brings the value namespace, so enum
+/// variants can be imported through the old name (`use types::Old::Variant`) and an old-named
+/// tuple struct can still be constructed (`types::Old(value)`).
 fn alias_item(old: &str, new: &str) -> Result<syn::Item, String> {
     let source = format!(
-        "#[doc = \"Same type as [`{new}`]: the schemas behind both names are structurally identical (their descriptions can differ).\"]\n#[doc(hidden)]\npub type {old} = {new};"
+        "#[doc = \"Same type as [`{new}`]: the schemas behind both names are structurally identical (their descriptions can differ).\"]\n#[doc(hidden)]\npub use self::{new} as {old};"
     );
     syn::parse_str(&source).map_err(|error| format!("alias `{old}`: {error}"))
 }

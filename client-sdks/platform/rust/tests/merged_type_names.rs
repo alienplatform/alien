@@ -39,3 +39,10 @@ fn a_shared_query_parameter_keeps_its_operation_name() {
         .create_deployment()
         .workspace(workspace);
 }
+
+#[test]
+fn variants_can_be_imported_through_an_earlier_enum_name() {
+    use types::AiAvailabilityObservationModelsItemAvailability::{Available, Blocked};
+    let availability: types::AiAvailabilityObservationModelsItemAvailability = Available;
+    assert!(!matches!(availability, Blocked));
+}
