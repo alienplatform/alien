@@ -1142,6 +1142,7 @@ dependencies = [
  "httpmock",
  "indexmap 2.14.1",
  "insta",
+ "ipnet",
  "js-sys",
  "k8s-openapi",
  "libc",

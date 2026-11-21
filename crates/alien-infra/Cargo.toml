@@ -66,6 +66,7 @@ utoipa = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync", "macros", "io-util", "process", "rt", "rt-multi-thread", "time", "fs"] }
 async-trait = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
+ipnet = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream", "rustls-tls-webpki-roots"] }
 futures = { workspace = true }
 futures-util = { workspace = true }

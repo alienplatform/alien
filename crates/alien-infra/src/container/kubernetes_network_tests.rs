@@ -477,3 +477,112 @@ fn the_built_policy_admits_dns_on_port_53_to_cluster_dns_and_the_node_local_cach
         &vec![peer("kube-dns"), peer("node-local-dns")]
     );
 }
+
+#[tokio::test]
+async fn the_gateway_reaches_only_linked_services_on_their_ports() {
+    use alien_core::{
+        sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, ClientConfig, KubernetesClientConfig, Sandbox,
+        SandboxCode, SandboxEgress,
+    };
+    use httpmock::prelude::*;
+    let mut gateway = container(SANDBOX_EGRESS_GATEWAY_ID, "primary");
+    gateway.egress = Some(alien_core::ContainerEgress::Internet);
+    let sandbox = |id: &str, links: Vec<ResourceRef>| {
+        let mut sandbox = Sandbox::new(id.into())
+            .code(SandboxCode::Image {
+                image: "example.invalid/base:1".into(),
+                bundled_from: None,
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(300),
+                idle_pause_seconds: None,
+                ..Default::default()
+            })
+            .build();
+        sandbox.gateway_links = links;
+        sandbox
+    };
+    let api = ResourceRef::new(Container::RESOURCE_TYPE, "api");
+    let stack_with = |links: Vec<ResourceRef>| {
+        Stack::new("test".into())
+            .add(gateway.clone(), ResourceLifecycle::Live)
+            .add(container("api", "primary"), ResourceLifecycle::Live)
+            .add(container("other", "primary"), ResourceLifecycle::Live)
+            .add(sandbox("agent", links), ResourceLifecycle::Live)
+            .build()
+    };
+    let server = MockServer::start_async().await;
+    let harness = KubernetesManifestTestHarness::new(Resource::new(gateway.clone()), vec![]);
+    let mut ctx = harness.ctx();
+    let ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+        panic!("Kubernetes config")
+    };
+    let KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+        panic!("manual config")
+    };
+    *server_url = server.base_url();
+
+    // No links: no rule and no read.
+    let unlinked = stack_with(vec![]);
+    ctx.desired_stack = &unlinked;
+    assert!(gateway_link_rules(&gateway, "test-ns", &ctx)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let linked = stack_with(vec![api]);
+    ctx.desired_stack = &linked;
+    // Before the linked Service exists, its pods by label only.
+    let mut missing = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/api/v1/namespaces/test-ns/services/api");
+            then.status(404)
+                .json_body(serde_json::json!({"kind":"Status","code":404}));
+        })
+        .await;
+    let rules = gateway_link_rules(&gateway, "test-ns", &ctx).await.unwrap();
+    let pods = NetworkPolicyPeer {
+        pod_selector: Some(selector(kubernetes_branded_resource_labels(&ctx, "api"))),
+        ..Default::default()
+    };
+    assert_eq!(
+        rules,
+        vec![NetworkPolicyEgressRule {
+            to: Some(vec![pods.clone()]),
+            ports: Some(vec![port(8080, "TCP")]),
+        }]
+    );
+    missing.delete_async().await;
+    server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/api/v1/namespaces/test-ns/services/api");
+            then.status(200).json_body(serde_json::json!({
+                "apiVersion":"v1","kind":"Service","metadata":{"name":"api","namespace":"test-ns"},
+                "spec":{"clusterIP":"10.96.4.7","ports":[{"port":8080}]}
+            }));
+        })
+        .await;
+    let rules = gateway_link_rules(&gateway, "test-ns", &ctx).await.unwrap();
+    assert_eq!(
+        rules[0].to.as_ref().unwrap(),
+        &vec![
+            pods,
+            NetworkPolicyPeer {
+                ip_block: Some(IPBlock {
+                    cidr: "10.96.4.7/32".into(),
+                    except: None,
+                }),
+                ..Default::default()
+            }
+        ]
+    );
+    // Any other Container gets nothing from a link.
+    let other = container("other", "primary");
+    assert!(gateway_link_rules(&other, "test-ns", &ctx)
+        .await
+        .unwrap()
+        .is_empty());
+}
