@@ -26,14 +26,16 @@
 //!
 //! ```text
 //! GOOGLE_TARGET_PROJECT_ID=... GOOGLE_TARGET_REGION=us-central1 \
-//! GOOGLE_TARGET_SERVICE_ACCOUNT_KEY="$(cat key.json)" \
+//! GOOGLE_TARGET_ACCESS_TOKEN=<short-lived token> \
 //! ALIEN_E2E_RESOURCE_PREFIX=<run prefix> \
 //! ALIEN_TEST_PROOF_LOG=/path/to/proof.log \
 //!   cargo test -p alien-test --test gcp_sandbox_internet_live -- --ignored --nocapture
 //! ```
 //!
-//! plus the variables the rest of the GCP E2E suite needs (manager, registry). `gcloud` must be
-//! on the PATH and logged in as a principal that may open IAP tunnels in the project.
+//! plus the variables the rest of the GCP E2E suite needs (manager, registry);
+//! `GOOGLE_TARGET_SERVICE_ACCOUNT_KEY` works in place of the token. `gcloud` must be on the
+//! PATH. With a token it opens the IAP tunnels with that token; with a key it uses its own login,
+//! which must be a principal that may open IAP tunnels in the project.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -98,9 +100,9 @@ fn gcp_config() -> GcpClientConfig {
     GcpClientConfig {
         project_id: gcp.project_id.clone(),
         region: gcp.region.clone(),
-        credentials: GcpCredentials::ServiceAccountKey {
-            json: gcp.credentials_json.clone().expect("a target key"),
-        },
+        credentials: gcp
+            .credentials()
+            .expect("GOOGLE_TARGET_ACCESS_TOKEN or GOOGLE_TARGET_SERVICE_ACCOUNT_KEY is set"),
         service_overrides: None,
         project_number: None,
     }
@@ -464,7 +466,11 @@ async fn tunnel(relay: &Relay, port: u16) -> anyhow::Result<(tokio::process::Chi
     let local = std::net::TcpListener::bind("127.0.0.1:0")?
         .local_addr()?
         .port();
-    let child = tokio::process::Command::new("gcloud")
+    let mut gcloud = tokio::process::Command::new("gcloud");
+    if let Some(path) = gcloud_token_file() {
+        gcloud.arg(format!("--access-token-file={}", path.display()));
+    }
+    let child = gcloud
         .args([
             "compute",
             "start-iap-tunnel",
@@ -489,6 +495,21 @@ async fn tunnel(relay: &Relay, port: u16) -> anyhow::Result<(tokio::process::Chi
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
     bail!("the tunnel to {}:{port} did not open", relay.vm)
+}
+
+/// With `GOOGLE_TARGET_ACCESS_TOKEN` set, gcloud opens the tunnels with that same token, from a
+/// private temporary file that lives as long as the test process; no gcloud login is used.
+fn gcloud_token_file() -> Option<&'static std::path::Path> {
+    static FILE: std::sync::OnceLock<Option<tempfile::NamedTempFile>> = std::sync::OnceLock::new();
+    FILE.get_or_init(|| {
+        let gcp = alien_test::config::TestConfig::from_env().gcp_target?;
+        let token = gcp.access_token?;
+        let file = tempfile::NamedTempFile::new().expect("a temporary token file");
+        std::fs::write(file.path(), token).expect("write the token file");
+        Some(file)
+    })
+    .as_ref()
+    .map(|file| file.path())
 }
 
 /// The provider, as a caller in the VPC would load it: the published sandbox binding, the
