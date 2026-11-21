@@ -15,8 +15,8 @@ let value: DataKubernetesPods = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
+        reason: "timed-out",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -36,5 +36,5 @@ let value: DataKubernetesPods = {
 | `activeSessions`                                                                                                         | *number*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `idlePods`                                                                                                               | *number*                                                                                                                 | :heavy_check_mark:                                                                                                       | Claimed but unused pods waiting in the pool.                                                                             |
 | `namespace`                                                                                                              | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
-| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus76](../../models/operations/getresourcedeploymentdetaildatastatus76.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus80](../../models/operations/getresourcedeploymentdetaildatastatus80.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `backend`                                                                                                                | *"kubernetesPods"*                                                                                                       | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |

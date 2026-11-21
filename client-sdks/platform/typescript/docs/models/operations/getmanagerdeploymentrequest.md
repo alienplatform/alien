@@ -6,7 +6,7 @@
 import { GetManagerDeploymentRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetManagerDeploymentRequest = {
-  id: "mgr_enxscjrqiiu2lrc672hwwuc5",
+  id: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
 };
 ```
 
@@ -14,4 +14,4 @@ let value: GetManagerDeploymentRequest = {
 
 | Field                            | Type                             | Required                         | Description                      | Example                          |
 | -------------------------------- | -------------------------------- | -------------------------------- | -------------------------------- | -------------------------------- |
-| `id`                             | *string*                         | :heavy_check_mark:               | Unique identifier for a manager. | mgr_enxscjrqiiu2lrc672hwwuc5     |
+| `id`                             | *string*                         | :heavy_check_mark:               | Unique identifier for a manager. | mgr_enxscjrqiiu2lrc672hwwuc5tv5y |

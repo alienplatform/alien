@@ -24,12 +24,43 @@ export const BlockerKind = {
 export type BlockerKind = ClosedEnum<typeof BlockerKind>;
 
 /**
+ * Protected deployments: the setup it waits for is the newer signed setup of this release (GET /deployments/{id}/signed-setup-update has its steps), not a rerun of the installed one.
+ */
+export type SignedSetupUpdate = {
+  /**
+   * Unique identifier for the release.
+   */
+  releaseId: string;
+  templateDigest: string;
+};
+
+/**
  * Why the update is blocked. Input values and internal errors are never included.
  */
 export type DeploymentUpdateOperationSummaryBlocker = {
   kind: BlockerKind;
   message: string;
   inputId?: string | undefined;
+  /**
+   * Setup blockers: what the release changed that only setup can apply, as the engine reported it (resource and permission profile names, no input values).
+   */
+  setupReason?: string | undefined;
+  /**
+   * Setup blockers on the deployment detail: when the oldest release in the current run of setup-blocked updates was requested. Absent when the run cannot be determined.
+   */
+  waitingSince?: Date | undefined;
+  /**
+   * Setup blockers on the deployment detail: how many different releases wait in the current run of setup-blocked updates.
+   */
+  waitingReleaseCount?: number | undefined;
+  /**
+   * Setup blockers on the deployment detail: true when the last setup run did not finish, so the setup has to be resumed. Absent otherwise.
+   */
+  setupIncomplete?: boolean | undefined;
+  /**
+   * Protected deployments: the setup it waits for is the newer signed setup of this release (GET /deployments/{id}/signed-setup-update has its steps), not a rerun of the installed one.
+   */
+  signedSetupUpdate?: SignedSetupUpdate | undefined;
 };
 
 /**
@@ -159,6 +190,25 @@ export const BlockerKind$inboundSchema: z.ZodEnum<typeof BlockerKind> = z.enum(
 );
 
 /** @internal */
+export const SignedSetupUpdate$inboundSchema: z.ZodType<
+  SignedSetupUpdate,
+  unknown
+> = z.object({
+  releaseId: z.string(),
+  templateDigest: z.string(),
+});
+
+export function signedSetupUpdateFromJSON(
+  jsonString: string,
+): SafeParseResult<SignedSetupUpdate, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SignedSetupUpdate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SignedSetupUpdate' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentUpdateOperationSummaryBlocker$inboundSchema: z.ZodType<
   DeploymentUpdateOperationSummaryBlocker,
   unknown
@@ -166,6 +216,12 @@ export const DeploymentUpdateOperationSummaryBlocker$inboundSchema: z.ZodType<
   kind: BlockerKind$inboundSchema,
   message: z.string(),
   inputId: z.string().optional(),
+  setupReason: z.string().optional(),
+  waitingSince: z.iso.datetime({ offset: true }).transform(v => new Date(v))
+    .optional(),
+  waitingReleaseCount: z.int().optional(),
+  setupIncomplete: z.boolean().optional(),
+  signedSetupUpdate: z.lazy(() => SignedSetupUpdate$inboundSchema).optional(),
 });
 
 export function deploymentUpdateOperationSummaryBlockerFromJSON(

@@ -9,7 +9,7 @@ let value: GroupKeys = {
   capability: "models",
   enabled: true,
   state: "revoked",
-  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
   observation: {
     provider: "<value>",
     platform: "gcp",
@@ -33,7 +33,7 @@ let value: GroupKeys = {
 | `capability`                                                 | [models.KeysCapability](../models/keyscapability.md)         | :heavy_check_mark:                                           | N/A                                                          |                                                              |
 | `enabled`                                                    | *boolean*                                                    | :heavy_check_mark:                                           | N/A                                                          |                                                              |
 | `state`                                                      | [models.KeysState](../models/keysstate.md)                   | :heavy_check_mark:                                           | N/A                                                          |                                                              |
-| `deploymentId`                                               | *string*                                                     | :heavy_check_mark:                                           | Unique identifier for the deployment.                        | dep_0c29fq4a2yjb7kx3smwdgxlc                                 |
+| `deploymentId`                                               | *string*                                                     | :heavy_check_mark:                                           | Unique identifier for the deployment.                        | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f                             |
 | `source`                                                     | [models.KeysSource](../models/keyssource.md)                 | :heavy_minus_sign:                                           | N/A                                                          |                                                              |
 | `sandboxUpdate`                                              | [models.KeysSandboxUpdate](../models/keyssandboxupdate.md)   | :heavy_minus_sign:                                           | N/A                                                          |                                                              |
 | `observation`                                                | [models.KeysObservation](../models/keysobservation.md)       | :heavy_check_mark:                                           | N/A                                                          |                                                              |

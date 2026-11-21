@@ -3,13 +3,14 @@
 
 ## Supported Types
 
-### `models.DataGcpServiceUsage`
+### `models.DataAwsCodeBuild`
 
 ```typescript
-const value: models.DataGcpServiceUsage = {
-  enabled: true,
-  projectId: "<id>",
-  serviceName: "<value>",
+const value: models.DataAwsCodeBuild = {
+  encryptionKeyPresent: true,
+  environmentVariableCount: 879452,
+  projectName: "<value>",
+  serviceRolePresent: true,
   status: {
     collectionIssues: [
       {
@@ -19,30 +20,88 @@ const value: models.DataGcpServiceUsage = {
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "stopped",
-    partial: true,
+    health: "degraded",
+    lifecycle: "unknown",
+    partial: false,
     stale: true,
   },
-  backend: "gcpServiceUsage",
+  backend: "awsCodeBuild",
 };
 ```
 
-### `models.DataAzureResourceProvider`
+### `models.DataGcpCloudBuild`
 
 ```typescript
-const value: models.DataAzureResourceProvider = {
-  namespace: "<value>",
-  registered: true,
-  resourceTypeCount: 563831,
+const value: models.DataGcpCloudBuild = {
+  buildConfigId: "<id>",
+  environmentVariableCount: 982514,
+  location: "<value>",
+  projectId: "<id>",
   status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "scaling",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "not-installed",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
+    health: "unknown",
+    lifecycle: "deleting",
     partial: true,
     stale: true,
   },
-  backend: "azureResourceProvider",
+  backend: "gcpCloudBuild",
 };
 ```
 
+### `models.DataAzureContainerApps2`
+
+```typescript
+const value: models.DataAzureContainerApps2 = {
+  environmentVariableCount: 246098,
+  managedEnvironmentId: "<id>",
+  resourceGroupName: "<value>",
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "not-installed",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
+    partial: true,
+    stale: true,
+  },
+  backend: "azureContainerApps",
+};
+```
+
+### `models.DataKubernetesJob`
+
+```typescript
+const value: models.DataKubernetesJob = {
+  conditionCount: 902553,
+  events: [],
+  jobName: "<value>",
+  namespace: "<value>",
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "collection-failed",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
+    health: "degraded",
+    lifecycle: "scaling",
+    partial: false,
+    stale: true,
+  },
+  backend: "kubernetesJob",
+};
+```

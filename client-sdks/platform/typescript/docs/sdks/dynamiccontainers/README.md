@@ -543,6 +543,6 @@ import {
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 403, 404            | application/json         |
+| errors.APIError          | 400, 403, 404, 409       | application/json         |
 | errors.APIError          | 500, 503                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |

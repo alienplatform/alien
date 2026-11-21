@@ -17,7 +17,7 @@ let value: PlanDeploymentComputeKubernetes = {};
 
 ## Fields
 
-| Field                                           | Type                                            | Required                                        | Description                                     |
-| ----------------------------------------------- | ----------------------------------------------- | ----------------------------------------------- | ----------------------------------------------- |
-| `cluster`                                       | *operations.PlanDeploymentComputeClusterUnion*  | :heavy_minus_sign:                              | N/A                                             |
-| `exposure`                                      | *operations.PlanDeploymentComputeExposureUnion* | :heavy_minus_sign:                              | N/A                                             |
+| Field                                          | Type                                           | Required                                       | Description                                    |
+| ---------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- |
+| `cluster`                                      | *operations.PlanDeploymentComputeClusterUnion* | :heavy_minus_sign:                             | N/A                                            |
+| `exposure`                                     | *operations.PlanDeploymentComputeExposure*     | :heavy_minus_sign:                             | N/A                                            |

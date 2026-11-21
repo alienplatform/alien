@@ -3,6 +3,7 @@
  */
 
 import * as z from "zod/v4";
+import { ClosedEnum } from "../../types/enums.js";
 
 export type GetManagerGlobals = {
   /**
@@ -11,16 +12,37 @@ export type GetManagerGlobals = {
   workspace?: string | undefined;
 };
 
+/**
+ * Count the deployments and projects that use this manager. On by default; with "false" the lookup skips the counts and both are returned as 0.
+ */
+export const IncludeCounts = {
+  True: "true",
+  False: "false",
+} as const;
+/**
+ * Count the deployments and projects that use this manager. On by default; with "false" the lookup skips the counts and both are returned as 0.
+ */
+export type IncludeCounts = ClosedEnum<typeof IncludeCounts>;
+
 export type GetManagerRequest = {
   /**
    * Unique identifier for a manager.
    */
   id: string;
+  /**
+   * Count the deployments and projects that use this manager. On by default; with "false" the lookup skips the counts and both are returned as 0.
+   */
+  includeCounts?: IncludeCounts | undefined;
 };
+
+/** @internal */
+export const IncludeCounts$outboundSchema: z.ZodEnum<typeof IncludeCounts> = z
+  .enum(IncludeCounts);
 
 /** @internal */
 export type GetManagerRequest$Outbound = {
   id: string;
+  includeCounts?: string | undefined;
 };
 
 /** @internal */
@@ -29,6 +51,7 @@ export const GetManagerRequest$outboundSchema: z.ZodType<
   GetManagerRequest
 > = z.object({
   id: z.string(),
+  includeCounts: IncludeCounts$outboundSchema.optional(),
 });
 
 export function getManagerRequestToJSON(

@@ -17,14 +17,7 @@ export type DenyAccessRequestGlobals = {
   workspace?: string | undefined;
 };
 
-export type DenyAccessRequestRequestBody = {
-  method: string;
-  /**
-   * Deprecated and ignored. Actor identity comes from the authenticated user.
-   */
-  actorId?: string | undefined;
-  source?: { [k: string]: any | null } | undefined;
-};
+export type DenyAccessRequestRequestBody = {};
 
 export type DenyAccessRequestRequest = {
   id: string;
@@ -86,22 +79,27 @@ export type DenyAccessRequestMaxRisk = ClosedEnum<
 >;
 
 /**
- * How and when the customer gate was passed. Null until approved.
+ * How, when and by whom the request was approved. Null until approved.
  */
 export type DenyAccessRequestApprovedBy = {
   /**
-   * `kubectl` for the in-cluster path, else the direct caller's method such as `slack`.
+   * `kubectl` (in the customer's cluster), `slack`, or the surface of a dashboard or API approval (`dashboard`, `cli`).
    */
   method: string | null;
   /**
-   * The approving user. Null for the kubectl path: the approver is only in the customer's cluster audit log.
+   * The Alien user who approved in the dashboard or API. Null for kubectl (the approver is only in the customer's cluster audit log) and for Slack.
    */
   actorId: string | null;
+  slack: models.AccessRequestSlackDecider | null;
   at: string;
 };
 
 export type DenyAccessRequestDeniedBy = {
+  /**
+   * The Alien user who denied in the dashboard or API. Null for Slack.
+   */
   actorId: string | null;
+  slack: models.AccessRequestSlackDecider | null;
   at: string;
 };
 
@@ -152,8 +150,9 @@ export type DenyAccessRequestResponse = {
    */
   queuedBy: string | null;
   queuedAt: string | null;
+  approver: models.AccessApprover;
   /**
-   * How and when the customer gate was passed. Null until approved.
+   * How, when and by whom the request was approved. Null until approved.
    */
   approvedBy: DenyAccessRequestApprovedBy | null;
   deniedBy: DenyAccessRequestDeniedBy | null;
@@ -162,21 +161,13 @@ export type DenyAccessRequestResponse = {
 };
 
 /** @internal */
-export type DenyAccessRequestRequestBody$Outbound = {
-  method: string;
-  actorId?: string | undefined;
-  source?: { [k: string]: any | null } | undefined;
-};
+export type DenyAccessRequestRequestBody$Outbound = {};
 
 /** @internal */
 export const DenyAccessRequestRequestBody$outboundSchema: z.ZodType<
   DenyAccessRequestRequestBody$Outbound,
   DenyAccessRequestRequestBody
-> = z.object({
-  method: z.string(),
-  actorId: z.string().optional(),
-  source: z.record(z.string(), z.nullable(z.any())).optional(),
-});
+> = z.object({});
 
 export function denyAccessRequestRequestBodyToJSON(
   denyAccessRequestRequestBody: DenyAccessRequestRequestBody,
@@ -281,6 +272,7 @@ export const DenyAccessRequestApprovedBy$inboundSchema: z.ZodType<
 > = z.object({
   method: z.nullable(z.string()),
   actorId: z.nullable(z.string()),
+  slack: z.nullable(models.AccessRequestSlackDecider$inboundSchema),
   at: z.string(),
 });
 
@@ -300,6 +292,7 @@ export const DenyAccessRequestDeniedBy$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   actorId: z.nullable(z.string()),
+  slack: z.nullable(models.AccessRequestSlackDecider$inboundSchema),
   at: z.string(),
 });
 
@@ -364,6 +357,7 @@ export const DenyAccessRequestResponse$inboundSchema: z.ZodType<
   createdAt: z.string(),
   queuedBy: z.nullable(z.string()),
   queuedAt: z.nullable(z.string()),
+  approver: models.AccessApprover$inboundSchema,
   approvedBy: z.nullable(
     z.lazy(() => DenyAccessRequestApprovedBy$inboundSchema),
   ),

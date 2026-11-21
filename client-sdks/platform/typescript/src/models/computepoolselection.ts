@@ -30,6 +30,13 @@ export type ComputePoolSelectionFailureDomainsUnion2 =
   | string;
 
 export type ComputePoolSelectionAutoscale = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?:
     | ComputePoolSelectionFailureDomains2
     | string
@@ -72,6 +79,13 @@ export type ComputePoolSelectionFailureDomainsUnion1 =
   | string;
 
 export type ComputePoolSelectionFixed = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?:
     | ComputePoolSelectionFailureDomains1
     | string
@@ -145,6 +159,7 @@ export const ComputePoolSelectionAutoscale$inboundSchema: z.ZodType<
   ComputePoolSelectionAutoscale,
   unknown
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failure_domains: z.nullable(
     z.union([
       z.lazy(() => ComputePoolSelectionFailureDomains2$inboundSchema),
@@ -221,6 +236,7 @@ export const ComputePoolSelectionFixed$inboundSchema: z.ZodType<
   ComputePoolSelectionFixed,
   unknown
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failure_domains: z.nullable(
     z.union([
       z.lazy(() => ComputePoolSelectionFailureDomains1$inboundSchema),

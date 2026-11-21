@@ -30,7 +30,7 @@ let value: DataRemoteStackManagement = {
 
 ## Fields
 
-| Field                       | Type                        | Required                    | Description                 |
-| --------------------------- | --------------------------- | --------------------------- | --------------------------- |
-| `data`                      | *operations.DataUnion12*    | :heavy_check_mark:          | N/A                         |
-| `resourceType`              | *"remote-stack-management"* | :heavy_check_mark:          | N/A                         |
+| Field                                                                                                        | Type                                                                                                         | Required                                                                                                     | Description                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `data`                                                                                                       | *operations.DataUnion13*                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
+| `resourceType`                                                                                               | [operations.ResourceTypeRemoteStackManagement](../../models/operations/resourcetyperemotestackmanagement.md) | :heavy_check_mark:                                                                                           | N/A                                                                                                          |

@@ -14,7 +14,7 @@ let value: PreparedDeploymentStackExtendGcpResource = {
 
 ## Fields
 
-| Field                                                        | Type                                                         | Required                                                     | Description                                                  |
-| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| `condition`                                                  | *models.PreparedDeploymentStackExtendResourceConditionUnion* | :heavy_minus_sign:                                           | N/A                                                          |
-| `scope`                                                      | *string*                                                     | :heavy_check_mark:                                           | Scope (project/resource level)                               |
+| Field                                                           | Type                                                            | Required                                                        | Description                                                     |
+| --------------------------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------- |
+| `condition`                                                     | *models.PreparedDeploymentStackExtendGcpResourceConditionUnion* | :heavy_minus_sign:                                              | N/A                                                             |
+| `scope`                                                         | *string*                                                        | :heavy_check_mark:                                              | Scope (project/resource level)                                  |

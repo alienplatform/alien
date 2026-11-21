@@ -17,10 +17,10 @@ let value: DataGcpServiceAccount2 = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "stopping",
-    partial: true,
-    stale: true,
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: false,
+    stale: false,
   },
   backend: "gcpServiceAccount",
 };
@@ -34,5 +34,5 @@ let value: DataGcpServiceAccount2 = {
 | `roleBound`                                                                | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
 | `serviceAccountEmail`                                                      | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `serviceAccountUniqueId`                                                   | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus50](../models/resourceheartbeatstatus50.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus54](../models/resourceheartbeatstatus54.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `backend`                                                                  | *"gcpServiceAccount"*                                                      | :heavy_check_mark:                                                         | N/A                                                                        |

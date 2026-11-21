@@ -6,7 +6,7 @@
 import { Failure } from "@alienplatform/platform-api/models";
 
 let value: Failure = {
-  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
   projectId: "<id>",
   error: {
     code: "<value>",
@@ -20,6 +20,6 @@ let value: Failure = {
 
 | Field                                    | Type                                     | Required                                 | Description                              | Example                                  |
 | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
-| `deploymentId`                           | *string*                                 | :heavy_check_mark:                       | ID of the deployment that failed         | dep_0c29fq4a2yjb7kx3smwdgxlc             |
+| `deploymentId`                           | *string*                                 | :heavy_check_mark:                       | ID of the deployment that failed         | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f         |
 | `projectId`                              | *string*                                 | :heavy_check_mark:                       | Project ID the deployment belongs to     |                                          |
 | `error`                                  | [models.APIError](../models/apierror.md) | :heavy_check_mark:                       | N/A                                      |                                          |

@@ -71,7 +71,7 @@ export function useDeploymentsCreateTokenMutation(
 }
 
 export function mutationKeyDeploymentsCreateToken(): MutationKey {
-  return ["@alienplatform/platform-api", "deployments", "createToken"];
+  return ["@alienplatform/platform-api", "Deployments", "createToken"];
 }
 
 export function buildDeploymentsCreateTokenMutation(

@@ -14,7 +14,7 @@ let value: SyncListResponsePreparedStackExtendGcpStack = {
 
 ## Fields
 
-| Field                                                           | Type                                                            | Required                                                        | Description                                                     |
-| --------------------------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------- |
-| `condition`                                                     | *models.SyncListResponsePreparedStackExtendStackConditionUnion* | :heavy_minus_sign:                                              | N/A                                                             |
-| `scope`                                                         | *string*                                                        | :heavy_check_mark:                                              | Scope (project/resource level)                                  |
+| Field                                                              | Type                                                               | Required                                                           | Description                                                        |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `condition`                                                        | *models.SyncListResponsePreparedStackExtendGcpStackConditionUnion* | :heavy_minus_sign:                                                 | N/A                                                                |
+| `scope`                                                            | *string*                                                           | :heavy_check_mark:                                                 | Scope (project/resource level)                                     |

@@ -4,6 +4,7 @@
 
 ### Available Operations
 
+* [createProjectValueAccess](#createprojectvalueaccess) - Value access for a project (not available yet)
 * [list](#list) - Retrieve all projects.
 * [create](#create) - Create a new project.
 * [get](#get) - Retrieve a project by ID or name.
@@ -17,8 +18,10 @@
 * [getTemplateUrls](#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getDeploymentLinkSetup](#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
 * [getActiveRelease](#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
+* [getProtectedSetupRelease](#getprotectedsetuprelease) - The release a protected setup installs when it registers without a release ID (a protected Terraform module is signed before its release exists): the channel's current release if it is signed for the platform and channel and has the setup's fingerprint, else the newest such release. The manager registers protected Terraform modules against it.
 * [previewModelsImpact](#previewmodelsimpact) - Preview which customer model connections a configuration change may affect.
 * [setCapabilities](#setcapabilities) - Set the capabilities offered by a Project. Removing a capability prevents new setup without deleting existing customer resources.
+* [disableCapability](#disablecapability) - Turn off one of a Project's features. Refused while deployments of that feature (or, for models, direct provider connections) still exist, so turning it off never strands a customer's resources.
 * [configureDeployments](#configuredeployments) - Enable deployments for a Project.
 * [getAiProviderHeaders](#getaiproviderheaders) - Get static headers added to AI requests for each provider.
 * [configureAiProviderHeaders](#configureaiproviderheaders) - Replace the static headers added to AI requests for each provider.
@@ -35,6 +38,97 @@
 * [getAiUsage](#getaiusage)
 * [getEncryptionUsage](#getencryptionusage)
 * [getSandboxMetrics](#getsandboxmetrics)
+
+## createProjectValueAccess
+
+Value access for a project (not available yet)
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="createProjectValueAccess" method="post" path="/v1/projects/{id}/value-access" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.createProjectValueAccess("<id>");
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsCreateProjectValueAccess } from "@alienplatform/platform-api/funcs/projectsCreateProjectValueAccess.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsCreateProjectValueAccess(alien, "<id>");
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsCreateProjectValueAccess failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsCreateProjectValueAccessMutation
+} from "@alienplatform/platform-api/react-query/projectsCreateProjectValueAccess.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
+| `valueAccessRequest`                                                                                                                                                           | [models.ValueAccessRequest](../../models/valueaccessrequest.md)                                                                                                                | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.ValueAccessResponse](../../models/valueaccessresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 403, 404, 409            | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## list
 
@@ -256,7 +350,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.get({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -282,7 +376,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsGet(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -439,7 +533,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.projects.update("prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const result = await alien.projects.update("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     gitRepository: null,
     domainId: "dom_469m0agk8luj4s16sakmmpdd",
     defaultManagers: {
@@ -474,7 +568,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await projectsUpdate(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const res = await projectsUpdate(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     gitRepository: null,
     domainId: "dom_469m0agk8luj4s16sakmmpdd",
     defaultManagers: {
@@ -733,7 +827,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.getGcpOAuthProvider({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -759,7 +853,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsGetGcpOAuthProvider(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -916,7 +1010,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.projects.updateGcpOAuthProvider("prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const result = await alien.projects.updateGcpOAuthProvider("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     mode: "alien-managed",
   });
 
@@ -942,7 +1036,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await projectsUpdateGcpOAuthProvider(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const res = await projectsUpdateGcpOAuthProvider(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     mode: "alien-managed",
   });
   if (res.ok) {
@@ -1081,7 +1175,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.projects.configureSource("prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const result = await alien.projects.configureSource("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     mode: "template",
     targetNamespace: "<value>",
     templatePath: "examples/github-agent/packages/remote-agent",
@@ -1109,7 +1203,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await projectsConfigureSource(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const res = await projectsConfigureSource(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     mode: "template",
     targetNamespace: "<value>",
     templatePath: "examples/github-agent/packages/remote-agent",
@@ -1257,7 +1351,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.getDeploymentPortalDomain({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -1283,7 +1377,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsGetDeploymentPortalDomain(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1539,7 +1633,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.getTemplateUrls({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -1565,7 +1659,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsGetTemplateUrls(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1723,7 +1817,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.getDeploymentLinkSetup({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -1749,7 +1843,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsGetDeploymentLinkSetup(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1907,7 +2001,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.getActiveRelease({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -1933,7 +2027,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsGetActiveRelease(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -2074,6 +2168,210 @@ import {
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## getProtectedSetupRelease
+
+The release a protected setup installs when it registers without a release ID (a protected Terraform module is signed before its release exists): the channel's current release if it is signed for the platform and channel and has the setup's fingerprint, else the newest such release. The manager registers protected Terraform modules against it.
+
+### Example Usage: projectId
+
+<!-- UsageSnippet language="typescript" operationID="getProjectProtectedSetupRelease" method="get" path="/v1/projects/{idOrName}/protected-setup-release" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getProtectedSetupRelease({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
+    platform: "azure",
+    channel: "<value>",
+    setupTarget: "<value>",
+    setupFingerprint: "<value>",
+    setupFingerprintVersion: 73804,
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetProtectedSetupRelease } from "@alienplatform/platform-api/funcs/projectsGetProtectedSetupRelease.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetProtectedSetupRelease(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
+    platform: "azure",
+    channel: "<value>",
+    setupTarget: "<value>",
+    setupFingerprint: "<value>",
+    setupFingerprintVersion: 73804,
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetProtectedSetupRelease failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetProtectedSetupRelease,
+  useProjectsGetProtectedSetupReleaseSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetProtectedSetupRelease,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetProtectedSetupRelease,
+  invalidateAllProjectsGetProtectedSetupRelease,
+} from "@alienplatform/platform-api/react-query/projectsGetProtectedSetupRelease.js";
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getProjectProtectedSetupRelease" method="get" path="/v1/projects/{idOrName}/protected-setup-release" example="projectName" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getProtectedSetupRelease({
+    idOrName: "my-project",
+    platform: "gcp",
+    channel: "<value>",
+    setupTarget: "<value>",
+    setupFingerprint: "<value>",
+    setupFingerprintVersion: 622074,
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetProtectedSetupRelease } from "@alienplatform/platform-api/funcs/projectsGetProtectedSetupRelease.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetProtectedSetupRelease(alien, {
+    idOrName: "my-project",
+    platform: "gcp",
+    channel: "<value>",
+    setupTarget: "<value>",
+    setupFingerprint: "<value>",
+    setupFingerprintVersion: 622074,
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetProtectedSetupRelease failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetProtectedSetupRelease,
+  useProjectsGetProtectedSetupReleaseSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetProtectedSetupRelease,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetProtectedSetupRelease,
+  invalidateAllProjectsGetProtectedSetupRelease,
+} from "@alienplatform/platform-api/react-query/projectsGetProtectedSetupRelease.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetProjectProtectedSetupReleaseRequest](../../models/operations/getprojectprotectedsetupreleaserequest.md)                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.Release](../../models/release.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404, 409                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## previewModelsImpact
 
 Preview which customer model connections a configuration change may affect.
@@ -2090,7 +2388,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.projects.previewModelsImpact("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.projects.previewModelsImpact("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -2114,7 +2412,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await projectsPreviewModelsImpact(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await projectsPreviewModelsImpact(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -2244,7 +2542,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.projects.setCapabilities("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.projects.setCapabilities("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -2268,7 +2566,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await projectsSetCapabilities(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await projectsSetCapabilities(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -2383,6 +2681,172 @@ import {
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## disableCapability
+
+Turn off one of a Project's features. Refused while deployments of that feature (or, for models, direct provider connections) still exist, so turning it off never strands a customer's resources.
+
+### Example Usage: projectId
+
+<!-- UsageSnippet language="typescript" operationID="disableProjectCapability" method="delete" path="/v1/projects/{idOrName}/project-capabilities/{capability}" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.disableCapability({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
+    capability: "models",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsDisableCapability } from "@alienplatform/platform-api/funcs/projectsDisableCapability.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsDisableCapability(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
+    capability: "models",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsDisableCapability failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsDisableCapabilityMutation
+} from "@alienplatform/platform-api/react-query/projectsDisableCapability.js";
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="disableProjectCapability" method="delete" path="/v1/projects/{idOrName}/project-capabilities/{capability}" example="projectName" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.disableCapability({
+    idOrName: "my-project",
+    capability: "buckets",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsDisableCapability } from "@alienplatform/platform-api/funcs/projectsDisableCapability.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsDisableCapability(alien, {
+    idOrName: "my-project",
+    capability: "buckets",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsDisableCapability failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsDisableCapabilityMutation
+} from "@alienplatform/platform-api/react-query/projectsDisableCapability.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.DisableProjectCapabilityRequest](../../models/operations/disableprojectcapabilityrequest.md)                                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.ProjectCapabilities](../../models/projectcapabilities.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 403, 404, 409            | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## configureDeployments
 
 Enable deployments for a Project.
@@ -2399,7 +2863,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.projects.configureDeployments("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.projects.configureDeployments("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -2423,7 +2887,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await projectsConfigureDeployments(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await projectsConfigureDeployments(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -2555,7 +3019,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.getAiProviderHeaders({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -2581,7 +3045,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsGetAiProviderHeaders(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -2738,7 +3202,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.projects.configureAiProviderHeaders("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.projects.configureAiProviderHeaders("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -2762,7 +3226,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await projectsConfigureAiProviderHeaders(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await projectsConfigureAiProviderHeaders(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -2893,7 +3357,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.projects.configureModels("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.projects.configureModels("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -2917,7 +3381,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await projectsConfigureModels(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await projectsConfigureModels(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -3048,7 +3512,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.projects.configureKeys("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.projects.configureKeys("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -3072,7 +3536,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await projectsConfigureKeys(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await projectsConfigureKeys(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -3203,7 +3667,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.projects.configureBuckets("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.projects.configureBuckets("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -3227,7 +3691,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await projectsConfigureBuckets(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await projectsConfigureBuckets(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -3358,7 +3822,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.projects.configureRegistry("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.projects.configureRegistry("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -3382,7 +3846,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await projectsConfigureRegistry(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await projectsConfigureRegistry(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -3513,7 +3977,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.projects.configureRemoteSandbox("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.projects.configureRemoteSandbox("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -3537,7 +4001,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await projectsConfigureRemoteSandbox(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await projectsConfigureRemoteSandbox(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -3669,7 +4133,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.ensureSandboxBaseImageRepository({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -3695,7 +4159,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsEnsureSandboxBaseImageRepository(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -3831,7 +4295,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.getCapabilityOverview({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -3857,7 +4321,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsGetCapabilityOverview(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -4015,7 +4479,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.getRemoteOperatorSummary({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -4041,7 +4505,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsGetRemoteOperatorSummary(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -4199,7 +4663,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.acceptRemoteOperatorImage({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
 
@@ -4226,7 +4690,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsAcceptRemoteOperatorImage(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
   if (res.ok) {
@@ -4364,7 +4828,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.acceptRemoteOperatorPermissions({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
 
@@ -4391,7 +4855,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsAcceptRemoteOperatorPermissions(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
   if (res.ok) {
@@ -4528,7 +4992,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.getAiUsage({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -4554,7 +5018,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsGetAiUsage(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -4710,7 +5174,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.getEncryptionUsage({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -4736,7 +5200,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsGetEncryptionUsage(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -4892,7 +5356,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.projects.getSandboxMetrics({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -4918,7 +5382,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await projectsGetSandboxMetrics(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;

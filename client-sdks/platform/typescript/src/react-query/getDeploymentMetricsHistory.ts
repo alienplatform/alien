@@ -53,7 +53,7 @@ export type GetDeploymentMetricsHistoryQueryError =
   | SDKValidationError;
 
 /**
- * Metrics Horizon reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
+ * Metrics the machine agent reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
  */
 export function useGetDeploymentMetricsHistory(
   request: operations.GetDeploymentMetricsHistoryRequest,
@@ -77,7 +77,7 @@ export function useGetDeploymentMetricsHistory(
 }
 
 /**
- * Metrics Horizon reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
+ * Metrics the machine agent reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
  */
 export function useGetDeploymentMetricsHistorySuspense(
   request: operations.GetDeploymentMetricsHistoryRequest,

@@ -3,6 +3,8 @@
  */
 
 import * as z from "zod/v4";
+import { remap as remap$ } from "../../lib/primitives.js";
+import * as models from "../index.js";
 
 export type CreateFirstPartyDeploymentSessionGlobals = {
   /**
@@ -16,11 +18,17 @@ export type CreateFirstPartyDeploymentSessionRequest = {
    * Unique identifier for the deployment group.
    */
   id: string;
+  createFirstPartyDeploymentSessionRequest?:
+    | models.CreateFirstPartyDeploymentSessionRequest
+    | undefined;
 };
 
 /** @internal */
 export type CreateFirstPartyDeploymentSessionRequest$Outbound = {
   id: string;
+  CreateFirstPartyDeploymentSessionRequest?:
+    | models.CreateFirstPartyDeploymentSessionRequest$Outbound
+    | undefined;
 };
 
 /** @internal */
@@ -29,6 +37,13 @@ export const CreateFirstPartyDeploymentSessionRequest$outboundSchema: z.ZodType<
   CreateFirstPartyDeploymentSessionRequest
 > = z.object({
   id: z.string(),
+  createFirstPartyDeploymentSessionRequest: models
+    .CreateFirstPartyDeploymentSessionRequest$outboundSchema.optional(),
+}).transform((v) => {
+  return remap$(v, {
+    createFirstPartyDeploymentSessionRequest:
+      "CreateFirstPartyDeploymentSessionRequest",
+  });
 });
 
 export function createFirstPartyDeploymentSessionRequestToJSON(

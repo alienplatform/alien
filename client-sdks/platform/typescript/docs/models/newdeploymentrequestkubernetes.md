@@ -17,7 +17,7 @@ let value: NewDeploymentRequestKubernetes = {};
 
 ## Fields
 
-| Field                                      | Type                                       | Required                                   | Description                                |
-| ------------------------------------------ | ------------------------------------------ | ------------------------------------------ | ------------------------------------------ |
-| `cluster`                                  | *models.NewDeploymentRequestClusterUnion*  | :heavy_minus_sign:                         | N/A                                        |
-| `exposure`                                 | *models.NewDeploymentRequestExposureUnion* | :heavy_minus_sign:                         | N/A                                        |
+| Field                                     | Type                                      | Required                                  | Description                               |
+| ----------------------------------------- | ----------------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| `cluster`                                 | *models.NewDeploymentRequestClusterUnion* | :heavy_minus_sign:                        | N/A                                       |
+| `exposure`                                | *models.NewDeploymentRequestExposure*     | :heavy_minus_sign:                        | N/A                                       |

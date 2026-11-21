@@ -35,7 +35,7 @@ let value: DataContainer = {
 
 ## Fields
 
-| Field                   | Type                    | Required                | Description             |
-| ----------------------- | ----------------------- | ----------------------- | ----------------------- |
-| `data`                  | *operations.DataUnion3* | :heavy_check_mark:      | N/A                     |
-| `resourceType`          | *"container"*           | :heavy_check_mark:      | N/A                     |
+| Field                                                                                | Type                                                                                 | Required                                                                             | Description                                                                          |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `data`                                                                               | *operations.DataUnion3*                                                              | :heavy_check_mark:                                                                   | N/A                                                                                  |
+| `resourceType`                                                                       | [operations.ResourceTypeContainer](../../models/operations/resourcetypecontainer.md) | :heavy_check_mark:                                                                   | N/A                                                                                  |

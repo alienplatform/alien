@@ -79,7 +79,7 @@ export function queryKeyDeploymentsListFilterDeploymentGroups(
 ): QueryKey {
   return [
     "@alienplatform/platform-api",
-    "deployments",
+    "Deployments",
     "listFilterDeploymentGroups",
     parameters,
   ];

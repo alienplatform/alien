@@ -3,16 +3,13 @@
 
 ## Supported Types
 
-### `operations.DataAwsBedrock`
+### `operations.DataGcpServiceUsage`
 
 ```typescript
-const value: operations.DataAwsBedrock = {
-  availability: {
-    catalogRevision: "<value>",
-    models: [],
-    source: "aws-bedrock",
-  },
-  region: "<value>",
+const value: operations.DataGcpServiceUsage = {
+  enabled: true,
+  projectId: "<id>",
+  serviceName: "<value>",
   status: {
     collectionIssues: [
       {
@@ -22,96 +19,29 @@ const value: operations.DataAwsBedrock = {
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "running",
+    health: "healthy",
+    lifecycle: "deleted",
     partial: false,
     stale: false,
   },
-  backend: "awsBedrock",
+  backend: "gcpServiceUsage",
 };
 ```
 
-### `operations.DataGcpVertex`
+### `operations.DataAzureResourceProvider`
 
 ```typescript
-const value: operations.DataGcpVertex = {
-  availability: {
-    catalogRevision: "<value>",
-    models: [
-      {
-        accessTest: "not-checked",
-        availability: "unknown",
-        blockers: [],
-        clientApis: [],
-        publicModelId: "<id>",
-      },
-    ],
-    source: "anthropic",
-  },
-  location: "<value>",
-  project: "<value>",
+const value: operations.DataAzureResourceProvider = {
+  namespace: "<value>",
+  registered: true,
+  resourceTypeCount: 563831,
   status: {
     collectionIssues: [],
     health: "degraded",
-    lifecycle: "unknown",
-    partial: false,
-    stale: false,
-  },
-  backend: "gcpVertex",
-};
-```
-
-### `operations.DataAzureFoundry`
-
-```typescript
-const value: operations.DataAzureFoundry = {
-  accountName: "<value>",
-  availability: {
-    catalogRevision: "<value>",
-    models: [
-      {
-        accessTest: "verified",
-        availability: "available",
-        blockers: [],
-        clientApis: [
-          "anthropic-messages",
-        ],
-        publicModelId: "<id>",
-      },
-    ],
-    source: "azure-foundry",
-  },
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
-    lifecycle: "stopping",
+    lifecycle: "scaling",
     partial: true,
-    stale: false,
+    stale: true,
   },
-  backend: "azureFoundry",
+  backend: "azureResourceProvider",
 };
 ```
-
-### `operations.DataExternal`
-
-```typescript
-const value: operations.DataExternal = {
-  provider: "<value>",
-  status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
-    partial: true,
-    stale: false,
-  },
-  backend: "external",
-};
-```
-

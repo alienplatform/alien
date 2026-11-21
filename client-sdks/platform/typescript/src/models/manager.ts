@@ -6,6 +6,10 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
+import {
+  AvailableSetupUpdate,
+  AvailableSetupUpdate$inboundSchema,
+} from "./availablesetupupdate.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   ManagerManagementConfigs,
@@ -86,6 +90,40 @@ export type ManagerMetrics = {
 };
 
 /**
+ * How this Private Alien Instance was set up. Absent for Alien-hosted managers.
+ */
+export const ManagerSetupMethod = {
+  Cloudformation: "cloudformation",
+  GoogleOauth: "google-oauth",
+  Terraform: "terraform",
+  Helm: "helm",
+  Cli: "cli",
+  Manual: "manual",
+} as const;
+/**
+ * How this Private Alien Instance was set up. Absent for Alien-hosted managers.
+ */
+export type ManagerSetupMethod = ClosedEnum<typeof ManagerSetupMethod>;
+
+/**
+ * Where this Private Alien Instance's setup was installed. Returned when retrieving one manager.
+ */
+export type SetupLocation = {
+  /**
+   * CloudFormation stack ARN, for CloudFormation setup
+   */
+  stackId?: string | null | undefined;
+  /**
+   * CloudFormation stack name
+   */
+  stackName?: string | null | undefined;
+  /**
+   * Region of the stack
+   */
+  region?: string | null | undefined;
+};
+
+/**
  * Manager schema
  */
 export type Manager = {
@@ -94,6 +132,10 @@ export type Manager = {
    * Display name of the manager
    */
   name: string;
+  /**
+   * Capabilities the manager reported in its last heartbeat, such as `values: 1` when it stores deployment values.
+   */
+  capabilities?: { [k: string]: number } | undefined;
   /**
    * Platforms this manager can handle
    */
@@ -135,6 +177,10 @@ export type Manager = {
    */
   version?: string | null | undefined;
   /**
+   * URL machines can use to reach the machine control plane through this manager (self-reported via heartbeat). Null when the manager does not relay machine traffic.
+   */
+  machineRelayUrl?: string | null | undefined;
+  /**
    * Runtime metrics (self-reported via heartbeat)
    */
   metrics?: ManagerMetrics | null | undefined;
@@ -158,6 +204,18 @@ export type Manager = {
    * Timestamp when the manager was created
    */
   createdAt: Date;
+  /**
+   * How this Private Alien Instance was set up. Absent for Alien-hosted managers.
+   */
+  setupMethod?: ManagerSetupMethod | null | undefined;
+  /**
+   * Resources this Private Alien Instance declined that running its setup again turns on. Returned when retrieving one manager.
+   */
+  availableSetupUpdates?: Array<AvailableSetupUpdate> | undefined;
+  /**
+   * Where this Private Alien Instance's setup was installed. Returned when retrieving one manager.
+   */
+  setupLocation?: SetupLocation | null | undefined;
 };
 
 /** @internal */
@@ -194,9 +252,33 @@ export function managerMetricsFromJSON(
 }
 
 /** @internal */
+export const ManagerSetupMethod$inboundSchema: z.ZodEnum<
+  typeof ManagerSetupMethod
+> = z.enum(ManagerSetupMethod);
+
+/** @internal */
+export const SetupLocation$inboundSchema: z.ZodType<SetupLocation, unknown> = z
+  .object({
+    stackId: z.nullable(z.string()).optional(),
+    stackName: z.nullable(z.string()).optional(),
+    region: z.nullable(z.string()).optional(),
+  });
+
+export function setupLocationFromJSON(
+  jsonString: string,
+): SafeParseResult<SetupLocation, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SetupLocation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SetupLocation' from JSON`,
+  );
+}
+
+/** @internal */
 export const Manager$inboundSchema: z.ZodType<Manager, unknown> = z.object({
   id: z.string(),
   name: z.string(),
+  capabilities: z.record(z.string(), z.number()).optional(),
   targets: z.array(ManagerTarget$inboundSchema),
   cloud: z.nullable(CloudEnum$inboundSchema).optional(),
   region: z.nullable(z.string()).optional(),
@@ -207,6 +289,7 @@ export const Manager$inboundSchema: z.ZodType<Manager, unknown> = z.object({
   workspaceId: z.string(),
   status: ManagerStatus$inboundSchema,
   version: z.nullable(z.string()).optional(),
+  machineRelayUrl: z.nullable(z.string()).optional(),
   metrics: z.nullable(z.lazy(() => ManagerMetrics$inboundSchema)).optional(),
   lastHeartbeatAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -215,6 +298,10 @@ export const Manager$inboundSchema: z.ZodType<Manager, unknown> = z.object({
   managedDeploymentCount: z.int(),
   defaultProjectCount: z.int(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  setupMethod: z.nullable(ManagerSetupMethod$inboundSchema).optional(),
+  availableSetupUpdates: z.array(AvailableSetupUpdate$inboundSchema).optional(),
+  setupLocation: z.nullable(z.lazy(() => SetupLocation$inboundSchema))
+    .optional(),
 });
 
 export function managerFromJSON(

@@ -9,50 +9,72 @@ import { DeploymentDetailResponseUpdateState } from "@alienplatform/platform-api
 
 let value: DeploymentDetailResponseUpdateState = {
   active: {
-    id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
+    id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
     status: "queued",
     reasons: [],
-    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     changedKeys: [],
-    cause: {
-      kind: "volume-restore",
-      at: new Date("2024-04-20T16:58:36.345Z"),
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    blocker: {
+      kind: "other",
+      message: "<value>",
+      signedSetupUpdate: {
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+        templateDigest: "<value>",
+      },
     },
-    requestedAt: new Date("2024-05-03T02:14:14.983Z"),
+    cause: {
+      kind: "promotion",
+      at: new Date("2026-12-01T10:04:11.187Z"),
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+    },
+    requestedAt: new Date("2025-05-23T02:17:08.731Z"),
   },
   next: {
-    id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-    status: "applying",
-    reasons: [],
-    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
+    status: "superseded",
+    reasons: [
+      "redeploy",
+    ],
+    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     changedKeys: [
       "<value 1>",
       "<value 2>",
       "<value 3>",
     ],
-    cause: {
-      kind: "volume-restore",
-      at: new Date("2024-04-20T16:58:36.345Z"),
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    blocker: {
+      kind: "other",
+      message: "<value>",
+      signedSetupUpdate: {
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+        templateDigest: "<value>",
+      },
     },
-    requestedAt: new Date("2025-07-21T11:59:25.062Z"),
+    cause: null,
+    requestedAt: new Date("2025-07-14T02:26:55.487Z"),
   },
   latest: {
-    id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-    status: "queued",
+    id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
+    status: "failed",
     reasons: [],
-    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     changedKeys: [
       "<value 1>",
       "<value 2>",
     ],
-    cause: {
-      kind: "volume-restore",
-      at: new Date("2024-04-20T16:58:36.345Z"),
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    blocker: {
+      kind: "other",
+      message: "<value>",
+      signedSetupUpdate: {
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+        templateDigest: "<value>",
+      },
     },
-    requestedAt: new Date("2026-06-26T04:52:21.740Z"),
+    cause: {
+      kind: "promotion",
+      at: new Date("2026-12-01T10:04:11.187Z"),
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+    },
+    requestedAt: new Date("2026-04-09T17:19:50.603Z"),
   },
 };
 ```

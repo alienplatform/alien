@@ -55,6 +55,15 @@ export type AiAvailabilityObservationClientApi = ClosedEnum<
   typeof AiAvailabilityObservationClientApi
 >;
 
+/**
+ * One quota the account has set well below the cloud's default (under 10%).
+ */
+export type AiAvailabilityObservationQuotaWarning = {
+  applied: number;
+  default: number;
+  quotaName: string;
+};
+
 export type AiAvailabilityObservationModel = {
   accessTest: AiAvailabilityObservationAccessTest;
   availability: AiAvailabilityObservationAvailability;
@@ -62,7 +71,21 @@ export type AiAvailabilityObservationModel = {
   clientApis: Array<AiAvailabilityObservationClientApi>;
   errorCode?: string | null | undefined;
   publicModelId: string;
+  /**
+   * Applied quotas far below the cloud's default for this model. Empty when none were read
+   *
+   * @remarks
+   * or none are low.
+   */
+  quotaWarnings?: Array<AiAvailabilityObservationQuotaWarning> | undefined;
   testedAt?: Date | null | undefined;
+  /**
+   * Requests the cloud throttled for this model in the last hour, from the cloud's own
+   *
+   * @remarks
+   * metrics. `None` when not read; `Some(0)` is a real zero.
+   */
+  throttledLastHour?: number | null | undefined;
 };
 
 /**
@@ -121,6 +144,27 @@ export const AiAvailabilityObservationClientApi$inboundSchema: z.ZodEnum<
 > = z.enum(AiAvailabilityObservationClientApi);
 
 /** @internal */
+export const AiAvailabilityObservationQuotaWarning$inboundSchema: z.ZodType<
+  AiAvailabilityObservationQuotaWarning,
+  unknown
+> = z.object({
+  applied: z.number(),
+  default: z.number(),
+  quotaName: z.string(),
+});
+
+export function aiAvailabilityObservationQuotaWarningFromJSON(
+  jsonString: string,
+): SafeParseResult<AiAvailabilityObservationQuotaWarning, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      AiAvailabilityObservationQuotaWarning$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'AiAvailabilityObservationQuotaWarning' from JSON`,
+  );
+}
+
+/** @internal */
 export const AiAvailabilityObservationModel$inboundSchema: z.ZodType<
   AiAvailabilityObservationModel,
   unknown
@@ -131,9 +175,13 @@ export const AiAvailabilityObservationModel$inboundSchema: z.ZodType<
   clientApis: z.array(AiAvailabilityObservationClientApi$inboundSchema),
   errorCode: z.nullable(z.string()).optional(),
   publicModelId: z.string(),
+  quotaWarnings: z.array(
+    z.lazy(() => AiAvailabilityObservationQuotaWarning$inboundSchema),
+  ).optional(),
   testedAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
+  throttledLastHour: z.nullable(z.int()).optional(),
 });
 
 export function aiAvailabilityObservationModelFromJSON(

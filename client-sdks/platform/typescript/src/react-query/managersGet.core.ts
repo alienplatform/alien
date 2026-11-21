@@ -40,7 +40,9 @@ export function buildManagersGetQuery(
   queryFn: (context: QueryFunctionContext) => Promise<ManagersGetQueryData>;
 } {
   return {
-    queryKey: queryKeyManagersGet(request.id),
+    queryKey: queryKeyManagersGet(request.id, {
+      includeCounts: request.includeCounts,
+    }),
     queryFn: async function managersGetQueryFn(
       ctx,
     ): Promise<ManagersGetQueryData> {
@@ -64,6 +66,9 @@ export function buildManagersGetQuery(
   };
 }
 
-export function queryKeyManagersGet(id: string): QueryKey {
-  return ["@alienplatform/platform-api", "managers", "get", id];
+export function queryKeyManagersGet(
+  id: string,
+  parameters: { includeCounts?: operations.IncludeCounts | undefined },
+): QueryKey {
+  return ["@alienplatform/platform-api", "managers", "get", id, parameters];
 }

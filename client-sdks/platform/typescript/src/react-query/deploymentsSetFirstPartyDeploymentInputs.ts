@@ -70,7 +70,7 @@ export function useDeploymentsSetFirstPartyDeploymentInputsMutation(
 export function mutationKeyDeploymentsSetFirstPartyDeploymentInputs(): MutationKey {
   return [
     "@alienplatform/platform-api",
-    "deployments",
+    "Deployments",
     "setFirstPartyDeploymentInputs",
   ];
 }
