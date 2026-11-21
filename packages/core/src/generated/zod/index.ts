@@ -277,6 +277,7 @@ export type { GcpRemoteBindingsImportData } from "./gcp-remote-bindings-import-d
 export type { GcpRemoteStackManagementHeartbeatData } from "./gcp-remote-stack-management-heartbeat-data-schema.js";
 export type { GcpRemoteStackManagementImportData } from "./gcp-remote-stack-management-import-data-schema.js";
 export type { GcpSandboxImportData } from "./gcp-sandbox-import-data-schema.js";
+export type { GcpSandboxNetwork } from "./gcp-sandbox-network-schema.js";
 export type { GcpSecretManagerVaultHeartbeatData } from "./gcp-secret-manager-vault-heartbeat-data-schema.js";
 export type { GcpServiceAccountHeartbeatData } from "./gcp-service-account-heartbeat-data-schema.js";
 export type { GcpServiceAccountImportData } from "./gcp-service-account-import-data-schema.js";
@@ -851,6 +852,7 @@ export { GcpRemoteBindingsImportDataSchema } from "./gcp-remote-bindings-import-
 export { GcpRemoteStackManagementHeartbeatDataSchema } from "./gcp-remote-stack-management-heartbeat-data-schema.js";
 export { GcpRemoteStackManagementImportDataSchema } from "./gcp-remote-stack-management-import-data-schema.js";
 export { GcpSandboxImportDataSchema } from "./gcp-sandbox-import-data-schema.js";
+export { GcpSandboxNetworkSchema } from "./gcp-sandbox-network-schema.js";
 export { GcpSecretManagerVaultHeartbeatDataSchema } from "./gcp-secret-manager-vault-heartbeat-data-schema.js";
 export { GcpServiceAccountHeartbeatDataSchema } from "./gcp-service-account-heartbeat-data-schema.js";
 export { GcpServiceAccountImportDataSchema } from "./gcp-service-account-import-data-schema.js";
