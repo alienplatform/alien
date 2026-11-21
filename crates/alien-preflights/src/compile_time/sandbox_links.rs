@@ -154,8 +154,20 @@ mod tests {
             gcp[0].contains("not available on Google Cloud yet"),
             "{gcp:?}"
         );
-        let azure = errors(&stack, Platform::Azure).await;
-        assert!(azure[0].contains("not available on Azure"), "{azure:?}");
+    }
+
+    #[tokio::test]
+    async fn azure_links_plan_once_the_gateway_image_serves_them() {
+        // A single-port container without a public endpoint links on Azure.
+        let linked = stack(
+            sandbox(SandboxEgress::Internet, &[&api]),
+            Some(LINKS_GATEWAY),
+        );
+        assert!(errors(&linked, Platform::Azure).await.is_empty());
+        // The released gateway image refuses Azure links as it does everywhere.
+        let released = stack(sandbox(SandboxEgress::Internet, &[&api]), None);
+        let refused = errors(&released, Platform::Azure).await;
+        assert!(refused[0].contains("cannot enforce links"), "{refused:?}");
     }
 
     #[tokio::test]

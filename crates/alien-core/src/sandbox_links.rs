@@ -188,15 +188,16 @@ pub fn internal_ports(stack: &crate::Stack, id: &str) -> Result<Vec<u16>, String
 /// Why `platform` cannot route a sandbox's gateway to a linked service, if it cannot.
 pub fn platform_refusal(platform: crate::Platform) -> Option<&'static str> {
     match platform {
-        crate::Platform::Aws | crate::Platform::Kubernetes | crate::Platform::Local => None,
+        // Azure fronts each linked container with an internal load balancer; links ship with
+        // the gateway image that serves them, as Azure internet sandboxes do.
+        crate::Platform::Aws
+        | crate::Platform::Kubernetes
+        | crate::Platform::Local
+        | crate::Platform::Azure => None,
         // Follows Google Cloud internet sandboxes, which are not available yet.
         crate::Platform::Gcp => Some(
             "links are not available on Google Cloud yet: they go through the deployment's \
              egress gateway, which Google Cloud internet sandboxes do not use yet",
-        ),
-        crate::Platform::Azure => Some(
-            "links are not available on Azure in this release: the gateway runs on VMs outside \
-             the container network",
         ),
         _ => Some("links are not available on this platform"),
     }
