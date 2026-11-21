@@ -13,6 +13,4 @@ const agents = new alien.Sandbox("agents")
   .lifecycle({})
   .build()
 
-export default new alien.Stack("sandbox-internet")
-  .add(agents, "frozen")
-  .build()
+export default new alien.Stack("sandbox-internet").add(agents, "frozen").build()
