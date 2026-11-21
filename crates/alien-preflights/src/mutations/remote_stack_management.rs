@@ -224,7 +224,7 @@ mod tests {
             gcp_federation_scope: None,
             release_statements: None,
             signed_config: None,
-            installed_setup_fingerprint: None,
+            installed_setup_marker: None,
             deployment_name: None,
             stack_settings: StackSettings {
                 deployment_model,

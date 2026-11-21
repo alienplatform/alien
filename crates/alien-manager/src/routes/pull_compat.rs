@@ -1051,7 +1051,13 @@ mod tests {
                 )
                 .build()
         };
-        for version in [None, Some("3.3.31"), Some("3.3.62"), Some("3.3.68"), Some("3.3.69")] {
+        for version in [
+            None,
+            Some("3.3.31"),
+            Some("3.3.62"),
+            Some("3.3.68"),
+            Some("3.3.69"),
+        ] {
             assert_eq!(
                 refused_for(&queue(true), version),
                 ["queue dead-letter targets"],
