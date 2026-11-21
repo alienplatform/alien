@@ -57,7 +57,7 @@ mod sandbox;
 pub use sandbox::*;
 
 pub mod setup_drift;
-pub use setup_drift::setup_drift;
+pub use setup_drift::{recorded_denials, setup_drift};
 pub mod setup_scaffolding;
 
 mod kubernetes_cluster;

@@ -2593,6 +2593,9 @@ async fn deploy_task_with_environment(
             success_line("Deployment is running with no pending update. Nothing to do.")
         );
         println!("{}", dim_label(&setup_current_note(direct_setup)));
+        for line in earlier_denials_note(installed_stack_state.as_ref()) {
+            println!("{}", dim_label(&line));
+        }
         println!(
             "{} {}",
             dim_label("Next"),
@@ -2675,7 +2678,6 @@ async fn deploy_task_with_environment(
                     &base_url,
                     &setup_token,
                     &tracked_deployment.deployment_id,
-                    &setup_drift,
                 )
                 .await?;
             }
@@ -3746,13 +3748,29 @@ fn setup_current_note(direct_setup: bool) -> String {
     }
 }
 
+/// Denials a resource recorded earlier with the grants already current: the grant exists, so
+/// setup would change nothing, and the next update of that resource asks again.
+fn earlier_denials_note(stack_state: Option<&alien_core::StackState>) -> Vec<String> {
+    let Some(stack_state) = stack_state else {
+        return Vec::new();
+    };
+    alien_infra::recorded_denials(stack_state)
+        .into_iter()
+        .map(|reason| {
+            format!(
+                "{} It will be retried on the next update.",
+                reason.summary()
+            )
+        })
+        .collect()
+}
+
 /// Asks the platform to open a setup-update operation for the installed release, so a setup run
 /// on a running deployment hands off to an operation the manager completes.
 async fn open_setup_update_operation(
     base_url: &str,
     setup_token: &str,
     deployment_id: &str,
-    reasons: &[alien_core::SetupDriftReason],
 ) -> Result<()> {
     let url = api_url(
         base_url,
@@ -3764,7 +3782,6 @@ async fn open_setup_update_operation(
     )?;
     let response = create_platform_http_client(setup_token)?
         .post(url)
-        .json(&serde_json::json!({ "reasons": reasons }))
         .send()
         .await
         .into_alien_error()

@@ -187,7 +187,7 @@ fn missing_flow_logs(_: &Stack, _: &StackState, _: Platform) -> Vec<SetupDriftRe
 /// Read from the controller's recorded state without naming its type: CloudWatch alarms keep
 /// `alarms.denied` (a message) and DynamoDB point-in-time recovery keeps
 /// `pointInTimeRecoveryDenial`.
-fn recorded_denials(state: &StackState) -> Vec<SetupDriftReason> {
+pub fn recorded_denials(state: &StackState) -> Vec<SetupDriftReason> {
     let mut reasons = Vec::new();
     for (id, resource) in &state.resources {
         let Some(internal) = resource.internal_state.as_ref() else {
@@ -201,7 +201,7 @@ fn recorded_denials(state: &StackState) -> Vec<SetupDriftReason> {
             reasons.push(SetupDriftReason {
                 code: SetupDriftCode::GrantDenied,
                 resource: Some(id.clone()),
-                detail: "CloudWatch alarms were denied by the management permissions".to_string(),
+                detail: "CloudWatch alarms were denied earlier".to_string(),
             });
         }
         if internal
@@ -211,8 +211,7 @@ fn recorded_denials(state: &StackState) -> Vec<SetupDriftReason> {
             reasons.push(SetupDriftReason {
                 code: SetupDriftCode::GrantDenied,
                 resource: Some(id.clone()),
-                detail: "Point-in-time recovery was denied by the management permissions"
-                    .to_string(),
+                detail: "Point-in-time recovery was denied earlier".to_string(),
             });
         }
     }
