@@ -24,8 +24,10 @@
 //!
 //! The SDK writes each grant to every gateway replica at its VPC address, the same list the
 //! sandbox's agent dials, so the test cannot rename the replicas. It gives each replica address
-//! to the local loopback interface (`sudo ip addr replace <ip>/32 dev lo`, removed at the end) and
-//! binds one tunnel per replica to `<ip>:<admin port>`, relayed to that replica's admin port.
+//! to the local loopback interface (`sudo ip addr replace <ip>/32 dev lo`, removed at the end),
+//! listens on `<ip>:<admin port>` itself and forwards each connection to that replica's tunnel.
+//! The tunnels sit on free 127.0.0.1 ports: `gcloud` checks a local port on every address, so a
+//! second tunnel on the admin port is refused even when bound to another address.
 //!
 //! Run by hand, against the test project only (it creates network resources):
 //!
@@ -685,29 +687,16 @@ impl Drop for LoopbackAliases {
 /// `gcloud` checks the backend once and exits when the relay is not listening yet (IAP answers
 /// 4003 while the VM boots), so a tunnel that exits is started again until the deadline.
 async fn tunnel(relay: &Relay, port: u16) -> anyhow::Result<(tokio::process::Child, u16)> {
-    tunnel_at(relay, port, None).await
-}
-
-/// `tunnel`, bound to `local` when given (an address the loopback interface holds), else to a
-/// free port on 127.0.0.1.
-async fn tunnel_at(
-    relay: &Relay,
-    port: u16,
-    local: Option<std::net::SocketAddrV4>,
-) -> anyhow::Result<(tokio::process::Child, u16)> {
     let deadline = Instant::now() + Duration::from_secs(600);
     let mut attempts = 0;
     while Instant::now() < deadline {
         attempts += 1;
-        let local = match local {
-            Some(local) => local,
-            None => std::net::SocketAddrV4::new(
-                std::net::Ipv4Addr::LOCALHOST,
-                std::net::TcpListener::bind("127.0.0.1:0")?
-                    .local_addr()?
-                    .port(),
-            ),
-        };
+        let local = std::net::SocketAddrV4::new(
+            std::net::Ipv4Addr::LOCALHOST,
+            std::net::TcpListener::bind("127.0.0.1:0")?
+                .local_addr()?
+                .port(),
+        );
         let mut gcloud = tokio::process::Command::new("gcloud");
         if let Some(path) = gcloud_token_file() {
             gcloud.arg(format!("--access-token-file={}", path.display()));
@@ -741,6 +730,34 @@ async fn tunnel_at(
         "the tunnel to {}:{port} did not open after {attempts} attempts",
         relay.vm
     )
+}
+
+/// Accepts on `listen` and pipes every connection to `127.0.0.1:port`, until dropped.
+struct Forwarder(tokio::task::JoinHandle<()>);
+
+impl Forwarder {
+    async fn start(listen: std::net::SocketAddrV4, port: u16) -> anyhow::Result<Self> {
+        let listener = tokio::net::TcpListener::bind(listen)
+            .await
+            .with_context(|| format!("listen on {listen}"))?;
+        Ok(Self(tokio::spawn(async move {
+            while let Ok((mut client, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    if let Ok(mut upstream) =
+                        tokio::net::TcpStream::connect(("127.0.0.1", port)).await
+                    {
+                        let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                    }
+                });
+            }
+        })))
+    }
+}
+
+impl Drop for Forwarder {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// The last lines of the relay's serial console, kept in the proof when a run fails so the
@@ -955,10 +972,9 @@ async fn gcp_internet_sandbox_egress_goes_through_the_gateway_only(ctx: &mut Gcp
                 let _aliases = LoopbackAliases::add(&deployed.gateway_ips)?;
                 let mut _admin_tunnels = Vec::new();
                 for (i, ip) in deployed.gateway_ips.iter().enumerate() {
-                    let local = std::net::SocketAddrV4::new(ip.parse()?, plan::ADMIN_PORT);
-                    let (child, _) =
-                        tunnel_at(&relay, RELAY_ADMIN_PORT + i as u16, Some(local)).await?;
-                    _admin_tunnels.push(child);
+                    let (child, port) = tunnel(&relay, RELAY_ADMIN_PORT + i as u16).await?;
+                    let listen = std::net::SocketAddrV4::new(ip.parse()?, plan::ADMIN_PORT);
+                    _admin_tunnels.push((child, Forwarder::start(listen, port).await?));
                 }
                 let workload = act_as_workload(&deployed, &mut proof).await?;
                 let provider = provider(&deployed, workload, endpoint_port)?;
