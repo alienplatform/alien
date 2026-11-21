@@ -165,10 +165,10 @@ pub fn internal_ports(stack: &crate::Stack, id: &str) -> Result<Vec<u16>, String
 pub fn platform_refusal(platform: crate::Platform) -> Option<&'static str> {
     match platform {
         crate::Platform::Aws | crate::Platform::Kubernetes | crate::Platform::Local => None,
+        // Follows Google Cloud internet sandboxes, which are not available yet.
         crate::Platform::Gcp => Some(
-            "links need the deployment's egress gateway, and Google Cloud sandboxes have none: \
-             their outbound traffic leaves through Google's network and cannot reach the \
-             deployment's private network",
+            "links are not available on Google Cloud yet: they go through the deployment's \
+             egress gateway, which Google Cloud internet sandboxes do not use yet",
         ),
         crate::Platform::Azure => Some(
             "links are not available on Azure in this release: the gateway runs on VMs outside \

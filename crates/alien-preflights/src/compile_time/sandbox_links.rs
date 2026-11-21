@@ -151,7 +151,7 @@ mod tests {
         );
         let gcp = errors(&stack, Platform::Gcp).await;
         assert!(
-            gcp[0].contains("Google Cloud sandboxes have none"),
+            gcp[0].contains("not available on Google Cloud yet"),
             "{gcp:?}"
         );
         let azure = errors(&stack, Platform::Azure).await;
