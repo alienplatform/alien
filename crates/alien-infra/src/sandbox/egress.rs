@@ -13,7 +13,7 @@ use alien_bindings::Vault;
 use alien_client_core::ErrorData as CloudError;
 use alien_error::{AlienError, Context};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use ed25519_compact::{KeyPair, SecretKey};
+use ed25519_compact::SecretKey;
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
 use sha2::{Digest, Sha256};
@@ -58,18 +58,12 @@ fn invalid_key() -> ErrorData {
 
 /// A fresh signing key: the vault value and its public half.
 fn new_signing_key() -> Result<(String, GatewayPublicKey)> {
-    let key = KeyPair::generate();
-    let stored = StoredSigningKey {
-        kid: uuid::Uuid::new_v4().to_string(),
-        private_key: STANDARD.encode(key.sk.to_der()),
-    };
-    // Serializing strings cannot fail, but keep the error free of secret contents.
-    let value = serde_json::to_string(&stored).map_err(|_| AlienError::new(invalid_key()))?;
+    let key = alien_bindings::sandbox_egress_token::generate_signing_key();
     Ok((
-        value,
+        key.document,
         GatewayPublicKey {
-            kid: stored.kid,
-            public_key: STANDARD.encode(key.pk.as_ref()),
+            kid: key.kid,
+            public_key: key.public_key,
         },
     ))
 }

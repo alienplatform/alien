@@ -29,6 +29,10 @@ pub struct LocalSandboxController {
     /// File the route's bearer token is written to. The binding carries the path, never the
     /// token, so no secret lands in deployment state.
     pub(crate) token_path: Option<String>,
+    /// Bindings of the services the sandbox links, published in its binding. Empty, and not
+    /// written, for a sandbox without links.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(crate) links: std::collections::BTreeMap<String, alien_core::bindings::ContainerBinding>,
 }
 
 #[controller]
@@ -71,7 +75,7 @@ impl LocalSandboxController {
         let route = alien_local::SandboxRoute::ensure_at(
             manager,
             &config.id,
-            session_template(&config)?,
+            session_template(&config, ctx.desired_stack)?,
             self.route_url.as_deref(),
         )
         .await
@@ -83,6 +87,7 @@ impl LocalSandboxController {
         self.route_url = Some(route.base_url.clone());
         self.token_path = Some(route.token_path.display().to_string());
         self.egress = Some(config.into());
+        self.links = link_bindings(ctx.desired_stack, &config);
 
         info!(sandbox_id = %config.id, route = %route.base_url, "Local sandbox ready");
 
@@ -108,7 +113,7 @@ impl LocalSandboxController {
         let route = alien_local::SandboxRoute::ensure_at(
             Arc::clone(&manager),
             &config.id,
-            session_template(&config)?,
+            session_template(&config, ctx.desired_stack)?,
             self.route_url.as_deref(),
         )
         .await
@@ -119,6 +124,7 @@ impl LocalSandboxController {
         self.route_url = Some(route.base_url);
         self.token_path = Some(route.token_path.display().to_string());
         self.egress = Some(config.into());
+        self.links = link_bindings(ctx.desired_stack, &config);
 
         // "Healthy" on a platform with nothing durable means the runtime is still there to
         // create sessions in; the session count itself is not a health signal.
@@ -183,7 +189,7 @@ impl LocalSandboxController {
         let route = alien_local::SandboxRoute::ensure_at(
             manager,
             &config.id,
-            session_template(&config)?,
+            session_template(&config, ctx.desired_stack)?,
             self.route_url.as_deref(),
         )
         .await
@@ -194,6 +200,7 @@ impl LocalSandboxController {
         self.route_url = Some(route.base_url);
         self.token_path = Some(route.token_path.display().to_string());
         self.egress = Some(config.into());
+        self.links = link_bindings(ctx.desired_stack, &config);
 
         info!(sandbox_id = %config.id, "Updated local sandbox configuration");
 
@@ -293,6 +300,7 @@ impl LocalSandboxController {
                 .egress
                 .as_ref()
                 .and_then(|value| value.default_policy().cloned());
+            value.links = self.links.clone();
         }
 
         Ok(Some(
@@ -310,8 +318,54 @@ impl LocalSandboxController {
 ///
 /// Every field is enforced. A limit this cannot express is an error rather than a default:
 /// silently widening a ceiling on a sandbox is the failure this resource exists to prevent.
+/// The services `sandbox` links, as its sessions reach them through the local gateway: each
+/// container by its resource id on its declared ports. Empty without links, and for a sandbox
+/// without internet egress, which planning refuses links for.
+fn linked_services(stack: &alien_core::Stack, sandbox: &Sandbox) -> Vec<(String, Vec<u16>)> {
+    if sandbox.egress != alien_core::SandboxEgress::Internet {
+        return Vec::new();
+    }
+    sandbox
+        .gateway_links
+        .iter()
+        .filter_map(|link| {
+            // Planning checked the link; a target that stopped being linkable is left out.
+            let ports = alien_core::sandbox_links::internal_ports(stack, &link.id).ok()?;
+            Some((link.id.clone(), ports))
+        })
+        .collect()
+}
+
+/// The bindings a sandbox's commands receive for its links: each linked container's name on
+/// `deployment-network`, never its host-mapped public URL.
+fn link_bindings(
+    stack: &alien_core::Stack,
+    sandbox: &Sandbox,
+) -> std::collections::BTreeMap<String, alien_core::bindings::ContainerBinding> {
+    use alien_core::bindings::{BindingValue, ContainerBinding, LocalContainerBinding};
+    linked_services(stack, sandbox)
+        .into_iter()
+        .map(|(id, ports)| {
+            let url = |port: u16| format!("http://{id}.svc:{port}");
+            let binding = ContainerBinding::Local(LocalContainerBinding {
+                container_name: BindingValue::value(id.clone()),
+                internal_url: BindingValue::value(url(ports[0])),
+                public_url: None,
+                internal_urls: ports
+                    .iter()
+                    .map(|&port| (port, BindingValue::value(url(port))))
+                    .collect(),
+            });
+            (id, binding)
+        })
+        .collect()
+}
+
 #[cfg(feature = "local")]
-fn session_template(sandbox: &Sandbox) -> Result<alien_local::SandboxSessionConfig> {
+fn session_template(
+    sandbox: &Sandbox,
+    stack: &alien_core::Stack,
+) -> Result<alien_local::SandboxSessionConfig> {
     use alien_core::{SandboxCode, SandboxEgress};
 
     let SandboxCode::Image { image, .. } = &sandbox.code else {
@@ -347,6 +401,10 @@ fn session_template(sandbox: &Sandbox) -> Result<alien_local::SandboxSessionConf
         egress,
         preview_ports: sandbox.preview_ports.clone(),
         env: std::collections::HashMap::new(),
+        links: linked_services(stack, sandbox)
+            .into_iter()
+            .map(|(id, ports)| alien_local::SandboxLink { id, ports })
+            .collect(),
     })
 }
 
@@ -449,6 +507,95 @@ mod tests {
 
         let restored = deserialize_controller(value).expect("a registered tag must deserialize");
         assert_eq!(restored.controller_type(), controller.controller_type());
+    }
+
+    fn linking_stack(egress: alien_core::SandboxEgress) -> (alien_core::Stack, Sandbox) {
+        use alien_core::{Container, ContainerCode, ResourceLifecycle, ResourceSpec};
+        let api = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "nginx".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("execution".to_string())
+            .build();
+        let mut sandbox = Sandbox::new("agents".into())
+            .code(alien_core::SandboxCode::Image {
+                image: "alpine".into(),
+                bundled_from: None,
+            })
+            .egress(egress)
+            .lifecycle(alien_core::SandboxLifecyclePolicy::default())
+            .build();
+        sandbox.gateway_links = vec![alien_core::ResourceRef::new(
+            Container::RESOURCE_TYPE,
+            "api",
+        )];
+        let stack = alien_core::Stack::new("links".into())
+            .add(api, ResourceLifecycle::Live)
+            .add(sandbox.clone(), ResourceLifecycle::Live)
+            .build();
+        (stack, sandbox)
+    }
+
+    /// A linked container reaches the sessions' template and the binding by its name on
+    /// `deployment-network`; without links neither carries anything new.
+    #[test]
+    fn links_reach_the_template_and_the_binding_by_the_service_name() {
+        let (stack, sandbox) = linking_stack(alien_core::SandboxEgress::Internet);
+        let template = session_template(&sandbox, &stack).unwrap();
+        assert_eq!(
+            template.links,
+            [alien_local::SandboxLink {
+                id: "api".into(),
+                ports: vec![8080],
+            }]
+        );
+        let controller = LocalSandboxController {
+            sandbox_name: Some("agents".into()),
+            route_url: Some("http://127.0.0.1:1".into()),
+            token_path: Some("/tmp/token".into()),
+            egress: Some((&sandbox).into()),
+            links: link_bindings(&stack, &sandbox),
+            ..Default::default()
+        };
+        let binding = controller.get_binding_params().unwrap().unwrap();
+        assert_eq!(
+            binding["links"]["api"]["internalUrls"]["8080"],
+            "http://api.svc:8080"
+        );
+        assert!(binding["links"]["api"]["publicUrl"].is_null());
+
+        let mut unlinked = sandbox.clone();
+        unlinked.gateway_links.clear();
+        assert!(session_template(&unlinked, &stack)
+            .unwrap()
+            .links
+            .is_empty());
+        assert!(link_bindings(&stack, &unlinked).is_empty());
+        let controller = LocalSandboxController {
+            links: link_bindings(&stack, &unlinked),
+            ..controller
+        };
+        let binding = controller.get_binding_params().unwrap().unwrap();
+        assert!(binding.get("links").is_none(), "{binding}");
+        let saved = serde_json::to_value(&controller).unwrap();
+        assert!(saved.get("links").is_none(), "{saved}");
+    }
+
+    /// Only internet egress has a gateway to send links through.
+    #[test]
+    fn a_sandbox_without_internet_egress_gets_no_links() {
+        let (stack, sandbox) = linking_stack(alien_core::SandboxEgress::None);
+        assert!(session_template(&sandbox, &stack).unwrap().links.is_empty());
+        assert!(link_bindings(&stack, &sandbox).is_empty());
     }
 
     /// Resolving a controller for a new deployment is a different path from deserializing saved

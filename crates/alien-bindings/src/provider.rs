@@ -2084,9 +2084,13 @@ impl BindingsProviderApi for BindingsProvider {
         } else {
             None
         };
-        let links = gateway
-            .map(|config| config.links.clone())
-            .unwrap_or_default();
+        // A local sandbox's gateway runs in the local manager, so its binding carries the links
+        // itself.
+        let links = match (&binding, gateway) {
+            (SandboxBinding::Local(local), _) => local.links.clone(),
+            (_, Some(config)) => config.links.clone(),
+            (_, None) => Default::default(),
+        };
 
         let sandbox = match binding {
             #[cfg(feature = "local")]

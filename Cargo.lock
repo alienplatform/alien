@@ -1231,6 +1231,7 @@ dependencies = [
  "futures-util",
  "hex",
  "httpmock",
+ "ipnet",
  "libc",
  "notify",
  "object_store",
