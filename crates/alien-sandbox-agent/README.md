@@ -613,7 +613,10 @@ build, release, setup render and deployment, so no setup creates the network att
 gateway VMs or any Private Service Connect resource. `none` works as described below. The rest of
 this section is how `internet` will work once it is available; the code is in place and behind
 one switch (`alien_core::gcp_sandbox_gateway::INTERNET_EGRESS_AVAILABLE`), which is turned on once
-the on-demand live test (`alien-test`, `gcp_sandbox_internet_live`) passes.
+the on-demand live test (`alien-test`, `gcp_sandbox_internet_live`) passes. The plan also needs the
+gateway image setup installs to serve the gateway's admin protocol, as on Azure: the image this
+release pins does not, so the release that turns the switch on also moves the gateway pin to one
+that does.
 
 The plan warns on every GCP sandbox that uses the default network: a project whose first sandbox
 used the default network can never run gateway-backed `internet` sandboxes, even after every

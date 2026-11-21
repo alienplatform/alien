@@ -70,7 +70,7 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                 // Connect resources; the deployment prerequisite is the backstop.
                 if platform == Platform::Gcp
                     && sandbox.egress == SandboxEgress::Internet
-                    && !alien_core::gcp_sandbox_gateway::internet_egress_available()
+                    && !alien_core::gcp_sandbox_gateway::internet_egress_available_for(stack)
                 {
                     return Some(format!(
                         "Sandbox '{}': {}",
@@ -181,7 +181,7 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
         // `allow` and `allowDomains` keep their released meaning on Google Cloud: open outbound
         // through Google's own network. Only `internet` uses the deployment's egress gateway, so
         // the hint to use it is given only once `internet` is available.
-        let gcp_internet = alien_core::gcp_sandbox_gateway::internet_egress_available();
+        let gcp_internet = alien_core::gcp_sandbox_gateway::internet_egress_available_for(stack);
         warnings.extend(
             stack
                 .resources()
@@ -853,6 +853,46 @@ mod tests {
     /// With the switch on, a Google Cloud internet sandbox nobody holds execute on is refused:
     /// its private ingress answers only to a credential signed for an execute holder, so nobody
     /// could use it. Preview ports are not needed for that credential.
+    /// The switch alone is not the flip: with the gateway image this release pins, which does
+    /// not serve the admin protocol, a Google Cloud internet sandbox is still refused with the
+    /// same message, before any setup could build the gateway VMs.
+    #[tokio::test]
+    async fn gcp_internet_needs_a_gateway_image_that_serves_the_admin_protocol() {
+        const OLD_GATEWAY: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1";
+        assert!(!alien_core::sandbox_egress::gateway_image_serves_admin_protocol(OLD_GATEWAY));
+        let on =
+            alien_core::gcp_sandbox_gateway::enable_internet_egress_with_gateway_image_for_test(
+                OLD_GATEWAY,
+            );
+        let mut stack = stack_with(sandbox("agent", None, SandboxEgress::Internet));
+        stack.permissions.profiles.insert(
+            "worker".to_string(),
+            alien_core::permissions::PermissionProfile::new()
+                .resource("agent", ["sandbox/execute"]),
+        );
+        let refused = SandboxPlatformSupportCheck
+            .check(&stack, Platform::Gcp)
+            .await
+            .unwrap();
+        assert!(!refused.success);
+        assert!(
+            refused
+                .errors
+                .iter()
+                .any(|e| e.contains(alien_core::gcp_sandbox_gateway::INTERNET_SANDBOX_UNAVAILABLE)),
+            "{:?}",
+            refused.errors
+        );
+        drop(on);
+
+        let _flipped = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
+        let allowed = SandboxPlatformSupportCheck
+            .check(&stack, Platform::Gcp)
+            .await
+            .unwrap();
+        assert!(allowed.success, "{:?}", allowed.errors);
+    }
+
     #[tokio::test]
     async fn a_gcp_internet_sandbox_needs_an_execute_holder() {
         let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();

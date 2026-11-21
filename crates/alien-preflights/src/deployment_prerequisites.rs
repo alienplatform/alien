@@ -295,11 +295,11 @@ impl DeploymentPrerequisiteCheck for GcpInternetSandboxUnavailableCheck {
 
     async fn check(
         &self,
-        _stack: &Stack,
+        stack: &Stack,
         _state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<CheckResult> {
-        if alien_core::gcp_sandbox_gateway::internet_egress_available() {
+        if alien_core::gcp_sandbox_gateway::internet_egress_available_for(stack) {
             Ok(CheckResult::success())
         } else {
             Ok(CheckResult::failed(vec![
@@ -1851,9 +1851,28 @@ mod tests {
             assert!(!check.should_run(&internet, &stack_state(platform), &config));
         }
 
+        // The switch alone is not the flip: a stack prepared with the gateway image this release
+        // pins is still refused, because that gateway cannot serve the sandbox binding.
         let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
         assert!(alien_core::sandbox_egress::has_sandbox_gateway(&internet));
-        assert!(check.check(&internet, &gcp, &config).await.unwrap().success);
+        let old_gateway = check.check(&internet, &gcp, &config).await.unwrap();
+        assert_eq!(
+            old_gateway.success,
+            alien_core::sandbox_egress::gateway_image_serves_admin_protocol(
+                alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE
+            )
+        );
+        // The flip: the switch on and the gateway pin bumped to an image that serves it.
+        let flipped = prepared(
+            sandbox_stack(alien_core::SandboxEgress::Internet),
+            Platform::Gcp,
+        )
+        .await;
+        assert_eq!(
+            alien_core::sandbox_egress::planned_gateway_image(&flipped),
+            alien_core::gcp_sandbox_gateway::FLIPPED_GATEWAY_IMAGE
+        );
+        assert!(check.check(&flipped, &gcp, &config).await.unwrap().success);
     }
 
     async fn azure_protocol_check(stack: &Stack, platform: Platform) -> Option<CheckResult> {

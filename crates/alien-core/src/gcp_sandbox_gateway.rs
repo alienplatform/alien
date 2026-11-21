@@ -35,26 +35,56 @@ pub fn internet_egress_available() -> bool {
     INTERNET_EGRESS_AVAILABLE || test_switch::forced()
 }
 
+/// Whether this stack's Google Cloud internet sandboxes can be planned: the switch is on and the
+/// gateway image setup will run serves the admin protocol the sandbox binding requires. A gateway
+/// without it would fail every sandbox create after setup built the gateway VMs, so the flip
+/// also bumps the release's gateway pin. Build, render and deployment checks all ask this.
+pub fn internet_egress_available_for(stack: &crate::Stack) -> bool {
+    internet_egress_available()
+        && crate::sandbox_egress::gateway_image_serves_admin_protocol(
+            crate::sandbox_egress::planned_gateway_image(stack),
+        )
+}
+
+/// The gateway image a test installs in place of the release pin, if one turned it on.
+pub(crate) fn gateway_image_override() -> Option<&'static str> {
+    test_switch::gateway_image()
+}
+
 #[cfg(any(test, feature = "test-gcp-internet-egress"))]
 mod test_switch {
     use std::cell::Cell;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::OnceLock;
+
+    /// The released public gateway image the flip pins (v3.3.71, by digest). It serves the admin
+    /// protocol the sandbox binding requires, and it is what the live test runs.
+    pub const FLIPPED_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:69d97f5aceb41f5bc8eee09e497cd967f04ef19b649150a472607153446ef7d8";
 
     thread_local! {
         static FORCED: Cell<bool> = const { Cell::new(false) };
+        static IMAGE: Cell<Option<&'static str>> = const { Cell::new(None) };
     }
 
     static FORCED_FOR_PROCESS: AtomicBool = AtomicBool::new(false);
+    static IMAGE_FOR_PROCESS: OnceLock<&'static str> = OnceLock::new();
 
     pub(super) fn forced() -> bool {
         FORCED.with(Cell::get) || FORCED_FOR_PROCESS.load(Ordering::SeqCst)
     }
 
-    /// Turns Google Cloud internet egress on for every thread of this process, for good: the
-    /// live test, whose build, manager and controllers run on the runtime's worker threads, plans
-    /// and deploys the stack the flipped release would. Never used by unit tests, which share a
-    /// process and must see the switch off.
+    pub(super) fn gateway_image() -> Option<&'static str> {
+        IMAGE
+            .with(Cell::get)
+            .or_else(|| IMAGE_FOR_PROCESS.get().copied())
+    }
+
+    /// Turns Google Cloud internet egress on for every thread of this process, for good, with
+    /// [`FLIPPED_GATEWAY_IMAGE`] as the gateway: the live test, whose build, manager and
+    /// controllers run on the runtime's worker threads, plans and deploys the stack the flipped
+    /// release would. Never used by unit tests, which share a process and must see the switch off.
     pub fn enable_internet_egress_for_process() {
+        let _ = IMAGE_FOR_PROCESS.set(FLIPPED_GATEWAY_IMAGE);
         FORCED_FOR_PROCESS.store(true, Ordering::SeqCst);
     }
 
@@ -65,13 +95,24 @@ mod test_switch {
     impl Drop for InternetEgressForTest {
         fn drop(&mut self) {
             FORCED.with(|forced| forced.set(false));
+            IMAGE.with(|image| image.set(None));
         }
     }
 
-    /// Turns Google Cloud internet egress on for the current thread, as the flipped switch
-    /// would. Tests only; production code never reaches this.
+    /// Turns Google Cloud internet egress on for the current thread, as the flip release would:
+    /// the switch on and [`FLIPPED_GATEWAY_IMAGE`] as the gateway. Tests only; production code
+    /// never reaches this.
     pub fn enable_internet_egress_for_test() -> InternetEgressForTest {
+        enable_internet_egress_with_gateway_image_for_test(FLIPPED_GATEWAY_IMAGE)
+    }
+
+    /// Turns the switch on for the current thread with `image` as the gateway, for a test of a
+    /// flip that did not bump the gateway pin.
+    pub fn enable_internet_egress_with_gateway_image_for_test(
+        image: &'static str,
+    ) -> InternetEgressForTest {
         FORCED.with(|forced| forced.set(true));
+        IMAGE.with(|slot| slot.set(Some(image)));
         InternetEgressForTest(())
     }
 }
@@ -81,11 +122,17 @@ mod test_switch {
     pub(super) fn forced() -> bool {
         false
     }
+
+    pub(super) fn gateway_image() -> Option<&'static str> {
+        None
+    }
 }
 
 #[cfg(any(test, feature = "test-gcp-internet-egress"))]
 pub use test_switch::{
-    enable_internet_egress_for_process, enable_internet_egress_for_test, InternetEgressForTest,
+    enable_internet_egress_for_process, enable_internet_egress_for_test,
+    enable_internet_egress_with_gateway_image_for_test, InternetEgressForTest,
+    FLIPPED_GATEWAY_IMAGE,
 };
 
 /// Range of the attachment's own subnet. Sandbox traffic enters the VPC from addresses in it. A
@@ -404,6 +451,40 @@ mod tests {
                 .unwrap();
         }
         assert!(!internet_egress_available());
+    }
+
+    /// The flip needs both the switch and a gateway image that serves the admin protocol: the
+    /// switch alone, with the image this release pins today, still refuses.
+    #[test]
+    fn internet_egress_needs_a_gateway_image_that_serves_the_admin_protocol() {
+        let stack = crate::Stack::new("s".into()).build();
+        assert!(!internet_egress_available_for(&stack));
+        {
+            let _on = enable_internet_egress_with_gateway_image_for_test(
+                crate::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE,
+            );
+            assert_eq!(
+                internet_egress_available_for(&stack),
+                crate::sandbox_egress::gateway_image_serves_admin_protocol(
+                    crate::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE
+                )
+            );
+        }
+        {
+            let _on = enable_internet_egress_for_test();
+            assert!(crate::sandbox_egress::gateway_image_serves_admin_protocol(
+                FLIPPED_GATEWAY_IMAGE
+            ));
+            assert_eq!(
+                crate::sandbox_egress::planned_gateway_image(&stack),
+                FLIPPED_GATEWAY_IMAGE
+            );
+            assert!(internet_egress_available_for(&stack));
+        }
+        assert_eq!(
+            crate::sandbox_egress::installed_gateway_image(),
+            crate::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE
+        );
     }
 
     #[test]
