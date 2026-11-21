@@ -24,7 +24,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
-use super::build::{build, check_name, HOOKS_PROTOCOL};
+use super::build::{build, check_name, ControllerProfile, HOOKS_PROTOCOL};
 use super::read_workspace;
 use super::test::check_shipped_imports;
 use crate::config::LoadedConfiguration;
@@ -97,7 +97,8 @@ pub(crate) fn extension_workspaces(project_dir: &Path) -> Result<Vec<PathBuf>> {
 /// lists is built where alien.ts imports it from, and alien.ts is evaluated again for the digests
 /// the builds wrote; an extension with no workspace, from an installed package, ships the bundle
 /// it came with. A listed extension that doesn't build fails the release. Each controller builds
-/// for `targets`, or for every target this machine can build when it is empty.
+/// for `targets`, or for every target this machine can build when it is empty, as `profile`
+/// says.
 ///
 /// When alien.ts doesn't evaluate, as in a fresh checkout, each extension workspace under the
 /// project with no `generated/` module yet is built first, since alien.ts may import that module;
@@ -108,6 +109,7 @@ pub(crate) fn extension_workspaces(project_dir: &Path) -> Result<Vec<PathBuf>> {
 pub(crate) async fn evaluate_building_extensions<F, Fut>(
     project_dir: &Path,
     targets: &[BinaryTarget],
+    profile: ControllerProfile,
     evaluate: F,
 ) -> Result<LoadedConfiguration>
 where
@@ -116,7 +118,7 @@ where
 {
     let (configuration, built) = match evaluate().await {
         Ok(configuration) => {
-            return build_listed(configuration, project_dir, targets, &[], &evaluate).await
+            return build_listed(configuration, project_dir, targets, profile, &[], &evaluate).await
         }
         Err(error) => {
             let roots: Vec<PathBuf> = match extension_workspaces(project_dir) {
@@ -138,7 +140,7 @@ where
             let mut built = Vec::new();
             let mut warnings = Vec::new();
             for root in roots {
-                match build_workspace(&root, targets).await {
+                match build_workspace(&root, targets, profile).await {
                     Ok(()) => built.push(root),
                     Err(failure) => {
                         warn!("{failure}");
@@ -160,7 +162,15 @@ where
             }
         }
     };
-    build_listed(configuration, project_dir, targets, &built, &evaluate).await
+    build_listed(
+        configuration,
+        project_dir,
+        targets,
+        profile,
+        &built,
+        &evaluate,
+    )
+    .await
 }
 
 /// Builds the workspace of each extension `stack` lists, except those in `built`, and evaluates
@@ -169,6 +179,7 @@ async fn build_listed<F, Fut>(
     configuration: LoadedConfiguration,
     project_dir: &Path,
     targets: &[BinaryTarget],
+    profile: ControllerProfile,
     built: &[PathBuf],
     evaluate: &F,
 ) -> Result<LoadedConfiguration>
@@ -187,18 +198,24 @@ where
         return Ok(configuration);
     }
     for root in &roots {
-        build_workspace(root, targets).await?;
+        build_workspace(root, targets, profile).await?;
     }
     evaluate().await
 }
 
-async fn build_workspace(root: &Path, targets: &[BinaryTarget]) -> Result<()> {
+async fn build_workspace(
+    root: &Path,
+    targets: &[BinaryTarget],
+    profile: ControllerProfile,
+) -> Result<()> {
     info!("Building the extension in {}", root.display());
     let failed = || ErrorData::ReleaseFailed {
         message: format!("the extension in {} did not build", root.display()),
     };
     let workspace = read_workspace(root).context(failed())?;
-    build(&workspace, targets).await.context(failed())?;
+    build(&workspace, targets, profile)
+        .await
+        .context(failed())?;
     Ok(())
 }
 
@@ -908,10 +925,15 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         broken_workspace(&project.path().join("tools/wip-ext"));
         let evaluated = std::sync::atomic::AtomicUsize::new(0);
-        let configuration = evaluate_building_extensions(project.path(), &[], || async {
-            evaluated.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(loaded(Stack::new("my-app".to_string()).build()))
-        })
+        let configuration = evaluate_building_extensions(
+            project.path(),
+            &[],
+            ControllerProfile::Release,
+            || async {
+                evaluated.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(loaded(Stack::new("my-app".to_string()).build()))
+            },
+        )
         .await
         .unwrap();
         assert!(configuration.stack.extensions.is_empty());
@@ -931,16 +953,18 @@ mod tests {
             }))
         };
         // No workspace: the error as it is, after one evaluation.
-        let error = evaluate_building_extensions(project.path(), &[], evaluate)
-            .await
-            .unwrap_err();
+        let error =
+            evaluate_building_extensions(project.path(), &[], ControllerProfile::Release, evaluate)
+                .await
+                .unwrap_err();
         assert!(error.to_string().contains("Cannot find module"), "{error}");
         assert_eq!(evaluated.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         broken_workspace(&project.path().join("acme"));
-        let error = evaluate_building_extensions(project.path(), &[], evaluate)
-            .await
-            .unwrap_err();
+        let error =
+            evaluate_building_extensions(project.path(), &[], ControllerProfile::Release, evaluate)
+                .await
+                .unwrap_err();
         assert_eq!(evaluated.load(std::sync::atomic::Ordering::SeqCst), 3);
         let report = format!("{error:?}");
         assert!(report.contains("these builds failed"), "{report}");
@@ -956,11 +980,16 @@ mod tests {
         std::fs::create_dir_all(project.path().join("acme")).unwrap();
         std::fs::write(project.path().join("acme/Cargo.toml"), "[workspace\n").unwrap();
 
-        let error = evaluate_building_extensions(project.path(), &[], || async {
-            Err::<LoadedConfiguration, _>(AlienError::new(ErrorData::ConfigurationError {
-                message: "Cannot find module './acme/generated'".to_string(),
-            }))
-        })
+        let error = evaluate_building_extensions(
+            project.path(),
+            &[],
+            ControllerProfile::Release,
+            || async {
+                Err::<LoadedConfiguration, _>(AlienError::new(ErrorData::ConfigurationError {
+                    message: "Cannot find module './acme/generated'".to_string(),
+                }))
+            },
+        )
         .await
         .unwrap_err();
 
@@ -1016,14 +1045,19 @@ mod tests {
         generated_module(&budget, "budget");
         broken_workspace(&project.path().join("tags"));
         let evaluated = std::sync::atomic::AtomicUsize::new(0);
-        let error = evaluate_building_extensions(project.path(), &[], || async {
-            match evaluated.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
-                0 => Err(AlienError::new(ErrorData::ConfigurationError {
-                    message: "Cannot find module './tags/generated'".to_string(),
-                })),
-                _ => Ok(loaded(listing(&["budget"]))),
-            }
-        })
+        let error = evaluate_building_extensions(
+            project.path(),
+            &[],
+            ControllerProfile::Release,
+            || async {
+                match evaluated.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 => Err(AlienError::new(ErrorData::ConfigurationError {
+                        message: "Cannot find module './tags/generated'".to_string(),
+                    })),
+                    _ => Ok(loaded(listing(&["budget"]))),
+                }
+            },
+        )
         .await
         .unwrap_err();
         let report = format!("{error:?}");
@@ -1040,12 +1074,17 @@ mod tests {
         broken_workspace(&budget);
         generated_module(&budget, "budget");
         let evaluated = std::sync::atomic::AtomicUsize::new(0);
-        let error = evaluate_building_extensions(project.path(), &[], || async {
-            evaluated.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Err::<LoadedConfiguration, _>(AlienError::new(ErrorData::ConfigurationError {
-                message: "alien.ts: Unexpected token".to_string(),
-            }))
-        })
+        let error = evaluate_building_extensions(
+            project.path(),
+            &[],
+            ControllerProfile::Release,
+            || async {
+                evaluated.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err::<LoadedConfiguration, _>(AlienError::new(ErrorData::ConfigurationError {
+                    message: "alien.ts: Unexpected token".to_string(),
+                }))
+            },
+        )
         .await
         .unwrap_err();
         let report = format!("{error:?}");
@@ -1113,18 +1152,19 @@ mod tests {
         let url = url::Url::from_file_path(acme.join("generated/index.ts"))
             .unwrap()
             .to_string();
-        let error = evaluate_building_extensions(&project, &[], || async {
-            Ok(LoadedConfiguration {
-                stack: listing(&["acme"]),
-                config_file: project.join("alien.ts"),
-                extension_modules: vec![crate::config::ExtensionModule {
-                    name: "acme".to_string(),
-                    url: url.clone(),
-                }],
+        let error =
+            evaluate_building_extensions(&project, &[], ControllerProfile::Release, || async {
+                Ok(LoadedConfiguration {
+                    stack: listing(&["acme"]),
+                    config_file: project.join("alien.ts"),
+                    extension_modules: vec![crate::config::ExtensionModule {
+                        name: "acme".to_string(),
+                        url: url.clone(),
+                    }],
+                })
             })
-        })
-        .await
-        .unwrap_err();
+            .await
+            .unwrap_err();
         let report = format!("{error:?}");
         assert!(report.contains("acme did not build"), "{report}");
     }

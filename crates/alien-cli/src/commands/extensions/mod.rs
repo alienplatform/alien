@@ -37,6 +37,7 @@ pub(crate) const BUNDLE_DIR: &str = "target/alien-extension";
 pub(crate) const GENERATED_DIR: &str = "generated";
 
 pub use build::build_task;
+pub(crate) use build::ControllerProfile;
 pub use local_bundle::load_local_bundles;
 pub use test::test_task;
 

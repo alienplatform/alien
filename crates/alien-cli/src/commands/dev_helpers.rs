@@ -771,12 +771,14 @@ pub async fn build_and_post_release_simple(
         };
         // The extensions the stack lists build first, for this machine only, so the stack pins
         // the bundles they write. A machine no bundle has a controller for builds every target
-        // it can, and the manager then refuses the extension naming the machine.
+        // it can, and the manager then refuses the extension naming the machine. This machine's
+        // controller builds in the dev profile, as an edit rebuilds it: the manager runs it.
         let configuration = crate::commands::extensions::release::evaluate_building_extensions(
             current_dir,
             &alien_infra::extension_bundle::host_target()
                 .into_iter()
                 .collect::<Vec<_>>(),
+            crate::commands::extensions::ControllerProfile::Dev,
             || async {
                 load_configuration_and_extension_modules(config_path.clone())
                     .await
