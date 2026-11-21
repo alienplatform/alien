@@ -831,14 +831,20 @@ This module exposes `deployment_management_config`, `deployment_stack_settings`,
 
 ## Destroy Order
 
-If `helm_install_enabled = true`, `terraform destroy` uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure.
+Deleting the deployment needs the Operator running: the Operator removes the runtime resources. Never uninstall the Operator Helm release before the deployment reaches `teardown-required`, `retention-required` or `deleted`, or the delete stays `delete-pending` and cannot finish.
 
-If `helm_install_enabled = false`, uninstall the Helm release yourself and confirm the cleanup job completed before running `terraform destroy`. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.
+If `helm_install_enabled = true`, delete the deployment first and wait until its status is `teardown-required`, `retention-required` or `deleted`. Then run `terraform destroy`. It uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure. If the deployment still has retained data, `terraform destroy` can stop first and name this order; it removes nothing when it stops.
+
+If `helm_install_enabled = false`, follow these steps in order:
+
+1. Delete the deployment and wait until its status is `teardown-required`, `retention-required` or `deleted`.
+2. Uninstall the Helm release yourself and confirm the cleanup job completed. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.
+3. Run `terraform destroy`.
 ## Retain GCP setup data during uninstall
 
 Setup-owned Cloud Storage buckets, Firestore databases, Artifact Registry repositories, Memorystore Redis instances and Cloud SQL PostgreSQL databases are protected against replacement and destroy, including empty resources. Memorystore retention includes its service-connection policy, which GCP will not delete while the instance exists. Cloud SQL retention includes the SQL database, login, password secret and version. Encryption keys, their key rings and Cloud Storage's service-agent encryption grant survive with encrypted buckets. Application, public-read and management IAM grants remain managed for removal.
 
-Apply the current package to the existing installation before uninstalling. Stop deployment workloads first. Use Python 3 on Linux or macOS, or Windows through WSL with receipts on its Linux filesystem, and the original Terraform backend, workspace and working directory. Serialize this procedure with other Terraform runs. For a child module add `--module-address 'module.<name>'`, including any module instance index.
+Apply the current package to the existing installation before uninstalling. Delete the deployment first and wait until its status is `teardown-required`, `retention-required` or `deleted`; that removes the runtime workloads. Use Python 3 on Linux or macOS, or Windows through WSL with receipts on its Linux filesystem, and the original Terraform backend, workspace and working directory. Serialize this procedure with other Terraform runs. For a child module add `--module-address 'module.<name>'`, including any module instance index.
 
 ```bash
 python3 ./retain-data.py --receipt-dir /secure/path/retained-setup
