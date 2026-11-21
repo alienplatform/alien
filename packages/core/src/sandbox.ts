@@ -155,6 +155,27 @@ export class Sandbox extends ResourceBuilder {
   }
 
   /**
+   * Lets every sandbox of this resource reach a service of the same deployment, such as the
+   * app's own API, on the service's declared ports.
+   *
+   * The traffic goes through the deployment's egress gateway, with the same per-sandbox policy
+   * and connection log as other outbound traffic, and stays inside the deployment's network.
+   * Only the linked service's internal hostname reaches it, on its declared ports; every other
+   * private address stays unreachable. Links are a ceiling: a runtime policy keeps them with
+   * `internet`, keeps only those it names as `link:<resource-id>` in an allowlist, and keeps
+   * none with an empty allowlist. The sandbox receives the service's binding, holding its
+   * internal URL. Requires `egress("internet")`. Containers with a declared port can be linked.
+   */
+  public link(resource: Resource | ResourceRef): this {
+    const ref = resource instanceof Resource ? resource.ref() : resource
+    const links = (this._config.gatewayLinks ??= [])
+    if (!links.some(link => link.id === ref.id && link.type === ref.type)) {
+      links.push(ref)
+    }
+    return this
+  }
+
+  /**
    * Declares the ports eligible for a preview capability.
    *
    * A port not declared here can never be exposed, so an application cannot widen its own
