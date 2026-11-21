@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { GcpSandboxNetworkSchema } from "./gcp-sandbox-network-schema.js";
 
 /**
  * @description GCP Network ImportData — VPC + subnetwork + Cloud NAT topology.
@@ -14,6 +15,9 @@ export const GcpNetworkImportDataSchema = z.object({
 "natName": z.string().describe("Cloud NAT name (when created).").nullish(),
 "projectId": z.string().describe("Project ID owning the network."),
 "routerSelfLink": z.string().describe("Cloud Router self-link backing Cloud NAT (when created).").nullish(),
+get "sandboxNetwork"(){
+                return z.union([GcpSandboxNetworkSchema, z.null()]).optional()
+              },
 "subnetSelfLinks": z.array(z.string()).describe("Subnetwork self-links across the configured regions."),
 "vpcName": z.string().describe("VPC short name.").nullish(),
 "vpcSelfLink": z.string().describe("VPC self-link. Absent when the controller will look up the\ndefault network at runtime.").nullish()
