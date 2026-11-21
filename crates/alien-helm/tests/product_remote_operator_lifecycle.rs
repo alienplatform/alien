@@ -2721,6 +2721,24 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
         args.push("--set=remoteOperator.enabled=false".to_string());
         args.push("--set=heartbeat.collection.nodes.enabled=false".to_string());
         run_ok("helm", &args, None);
+        if !remote_enabled {
+            // In nodeAgent mode the collector reads its token from the Secret the Operator owns,
+            // and the Operator adds the key when the upgraded pod starts. The runtime fixture is
+            // not an Operator, so the test writes the key the way the Operator would.
+            run_ok(
+                "kubectl",
+                [
+                    "create",
+                    "secret",
+                    "generic",
+                    &format!("{release}-operator"),
+                    "--namespace",
+                    namespace,
+                    "--from-literal=collector-token=collector-upgrade",
+                ],
+                None,
+            );
+        }
         args[0] = "upgrade".to_string();
         args.push(format!("--set=remoteOperator.enabled={remote_enabled}"));
         args.push("--set=logCollector.mode=nodeAgent".to_string());
