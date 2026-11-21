@@ -50,7 +50,8 @@ trap 'rm -rf "$published_dir"' EXIT
 git -C "$repo_root" archive HEAD client-sdks/platform/typescript | tar -x -C "$published_dir" --strip-components=3
 ln -s "$sdk_dir/node_modules" "$published_dir/node_modules"
 NODE_OPTIONS=--max-old-space-size=16384 "$sdk_dir/node_modules/.bin/tsc" -p "$published_dir/tsconfig.json"
-node "$repo_root/client-sdks/platform/scripts/check-published-exports.mjs" "$published_dir/esm" "$sdk_dir/esm"
+node "$repo_root/client-sdks/platform/scripts/check-published-exports.mjs" "$published_dir/esm" "$sdk_dir/esm" \
+  "$repo_root/client-sdks/platform/scripts/accepted-signature-changes.txt"
 pnpm -C "$repo_root" install --lockfile-only
 node --test "$repo_root/client-sdks/platform/scripts/typescript-sdk.test.mjs"
 node --test "$repo_root/client-sdks/platform/scripts/dynamic-containers-sdk.test.mjs"
