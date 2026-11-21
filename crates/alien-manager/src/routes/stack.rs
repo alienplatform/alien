@@ -1976,6 +1976,7 @@ pub(super) async fn prepare_setup_stack(
         deletion_policy: Default::default(),
         release_statements: None,
         signed_config: None,
+        installed_setup_fingerprint: None,
     };
 
     let quota_activation_declared = source_stack.resources.contains_key("enable-cloud-quotas");

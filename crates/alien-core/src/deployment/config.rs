@@ -58,6 +58,13 @@ pub struct DeploymentConfig {
     /// refuse one older than what they accepted, so it is carried as received.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signed_config: Option<crate::SignedStatement>,
+    /// The setup fingerprint the deployment's installed setup last reported, as the manager
+    /// recorded it. Controllers that record a denied optional grant keep it with the denial and
+    /// retry when it changes: a changed setup is what can add the grant. Not serialized, so a
+    /// stored or supplied configuration cannot set it.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub installed_setup_fingerprint: Option<String>,
     /// Site registry (`host[/path]`) every Kubernetes workload image is pulled from.
     /// Set by the Operator from the installation's `global.imageRegistry`; never part of a
     /// release, so a release cannot redirect where an installation pulls from.

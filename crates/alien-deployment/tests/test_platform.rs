@@ -316,6 +316,7 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
         deletion_policy: Default::default(),
         release_statements: None,
         signed_config: None,
+        installed_setup_fingerprint: None,
     }
 }
 

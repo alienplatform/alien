@@ -2213,6 +2213,7 @@ mod tests {
             deletion_policy: Default::default(),
             release_statements: None,
             signed_config: None,
+            installed_setup_fingerprint: None,
         }
     }
 

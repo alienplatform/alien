@@ -2086,6 +2086,7 @@ impl RunnerConfigSources<'_> {
             if config.input_values.is_empty() {
                 config.input_values = deployment.input_values.clone();
             }
+            config.installed_setup_fingerprint = deployment.setup_fingerprint.clone();
             config.manager_url = Some(self.config.base_url());
             config.native_image_host = native_image_host;
             config
@@ -2129,6 +2130,7 @@ impl RunnerConfigSources<'_> {
                 deletion_policy: Default::default(),
                 release_statements: None,
                 signed_config: None,
+                installed_setup_fingerprint: deployment.setup_fingerprint.clone(),
             }
         };
         Ok(config)

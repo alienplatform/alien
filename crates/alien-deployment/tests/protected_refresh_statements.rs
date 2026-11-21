@@ -193,6 +193,7 @@ fn config(stack_settings: StackSettings) -> DeploymentConfig {
         image_registry: None,
         image_pull_secrets: Vec::new(),
         signed_config: None,
+        installed_setup_fingerprint: None,
         management_external_id: None,
     }
 }

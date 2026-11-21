@@ -1084,6 +1084,7 @@ mod tests {
             gcp_federation_scope: None,
             release_statements: None,
             signed_config: None,
+            installed_setup_fingerprint: None,
             deployment_name: Some("test deployment".to_string()),
             stack_settings: Default::default(),
             management_config: None,

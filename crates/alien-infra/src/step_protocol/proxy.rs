@@ -339,6 +339,8 @@ pub fn deployment_config_for_extension(config: &DeploymentConfig) -> DeploymentC
         setup_run_id,
         // The signed release, signer lists and config a deployment's enforcers verify.
         release_statements: _,
+        // Not for third-party controllers.
+        installed_setup_fingerprint: _,
         signed_config: _,
         // Where the installation pulls images from, and its pull Secrets.
         image_registry: _,
@@ -386,6 +388,7 @@ pub fn deployment_config_for_extension(config: &DeploymentConfig) -> DeploymentC
         setup_run_id,
         release_statements: None,
         signed_config: None,
+        installed_setup_fingerprint: None,
         image_registry: None,
         image_pull_secrets: Vec::new(),
         deployment_name,
