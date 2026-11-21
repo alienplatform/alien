@@ -104,6 +104,8 @@ export function setDeploymentsGetStatsData(
     parameters: {
       project?: string | undefined;
       deploymentGroup?: string | undefined;
+      listState?: operations.GetDeploymentStatsListState | undefined;
+      includeListCounts?: operations.IncludeListCounts | undefined;
       managerId?: string | undefined;
       purpose?: models.DeploymentPurpose | undefined;
       environment?: Array<operations.GetDeploymentStatsEnvironment> | undefined;
@@ -124,6 +126,8 @@ export function invalidateDeploymentsGetStats(
     [parameters: {
       project?: string | undefined;
       deploymentGroup?: string | undefined;
+      listState?: operations.GetDeploymentStatsListState | undefined;
+      includeListCounts?: operations.IncludeListCounts | undefined;
       managerId?: string | undefined;
       purpose?: models.DeploymentPurpose | undefined;
       environment?: Array<operations.GetDeploymentStatsEnvironment> | undefined;
@@ -137,7 +141,7 @@ export function invalidateDeploymentsGetStats(
     ...filters,
     queryKey: [
       "@alienplatform/platform-api",
-      "deployments",
+      "Deployments",
       "getStats",
       ...queryKeyBase,
     ],
@@ -150,6 +154,6 @@ export function invalidateAllDeploymentsGetStats(
 ): Promise<void> {
   return client.invalidateQueries({
     ...filters,
-    queryKey: ["@alienplatform/platform-api", "deployments", "getStats"],
+    queryKey: ["@alienplatform/platform-api", "Deployments", "getStats"],
   });
 }

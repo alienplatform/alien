@@ -23,7 +23,7 @@ let value: DataPostgres = {
 
 ## Fields
 
-| Field                                   | Type                                    | Required                                | Description                             |
-| --------------------------------------- | --------------------------------------- | --------------------------------------- | --------------------------------------- |
-| `data`                                  | *models.SyncReconcileRequestDataUnion8* | :heavy_check_mark:                      | N/A                                     |
-| `resourceType`                          | *"postgres"*                            | :heavy_check_mark:                      | N/A                                     |
+| Field                                                            | Type                                                             | Required                                                         | Description                                                      |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `data`                                                           | *models.SyncReconcileRequestDataUnion8*                          | :heavy_check_mark:                                               | N/A                                                              |
+| `resourceType`                                                   | [models.ResourceTypePostgres](../models/resourcetypepostgres.md) | :heavy_check_mark:                                               | N/A                                                              |

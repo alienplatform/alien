@@ -178,13 +178,17 @@ run();
 * [prepareDeploymentInstallation](docs/sdks/alien/README.md#preparedeploymentinstallation)
 * [getDeploymentPreparation](docs/sdks/alien/README.md#getdeploymentpreparation)
 * [getInstallationDeployment](docs/sdks/alien/README.md#getinstallationdeployment)
+* [getDeploymentProtectionUpdate](docs/sdks/alien/README.md#getdeploymentprotectionupdate) - The setup update that protects this installed deployment: the signed template of the release it runs, published, and the exact steps for its setup method with the project's fingerprint. Whoever manages the deployment's setup runs them.
+* [getDeploymentSignedSetupUpdate](docs/sdks/alien/README.md#getdeploymentsignedsetupupdate) - The newer signed setup of a protected deployment: the signed template of the release it runs or moves to, published, when its digest isn't the one the install registered with, and the exact steps for its setup method. The fingerprint and the install's values stay. Whoever manages the deployment's setup runs them.
+* [issueDeploymentSetupKey](docs/sdks/alien/README.md#issuedeploymentsetupkey)
 * [resumeDeploymentInstallation](docs/sdks/alien/README.md#resumedeploymentinstallation)
 * [requestDeploymentCheck](docs/sdks/alien/README.md#requestdeploymentcheck)
-* [getDeploymentMetricsHistory](docs/sdks/alien/README.md#getdeploymentmetricshistory) - Metrics Horizon reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
+* [getDeploymentMetricsHistory](docs/sdks/alien/README.md#getdeploymentmetricshistory) - Metrics the machine agent reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
 * [getDeploymentCredentialRotation](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
 * [prepareDeploymentCredentialRotation](docs/sdks/alien/README.md#preparedeploymentcredentialrotation)
 * [cancelDeploymentCredentialRotation](docs/sdks/alien/README.md#canceldeploymentcredentialrotation)
 * [getDeploymentCredentialRotationValues](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
+* [recordAirgappedBundleSigned](docs/sdks/alien/README.md#recordairgappedbundlesigned)
 * [claimAwsXksStoreRetirement](docs/sdks/alien/README.md#claimawsxksstoreretirement)
 * [completeAwsXksStoreRetirement](docs/sdks/alien/README.md#completeawsxksstoreretirement)
 * [listAwsVirtualKeys](docs/sdks/alien/README.md#listawsvirtualkeys)
@@ -271,6 +275,7 @@ run();
 
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
 
+* [createDeploymentGroupValueAccess](docs/sdks/deploymentgroups/README.md#createdeploymentgroupvalueaccess) - Value access for a deployment group (not available yet)
 * [createDeploymentGroup](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
 * [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 * [ensureDeploymentGroupByName](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
@@ -281,6 +286,8 @@ run();
 * [deleteDeploymentGroup](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 * [setDeploymentGroupExternalId](docs/sdks/deploymentgroups/README.md#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 * [createToken](docs/sdks/deploymentgroups/README.md#createtoken) - Create deployment group token
+* [createPendingDeploymentGroupToken](docs/sdks/deploymentgroups/README.md#creatependingdeploymentgrouptoken) - Create a setup link that is waiting for its values
+* [activateDeploymentGroupToken](docs/sdks/deploymentgroups/README.md#activatedeploymentgrouptoken) - Activate a setup link whose values are in the manager
 * [getDeploymentGroupManagementExternalId](docs/sdks/deploymentgroups/README.md#getdeploymentgroupmanagementexternalid) - Get the AWS ExternalId for this deployment group
 * [createFirstPartyDeploymentSession](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
 * [getExternalAIBinding](docs/sdks/deploymentgroups/README.md#getexternalaibinding) - Get external AI connection state
@@ -291,10 +298,15 @@ run();
 
 ### [Deployments](docs/sdks/deployments/README.md)
 
+* [createDeploymentValueAccess](docs/sdks/deployments/README.md#createdeploymentvalueaccess) - Get a short-lived token to read or write this deployment's values in Alien Cloud or its Private Alien Instance
 * [move](docs/sdks/deployments/README.md#move) - Reassign a deployment to another group within its project
+* [createSetupEnrollment](docs/sdks/deployments/README.md#createsetupenrollment) - Reserve one cloud setup location and issue a one-hour, one-use enrollment. Requires deployment update authority. An explicit matching revision may replace a pending, unapplied attempt; active installs cannot be replaced.
+* [getSetupEnrollment](docs/sdks/deployments/README.md#getsetupenrollment) - Read setup progress and its revision for an authorized recovery. Never returns an enrollment code or its hash.
 * [list](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
 * [create](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId or deploymentGroupExternalId. Pending installation retries keep the originally reserved release and CloudFormation stack name, even after a new release is published. Other installation options must remain unchanged.
 * [getStats](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
+* [getMap](docs/sdks/deployments/README.md#getmap) - List every deployment of a project, the application's and each feature's, with its group, purpose and a one-word state, for the project overview. Capped at 5000 rows; `total` counts all of them.
+* [getPulse](docs/sdks/deployments/README.md#getpulse) - How many of a project's application deployments report heartbeats now, and per 5-minute bucket over 24 hours how many reported and the request and 5xx rates summed over those that measured requests. Sums never include deployments that did not report.
 * [listFilterEnvironments](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 * [listFilterDeploymentGroups](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 * [get](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
@@ -312,7 +324,10 @@ run();
 * [retry](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 * [getInputs](docs/sdks/deployments/README.md#getinputs) - Get the active input definitions and current non-secret values for a deployment.
 * [updateInputs](docs/sdks/deployments/README.md#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
+* [updateDomains](docs/sdks/deployments/README.md#updatedomains) - Set managed custom endpoint hostnames for a resource. An empty endpoints map restores generated hostnames.
+* [getComputePlan](docs/sdks/deployments/README.md#getcomputeplan) - Plan the deployment's current compute on its target release in its manager: each pool's machine choices (same CPU architecture as its current machine), scale ranges and container choices. Requires the same permission as updating compute.
 * [updateCompute](docs/sdks/deployments/README.md#updatecompute) - Update deployment-time compute selections or quota warning overrides and request reconciliation by the hosted manager.
+* [getEnvironmentVariables](docs/sdks/deployments/README.md#getenvironmentvariables) - Read editable environment override names and types. Stored values are never returned.
 * [updateEnvironmentVariables](docs/sdks/deployments/README.md#updateenvironmentvariables) - Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 * [createToken](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 * [listMachines](docs/sdks/deployments/README.md#listmachines)
@@ -326,8 +341,8 @@ run();
 * [create](docs/sdks/domains/README.md#create) - Create a workspace domain and optional initial endpoints.
 * [createEndpoint](docs/sdks/domains/README.md#createendpoint) - Create an endpoint under a workspace domain.
 * [get](docs/sdks/domains/README.md#get) - Get domain by ID.
-* [delete](docs/sdks/domains/README.md#delete) - Delete a workspace domain.
-* [refresh](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification.
+* [delete](docs/sdks/domains/README.md#delete) - Delete a workspace domain and immediately stop serving its custom hostnames. Removing only the challenge CNAME instead blocks issuance while the current matching certificate keeps serving until expiry.
+* [refresh](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification. Removing the challenge CNAME blocks new issuance; a matching, unexpired certificate keeps serving until it expires. Deleting the domain stops serving its custom hostnames immediately.
 
 ### [DynamicContainers](docs/sdks/dynamiccontainers/README.md)
 
@@ -341,6 +356,12 @@ run();
 
 * [list](docs/sdks/events/README.md#list) - Retrieve all events.
 * [get](docs/sdks/events/README.md#get) - Retrieve an event by ID.
+
+### [Extensions](docs/sdks/extensions/README.md)
+
+* [createBundleUploadUrls](docs/sdks/extensions/README.md#createbundleuploadurls) - Name every object of an extension bundle and get a presigned PUT for each one the project does not have yet. PUT them, then call POST /extensions/bundles.
+* [publishBundle](docs/sdks/extensions/README.md#publishbundle) - Check an uploaded extension bundle against its core zip's manifest and store each object under its sha256. A release that pins the core zip's digest can be created after.
+* [getBundleDownloadUrl](docs/sdks/extensions/README.md#getbundledownloadurl) - A presigned URL to download one stored object of an extension bundle by its digest. Whoever reads the project's releases may download what they pin.
 
 ### [Gateways](docs/sdks/gateways/README.md)
 
@@ -359,6 +380,7 @@ run();
 * [revokeJoinToken](docs/sdks/machines/README.md#revokejointoken)
 * [drainMachine](docs/sdks/machines/README.md#drainmachine)
 * [cancelMachineDrain](docs/sdks/machines/README.md#cancelmachinedrain)
+* [createRecoveryCommand](docs/sdks/machines/README.md#createrecoverycommand)
 * [removeMachine](docs/sdks/machines/README.md#removemachine)
 
 ### [Managers](docs/sdks/managers/README.md)
@@ -366,12 +388,14 @@ run();
 * [create](docs/sdks/managers/README.md#create) - Create a new manager.
 * [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
 * [retrySetup](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
+* [createSetupUpdate](docs/sdks/managers/README.md#createsetupupdate) - Prepare running setup again on an active Private Alien Instance, to turn on resources it declined. Returns the newest template, the instance's stack, and a fresh setup token for the stack's Token parameter.
 * [retry](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 * [cancelSetup](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
 * [get](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
 * [delete](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
 * [getDomainBinding](docs/sdks/managers/README.md#getdomainbinding) - Get the custom domain binding for a private manager.
 * [updateDomainBinding](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
+* [recheckDomainBinding](docs/sdks/managers/README.md#recheckdomainbinding) - Queue the manager's custom domain binding for another DNS, certificate and health check. Repeated calls while a check is queued do nothing.
 * [getManagementConfig](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for a manager.
 * [provision](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
 * [update](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
@@ -392,8 +416,8 @@ run();
 * [createAccessRequest](docs/sdks/operations/README.md#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
 * [listAccessRequests](docs/sdks/operations/README.md#listaccessrequests) - List a project's access requests, newest first.
 * [queueAccessRequest](docs/sdks/operations/README.md#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
-* [approveAccessRequest](docs/sdks/operations/README.md#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
-* [denyAccessRequest](docs/sdks/operations/README.md#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
+* [approveAccessRequest](docs/sdks/operations/README.md#approveaccessrequest) - Approve a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester. When the customer approves, this fails with ACCESS_REQUEST_CUSTOMER_APPROVES.
+* [denyAccessRequest](docs/sdks/operations/README.md#denyaccessrequest) - Deny a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester.
 * [getAccessRequestCoordinates](docs/sdks/operations/README.md#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
 * [getLiveDebugGrant](docs/sdks/operations/README.md#getlivedebuggrant) - Find an approved, unexpired access request the caller created whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request. Only the requester's own grants match: a debug session must present a grant its caller requested, so another principal's grant is never returned here.
 * [getAccessRequestActivity](docs/sdks/operations/README.md#getaccessrequestactivity) - The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
@@ -416,6 +440,7 @@ run();
 
 ### [Projects](docs/sdks/projects/README.md)
 
+* [createProjectValueAccess](docs/sdks/projects/README.md#createprojectvalueaccess) - Value access for a project (not available yet)
 * [list](docs/sdks/projects/README.md#list) - Retrieve all projects.
 * [create](docs/sdks/projects/README.md#create) - Create a new project.
 * [get](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
@@ -429,8 +454,10 @@ run();
 * [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getDeploymentLinkSetup](docs/sdks/projects/README.md#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
 * [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
+* [getProtectedSetupRelease](docs/sdks/projects/README.md#getprotectedsetuprelease) - The release a protected setup installs when it registers without a release ID (a protected Terraform module is signed before its release exists): the channel's current release if it is signed for the platform and channel and has the setup's fingerprint, else the newest such release. The manager registers protected Terraform modules against it.
 * [previewModelsImpact](docs/sdks/projects/README.md#previewmodelsimpact) - Preview which customer model connections a configuration change may affect.
 * [setCapabilities](docs/sdks/projects/README.md#setcapabilities) - Set the capabilities offered by a Project. Removing a capability prevents new setup without deleting existing customer resources.
+* [disableCapability](docs/sdks/projects/README.md#disablecapability) - Turn off one of a Project's features. Refused while deployments of that feature (or, for models, direct provider connections) still exist, so turning it off never strands a customer's resources.
 * [configureDeployments](docs/sdks/projects/README.md#configuredeployments) - Enable deployments for a Project.
 * [getAiProviderHeaders](docs/sdks/projects/README.md#getaiproviderheaders) - Get static headers added to AI requests for each provider.
 * [configureAiProviderHeaders](docs/sdks/projects/README.md#configureaiproviderheaders) - Replace the static headers added to AI requests for each provider.
@@ -471,7 +498,7 @@ run();
 
 ### [Resolve](docs/sdks/resolve/README.md)
 
-* [resolve](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
+* [resolve](docs/sdks/resolve/README.md#resolve) - Resolve the instance for a project and platform
 
 ### [Resources](docs/sdks/resources/README.md)
 
@@ -482,10 +509,30 @@ run();
 
 ### [SetupLinks](docs/sdks/setuplinks/README.md)
 
+* [createPortalSession](docs/sdks/setuplinks/README.md#createportalsession) - Open a setup link
+* [createPortalInstallerKey](docs/sdks/setuplinks/README.md#createportalinstallerkey) - Mint an installer key for a portal session
 * [create](docs/sdks/setuplinks/README.md#create) - Create a customer setup link
+
+### [Signing](docs/sdks/signing/README.md)
+
+* [listSignerLists](docs/sdks/signing/README.md#listsignerlists) - Every stored version of the project's signer list, oldest first, exactly as signed. Readable by whoever may read the project's releases.
+* [addSignerList](docs/sdks/signing/README.md#addsignerlist) - Store the next version of the project's signer list. The version is the statement's sequence and must follow the last stored one. A stored version never changes. Storing version 1 turns signing on; a second, different version 1 is refused with who turned it on.
+* [getProjectSigning](docs/sdks/signing/README.md#getprojectsigning) - The project's signing as the dashboard and `alien devices list` show it: fingerprint, trusted devices, recovery and waiting changes. Decoded from the stored lists for display; nothing here is verified.
+* [listPendingChanges](docs/sdks/signing/README.md#listpendingchanges) - The project's prepared signer list changes with the given status, newest first.
+* [createPendingChange](docs/sdks/signing/README.md#creatependingchange) - File the body of the next signer list for an admin to sign with `alien approve`: a device asking to be trusted, a CI key, a removal or a refresh. The body is stored as received; the CLI shows the admin a diff against the list it verified.
+* [getPendingChange](docs/sdks/signing/README.md#getpendingchange)
+* [resolvePendingChange](docs/sdks/signing/README.md#resolvependingchange) - Resolve a pending change: approved, naming the stored signer list version that carries it, or rejected. The platform checks only that the version is stored.
+* [addDeploymentConfigStatement](docs/sdks/signing/README.md#adddeploymentconfigstatement) - Store a signed `config/v1` statement for the deployment: developer environment variables and stack inputs, signed by a trusted device or CI. The newest sequence is delivered on sync. Storing a new statement for a protected deployment with a release starts an update that delivers it.
+* [listDeploymentConfigStatements](docs/sdks/signing/README.md#listdeploymentconfigstatements) - Every signed `config/v1` statement stored for the deployment, lowest sequence first, exactly as stored. The CLI builds the next statement on the newest and checks the chain when it rotates the CI key.
+* [getLatestDeploymentConfigStatement](docs/sdks/signing/README.md#getlatestdeploymentconfigstatement) - The deployment's newest signed `config/v1` statement, exactly as stored. The manager delivers it to enforcers on sync.
 
 ### [SlackIntegration](docs/sdks/slackintegration/README.md)
 
+* [getVendorApp](docs/sdks/slackintegration/README.md#getvendorapp) - The workspace's own Slack app for customer approvals, if it has one. Its credentials are never returned.
+* [setVendorAppBranding](docs/sdks/slackintegration/README.md#setvendorappbranding) - Set the name, description and color of the workspace's own Slack app, creating it (not yet connected) when there is none. Workspace administrators only. A connected app keeps its credentials; rename it in Slack too.
+* [disconnectVendorApp](docs/sdks/slackintegration/README.md#disconnectvendorapp) - Forget the workspace's own Slack app and its credentials. Customer cards go out from the Alien app again; cards the app already posted can no longer be updated. The app itself stays in Slack until you delete it there. Workspace administrators only.
+* [connectVendorApp](docs/sdks/slackintegration/README.md#connectvendorapp) - Connect the app created from the manifest link: its Bot User OAuth Token and Signing Secret. The token must belong to an app in the Slack workspace where Alien is installed and have the scopes the approval card needs. Workspace administrators only.
+* [sendVendorAppTestCard](docs/sdks/slackintegration/README.md#sendvendorapptestcard) - Post a sample approval card from the connected app to a channel. Its buttons answer only the person who clicks, through the app's own interactivity URL, which proves the token, the channel membership and the signing secret. Workspace administrators only.
 * [installUrl](docs/sdks/slackintegration/README.md#installurl) - Generate the Slack OAuth consent URL for this workspace.
 * [status](docs/sdks/slackintegration/README.md#status) - Return the Slack install for this workspace (if any).
 * [listChannels](docs/sdks/slackintegration/README.md#listchannels) - List public Slack channels for this workspace's install. Used by the dashboard's notification-channel picker.
@@ -495,6 +542,8 @@ run();
 ### [Sync](docs/sdks/sync/README.md)
 
 * [list](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
+* [configStatement](docs/sdks/sync/README.md#configstatement) - The deployment's newest signed `config/v1` statement, exactly as stored, for the manager that syncs it. 404 CONFIG_STATEMENT_NOT_FOUND when none is stored.
+* [signerLists](docs/sdks/sync/README.md#signerlists) - Every stored signer list version of a project, oldest first, exactly as stored, for a manager that syncs one of its deployments.
 * [context](docs/sdks/sync/README.md#context) - Get computed deployment state and configuration for a manager-side operation without acquiring the deployment reconciliation lock.
 * [managementExternalId](docs/sdks/sync/README.md#managementexternalid) - Get the AWS sts:ExternalId the deployment's management and remote-bindings roles trust. Only the manager runtime assigned to the deployment can read it.
 * [acquire](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
@@ -608,9 +657,12 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`debugSessionsUpdate`](docs/sdks/debugsessions/README.md#update) - Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
 - [`decommissionAwsVirtualKey`](docs/sdks/alien/README.md#decommissionawsvirtualkey)
 - [`deploymentGetInfo`](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment portal. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
+- [`deploymentGroupsActivateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#activatedeploymentgrouptoken) - Activate a setup link whose values are in the manager
 - [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
+- [`deploymentGroupsCreateDeploymentGroupValueAccess`](docs/sdks/deploymentgroups/README.md#createdeploymentgroupvalueaccess) - Value access for a deployment group (not available yet)
 - [`deploymentGroupsCreateExternalAIModelCheck`](docs/sdks/deploymentgroups/README.md#createexternalaimodelcheck) - Queue an explicit external model access check
 - [`deploymentGroupsCreateFirstPartyDeploymentSession`](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
+- [`deploymentGroupsCreatePendingDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#creatependingdeploymentgrouptoken) - Create a setup link that is waiting for its values
 - [`deploymentGroupsCreateToken`](docs/sdks/deploymentgroups/README.md#createtoken) - Create deployment group token
 - [`deploymentGroupsDeleteDeploymentGroup`](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 - [`deploymentGroupsDeleteExternalAIBinding`](docs/sdks/deploymentgroups/README.md#deleteexternalaibinding) - Revoke the external AI connection
@@ -629,12 +681,19 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentPrepareStack`](docs/sdks/deployment/README.md#preparestack) - Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
 - [`deploymentsCancelVolumeRestore`](docs/sdks/deployments/README.md#cancelvolumerestore) - Cancel a pending volume restore. Use it when a restore keeps failing: the deployment stops attempting it. A restore whose volume was already swapped still finishes. Allowed in any deployment status, including update-failed.
 - [`deploymentsCreate`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId or deploymentGroupExternalId. Pending installation retries keep the originally reserved release and CloudFormation stack name, even after a new release is published. Other installation options must remain unchanged.
+- [`deploymentsCreateDeploymentValueAccess`](docs/sdks/deployments/README.md#createdeploymentvalueaccess) - Get a short-lived token to read or write this deployment's values in Alien Cloud or its Private Alien Instance
+- [`deploymentsCreateSetupEnrollment`](docs/sdks/deployments/README.md#createsetupenrollment) - Reserve one cloud setup location and issue a one-hour, one-use enrollment. Requires deployment update authority. An explicit matching revision may replace a pending, unapplied attempt; active installs cannot be replaced.
 - [`deploymentsCreateSetupRegistrationOperation`](docs/sdks/deployments/README.md#createsetupregistrationoperation) - Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
 - [`deploymentsCreateToken`](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 - [`deploymentsDelete`](docs/sdks/deployments/README.md#delete) - Delete, detach, or forget a deployment by ID.
 - [`deploymentsGet`](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
+- [`deploymentsGetComputePlan`](docs/sdks/deployments/README.md#getcomputeplan) - Plan the deployment's current compute on its target release in its manager: each pool's machine choices (same CPU architecture as its current machine), scale ranges and container choices. Requires the same permission as updating compute.
+- [`deploymentsGetEnvironmentVariables`](docs/sdks/deployments/README.md#getenvironmentvariables) - Read editable environment override names and types. Stored values are never returned.
 - [`deploymentsGetInfo`](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 - [`deploymentsGetInputs`](docs/sdks/deployments/README.md#getinputs) - Get the active input definitions and current non-secret values for a deployment.
+- [`deploymentsGetMap`](docs/sdks/deployments/README.md#getmap) - List every deployment of a project, the application's and each feature's, with its group, purpose and a one-word state, for the project overview. Capped at 5000 rows; `total` counts all of them.
+- [`deploymentsGetPulse`](docs/sdks/deployments/README.md#getpulse) - How many of a project's application deployments report heartbeats now, and per 5-minute bucket over 24 hours how many reported and the request and 5xx rates summed over those that measured requests. Sums never include deployments that did not report.
+- [`deploymentsGetSetupEnrollment`](docs/sdks/deployments/README.md#getsetupenrollment) - Read setup progress and its revision for an authorized recovery. Never returns an enrollment code or its hash.
 - [`deploymentsGetSetupRegistrationOperation`](docs/sdks/deployments/README.md#getsetupregistrationoperation) - Get setup registration operation status.
 - [`deploymentsGetStats`](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
 - [`deploymentsGetUpdateOperation`](docs/sdks/deployments/README.md#getupdateoperation) - Retrieve a deployment update operation by its durable operation ID.
@@ -653,14 +712,15 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsSetFirstPartyDeploymentInputs`](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
 - [`deploymentsSetReleaseChannel`](docs/sdks/deployments/README.md#setreleasechannel)
 - [`deploymentsUpdateCompute`](docs/sdks/deployments/README.md#updatecompute) - Update deployment-time compute selections or quota warning overrides and request reconciliation by the hosted manager.
+- [`deploymentsUpdateDomains`](docs/sdks/deployments/README.md#updatedomains) - Set managed custom endpoint hostnames for a resource. An empty endpoints map restores generated hostnames.
 - [`deploymentsUpdateEnvironmentVariables`](docs/sdks/deployments/README.md#updateenvironmentvariables) - Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 - [`deploymentsUpdateInputs`](docs/sdks/deployments/README.md#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
 - [`domainsCreate`](docs/sdks/domains/README.md#create) - Create a workspace domain and optional initial endpoints.
 - [`domainsCreateEndpoint`](docs/sdks/domains/README.md#createendpoint) - Create an endpoint under a workspace domain.
-- [`domainsDelete`](docs/sdks/domains/README.md#delete) - Delete a workspace domain.
+- [`domainsDelete`](docs/sdks/domains/README.md#delete) - Delete a workspace domain and immediately stop serving its custom hostnames. Removing only the challenge CNAME instead blocks issuance while the current matching certificate keeps serving until expiry.
 - [`domainsGet`](docs/sdks/domains/README.md#get) - Get domain by ID.
 - [`domainsList`](docs/sdks/domains/README.md#list) - List system domains and workspace domains.
-- [`domainsRefresh`](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification.
+- [`domainsRefresh`](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification. Removing the challenge CNAME blocks new issuance; a matching, unexpired certificate keeps serving until it expires. Deleting the domain stops serving its custom hostnames immediately.
 - [`dynamicContainersDelete`](docs/sdks/dynamiccontainers/README.md#delete) - Remove a dynamic container from this deployment.
 - [`dynamicContainersGet`](docs/sdks/dynamiccontainers/README.md#get) - Get one dynamic container's desired generation, status, and internal address.
 - [`dynamicContainersList`](docs/sdks/dynamiccontainers/README.md#list) - List containers created after this deployment was installed.
@@ -668,13 +728,18 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`dynamicContainersPut`](docs/sdks/dynamiccontainers/README.md#put) - Create or replace a dynamic container in an existing deployment.
 - [`eventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
+- [`extensionsCreateBundleUploadUrls`](docs/sdks/extensions/README.md#createbundleuploadurls) - Name every object of an extension bundle and get a presigned PUT for each one the project does not have yet. PUT them, then call POST /extensions/bundles.
+- [`extensionsGetBundleDownloadUrl`](docs/sdks/extensions/README.md#getbundledownloadurl) - A presigned URL to download one stored object of an extension bundle by its digest. Whoever reads the project's releases may download what they pin.
+- [`extensionsPublishBundle`](docs/sdks/extensions/README.md#publishbundle) - Check an uploaded extension bundle against its core zip's manifest and store each object under its sha256. A release that pins the core zip's digest can be created after.
 - [`finalizeAwsVirtualKeyDeletion`](docs/sdks/alien/README.md#finalizeawsvirtualkeydeletion)
 - [`gatewaysGetWorkspaceOverview`](docs/sdks/gateways/README.md#getworkspaceoverview) - Get compact cross-Project setup and customer status for a workspace Gateway.
 - [`getAwsVirtualKey`](docs/sdks/alien/README.md#getawsvirtualkey)
 - [`getDeploymentCredentialRotation`](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
 - [`getDeploymentCredentialRotationValues`](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
-- [`getDeploymentMetricsHistory`](docs/sdks/alien/README.md#getdeploymentmetricshistory) - Metrics Horizon reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
+- [`getDeploymentMetricsHistory`](docs/sdks/alien/README.md#getdeploymentmetricshistory) - Metrics the machine agent reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
 - [`getDeploymentPreparation`](docs/sdks/alien/README.md#getdeploymentpreparation)
+- [`getDeploymentProtectionUpdate`](docs/sdks/alien/README.md#getdeploymentprotectionupdate) - The setup update that protects this installed deployment: the signed template of the release it runs, published, and the exact steps for its setup method with the project's fingerprint. Whoever manages the deployment's setup runs them.
+- [`getDeploymentSignedSetupUpdate`](docs/sdks/alien/README.md#getdeploymentsignedsetupupdate) - The newer signed setup of a protected deployment: the signed template of the release it runs or moves to, published, when its digest isn't the one the install registered with, and the exact steps for its setup method. The fingerprint and the install's values stay. Whoever manages the deployment's setup runs them.
 - [`getInstallationDeployment`](docs/sdks/alien/README.md#getinstallationdeployment)
 - [`getLogExportDeliveryConfig`](docs/sdks/alien/README.md#getlogexportdeliveryconfig)
 - [`getPendingWorkspaceInvitation`](docs/sdks/alien/README.md#getpendingworkspaceinvitation)
@@ -684,11 +749,13 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`getWorkspaceInviteLink`](docs/sdks/alien/README.md#getworkspaceinvitelink)
 - [`incidentsGet`](docs/sdks/incidents/README.md#get) - Get an authorized incident without Slack transport metadata.
 - [`incidentsList`](docs/sdks/incidents/README.md#list) - List authorized incidents without Slack transport metadata.
+- [`issueDeploymentSetupKey`](docs/sdks/alien/README.md#issuedeploymentsetupkey)
 - [`listAwsKeySetupCleanup`](docs/sdks/alien/README.md#listawskeysetupcleanup)
 - [`listAwsVirtualKeys`](docs/sdks/alien/README.md#listawsvirtualkeys)
 - [`listWorkspaceInvitations`](docs/sdks/alien/README.md#listworkspaceinvitations)
 - [`machinesCancelMachineDrain`](docs/sdks/machines/README.md#cancelmachinedrain)
 - [`machinesCreateJoinToken`](docs/sdks/machines/README.md#createjointoken)
+- [`machinesCreateRecoveryCommand`](docs/sdks/machines/README.md#createrecoverycommand)
 - [`machinesDrainMachine`](docs/sdks/machines/README.md#drainmachine)
 - [`machinesListJoinTokens`](docs/sdks/machines/README.md#listjointokens)
 - [`machinesRemoveMachine`](docs/sdks/machines/README.md#removemachine)
@@ -696,6 +763,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`machinesRotateJoinToken`](docs/sdks/machines/README.md#rotatejointoken)
 - [`managersCancelSetup`](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
 - [`managersCreate`](docs/sdks/managers/README.md#create) - Create a new manager.
+- [`managersCreateSetupUpdate`](docs/sdks/managers/README.md#createsetupupdate) - Prepare running setup again on an active Private Alien Instance, to turn on resources it declined. Returns the newest template, the instance's stack, and a fresh setup token for the stack's Token parameter.
 - [`managersDelete`](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
 - [`managersGenerateManagerBindingToken`](docs/sdks/managers/README.md#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
 - [`managersGenerateManagerToken`](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
@@ -706,16 +774,17 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`managersList`](docs/sdks/managers/README.md#list) - Retrieve all managers.
 - [`managersListEvents`](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
 - [`managersProvision`](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
+- [`managersRecheckDomainBinding`](docs/sdks/managers/README.md#recheckdomainbinding) - Queue the manager's custom domain binding for another DNS, certificate and health check. Repeated calls while a check is queued do nothing.
 - [`managersReportHeartbeat`](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
 - [`managersResolveGcpOAuthProvider`](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
 - [`managersRetry`](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 - [`managersRetrySetup`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 - [`managersUpdate`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
 - [`managersUpdateDomainBinding`](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
-- [`operationsApproveAccessRequest`](docs/sdks/operations/README.md#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
+- [`operationsApproveAccessRequest`](docs/sdks/operations/README.md#approveaccessrequest) - Approve a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester. When the customer approves, this fails with ACCESS_REQUEST_CUSTOMER_APPROVES.
 - [`operationsCreateAccessRequest`](docs/sdks/operations/README.md#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
 - [`operationsCreateBundleUploadUrl`](docs/sdks/operations/README.md#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
-- [`operationsDenyAccessRequest`](docs/sdks/operations/README.md#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
+- [`operationsDenyAccessRequest`](docs/sdks/operations/README.md#denyaccessrequest) - Deny a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester.
 - [`operationsGetAccessRequest`](docs/sdks/operations/README.md#getaccessrequest) - Get an access request by id.
 - [`operationsGetAccessRequestActivity`](docs/sdks/operations/README.md#getaccessrequestactivity) - The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
 - [`operationsGetAccessRequestCoordinates`](docs/sdks/operations/README.md#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
@@ -749,7 +818,9 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsConfigureSource`](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project.
 - [`projectsCreate`](docs/sdks/projects/README.md#create) - Create a new project.
 - [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace.
+- [`projectsCreateProjectValueAccess`](docs/sdks/projects/README.md#createprojectvalueaccess) - Value access for a project (not available yet)
 - [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
+- [`projectsDisableCapability`](docs/sdks/projects/README.md#disablecapability) - Turn off one of a Project's features. Refused while deployments of that feature (or, for models, direct provider connections) still exist, so turning it off never strands a customer's resources.
 - [`projectsEnsureSandboxBaseImageRepository`](docs/sdks/projects/README.md#ensuresandboxbaseimagerepository) - Ensure the project's private image repository exists and return where to push a private sandbox base image. Name the pushed image as the remote sandbox base image afterwards.
 - [`projectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
 - [`projectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
@@ -760,6 +831,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsGetDeploymentPortalDomain`](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 - [`projectsGetEncryptionUsage`](docs/sdks/projects/README.md#getencryptionusage)
 - [`projectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
+- [`projectsGetProtectedSetupRelease`](docs/sdks/projects/README.md#getprotectedsetuprelease) - The release a protected setup installs when it registers without a release ID (a protected Terraform module is signed before its release exists): the channel's current release if it is signed for the platform and channel and has the setup's fingerprint, else the newest such release. The manager registers protected Terraform modules against it.
 - [`projectsGetRemoteOperatorSummary`](docs/sdks/projects/README.md#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
 - [`projectsGetSandboxMetrics`](docs/sdks/projects/README.md#getsandboxmetrics)
 - [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
@@ -768,6 +840,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsSetCapabilities`](docs/sdks/projects/README.md#setcapabilities) - Set the capabilities offered by a Project. Removing a capability prevents new setup without deleting existing customer resources.
 - [`projectsUpdate`](docs/sdks/projects/README.md#update) - Update a project.
 - [`projectsUpdateGcpOAuthProvider`](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
+- [`recordAirgappedBundleSigned`](docs/sdks/alien/README.md#recordairgappedbundlesigned)
 - [`releaseChannelsCreate`](docs/sdks/releasechannels/README.md#create) - Create a release channel
 - [`releaseChannelsDelete`](docs/sdks/releasechannels/README.md#delete) - Delete a release channel
 - [`releaseChannelsList`](docs/sdks/releasechannels/README.md#list) - List release channels
@@ -783,7 +856,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`reportLogExportDelivery`](docs/sdks/alien/README.md#reportlogexportdelivery)
 - [`requestDeploymentCheck`](docs/sdks/alien/README.md#requestdeploymentcheck)
 - [`resendWorkspaceInvitation`](docs/sdks/alien/README.md#resendworkspaceinvitation)
-- [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
+- [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve the instance for a project and platform
 - [`resourcesGetDeploymentDetail`](docs/sdks/resources/README.md#getdeploymentdetail)
 - [`resourcesListDeployments`](docs/sdks/resources/README.md#listdeployments) - List deployments where the selected resource is installed.
 - [`resourcesListInventory`](docs/sdks/resources/README.md#listinventory)
@@ -794,18 +867,37 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`revokeWorkspaceInviteLink`](docs/sdks/alien/README.md#revokeworkspaceinvitelink)
 - [`rotateAwsVirtualKeyCredential`](docs/sdks/alien/README.md#rotateawsvirtualkeycredential)
 - [`setupLinksCreate`](docs/sdks/setuplinks/README.md#create) - Create a customer setup link
+- [`setupLinksCreatePortalInstallerKey`](docs/sdks/setuplinks/README.md#createportalinstallerkey) - Mint an installer key for a portal session
+- [`setupLinksCreatePortalSession`](docs/sdks/setuplinks/README.md#createportalsession) - Open a setup link
+- [`signingAddDeploymentConfigStatement`](docs/sdks/signing/README.md#adddeploymentconfigstatement) - Store a signed `config/v1` statement for the deployment: developer environment variables and stack inputs, signed by a trusted device or CI. The newest sequence is delivered on sync. Storing a new statement for a protected deployment with a release starts an update that delivers it.
+- [`signingAddSignerList`](docs/sdks/signing/README.md#addsignerlist) - Store the next version of the project's signer list. The version is the statement's sequence and must follow the last stored one. A stored version never changes. Storing version 1 turns signing on; a second, different version 1 is refused with who turned it on.
+- [`signingCreatePendingChange`](docs/sdks/signing/README.md#creatependingchange) - File the body of the next signer list for an admin to sign with `alien approve`: a device asking to be trusted, a CI key, a removal or a refresh. The body is stored as received; the CLI shows the admin a diff against the list it verified.
+- [`signingGetLatestDeploymentConfigStatement`](docs/sdks/signing/README.md#getlatestdeploymentconfigstatement) - The deployment's newest signed `config/v1` statement, exactly as stored. The manager delivers it to enforcers on sync.
+- [`signingGetPendingChange`](docs/sdks/signing/README.md#getpendingchange)
+- [`signingGetProjectSigning`](docs/sdks/signing/README.md#getprojectsigning) - The project's signing as the dashboard and `alien devices list` show it: fingerprint, trusted devices, recovery and waiting changes. Decoded from the stored lists for display; nothing here is verified.
+- [`signingListDeploymentConfigStatements`](docs/sdks/signing/README.md#listdeploymentconfigstatements) - Every signed `config/v1` statement stored for the deployment, lowest sequence first, exactly as stored. The CLI builds the next statement on the newest and checks the chain when it rotates the CI key.
+- [`signingListPendingChanges`](docs/sdks/signing/README.md#listpendingchanges) - The project's prepared signer list changes with the given status, newest first.
+- [`signingListSignerLists`](docs/sdks/signing/README.md#listsignerlists) - Every stored version of the project's signer list, oldest first, exactly as signed. Readable by whoever may read the project's releases.
+- [`signingResolvePendingChange`](docs/sdks/signing/README.md#resolvependingchange) - Resolve a pending change: approved, naming the stored signer list version that carries it, or rejected. The platform checks only that the version is stored.
+- [`slackIntegrationConnectVendorApp`](docs/sdks/slackintegration/README.md#connectvendorapp) - Connect the app created from the manifest link: its Bot User OAuth Token and Signing Secret. The token must belong to an app in the Slack workspace where Alien is installed and have the scopes the approval card needs. Workspace administrators only.
+- [`slackIntegrationDisconnectVendorApp`](docs/sdks/slackintegration/README.md#disconnectvendorapp) - Forget the workspace's own Slack app and its credentials. Customer cards go out from the Alien app again; cards the app already posted can no longer be updated. The app itself stays in Slack until you delete it there. Workspace administrators only.
+- [`slackIntegrationGetVendorApp`](docs/sdks/slackintegration/README.md#getvendorapp) - The workspace's own Slack app for customer approvals, if it has one. Its credentials are never returned.
 - [`slackIntegrationInstallUrl`](docs/sdks/slackintegration/README.md#installurl) - Generate the Slack OAuth consent URL for this workspace.
 - [`slackIntegrationListChannels`](docs/sdks/slackintegration/README.md#listchannels) - List public Slack channels for this workspace's install. Used by the dashboard's notification-channel picker.
+- [`slackIntegrationSendVendorAppTestCard`](docs/sdks/slackintegration/README.md#sendvendorapptestcard) - Post a sample approval card from the connected app to a channel. Its buttons answer only the person who clicks, through the app's own interactivity URL, which proves the token, the channel membership and the signing secret. Workspace administrators only.
 - [`slackIntegrationSetNotificationChannel`](docs/sdks/slackintegration/README.md#setnotificationchannel) - Configure which Slack channel receives ai-agent monitor reports.
+- [`slackIntegrationSetVendorAppBranding`](docs/sdks/slackintegration/README.md#setvendorappbranding) - Set the name, description and color of the workspace's own Slack app, creating it (not yet connected) when there is none. Workspace administrators only. A connected app keeps its credentials; rename it in Slack too.
 - [`slackIntegrationStatus`](docs/sdks/slackintegration/README.md#status) - Return the Slack install for this workspace (if any).
 - [`slackIntegrationUninstall`](docs/sdks/slackintegration/README.md#uninstall) - Uninstall the Slack integration for this workspace. Revokes the bot token at Slack and deletes the row.
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
+- [`syncConfigStatement`](docs/sdks/sync/README.md#configstatement) - The deployment's newest signed `config/v1` statement, exactly as stored, for the manager that syncs it. 404 CONFIG_STATEMENT_NOT_FOUND when none is stored.
 - [`syncContext`](docs/sdks/sync/README.md#context) - Get computed deployment state and configuration for a manager-side operation without acquiring the deployment reconciliation lock.
 - [`syncList`](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
 - [`syncManagementExternalId`](docs/sdks/sync/README.md#managementexternalid) - Get the AWS sts:ExternalId the deployment's management and remote-bindings roles trust. Only the manager runtime assigned to the deployment can read it.
 - [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
 - [`syncRelease`](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 - [`syncRenew`](docs/sdks/sync/README.md#renew)
+- [`syncSignerLists`](docs/sdks/sync/README.md#signerlists) - Every stored signer list version of a project, oldest first, exactly as stored, for a manager that syncs one of its deployments.
 - [`testProjectLogExport`](docs/sdks/alien/README.md#testprojectlogexport)
 - [`updateProjectLogExport`](docs/sdks/alien/README.md#updateprojectlogexport)
 - [`userCompleteProfileSetup`](docs/sdks/user/README.md#completeprofilesetup) - Complete the required beta intake and profile setup dialog.
@@ -913,9 +1005,12 @@ To learn about this feature and how to get started, check
 - [`useDebugSessionsUpdateMutation`](docs/sdks/debugsessions/README.md#update) - Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
 - [`useDecommissionAwsVirtualKeyMutation`](docs/sdks/alien/README.md#decommissionawsvirtualkey)
 - [`useDeploymentGetInfo`](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment portal. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
+- [`useDeploymentGroupsActivateDeploymentGroupTokenMutation`](docs/sdks/deploymentgroups/README.md#activatedeploymentgrouptoken) - Activate a setup link whose values are in the manager
 - [`useDeploymentGroupsCreateDeploymentGroupMutation`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
+- [`useDeploymentGroupsCreateDeploymentGroupValueAccessMutation`](docs/sdks/deploymentgroups/README.md#createdeploymentgroupvalueaccess) - Value access for a deployment group (not available yet)
 - [`useDeploymentGroupsCreateExternalAIModelCheckMutation`](docs/sdks/deploymentgroups/README.md#createexternalaimodelcheck) - Queue an explicit external model access check
 - [`useDeploymentGroupsCreateFirstPartyDeploymentSessionMutation`](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
+- [`useDeploymentGroupsCreatePendingDeploymentGroupTokenMutation`](docs/sdks/deploymentgroups/README.md#creatependingdeploymentgrouptoken) - Create a setup link that is waiting for its values
 - [`useDeploymentGroupsCreateTokenMutation`](docs/sdks/deploymentgroups/README.md#createtoken) - Create deployment group token
 - [`useDeploymentGroupsDeleteDeploymentGroupMutation`](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 - [`useDeploymentGroupsDeleteExternalAIBindingMutation`](docs/sdks/deploymentgroups/README.md#deleteexternalaibinding) - Revoke the external AI connection
@@ -933,13 +1028,20 @@ To learn about this feature and how to get started, check
 - [`useDeploymentPlanComputeMutation`](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
 - [`useDeploymentPrepareStackMutation`](docs/sdks/deployment/README.md#preparestack) - Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
 - [`useDeploymentsCancelVolumeRestoreMutation`](docs/sdks/deployments/README.md#cancelvolumerestore) - Cancel a pending volume restore. Use it when a restore keeps failing: the deployment stops attempting it. A restore whose volume was already swapped still finishes. Allowed in any deployment status, including update-failed.
+- [`useDeploymentsCreateDeploymentValueAccessMutation`](docs/sdks/deployments/README.md#createdeploymentvalueaccess) - Get a short-lived token to read or write this deployment's values in Alien Cloud or its Private Alien Instance
 - [`useDeploymentsCreateMutation`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId or deploymentGroupExternalId. Pending installation retries keep the originally reserved release and CloudFormation stack name, even after a new release is published. Other installation options must remain unchanged.
+- [`useDeploymentsCreateSetupEnrollmentMutation`](docs/sdks/deployments/README.md#createsetupenrollment) - Reserve one cloud setup location and issue a one-hour, one-use enrollment. Requires deployment update authority. An explicit matching revision may replace a pending, unapplied attempt; active installs cannot be replaced.
 - [`useDeploymentsCreateSetupRegistrationOperationMutation`](docs/sdks/deployments/README.md#createsetupregistrationoperation) - Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
 - [`useDeploymentsCreateTokenMutation`](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 - [`useDeploymentsDeleteMutation`](docs/sdks/deployments/README.md#delete) - Delete, detach, or forget a deployment by ID.
 - [`useDeploymentsGet`](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
+- [`useDeploymentsGetComputePlan`](docs/sdks/deployments/README.md#getcomputeplan) - Plan the deployment's current compute on its target release in its manager: each pool's machine choices (same CPU architecture as its current machine), scale ranges and container choices. Requires the same permission as updating compute.
+- [`useDeploymentsGetEnvironmentVariables`](docs/sdks/deployments/README.md#getenvironmentvariables) - Read editable environment override names and types. Stored values are never returned.
 - [`useDeploymentsGetInfo`](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 - [`useDeploymentsGetInputs`](docs/sdks/deployments/README.md#getinputs) - Get the active input definitions and current non-secret values for a deployment.
+- [`useDeploymentsGetMap`](docs/sdks/deployments/README.md#getmap) - List every deployment of a project, the application's and each feature's, with its group, purpose and a one-word state, for the project overview. Capped at 5000 rows; `total` counts all of them.
+- [`useDeploymentsGetPulse`](docs/sdks/deployments/README.md#getpulse) - How many of a project's application deployments report heartbeats now, and per 5-minute bucket over 24 hours how many reported and the request and 5xx rates summed over those that measured requests. Sums never include deployments that did not report.
+- [`useDeploymentsGetSetupEnrollment`](docs/sdks/deployments/README.md#getsetupenrollment) - Read setup progress and its revision for an authorized recovery. Never returns an enrollment code or its hash.
 - [`useDeploymentsGetSetupRegistrationOperation`](docs/sdks/deployments/README.md#getsetupregistrationoperation) - Get setup registration operation status.
 - [`useDeploymentsGetStats`](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
 - [`useDeploymentsGetUpdateOperation`](docs/sdks/deployments/README.md#getupdateoperation) - Retrieve a deployment update operation by its durable operation ID.
@@ -958,14 +1060,15 @@ To learn about this feature and how to get started, check
 - [`useDeploymentsSetFirstPartyDeploymentInputsMutation`](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
 - [`useDeploymentsSetReleaseChannelMutation`](docs/sdks/deployments/README.md#setreleasechannel)
 - [`useDeploymentsUpdateComputeMutation`](docs/sdks/deployments/README.md#updatecompute) - Update deployment-time compute selections or quota warning overrides and request reconciliation by the hosted manager.
+- [`useDeploymentsUpdateDomainsMutation`](docs/sdks/deployments/README.md#updatedomains) - Set managed custom endpoint hostnames for a resource. An empty endpoints map restores generated hostnames.
 - [`useDeploymentsUpdateEnvironmentVariablesMutation`](docs/sdks/deployments/README.md#updateenvironmentvariables) - Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 - [`useDeploymentsUpdateInputsMutation`](docs/sdks/deployments/README.md#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
 - [`useDomainsCreateEndpointMutation`](docs/sdks/domains/README.md#createendpoint) - Create an endpoint under a workspace domain.
 - [`useDomainsCreateMutation`](docs/sdks/domains/README.md#create) - Create a workspace domain and optional initial endpoints.
-- [`useDomainsDeleteMutation`](docs/sdks/domains/README.md#delete) - Delete a workspace domain.
+- [`useDomainsDeleteMutation`](docs/sdks/domains/README.md#delete) - Delete a workspace domain and immediately stop serving its custom hostnames. Removing only the challenge CNAME instead blocks issuance while the current matching certificate keeps serving until expiry.
 - [`useDomainsGet`](docs/sdks/domains/README.md#get) - Get domain by ID.
 - [`useDomainsList`](docs/sdks/domains/README.md#list) - List system domains and workspace domains.
-- [`useDomainsRefreshMutation`](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification.
+- [`useDomainsRefreshMutation`](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification. Removing the challenge CNAME blocks new issuance; a matching, unexpired certificate keeps serving until it expires. Deleting the domain stops serving its custom hostnames immediately.
 - [`useDynamicContainersDeleteMutation`](docs/sdks/dynamiccontainers/README.md#delete) - Remove a dynamic container from this deployment.
 - [`useDynamicContainersGet`](docs/sdks/dynamiccontainers/README.md#get) - Get one dynamic container's desired generation, status, and internal address.
 - [`useDynamicContainersList`](docs/sdks/dynamiccontainers/README.md#list) - List containers created after this deployment was installed.
@@ -973,13 +1076,18 @@ To learn about this feature and how to get started, check
 - [`useDynamicContainersPutMutation`](docs/sdks/dynamiccontainers/README.md#put) - Create or replace a dynamic container in an existing deployment.
 - [`useEventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`useEventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
+- [`useExtensionsCreateBundleUploadUrlsMutation`](docs/sdks/extensions/README.md#createbundleuploadurls) - Name every object of an extension bundle and get a presigned PUT for each one the project does not have yet. PUT them, then call POST /extensions/bundles.
+- [`useExtensionsGetBundleDownloadUrl`](docs/sdks/extensions/README.md#getbundledownloadurl) - A presigned URL to download one stored object of an extension bundle by its digest. Whoever reads the project's releases may download what they pin.
+- [`useExtensionsPublishBundleMutation`](docs/sdks/extensions/README.md#publishbundle) - Check an uploaded extension bundle against its core zip's manifest and store each object under its sha256. A release that pins the core zip's digest can be created after.
 - [`useFinalizeAwsVirtualKeyDeletionMutation`](docs/sdks/alien/README.md#finalizeawsvirtualkeydeletion)
 - [`useGatewaysGetWorkspaceOverview`](docs/sdks/gateways/README.md#getworkspaceoverview) - Get compact cross-Project setup and customer status for a workspace Gateway.
 - [`useGetAwsVirtualKey`](docs/sdks/alien/README.md#getawsvirtualkey)
 - [`useGetDeploymentCredentialRotation`](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
 - [`useGetDeploymentCredentialRotationValuesMutation`](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
-- [`useGetDeploymentMetricsHistory`](docs/sdks/alien/README.md#getdeploymentmetricshistory) - Metrics Horizon reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
+- [`useGetDeploymentMetricsHistory`](docs/sdks/alien/README.md#getdeploymentmetricshistory) - Metrics the machine agent reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
 - [`useGetDeploymentPreparation`](docs/sdks/alien/README.md#getdeploymentpreparation)
+- [`useGetDeploymentProtectionUpdate`](docs/sdks/alien/README.md#getdeploymentprotectionupdate) - The setup update that protects this installed deployment: the signed template of the release it runs, published, and the exact steps for its setup method with the project's fingerprint. Whoever manages the deployment's setup runs them.
+- [`useGetDeploymentSignedSetupUpdate`](docs/sdks/alien/README.md#getdeploymentsignedsetupupdate) - The newer signed setup of a protected deployment: the signed template of the release it runs or moves to, published, when its digest isn't the one the install registered with, and the exact steps for its setup method. The fingerprint and the install's values stay. Whoever manages the deployment's setup runs them.
 - [`useGetInstallationDeployment`](docs/sdks/alien/README.md#getinstallationdeployment)
 - [`useGetLogExportDeliveryConfig`](docs/sdks/alien/README.md#getlogexportdeliveryconfig)
 - [`useGetPendingWorkspaceInvitation`](docs/sdks/alien/README.md#getpendingworkspaceinvitation)
@@ -989,11 +1097,13 @@ To learn about this feature and how to get started, check
 - [`useGetWorkspaceInviteLink`](docs/sdks/alien/README.md#getworkspaceinvitelink)
 - [`useIncidentsGet`](docs/sdks/incidents/README.md#get) - Get an authorized incident without Slack transport metadata.
 - [`useIncidentsList`](docs/sdks/incidents/README.md#list) - List authorized incidents without Slack transport metadata.
+- [`useIssueDeploymentSetupKeyMutation`](docs/sdks/alien/README.md#issuedeploymentsetupkey)
 - [`useListAwsKeySetupCleanup`](docs/sdks/alien/README.md#listawskeysetupcleanup)
 - [`useListAwsVirtualKeys`](docs/sdks/alien/README.md#listawsvirtualkeys)
 - [`useListWorkspaceInvitations`](docs/sdks/alien/README.md#listworkspaceinvitations)
 - [`useMachinesCancelMachineDrainMutation`](docs/sdks/machines/README.md#cancelmachinedrain)
 - [`useMachinesCreateJoinTokenMutation`](docs/sdks/machines/README.md#createjointoken)
+- [`useMachinesCreateRecoveryCommandMutation`](docs/sdks/machines/README.md#createrecoverycommand)
 - [`useMachinesDrainMachineMutation`](docs/sdks/machines/README.md#drainmachine)
 - [`useMachinesListJoinTokens`](docs/sdks/machines/README.md#listjointokens)
 - [`useMachinesRemoveMachineMutation`](docs/sdks/machines/README.md#removemachine)
@@ -1001,6 +1111,7 @@ To learn about this feature and how to get started, check
 - [`useMachinesRotateJoinTokenMutation`](docs/sdks/machines/README.md#rotatejointoken)
 - [`useManagersCancelSetupMutation`](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
 - [`useManagersCreateMutation`](docs/sdks/managers/README.md#create) - Create a new manager.
+- [`useManagersCreateSetupUpdateMutation`](docs/sdks/managers/README.md#createsetupupdate) - Prepare running setup again on an active Private Alien Instance, to turn on resources it declined. Returns the newest template, the instance's stack, and a fresh setup token for the stack's Token parameter.
 - [`useManagersDeleteMutation`](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
 - [`useManagersGenerateManagerBindingTokenMutation`](docs/sdks/managers/README.md#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
 - [`useManagersGenerateManagerTokenMutation`](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
@@ -1011,16 +1122,17 @@ To learn about this feature and how to get started, check
 - [`useManagersList`](docs/sdks/managers/README.md#list) - Retrieve all managers.
 - [`useManagersListEvents`](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
 - [`useManagersProvisionMutation`](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
+- [`useManagersRecheckDomainBindingMutation`](docs/sdks/managers/README.md#recheckdomainbinding) - Queue the manager's custom domain binding for another DNS, certificate and health check. Repeated calls while a check is queued do nothing.
 - [`useManagersReportHeartbeatMutation`](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
 - [`useManagersResolveGcpOAuthProviderMutation`](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
 - [`useManagersRetryMutation`](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 - [`useManagersRetrySetupMutation`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 - [`useManagersUpdateDomainBindingMutation`](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
 - [`useManagersUpdateMutation`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
-- [`useOperationsApproveAccessRequestMutation`](docs/sdks/operations/README.md#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
+- [`useOperationsApproveAccessRequestMutation`](docs/sdks/operations/README.md#approveaccessrequest) - Approve a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester. When the customer approves, this fails with ACCESS_REQUEST_CUSTOMER_APPROVES.
 - [`useOperationsCreateAccessRequestMutation`](docs/sdks/operations/README.md#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
 - [`useOperationsCreateBundleUploadUrlMutation`](docs/sdks/operations/README.md#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
-- [`useOperationsDenyAccessRequestMutation`](docs/sdks/operations/README.md#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
+- [`useOperationsDenyAccessRequestMutation`](docs/sdks/operations/README.md#denyaccessrequest) - Deny a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester.
 - [`useOperationsGetAccessRequest`](docs/sdks/operations/README.md#getaccessrequest) - Get an access request by id.
 - [`useOperationsGetAccessRequestActivity`](docs/sdks/operations/README.md#getaccessrequestactivity) - The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
 - [`useOperationsGetAccessRequestCoordinates`](docs/sdks/operations/README.md#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
@@ -1054,7 +1166,9 @@ To learn about this feature and how to get started, check
 - [`useProjectsConfigureSourceMutation`](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project.
 - [`useProjectsCreateFromTemplateMutation`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace.
 - [`useProjectsCreateMutation`](docs/sdks/projects/README.md#create) - Create a new project.
+- [`useProjectsCreateProjectValueAccessMutation`](docs/sdks/projects/README.md#createprojectvalueaccess) - Value access for a project (not available yet)
 - [`useProjectsDeleteMutation`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
+- [`useProjectsDisableCapabilityMutation`](docs/sdks/projects/README.md#disablecapability) - Turn off one of a Project's features. Refused while deployments of that feature (or, for models, direct provider connections) still exist, so turning it off never strands a customer's resources.
 - [`useProjectsEnsureSandboxBaseImageRepositoryMutation`](docs/sdks/projects/README.md#ensuresandboxbaseimagerepository) - Ensure the project's private image repository exists and return where to push a private sandbox base image. Name the pushed image as the remote sandbox base image afterwards.
 - [`useProjectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
 - [`useProjectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
@@ -1065,6 +1179,7 @@ To learn about this feature and how to get started, check
 - [`useProjectsGetDeploymentPortalDomain`](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 - [`useProjectsGetEncryptionUsage`](docs/sdks/projects/README.md#getencryptionusage)
 - [`useProjectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
+- [`useProjectsGetProtectedSetupRelease`](docs/sdks/projects/README.md#getprotectedsetuprelease) - The release a protected setup installs when it registers without a release ID (a protected Terraform module is signed before its release exists): the channel's current release if it is signed for the platform and channel and has the setup's fingerprint, else the newest such release. The manager registers protected Terraform modules against it.
 - [`useProjectsGetRemoteOperatorSummary`](docs/sdks/projects/README.md#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
 - [`useProjectsGetSandboxMetrics`](docs/sdks/projects/README.md#getsandboxmetrics)
 - [`useProjectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
@@ -1073,6 +1188,7 @@ To learn about this feature and how to get started, check
 - [`useProjectsSetCapabilitiesMutation`](docs/sdks/projects/README.md#setcapabilities) - Set the capabilities offered by a Project. Removing a capability prevents new setup without deleting existing customer resources.
 - [`useProjectsUpdateGcpOAuthProviderMutation`](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 - [`useProjectsUpdateMutation`](docs/sdks/projects/README.md#update) - Update a project.
+- [`useRecordAirgappedBundleSignedMutation`](docs/sdks/alien/README.md#recordairgappedbundlesigned)
 - [`useReleaseChannelsCreateMutation`](docs/sdks/releasechannels/README.md#create) - Create a release channel
 - [`useReleaseChannelsDeleteMutation`](docs/sdks/releasechannels/README.md#delete) - Delete a release channel
 - [`useReleaseChannelsList`](docs/sdks/releasechannels/README.md#list) - List release channels
@@ -1088,7 +1204,7 @@ To learn about this feature and how to get started, check
 - [`useReportLogExportDeliveryMutation`](docs/sdks/alien/README.md#reportlogexportdelivery)
 - [`useRequestDeploymentCheckMutation`](docs/sdks/alien/README.md#requestdeploymentcheck)
 - [`useResendWorkspaceInvitationMutation`](docs/sdks/alien/README.md#resendworkspaceinvitation)
-- [`useResolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
+- [`useResolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve the instance for a project and platform
 - [`useResourcesGetDeploymentDetail`](docs/sdks/resources/README.md#getdeploymentdetail)
 - [`useResourcesListDeployments`](docs/sdks/resources/README.md#listdeployments) - List deployments where the selected resource is installed.
 - [`useResourcesListInventory`](docs/sdks/resources/README.md#listinventory)
@@ -1099,18 +1215,37 @@ To learn about this feature and how to get started, check
 - [`useRevokeWorkspaceInviteLinkMutation`](docs/sdks/alien/README.md#revokeworkspaceinvitelink)
 - [`useRotateAwsVirtualKeyCredentialMutation`](docs/sdks/alien/README.md#rotateawsvirtualkeycredential)
 - [`useSetupLinksCreateMutation`](docs/sdks/setuplinks/README.md#create) - Create a customer setup link
+- [`useSetupLinksCreatePortalInstallerKeyMutation`](docs/sdks/setuplinks/README.md#createportalinstallerkey) - Mint an installer key for a portal session
+- [`useSetupLinksCreatePortalSessionMutation`](docs/sdks/setuplinks/README.md#createportalsession) - Open a setup link
+- [`useSigningAddDeploymentConfigStatementMutation`](docs/sdks/signing/README.md#adddeploymentconfigstatement) - Store a signed `config/v1` statement for the deployment: developer environment variables and stack inputs, signed by a trusted device or CI. The newest sequence is delivered on sync. Storing a new statement for a protected deployment with a release starts an update that delivers it.
+- [`useSigningAddSignerListMutation`](docs/sdks/signing/README.md#addsignerlist) - Store the next version of the project's signer list. The version is the statement's sequence and must follow the last stored one. A stored version never changes. Storing version 1 turns signing on; a second, different version 1 is refused with who turned it on.
+- [`useSigningCreatePendingChangeMutation`](docs/sdks/signing/README.md#creatependingchange) - File the body of the next signer list for an admin to sign with `alien approve`: a device asking to be trusted, a CI key, a removal or a refresh. The body is stored as received; the CLI shows the admin a diff against the list it verified.
+- [`useSigningGetLatestDeploymentConfigStatement`](docs/sdks/signing/README.md#getlatestdeploymentconfigstatement) - The deployment's newest signed `config/v1` statement, exactly as stored. The manager delivers it to enforcers on sync.
+- [`useSigningGetPendingChange`](docs/sdks/signing/README.md#getpendingchange)
+- [`useSigningGetProjectSigning`](docs/sdks/signing/README.md#getprojectsigning) - The project's signing as the dashboard and `alien devices list` show it: fingerprint, trusted devices, recovery and waiting changes. Decoded from the stored lists for display; nothing here is verified.
+- [`useSigningListDeploymentConfigStatements`](docs/sdks/signing/README.md#listdeploymentconfigstatements) - Every signed `config/v1` statement stored for the deployment, lowest sequence first, exactly as stored. The CLI builds the next statement on the newest and checks the chain when it rotates the CI key.
+- [`useSigningListPendingChanges`](docs/sdks/signing/README.md#listpendingchanges) - The project's prepared signer list changes with the given status, newest first.
+- [`useSigningListSignerLists`](docs/sdks/signing/README.md#listsignerlists) - Every stored version of the project's signer list, oldest first, exactly as signed. Readable by whoever may read the project's releases.
+- [`useSigningResolvePendingChangeMutation`](docs/sdks/signing/README.md#resolvependingchange) - Resolve a pending change: approved, naming the stored signer list version that carries it, or rejected. The platform checks only that the version is stored.
+- [`useSlackIntegrationConnectVendorAppMutation`](docs/sdks/slackintegration/README.md#connectvendorapp) - Connect the app created from the manifest link: its Bot User OAuth Token and Signing Secret. The token must belong to an app in the Slack workspace where Alien is installed and have the scopes the approval card needs. Workspace administrators only.
+- [`useSlackIntegrationDisconnectVendorAppMutation`](docs/sdks/slackintegration/README.md#disconnectvendorapp) - Forget the workspace's own Slack app and its credentials. Customer cards go out from the Alien app again; cards the app already posted can no longer be updated. The app itself stays in Slack until you delete it there. Workspace administrators only.
+- [`useSlackIntegrationGetVendorApp`](docs/sdks/slackintegration/README.md#getvendorapp) - The workspace's own Slack app for customer approvals, if it has one. Its credentials are never returned.
 - [`useSlackIntegrationInstallUrlMutation`](docs/sdks/slackintegration/README.md#installurl) - Generate the Slack OAuth consent URL for this workspace.
 - [`useSlackIntegrationListChannels`](docs/sdks/slackintegration/README.md#listchannels) - List public Slack channels for this workspace's install. Used by the dashboard's notification-channel picker.
+- [`useSlackIntegrationSendVendorAppTestCardMutation`](docs/sdks/slackintegration/README.md#sendvendorapptestcard) - Post a sample approval card from the connected app to a channel. Its buttons answer only the person who clicks, through the app's own interactivity URL, which proves the token, the channel membership and the signing secret. Workspace administrators only.
 - [`useSlackIntegrationSetNotificationChannelMutation`](docs/sdks/slackintegration/README.md#setnotificationchannel) - Configure which Slack channel receives ai-agent monitor reports.
+- [`useSlackIntegrationSetVendorAppBrandingMutation`](docs/sdks/slackintegration/README.md#setvendorappbranding) - Set the name, description and color of the workspace's own Slack app, creating it (not yet connected) when there is none. Workspace administrators only. A connected app keeps its credentials; rename it in Slack too.
 - [`useSlackIntegrationStatus`](docs/sdks/slackintegration/README.md#status) - Return the Slack install for this workspace (if any).
 - [`useSlackIntegrationUninstallMutation`](docs/sdks/slackintegration/README.md#uninstall) - Uninstall the Slack integration for this workspace. Revokes the bot token at Slack and deletes the row.
 - [`useSyncAcquireMutation`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
+- [`useSyncConfigStatementMutation`](docs/sdks/sync/README.md#configstatement) - The deployment's newest signed `config/v1` statement, exactly as stored, for the manager that syncs it. 404 CONFIG_STATEMENT_NOT_FOUND when none is stored.
 - [`useSyncContextMutation`](docs/sdks/sync/README.md#context) - Get computed deployment state and configuration for a manager-side operation without acquiring the deployment reconciliation lock.
 - [`useSyncListMutation`](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
 - [`useSyncManagementExternalIdMutation`](docs/sdks/sync/README.md#managementexternalid) - Get the AWS sts:ExternalId the deployment's management and remote-bindings roles trust. Only the manager runtime assigned to the deployment can read it.
 - [`useSyncReconcileMutation`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
 - [`useSyncReleaseMutation`](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 - [`useSyncRenewMutation`](docs/sdks/sync/README.md#renew)
+- [`useSyncSignerListsMutation`](docs/sdks/sync/README.md#signerlists) - Every stored signer list version of a project, oldest first, exactly as stored, for a manager that syncs one of its deployments.
 - [`useTestProjectLogExportMutation`](docs/sdks/alien/README.md#testprojectlogexport)
 - [`useUpdateProjectLogExportMutation`](docs/sdks/alien/README.md#updateprojectlogexport)
 - [`useUserCompleteProfileSetupMutation`](docs/sdks/user/README.md#completeprofilesetup) - Complete the required beta intake and profile setup dialog.

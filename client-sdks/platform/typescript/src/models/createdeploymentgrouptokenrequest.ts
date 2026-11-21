@@ -53,9 +53,13 @@ export type CreateDeploymentGroupTokenRequest = {
    */
   description?: string | undefined;
   /**
-   * Optional expiration date for the API key
+   * When the setup link and its API key expire. Omit or null for 7 days. A key below the workspace cannot create a link that outlives itself, so the link can expire earlier.
    */
   expiresAt?: Date | null | undefined;
+  /**
+   * Who may open the setup link: email addresses (j@acme.com) or whole domains (@acme.com, that exact domain only). The person enters a code sent to their email. Omit or leave empty for a handoff link, which opens once within 5 minutes of creation and is meant for redirecting a signed-in user from your app. Do not email a handoff link: email security scanners can use it up. Alien CLIs older than 3.3.56 are refused when this is empty.
+   */
+  allowed?: Array<string> | undefined;
   deploymentSetupConfig?: DeploymentSetupConfigInput | undefined;
   /**
    * Setup to include. Use 'all' for every capability enabled for the Project. Omit to preserve the standard deployment-link behavior.
@@ -109,6 +113,7 @@ export type CreateDeploymentGroupTokenRequest$Outbound = {
   refreshUrl?: string | null | undefined;
   description?: string | undefined;
   expiresAt?: string | null | undefined;
+  allowed?: Array<string> | undefined;
   deploymentSetupConfig?: DeploymentSetupConfigInput$Outbound | undefined;
   setupItems?:
     | string
@@ -127,6 +132,7 @@ export const CreateDeploymentGroupTokenRequest$outboundSchema: z.ZodType<
   refreshUrl: z.nullable(z.string()).optional(),
   description: z.string().optional(),
   expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
+  allowed: z.array(z.string()).optional(),
   deploymentSetupConfig: DeploymentSetupConfigInput$outboundSchema.optional(),
   setupItems: z.union([
     CreateDeploymentGroupTokenRequestSetupItemsEnum$outboundSchema,

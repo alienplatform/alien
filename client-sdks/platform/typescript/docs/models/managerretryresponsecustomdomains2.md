@@ -9,13 +9,13 @@ import { ManagerRetryResponseCustomDomains2 } from "@alienplatform/platform-api/
 
 let value: ManagerRetryResponseCustomDomains2 = {
   certificate: {},
-  domain: "optimal-executor.biz",
 };
 ```
 
 ## Fields
 
-| Field                                                                                                  | Type                                                                                                   | Required                                                                                               | Description                                                                                            |
-| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `certificate`                                                                                          | [models.ManagerRetryResponseDomainsCertificate2](../models/managerretryresponsedomainscertificate2.md) | :heavy_check_mark:                                                                                     | Platform-specific certificate references for custom domains.                                           |
-| `domain`                                                                                               | *string*                                                                                               | :heavy_check_mark:                                                                                     | Fully qualified domain name to use.                                                                    |
+| Field                                                                                    | Type                                                                                     | Required                                                                                 | Description                                                                              |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `certificate`                                                                            | [models.ManagerRetryResponseCertificate2](../models/managerretryresponsecertificate2.md) | :heavy_check_mark:                                                                       | Platform-specific certificate references for custom domains.                             |
+| `domain`                                                                                 | *string*                                                                                 | :heavy_minus_sign:                                                                       | Fully qualified domain name for a supplied certificate.                                  |
+| `endpoints`                                                                              | Record<string, *string*>                                                                 | :heavy_minus_sign:                                                                       | Hostnames keyed by endpoint name for a managed certificate.                              |

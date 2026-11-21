@@ -6,11 +6,12 @@
 import { SyncAcquireResponseDeployment } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseDeployment = {
-  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
   projectId: "<id>",
-  deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
-  operationId: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-  attemptId: "duat_uve04tou5eoua3q17dar1pz",
+  deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
+  operationId: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
+  configurationRevision: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
+  attemptId: "duat_uve04tou5eoua3q17dar1pzsbnjr",
   current: {
     platform: "aws",
     protocolVersion: 626709,
@@ -18,9 +19,15 @@ let value: SyncAcquireResponseDeployment = {
   },
   config: {
     environmentVariables: {
-      createdAt: "1732088910143",
+      createdAt: "1708829691352",
       hash: "<value>",
-      variables: [],
+      variables: [
+        {
+          name: "<value>",
+          type: "plain",
+          value: "<value>",
+        },
+      ],
     },
   },
 };
@@ -28,13 +35,14 @@ let value: SyncAcquireResponseDeployment = {
 
 ## Fields
 
-| Field                                                                                 | Type                                                                                  | Required                                                                              | Description                                                                           | Example                                                                               |
-| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `deploymentId`                                                                        | *string*                                                                              | :heavy_check_mark:                                                                    | ID of the deployment                                                                  | dep_0c29fq4a2yjb7kx3smwdgxlc                                                          |
-| `projectId`                                                                           | *string*                                                                              | :heavy_check_mark:                                                                    | Project ID the deployment belongs to                                                  |                                                                                       |
-| `deploymentGroupId`                                                                   | *string*                                                                              | :heavy_check_mark:                                                                    | Deployment group ID the deployment belongs to                                         | dg_r27ict8c7vcgsumpj90ackf7b                                                          |
-| `setupMethod`                                                                         | [models.DeploymentSetupMethod](../models/deploymentsetupmethod.md)                    | :heavy_minus_sign:                                                                    | N/A                                                                                   |                                                                                       |
-| `operationId`                                                                         | *string*                                                                              | :heavy_check_mark:                                                                    | Immutable target claimed for this execution, or null for observation-only work.       | duop_0vtxpb1sw4sbcdwg2xo37q6                                                          |
-| `attemptId`                                                                           | *string*                                                                              | :heavy_check_mark:                                                                    | Execution attempt claimed by this manager session, or null for observation-only work. | duat_uve04tou5eoua3q17dar1pz                                                          |
-| `current`                                                                             | [models.DeploymentState](../models/deploymentstate.md)                                | :heavy_check_mark:                                                                    | Current deployment state (includes releases)                                          |                                                                                       |
-| `config`                                                                              | [models.DeploymentConfig](../models/deploymentconfig.md)                              | :heavy_check_mark:                                                                    | Deployment configuration                                                              |                                                                                       |
+| Field                                                                                                    | Type                                                                                                     | Required                                                                                                 | Description                                                                                              | Example                                                                                                  |
+| -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `deploymentId`                                                                                           | *string*                                                                                                 | :heavy_check_mark:                                                                                       | ID of the deployment                                                                                     | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f                                                                         |
+| `projectId`                                                                                              | *string*                                                                                                 | :heavy_check_mark:                                                                                       | Project ID the deployment belongs to                                                                     |                                                                                                          |
+| `deploymentGroupId`                                                                                      | *string*                                                                                                 | :heavy_check_mark:                                                                                       | Deployment group ID the deployment belongs to                                                            | dg_r27ict8c7vcgsumpj90ackf7bnwt                                                                          |
+| `setupMethod`                                                                                            | [models.DeploymentSetupMethod](../models/deploymentsetupmethod.md)                                       | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |                                                                                                          |
+| `operationId`                                                                                            | *string*                                                                                                 | :heavy_check_mark:                                                                                       | Immutable target claimed for this execution, or null for observation-only work.                          | duop_0vtxpb1sw4sbcdwg2xo37q6msm9l                                                                        |
+| `configurationRevision`                                                                                  | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | Immutable configuration revision included in offline targets and returned after successful installation. | duop_0vtxpb1sw4sbcdwg2xo37q6msm9l                                                                        |
+| `attemptId`                                                                                              | *string*                                                                                                 | :heavy_check_mark:                                                                                       | Execution attempt claimed by this manager session, or null for observation-only work.                    | duat_uve04tou5eoua3q17dar1pzsbnjr                                                                        |
+| `current`                                                                                                | [models.DeploymentState](../models/deploymentstate.md)                                                   | :heavy_check_mark:                                                                                       | Current deployment state (includes releases)                                                             |                                                                                                          |
+| `config`                                                                                                 | [models.SyncAcquireResponseDeploymentConfig](../models/syncacquireresponsedeploymentconfig.md)           | :heavy_check_mark:                                                                                       | Deployment configuration                                                                                 |                                                                                                          |

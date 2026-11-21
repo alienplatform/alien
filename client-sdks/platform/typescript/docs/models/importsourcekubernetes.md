@@ -17,7 +17,7 @@ let value: ImportSourceKubernetes = {};
 
 ## Fields
 
-| Field                              | Type                               | Required                           | Description                        |
-| ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- |
-| `cluster`                          | *models.ImportSourceClusterUnion*  | :heavy_minus_sign:                 | N/A                                |
-| `exposure`                         | *models.ImportSourceExposureUnion* | :heavy_minus_sign:                 | N/A                                |
+| Field                             | Type                              | Required                          | Description                       |
+| --------------------------------- | --------------------------------- | --------------------------------- | --------------------------------- |
+| `cluster`                         | *models.ImportSourceClusterUnion* | :heavy_minus_sign:                | N/A                               |
+| `exposure`                        | *models.ImportSourceExposure*     | :heavy_minus_sign:                | N/A                               |

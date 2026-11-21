@@ -14,15 +14,15 @@ let value: DataServiceActivation = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
+          reason: "timed-out",
           severity: "error",
           source: "<value>",
         },
       ],
-      health: "unhealthy",
-      lifecycle: "stopped",
-      partial: true,
-      stale: true,
+      health: "healthy",
+      lifecycle: "deleted",
+      partial: false,
+      stale: false,
     },
     backend: "gcpServiceUsage",
   },
@@ -32,7 +32,7 @@ let value: DataServiceActivation = {
 
 ## Fields
 
-| Field                                    | Type                                     | Required                                 | Description                              |
-| ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
-| `data`                                   | *models.SyncReconcileRequestDataUnion15* | :heavy_check_mark:                       | N/A                                      |
-| `resourceType`                           | *"service_activation"*                   | :heavy_check_mark:                       | N/A                                      |
+| Field                                                                              | Type                                                                               | Required                                                                           | Description                                                                        |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `data`                                                                             | *models.SyncReconcileRequestDataUnion16*                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `resourceType`                                                                     | [models.ResourceTypeServiceActivation](../models/resourcetypeserviceactivation.md) | :heavy_check_mark:                                                                 | N/A                                                                                |

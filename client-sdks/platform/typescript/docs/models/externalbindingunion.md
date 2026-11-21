@@ -103,18 +103,30 @@ const value: models.ExternalBindingUnion6 = {
 };
 ```
 
-### `models.ExternalBindingAi`
+### `models.ExternalBindingUnion7`
 
 ```typescript
-const value: models.ExternalBindingAi = {
-  apiKey: {
+const value: models.ExternalBindingUnion7 = {
+  databaseResourceId: "<id>",
+  host: {
     "secretRef": {
       "key": "<key>",
       "name": "<value>",
     },
   },
+  port: "<value>",
+  username: "Kellie.Ratke",
+  service: "azure-managed-redis",
+  type: "redis",
+};
+```
+
+### `models.ExternalBindingUnion8`
+
+```typescript
+const value: models.ExternalBindingUnion8 = {
+  apiKey: "<value>",
   provider: "<value>",
   type: "ai",
 };
 ```
-

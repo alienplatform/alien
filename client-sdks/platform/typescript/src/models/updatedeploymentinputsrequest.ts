@@ -8,6 +8,11 @@ import {
   StackInputValueRequest$Outbound,
   StackInputValueRequest$outboundSchema,
 } from "./stackinputvaluerequest.js";
+import {
+  ValueRef,
+  ValueRef$Outbound,
+  ValueRef$outboundSchema,
+} from "./valueref.js";
 
 export type UpdateDeploymentInputsRequest = {
   /**
@@ -15,6 +20,10 @@ export type UpdateDeploymentInputsRequest = {
    */
   expectedBaseOperationId?: string | undefined;
   inputValues?: { [k: string]: StackInputValueRequest } | undefined;
+  /**
+   * Answers the client already stored in the manager, by input id. Send these instead of `inputValues` for the inputs listed in `heldInputIds`.
+   */
+  inputValueRefs?: { [k: string]: ValueRef } | undefined;
   clearInputIds?: Array<string> | undefined;
 };
 
@@ -22,6 +31,7 @@ export type UpdateDeploymentInputsRequest = {
 export type UpdateDeploymentInputsRequest$Outbound = {
   expectedBaseOperationId?: string | undefined;
   inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
+  inputValueRefs?: { [k: string]: ValueRef$Outbound } | undefined;
   clearInputIds?: Array<string> | undefined;
 };
 
@@ -33,6 +43,7 @@ export const UpdateDeploymentInputsRequest$outboundSchema: z.ZodType<
   expectedBaseOperationId: z.string().optional(),
   inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
     .optional(),
+  inputValueRefs: z.record(z.string(), ValueRef$outboundSchema).optional(),
   clearInputIds: z.array(z.string()).optional(),
 });
 

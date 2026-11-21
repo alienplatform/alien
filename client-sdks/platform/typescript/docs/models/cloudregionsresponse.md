@@ -10,8 +10,13 @@ let value: CloudRegionsResponse = {
     aws: [
       "<value 1>",
       "<value 2>",
+      "<value 3>",
     ],
-    gcp: [],
+    gcp: [
+      "<value 1>",
+      "<value 2>",
+      "<value 3>",
+    ],
     azure: [
       "<value 1>",
       "<value 2>",

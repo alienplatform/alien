@@ -16,12 +16,12 @@ let value: DataKubernetesPods = {
       {
         message: "<value>",
         reason: "collection-failed",
-        severity: "error",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
+    health: "unhealthy",
+    lifecycle: "deleted",
     partial: false,
     stale: true,
   },
@@ -36,5 +36,5 @@ let value: DataKubernetesPods = {
 | `activeSessions`                                                           | *number*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `idlePods`                                                                 | *number*                                                                   | :heavy_check_mark:                                                         | Claimed but unused pods waiting in the pool.                               |
 | `namespace`                                                                | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus76](../models/resourceheartbeatstatus76.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus80](../models/resourceheartbeatstatus80.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `backend`                                                                  | *"kubernetesPods"*                                                         | :heavy_check_mark:                                                         | N/A                                                                        |

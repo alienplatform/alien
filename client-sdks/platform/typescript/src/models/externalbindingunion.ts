@@ -7,40 +7,1451 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
-import {
-  ExternalBindingAcr,
-  ExternalBindingAcr$inboundSchema,
-  ExternalBindingAcr$Outbound,
-  ExternalBindingAcr$outboundSchema,
-  ExternalBindingAi,
-  ExternalBindingAi$inboundSchema,
-  ExternalBindingAi$Outbound,
-  ExternalBindingAi$outboundSchema,
-  ExternalBindingContainerAppsEnvironment,
-  ExternalBindingContainerAppsEnvironment$inboundSchema,
-  ExternalBindingContainerAppsEnvironment$Outbound,
-  ExternalBindingContainerAppsEnvironment$outboundSchema,
-  ExternalBindingEcr,
-  ExternalBindingEcr$inboundSchema,
-  ExternalBindingEcr$Outbound,
-  ExternalBindingEcr$outboundSchema,
-  ExternalBindingGar,
-  ExternalBindingGar$inboundSchema,
-  ExternalBindingGar$Outbound,
-  ExternalBindingGar$outboundSchema,
-  ExternalBindingLocal,
-  ExternalBindingLocal$inboundSchema,
-  ExternalBindingLocal$Outbound,
-  ExternalBindingLocal$outboundSchema,
-  ExternalBindingUnion5,
-  ExternalBindingUnion5$inboundSchema,
-  ExternalBindingUnion5$Outbound,
-  ExternalBindingUnion5$outboundSchema,
-  ExternalBindingUnion6,
-  ExternalBindingUnion6$inboundSchema,
-  ExternalBindingUnion6$Outbound,
-  ExternalBindingUnion6$outboundSchema,
-} from "./externalbindingecr.js";
+
+export const TypeAi2 = {
+  Ai: "ai",
+} as const;
+export type TypeAi2 = ClosedEnum<typeof TypeAi2>;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type BindingValueStringSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type BindingValueString = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: BindingValueStringSecretRef;
+};
+
+/**
+ * External AI provider binding configuration (BYO-key).
+ *
+ * @remarks
+ *
+ * The operator-supplied secret rides inside the binding via
+ * `BindingValue<String>`, so it is a literal on cloud platforms and gains
+ * Kubernetes SecretRef resolution for free (`extract_binding_secrets` walks
+ * the binding JSON for `secretRef`).
+ */
+export type ExternalBindingAi = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  apiKey: any | null;
+  /**
+   * The external AI provider name (e.g., "openai", "anthropic")
+   */
+  provider: string;
+  type: TypeAi2;
+};
+
+export const ServiceEnum = {
+  Bedrock: "bedrock",
+} as const;
+export type ServiceEnum = ClosedEnum<typeof ServiceEnum>;
+
+export const TypeAi1 = {
+  Ai: "ai",
+} as const;
+export type TypeAi1 = ClosedEnum<typeof TypeAi1>;
+
+/**
+ * A managed cloud AI service the workload reaches with its ambient identity. The installer owns
+ *
+ * @remarks
+ * the identity and its permissions; Alien grants nothing for it.
+ */
+export type ExternalBindingBedrock = {
+  /**
+   * The AWS region where Bedrock is accessed (for example `us-east-1`). The gateway builds
+   *
+   * @remarks
+   * `https://bedrock-runtime.<region>.amazonaws.com` from it, so parsing refuses anything
+   * that is not a plain AWS region name.
+   */
+  region: string;
+  service: ServiceEnum;
+  type: TypeAi1;
+};
+
+/**
+ * What an installer supplies for an AI resource with an external binding.
+ *
+ * @remarks
+ *
+ * Two inputs, told apart by whether the JSON carries a `service` tag (other than `external-ai`):
+ * - `{ "provider", "apiKey" }` — BYO key (the original input; stored deployments and Helm values
+ *   carry it, so it parses exactly as before). `{ "service": "external-ai", "provider",
+ *   "apiKey" }` also parses, as it did before the cloud-identity form existed.
+ * - `{ "service": "bedrock", "region" }` — the cloud's own AI service, called with the workload's
+ *   ambient identity (for example an EKS pod's IRSA role). No key, no Secret.
+ *
+ * The cloud-identity form needs the pod to have its own AWS identity: on Kubernetes, an IRSA role
+ * on the service account (or an EKS Pod Identity association) with `bedrock:InvokeModel` and
+ * `bedrock:InvokeModelWithResponseStream`. Without one the gateway refuses to sign and never uses
+ * the node's role. The `region` must be a plain AWS region name such as `us-east-1`.
+ *
+ * Access is not checked at install time (the setup credentials cannot speak for the pod's role):
+ * it is checked on the first call, and a model the role cannot use fails with
+ * `provider_access_unavailable`.
+ *
+ * Untagged, because the BYO-key input has no tag and must keep parsing unchanged. The two shapes
+ * cannot overlap: the ambient one requires `service`, the key one requires `provider` and `apiKey`.
+ * `Deserialize` is hand-written (see below) so a typo gets an error naming both accepted forms, and
+ * so an ambient input carrying an unused key such as `apiKey` is refused instead of dropped.
+ */
+export type ExternalBindingUnion8 = ExternalBindingBedrock | ExternalBindingAi;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PortSecretRef11 = {
+  key: string;
+  name: string;
+};
+
+export type Port11 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PortSecretRef11;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type PortUnion11 = Port11 | number | any | string;
+
+export const TypeRedis5 = {
+  Redis: "redis",
+} as const;
+export type TypeRedis5 = ClosedEnum<typeof TypeRedis5>;
+
+/**
+ * Local Valkey binding.
+ */
+export type ExternalBindingLocalRedis = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: any | null;
+  password: string;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: Port11 | number | any | string | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: any | null;
+  service: "local-redis";
+  type: TypeRedis5;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SecretKeyRef2 = {
+  key: string;
+  name: string;
+};
+
+export type Password3 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretKeyRef: SecretKeyRef2;
+};
+
+/**
+ * Password literal or a `secretKeyRef` to a Kubernetes Secret. Kubernetes workloads get the
+ *
+ * @remarks
+ * password from the Secret as an environment variable, which the SDK inserts after it
+ * parses the binding, so any character is safe.
+ */
+export type PasswordUnion2 = Password3 | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PortSecretRef10 = {
+  key: string;
+  name: string;
+};
+
+export type Port10 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PortSecretRef10;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type PortUnion10 = Port10 | number | any | string;
+
+export const TypeRedis4 = {
+  Redis: "redis",
+} as const;
+export type TypeRedis4 = ClosedEnum<typeof TypeRedis4>;
+
+/**
+ * Operator-provided server binding.
+ */
+export type ExternalBindingExternalRedis = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: any | null;
+  /**
+   * Password literal or a `secretKeyRef` to a Kubernetes Secret. Kubernetes workloads get the
+   *
+   * @remarks
+   * password from the Secret as an environment variable, which the SDK inserts after it
+   * parses the binding, so any character is safe.
+   */
+  password: Password3 | string;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: Port10 | number | any | string | null;
+  /**
+   * Connect over TLS. Defaults to true.
+   */
+  tls?: boolean | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: any | null;
+  service: "external";
+  type: TypeRedis4;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PortSecretRef9 = {
+  key: string;
+  name: string;
+};
+
+export type Port9 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PortSecretRef9;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type PortUnion9 = Port9 | number | any | string;
+
+export const TypeRedis3 = {
+  Redis: "redis",
+} as const;
+export type TypeRedis3 = ClosedEnum<typeof TypeRedis3>;
+
+/**
+ * Azure Managed Redis binding.
+ */
+export type ExternalBindingAzureManagedRedis = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  databaseResourceId: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: Port9 | number | any | string | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: any | null;
+  service: "azure-managed-redis";
+  type: TypeRedis3;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PortSecretRef8 = {
+  key: string;
+  name: string;
+};
+
+export type Port8 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PortSecretRef8;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type PortUnion8 = Port8 | number | any | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type ServerCaCertificatesSecretRef2 = {
+  key: string;
+  name: string;
+};
+
+export type ServerCaCertificates2 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: ServerCaCertificatesSecretRef2;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type ServerCaCertificatesUnion2 =
+  | ServerCaCertificates2
+  | Array<string>
+  | any
+  | string;
+
+export const TypeRedis2 = {
+  Redis: "redis",
+} as const;
+export type TypeRedis2 = ClosedEnum<typeof TypeRedis2>;
+
+/**
+ * GCP Memorystore binding.
+ */
+export type ExternalBindingMemorystore = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  instanceName: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: Port8 | number | any | string | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  serverCaCertificates:
+    | ServerCaCertificates2
+    | Array<string>
+    | any
+    | string
+    | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: any | null;
+  service: "memorystore";
+  type: TypeRedis2;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PortSecretRef7 = {
+  key: string;
+  name: string;
+};
+
+export type Port7 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PortSecretRef7;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type PortUnion7 = Port7 | number | any | string;
+
+export const TypeRedis1 = {
+  Redis: "redis",
+} as const;
+export type TypeRedis1 = ClosedEnum<typeof TypeRedis1>;
+
+/**
+ * AWS ElastiCache binding.
+ */
+export type ExternalBindingElasticache = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  passwordSecretArn: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: Port7 | number | any | string | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: any | null;
+  service: "elasticache";
+  type: TypeRedis1;
+};
+
+/**
+ * Connection details for a Redis-compatible server, one variant per backend.
+ *
+ * @remarks
+ *
+ * Service tags are unique across all binding enums (serde dispatches on
+ * `service` alone), so the key-value store's `redis` tag is not reused.
+ */
+export type ExternalBindingUnion7 =
+  | ExternalBindingElasticache
+  | ExternalBindingMemorystore
+  | ExternalBindingAzureManagedRedis
+  | ExternalBindingExternalRedis
+  | ExternalBindingLocalRedis;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PortSecretRef6 = {
+  key: string;
+  name: string;
+};
+
+export type Port6 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PortSecretRef6;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type PortUnion6 = Port6 | number | any | string;
+
+export const TypePostgres6 = {
+  Postgres: "postgres",
+} as const;
+export type TypePostgres6 = ClosedEnum<typeof TypePostgres6>;
+
+/**
+ * Local embedded Postgres binding.
+ */
+export type ExternalBindingLocalPostgres = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  database: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: any | null;
+  password: string;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: Port6 | number | any | string | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: any | null;
+  service: "local-postgres";
+  type: TypePostgres6;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SecretKeyRef1 = {
+  key: string;
+  name: string;
+};
+
+export type Password2 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretKeyRef: SecretKeyRef1;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PasswordSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type Password1 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PasswordSecretRef;
+};
+
+/**
+ * Connection password or Kubernetes Secret reference. Kubernetes workloads resolve
+ *
+ * @remarks
+ * the reference through secretKeyRef before the application loads its binding.
+ */
+export type PasswordUnion1 = Password1 | Password2 | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PortSecretRef5 = {
+  key: string;
+  name: string;
+};
+
+export type Port5 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PortSecretRef5;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type PortUnion5 = Port5 | number | any | string;
+
+/**
+ * TLS policy for an operator-provided / BYO Postgres database.
+ *
+ * @remarks
+ *
+ * Unlike libpq's ambiguous `prefer` mode, both choices map exactly to the
+ * connection settings exposed by every supported SDK.
+ */
+export const SslMode = {
+  VerifyFull: "verify-full",
+  Disable: "disable",
+} as const;
+/**
+ * TLS policy for an operator-provided / BYO Postgres database.
+ *
+ * @remarks
+ *
+ * Unlike libpq's ambiguous `prefer` mode, both choices map exactly to the
+ * connection settings exposed by every supported SDK.
+ */
+export type SslMode = ClosedEnum<typeof SslMode>;
+
+export const TypePostgres5 = {
+  Postgres: "postgres",
+} as const;
+export type TypePostgres5 = ClosedEnum<typeof TypePostgres5>;
+
+/**
+ * Operator-provided / BYO database binding.
+ */
+export type ExternalBindingExternalPostgres = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  database: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: any | null;
+  /**
+   * Connection password or Kubernetes Secret reference. Kubernetes workloads resolve
+   *
+   * @remarks
+   * the reference through secretKeyRef before the application loads its binding.
+   */
+  password: Password1 | Password2 | string;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: Port5 | number | any | string | null;
+  /**
+   * TLS policy for an operator-provided / BYO Postgres database.
+   *
+   * @remarks
+   *
+   * Unlike libpq's ambiguous `prefer` mode, both choices map exactly to the
+   * connection settings exposed by every supported SDK.
+   */
+  sslMode?: SslMode | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: any | null;
+  service: "external";
+  type: TypePostgres5;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PortSecretRef4 = {
+  key: string;
+  name: string;
+};
+
+export type Port4 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PortSecretRef4;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type PortUnion4 = Port4 | number | any | string;
+
+export const TypePostgres4 = {
+  Postgres: "postgres",
+} as const;
+export type TypePostgres4 = ClosedEnum<typeof TypePostgres4>;
+
+/**
+ * Azure Flexible Server binding.
+ */
+export type ExternalBindingFlexibleServer = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  database: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  passwordSecretUri: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: Port4 | number | any | string | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: any | null;
+  service: "flexible-server";
+  type: TypePostgres4;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PortSecretRef3 = {
+  key: string;
+  name: string;
+};
+
+export type Port3 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PortSecretRef3;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type PortUnion3 = Port3 | number | any | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type ServerCaCertificatesSecretRef1 = {
+  key: string;
+  name: string;
+};
+
+export type ServerCaCertificates1 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: ServerCaCertificatesSecretRef1;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type ServerCaCertificatesUnion1 =
+  | ServerCaCertificates1
+  | Array<string>
+  | any
+  | string;
+
+export const TypePostgres3 = {
+  Postgres: "postgres",
+} as const;
+export type TypePostgres3 = ClosedEnum<typeof TypePostgres3>;
+
+/**
+ * GCP Cloud SQL binding.
+ */
+export type ExternalBindingCloudSQL = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  database: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  passwordSecretName: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: Port3 | number | any | string | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  serverCaCertificates:
+    | ServerCaCertificates1
+    | Array<string>
+    | any
+    | string
+    | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: any | null;
+  service: "cloud-sql";
+  type: TypePostgres3;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PortSecretRef2 = {
+  key: string;
+  name: string;
+};
+
+export type Port2 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PortSecretRef2;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type PortUnion2 = Port2 | number | any | string;
+
+export const TypePostgres2 = {
+  Postgres: "postgres",
+} as const;
+export type TypePostgres2 = ClosedEnum<typeof TypePostgres2>;
+
+/**
+ * AWS Aurora Serverless v2 binding.
+ */
+export type ExternalBindingAuroraManaged = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  clusterEndpoint: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  database: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  passwordSecretArn: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: Port2 | number | any | string | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: any | null;
+  service: "aurora-managed";
+  type: TypePostgres2;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PortSecretRef1 = {
+  key: string;
+  name: string;
+};
+
+export type Port1 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PortSecretRef1;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type PortUnion1 = Port1 | number | any | string;
+
+export const TypePostgres1 = {
+  Postgres: "postgres",
+} as const;
+export type TypePostgres1 = ClosedEnum<typeof TypePostgres1>;
+
+/**
+ * AWS Aurora Serverless v2 binding.
+ */
+export type ExternalBindingAurora = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  clusterEndpoint: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  database: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  passwordSecretArn: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: Port1 | number | any | string | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: any | null;
+  service: "aurora";
+  type: TypePostgres1;
+};
+
+/**
+ * Connection details for a Postgres database, one variant per backend.
+ */
+export type ExternalBindingUnion6 =
+  | ExternalBindingAurora
+  | ExternalBindingAuroraManaged
+  | ExternalBindingCloudSQL
+  | ExternalBindingFlexibleServer
+  | ExternalBindingExternalPostgres
+  | ExternalBindingLocalPostgres;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type StaticIpSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type StaticIp = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: StaticIpSecretRef;
+};
+
+export const TypeContainerAppsEnvironment = {
+  ContainerAppsEnvironment: "container_apps_environment",
+} as const;
+export type TypeContainerAppsEnvironment = ClosedEnum<
+  typeof TypeContainerAppsEnvironment
+>;
+
+/**
+ * Binding configuration for a pre-existing Azure Container Apps Environment.
+ *
+ * @remarks
+ *
+ * Used when deploying to an existing environment instead of having Alien provision one.
+ * This is useful for shared environments (e.g., test infrastructure) or enterprise
+ * setups where environments are managed by a separate team.
+ */
+export type ExternalBindingContainerAppsEnvironment = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  defaultDomain: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  environmentName: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  resourceGroupName: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  resourceId: any | null;
+  staticIp?: any | null | undefined;
+  type: TypeContainerAppsEnvironment;
+};
+
+export const TypeVault5 = {
+  Vault: "vault",
+} as const;
+export type TypeVault5 = ClosedEnum<typeof TypeVault5>;
+
+/**
+ * Local development vault binding (for testing/development)
+ */
+export type ExternalBindingLocalVault = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  dataDir: any | null;
+  /**
+   * The vault name for local storage
+   */
+  vaultName: string;
+  service: "local-vault";
+  type: TypeVault5;
+};
+
+export const TypeVault4 = {
+  Vault: "vault",
+} as const;
+export type TypeVault4 = ClosedEnum<typeof TypeVault4>;
+
+/**
+ * Kubernetes Secrets vault binding configuration
+ */
+export type ExternalBindingKubernetesSecret = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  namespace: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  vaultPrefix: any | null;
+  service: "kubernetes-secret";
+  type: TypeVault4;
+};
+
+export const TypeVault3 = {
+  Vault: "vault",
+} as const;
+export type TypeVault3 = ClosedEnum<typeof TypeVault3>;
+
+/**
+ * Azure Key Vault binding configuration
+ */
+export type ExternalBindingKeyVault = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  vaultName: any | null;
+  service: "key-vault";
+  type: TypeVault3;
+};
+
+export const TypeVault2 = {
+  Vault: "vault",
+} as const;
+export type TypeVault2 = ClosedEnum<typeof TypeVault2>;
+
+/**
+ * GCP Secret Manager vault binding configuration
+ */
+export type ExternalBindingSecretManager = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  vaultPrefix: any | null;
+  service: "secret-manager";
+  type: TypeVault2;
+};
+
+export const TypeVault1 = {
+  Vault: "vault",
+} as const;
+export type TypeVault1 = ClosedEnum<typeof TypeVault1>;
+
+/**
+ * AWS SSM Parameter Store vault binding configuration
+ */
+export type ExternalBindingParameterStore = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  vaultPrefix: any | null;
+  service: "parameter-store";
+  type: TypeVault1;
+};
+
+/**
+ * Represents a vault binding for secure secret management
+ */
+export type ExternalBindingUnion5 =
+  | ExternalBindingParameterStore
+  | ExternalBindingSecretManager
+  | ExternalBindingKeyVault
+  | ExternalBindingKubernetesSecret
+  | ExternalBindingLocalVault;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type DataDirSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type DataDir = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: DataDirSecretRef;
+};
+
+export const TypeArtifactRegistry4 = {
+  ArtifactRegistry: "artifact_registry",
+} as const;
+export type TypeArtifactRegistry4 = ClosedEnum<typeof TypeArtifactRegistry4>;
+
+/**
+ * Local container registry binding configuration.
+ *
+ * @remarks
+ *
+ * The local registry runs on localhost only and does not require authentication.
+ * Security boundary is the OS process isolation on the customer's machine.
+ * External image access is secured by the manager's registry proxy (deployment tokens).
+ */
+export type ExternalBindingLocal = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  dataDir: any | null;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  registryUrl: any | null;
+  service: "local";
+  type: TypeArtifactRegistry4;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PullServiceAccountEmailSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type PullServiceAccountEmail = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PullServiceAccountEmailSecretRef;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PushServiceAccountEmailSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type PushServiceAccountEmail = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PushServiceAccountEmailSecretRef;
+};
+
+export const TypeArtifactRegistry3 = {
+  ArtifactRegistry: "artifact_registry",
+} as const;
+export type TypeArtifactRegistry3 = ClosedEnum<typeof TypeArtifactRegistry3>;
+
+/**
+ * Google Artifact Registry binding configuration
+ */
+export type ExternalBindingGar = {
+  pullServiceAccountEmail?: any | null | undefined;
+  pushServiceAccountEmail?: any | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  repositoryName: any | null;
+  service: "gar";
+  type: TypeArtifactRegistry3;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type RepositoryPrefixSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type RepositoryPrefix = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: RepositoryPrefixSecretRef;
+};
+
+export const TypeArtifactRegistry2 = {
+  ArtifactRegistry: "artifact_registry",
+} as const;
+export type TypeArtifactRegistry2 = ClosedEnum<typeof TypeArtifactRegistry2>;
+
+/**
+ * Azure Container Registry binding configuration
+ */
+export type ExternalBindingAcr = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  registryName: any | null;
+  repositoryPrefix?: any | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  resourceGroupName: any | null;
+  service: "acr";
+  type: TypeArtifactRegistry2;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PullRoleArnSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type PullRoleArn = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PullRoleArnSecretRef;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type PushRoleArnSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type PushRoleArn = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: PushRoleArnSecretRef;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SandboxRepositoryPrefixSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SandboxRepositoryPrefix = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SandboxRepositoryPrefixSecretRef;
+};
+
+export const TypeArtifactRegistry1 = {
+  ArtifactRegistry: "artifact_registry",
+} as const;
+export type TypeArtifactRegistry1 = ClosedEnum<typeof TypeArtifactRegistry1>;
+
+/**
+ * AWS ECR (Elastic Container Registry) binding configuration
+ */
+export type ExternalBindingEcr = {
+  /**
+   * Repository prefixes this registry used before `repositoryPrefix`. Images already released
+   *
+   * @remarks
+   * under them stay readable and keep their cross-account grants; nothing new is written there.
+   */
+  legacyRepositoryPrefixes?: Array<string> | undefined;
+  /**
+   * Sandbox namespaces this registry used before `sandboxRepositoryPrefix`, read the same way.
+   */
+  legacySandboxRepositoryPrefixes?: Array<string> | undefined;
+  pullRoleArn?: any | null | undefined;
+  pushRoleArn?: any | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  repositoryPrefix: any | null;
+  sandboxRepositoryPrefix?: any | null | undefined;
+  service: "ecr";
+  type: TypeArtifactRegistry1;
+};
 
 /**
  * Service-type based artifact registry binding that supports multiple registry providers
@@ -50,21 +1461,6 @@ export type ExternalBindingUnion4 =
   | ExternalBindingAcr
   | ExternalBindingGar
   | ExternalBindingLocal;
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type DataDirSecretRef1 = {
-  key: string;
-  name: string;
-};
-
-export type DataDir1 = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: DataDirSecretRef1;
-};
 
 /**
  * Reference to a Kubernetes Secret
@@ -105,34 +1501,19 @@ export type ExternalBindingLocalKv = {
 /**
  * Reference to a Kubernetes Secret
  */
-export type ConnectionUrlSecretRef = {
+export type DatabaseSecretRef = {
   key: string;
   name: string;
 };
 
-export type ConnectionUrl = {
+export type Database = {
   /**
    * Reference to a Kubernetes Secret
    */
-  secretRef: ConnectionUrlSecretRef;
+  secretRef: DatabaseSecretRef;
 };
 
-/**
- * Reference to a Kubernetes Secret
- */
-export type DatabaseSecretRef1 = {
-  key: string;
-  name: string;
-};
-
-export type Database1 = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: DatabaseSecretRef1;
-};
-
-export type DatabaseUnion = Database1 | number | any | string;
+export type DatabaseUnion = Database | number | any | string;
 
 /**
  * Reference to a Kubernetes Secret
@@ -157,7 +1538,7 @@ export type TypeKv4 = ClosedEnum<typeof TypeKv4>;
 /**
  * Redis KV binding configuration
  */
-export type ExternalBindingRedis = {
+export type ExternalBindingRedisKv = {
   /**
    * Represents a value that can be either a concrete value, a template expression,
    *
@@ -165,55 +1546,10 @@ export type ExternalBindingRedis = {
    * or a reference to a Kubernetes Secret
    */
   connectionUrl: any | null;
-  database?: Database1 | number | any | string | null | undefined;
+  database?: Database | number | any | string | null | undefined;
   keyPrefix?: any | null | undefined;
   service: "redis";
   type: TypeKv4;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type AccountNameSecretRef2 = {
-  key: string;
-  name: string;
-};
-
-export type AccountName2 = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: AccountNameSecretRef2;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type ResourceGroupNameSecretRef1 = {
-  key: string;
-  name: string;
-};
-
-export type ResourceGroupName1 = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: ResourceGroupNameSecretRef1;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type TableNameSecretRef2 = {
-  key: string;
-  name: string;
-};
-
-export type TableName2 = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: TableNameSecretRef2;
 };
 
 export const TypeKv3 = {
@@ -248,51 +1584,6 @@ export type ExternalBindingTablestorage = {
   tableName: any | null;
   service: "tablestorage";
   type: TypeKv3;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type CollectionNameSecretRef = {
-  key: string;
-  name: string;
-};
-
-export type CollectionName = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: CollectionNameSecretRef;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type DatabaseIdSecretRef = {
-  key: string;
-  name: string;
-};
-
-export type DatabaseId = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: DatabaseIdSecretRef;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type ProjectIdSecretRef = {
-  key: string;
-  name: string;
-};
-
-export type ProjectId = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: ProjectIdSecretRef;
 };
 
 export const TypeKv2 = {
@@ -344,36 +1635,6 @@ export type EndpointUrl = {
   secretRef: EndpointUrlSecretRef;
 };
 
-/**
- * Reference to a Kubernetes Secret
- */
-export type RegionSecretRef2 = {
-  key: string;
-  name: string;
-};
-
-export type Region2 = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: RegionSecretRef2;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type TableNameSecretRef1 = {
-  key: string;
-  name: string;
-};
-
-export type TableName1 = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: TableNameSecretRef1;
-};
-
 export const TypeKv1 = {
   Kv: "kv",
 } as const;
@@ -409,23 +1670,8 @@ export type ExternalBindingUnion3 =
   | ExternalBindingDynamodb
   | ExternalBindingFirestore
   | ExternalBindingTablestorage
-  | ExternalBindingRedis
+  | ExternalBindingRedisKv
   | ExternalBindingLocalKv;
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type EndpointSecretRef2 = {
-  key: string;
-  name: string;
-};
-
-export type ExternalBindingEndpoint2 = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: EndpointSecretRef2;
-};
 
 export const TypeQueue5 = {
   Queue: "queue",
@@ -451,21 +1697,6 @@ export type ExternalBindingLocalQueueHTTP = {
   type: TypeQueue5;
 };
 
-/**
- * Reference to a Kubernetes Secret
- */
-export type QueuePathSecretRef = {
-  key: string;
-  name: string;
-};
-
-export type QueuePath = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: QueuePathSecretRef;
-};
-
 export const TypeQueue4 = {
   Queue: "queue",
 } as const;
@@ -484,36 +1715,6 @@ export type ExternalBindingLocalQueue = {
   queuePath: any | null;
   service: "local-queue";
   type: TypeQueue4;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type NamespaceSecretRef1 = {
-  key: string;
-  name: string;
-};
-
-export type Namespace1 = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: NamespaceSecretRef1;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type QueueNameSecretRef = {
-  key: string;
-  name: string;
-};
-
-export type QueueName = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: QueueNameSecretRef;
 };
 
 export const TypeQueue3 = {
@@ -543,36 +1744,6 @@ export type ExternalBindingServicebus = {
   type: TypeQueue3;
 };
 
-/**
- * Reference to a Kubernetes Secret
- */
-export type SubscriptionSecretRef = {
-  key: string;
-  name: string;
-};
-
-export type Subscription = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: SubscriptionSecretRef;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type TopicSecretRef = {
-  key: string;
-  name: string;
-};
-
-export type Topic = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: TopicSecretRef;
-};
-
 export const TypeQueue2 = {
   Queue: "queue",
 } as const;
@@ -598,21 +1769,6 @@ export type ExternalBindingPubsub = {
   topic: any | null;
   service: "pubsub";
   type: TypeQueue2;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type QueueUrlSecretRef = {
-  key: string;
-  name: string;
-};
-
-export type QueueUrl = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: QueueUrlSecretRef;
 };
 
 export const TypeQueue1 = {
@@ -645,21 +1801,6 @@ export type ExternalBindingUnion2 =
   | ExternalBindingLocalQueue
   | ExternalBindingLocalQueueHTTP;
 
-/**
- * Reference to a Kubernetes Secret
- */
-export type StoragePathSecretRef = {
-  key: string;
-  name: string;
-};
-
-export type StoragePath = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: StoragePathSecretRef;
-};
-
 export const TypeStorage4 = {
   Storage: "storage",
 } as const;
@@ -680,21 +1821,6 @@ export type ExternalBindingLocalStorage = {
   type: TypeStorage4;
 };
 
-/**
- * Reference to a Kubernetes Secret
- */
-export type BucketNameSecretRef2 = {
-  key: string;
-  name: string;
-};
-
-export type BucketName2 = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: BucketNameSecretRef2;
-};
-
 export const TypeStorage3 = {
   Storage: "storage",
 } as const;
@@ -713,36 +1839,6 @@ export type ExternalBindingGcs = {
   bucketName: any | null;
   service: "gcs";
   type: TypeStorage3;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type AccountNameSecretRef1 = {
-  key: string;
-  name: string;
-};
-
-export type AccountName1 = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: AccountNameSecretRef1;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type ContainerNameSecretRef = {
-  key: string;
-  name: string;
-};
-
-export type ContainerName = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: ContainerNameSecretRef;
 };
 
 export const TypeStorage2 = {
@@ -790,46 +1886,31 @@ export type AccessKeyId = {
 /**
  * Reference to a Kubernetes Secret
  */
-export type BucketNameSecretRef1 = {
+export type EndpointSecretRef = {
   key: string;
   name: string;
 };
 
-export type BucketName1 = {
+export type ExternalBindingEndpoint = {
   /**
    * Reference to a Kubernetes Secret
    */
-  secretRef: BucketNameSecretRef1;
+  secretRef: EndpointSecretRef;
 };
 
 /**
  * Reference to a Kubernetes Secret
  */
-export type EndpointSecretRef1 = {
+export type RegionSecretRef = {
   key: string;
   name: string;
 };
 
-export type ExternalBindingEndpoint1 = {
+export type Region = {
   /**
    * Reference to a Kubernetes Secret
    */
-  secretRef: EndpointSecretRef1;
-};
-
-/**
- * Reference to a Kubernetes Secret
- */
-export type RegionSecretRef1 = {
-  key: string;
-  name: string;
-};
-
-export type Region1 = {
-  /**
-   * Reference to a Kubernetes Secret
-   */
-  secretRef: RegionSecretRef1;
+  secretRef: RegionSecretRef;
 };
 
 /**
@@ -905,7 +1986,6 @@ export type ExternalBindingUnion1 =
  */
 export type ExternalBindingUnion =
   | ExternalBindingContainerAppsEnvironment
-  | ExternalBindingAi
   | ExternalBindingS3
   | ExternalBindingBlob
   | ExternalBindingGcs
@@ -918,24 +1998,3862 @@ export type ExternalBindingUnion =
   | ExternalBindingDynamodb
   | ExternalBindingFirestore
   | ExternalBindingTablestorage
-  | ExternalBindingRedis
+  | ExternalBindingRedisKv
   | ExternalBindingLocalKv
   | ExternalBindingEcr
   | ExternalBindingAcr
   | ExternalBindingGar
   | ExternalBindingLocal
-  | ExternalBindingUnion5
-  | ExternalBindingUnion6;
+  | ExternalBindingParameterStore
+  | ExternalBindingSecretManager
+  | ExternalBindingKeyVault
+  | ExternalBindingKubernetesSecret
+  | ExternalBindingLocalVault
+  | ExternalBindingAurora
+  | ExternalBindingAuroraManaged
+  | ExternalBindingCloudSQL
+  | ExternalBindingFlexibleServer
+  | ExternalBindingExternalPostgres
+  | ExternalBindingLocalPostgres
+  | ExternalBindingElasticache
+  | ExternalBindingMemorystore
+  | ExternalBindingAzureManagedRedis
+  | ExternalBindingExternalRedis
+  | ExternalBindingLocalRedis
+  | ExternalBindingBedrock
+  | ExternalBindingAi;
+
+/** @internal */
+export const TypeAi2$inboundSchema: z.ZodEnum<typeof TypeAi2> = z.enum(TypeAi2);
+/** @internal */
+export const TypeAi2$outboundSchema: z.ZodEnum<typeof TypeAi2> =
+  TypeAi2$inboundSchema;
+
+/** @internal */
+export const BindingValueStringSecretRef$inboundSchema: z.ZodType<
+  BindingValueStringSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type BindingValueStringSecretRef$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const BindingValueStringSecretRef$outboundSchema: z.ZodType<
+  BindingValueStringSecretRef$Outbound,
+  BindingValueStringSecretRef
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function bindingValueStringSecretRefToJSON(
+  bindingValueStringSecretRef: BindingValueStringSecretRef,
+): string {
+  return JSON.stringify(
+    BindingValueStringSecretRef$outboundSchema.parse(
+      bindingValueStringSecretRef,
+    ),
+  );
+}
+export function bindingValueStringSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<BindingValueStringSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => BindingValueStringSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'BindingValueStringSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const BindingValueString$inboundSchema: z.ZodType<
+  BindingValueString,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => BindingValueStringSecretRef$inboundSchema),
+});
+/** @internal */
+export type BindingValueString$Outbound = {
+  secretRef: BindingValueStringSecretRef$Outbound;
+};
+
+/** @internal */
+export const BindingValueString$outboundSchema: z.ZodType<
+  BindingValueString$Outbound,
+  BindingValueString
+> = z.object({
+  secretRef: z.lazy(() => BindingValueStringSecretRef$outboundSchema),
+});
+
+export function bindingValueStringToJSON(
+  bindingValueString: BindingValueString,
+): string {
+  return JSON.stringify(
+    BindingValueString$outboundSchema.parse(bindingValueString),
+  );
+}
+export function bindingValueStringFromJSON(
+  jsonString: string,
+): SafeParseResult<BindingValueString, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => BindingValueString$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'BindingValueString' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExternalBindingAi$inboundSchema: z.ZodType<
+  ExternalBindingAi,
+  unknown
+> = z.object({
+  apiKey: z.nullable(z.any()),
+  provider: z.string(),
+  type: TypeAi2$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingAi$Outbound = {
+  apiKey: any | null;
+  provider: string;
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingAi$outboundSchema: z.ZodType<
+  ExternalBindingAi$Outbound,
+  ExternalBindingAi
+> = z.object({
+  apiKey: z.nullable(z.any()),
+  provider: z.string(),
+  type: TypeAi2$outboundSchema,
+});
+
+export function externalBindingAiToJSON(
+  externalBindingAi: ExternalBindingAi,
+): string {
+  return JSON.stringify(
+    ExternalBindingAi$outboundSchema.parse(externalBindingAi),
+  );
+}
+export function externalBindingAiFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingAi, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingAi$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingAi' from JSON`,
+  );
+}
+
+/** @internal */
+export const ServiceEnum$inboundSchema: z.ZodEnum<typeof ServiceEnum> = z.enum(
+  ServiceEnum,
+);
+/** @internal */
+export const ServiceEnum$outboundSchema: z.ZodEnum<typeof ServiceEnum> =
+  ServiceEnum$inboundSchema;
+
+/** @internal */
+export const TypeAi1$inboundSchema: z.ZodEnum<typeof TypeAi1> = z.enum(TypeAi1);
+/** @internal */
+export const TypeAi1$outboundSchema: z.ZodEnum<typeof TypeAi1> =
+  TypeAi1$inboundSchema;
+
+/** @internal */
+export const ExternalBindingBedrock$inboundSchema: z.ZodType<
+  ExternalBindingBedrock,
+  unknown
+> = z.object({
+  region: z.string(),
+  service: ServiceEnum$inboundSchema,
+  type: TypeAi1$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingBedrock$Outbound = {
+  region: string;
+  service: string;
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingBedrock$outboundSchema: z.ZodType<
+  ExternalBindingBedrock$Outbound,
+  ExternalBindingBedrock
+> = z.object({
+  region: z.string(),
+  service: ServiceEnum$outboundSchema,
+  type: TypeAi1$outboundSchema,
+});
+
+export function externalBindingBedrockToJSON(
+  externalBindingBedrock: ExternalBindingBedrock,
+): string {
+  return JSON.stringify(
+    ExternalBindingBedrock$outboundSchema.parse(externalBindingBedrock),
+  );
+}
+export function externalBindingBedrockFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingBedrock, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingBedrock$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingBedrock' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExternalBindingUnion8$inboundSchema: z.ZodType<
+  ExternalBindingUnion8,
+  unknown
+> = z.union([
+  z.lazy(() => ExternalBindingBedrock$inboundSchema),
+  z.lazy(() => ExternalBindingAi$inboundSchema),
+]);
+/** @internal */
+export type ExternalBindingUnion8$Outbound =
+  | ExternalBindingBedrock$Outbound
+  | ExternalBindingAi$Outbound;
+
+/** @internal */
+export const ExternalBindingUnion8$outboundSchema: z.ZodType<
+  ExternalBindingUnion8$Outbound,
+  ExternalBindingUnion8
+> = z.union([
+  z.lazy(() => ExternalBindingBedrock$outboundSchema),
+  z.lazy(() => ExternalBindingAi$outboundSchema),
+]);
+
+export function externalBindingUnion8ToJSON(
+  externalBindingUnion8: ExternalBindingUnion8,
+): string {
+  return JSON.stringify(
+    ExternalBindingUnion8$outboundSchema.parse(externalBindingUnion8),
+  );
+}
+export function externalBindingUnion8FromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingUnion8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingUnion8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingUnion8' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortSecretRef11$inboundSchema: z.ZodType<
+  PortSecretRef11,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type PortSecretRef11$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PortSecretRef11$outboundSchema: z.ZodType<
+  PortSecretRef11$Outbound,
+  PortSecretRef11
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function portSecretRef11ToJSON(
+  portSecretRef11: PortSecretRef11,
+): string {
+  return JSON.stringify(PortSecretRef11$outboundSchema.parse(portSecretRef11));
+}
+export function portSecretRef11FromJSON(
+  jsonString: string,
+): SafeParseResult<PortSecretRef11, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortSecretRef11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortSecretRef11' from JSON`,
+  );
+}
+
+/** @internal */
+export const Port11$inboundSchema: z.ZodType<Port11, unknown> = z.object({
+  secretRef: z.lazy(() => PortSecretRef11$inboundSchema),
+});
+/** @internal */
+export type Port11$Outbound = {
+  secretRef: PortSecretRef11$Outbound;
+};
+
+/** @internal */
+export const Port11$outboundSchema: z.ZodType<Port11$Outbound, Port11> = z
+  .object({
+    secretRef: z.lazy(() => PortSecretRef11$outboundSchema),
+  });
+
+export function port11ToJSON(port11: Port11): string {
+  return JSON.stringify(Port11$outboundSchema.parse(port11));
+}
+export function port11FromJSON(
+  jsonString: string,
+): SafeParseResult<Port11, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Port11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Port11' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortUnion11$inboundSchema: z.ZodType<PortUnion11, unknown> = z
+  .union([z.lazy(() => Port11$inboundSchema), z.int(), z.any(), z.string()]);
+/** @internal */
+export type PortUnion11$Outbound = Port11$Outbound | number | any | string;
+
+/** @internal */
+export const PortUnion11$outboundSchema: z.ZodType<
+  PortUnion11$Outbound,
+  PortUnion11
+> = z.union([
+  z.lazy(() => Port11$outboundSchema),
+  z.int(),
+  z.any(),
+  z.string(),
+]);
+
+export function portUnion11ToJSON(portUnion11: PortUnion11): string {
+  return JSON.stringify(PortUnion11$outboundSchema.parse(portUnion11));
+}
+export function portUnion11FromJSON(
+  jsonString: string,
+): SafeParseResult<PortUnion11, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortUnion11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortUnion11' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeRedis5$inboundSchema: z.ZodEnum<typeof TypeRedis5> = z.enum(
+  TypeRedis5,
+);
+/** @internal */
+export const TypeRedis5$outboundSchema: z.ZodEnum<typeof TypeRedis5> =
+  TypeRedis5$inboundSchema;
+
+/** @internal */
+export const ExternalBindingLocalRedis$inboundSchema: z.ZodType<
+  ExternalBindingLocalRedis,
+  unknown
+> = z.object({
+  host: z.nullable(z.any()),
+  password: z.string(),
+  port: z.nullable(
+    z.union([z.lazy(() => Port11$inboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("local-redis"),
+  type: TypeRedis5$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingLocalRedis$Outbound = {
+  host: any | null;
+  password: string;
+  port: Port11$Outbound | number | any | string | null;
+  username: any | null;
+  service: "local-redis";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingLocalRedis$outboundSchema: z.ZodType<
+  ExternalBindingLocalRedis$Outbound,
+  ExternalBindingLocalRedis
+> = z.object({
+  host: z.nullable(z.any()),
+  password: z.string(),
+  port: z.nullable(
+    z.union([
+      z.lazy(() => Port11$outboundSchema),
+      z.int(),
+      z.any(),
+      z.string(),
+    ]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("local-redis"),
+  type: TypeRedis5$outboundSchema,
+});
+
+export function externalBindingLocalRedisToJSON(
+  externalBindingLocalRedis: ExternalBindingLocalRedis,
+): string {
+  return JSON.stringify(
+    ExternalBindingLocalRedis$outboundSchema.parse(externalBindingLocalRedis),
+  );
+}
+export function externalBindingLocalRedisFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingLocalRedis, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingLocalRedis$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingLocalRedis' from JSON`,
+  );
+}
+
+/** @internal */
+export const SecretKeyRef2$inboundSchema: z.ZodType<SecretKeyRef2, unknown> = z
+  .object({
+    key: z.string(),
+    name: z.string(),
+  });
+/** @internal */
+export type SecretKeyRef2$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const SecretKeyRef2$outboundSchema: z.ZodType<
+  SecretKeyRef2$Outbound,
+  SecretKeyRef2
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function secretKeyRef2ToJSON(secretKeyRef2: SecretKeyRef2): string {
+  return JSON.stringify(SecretKeyRef2$outboundSchema.parse(secretKeyRef2));
+}
+export function secretKeyRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<SecretKeyRef2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SecretKeyRef2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SecretKeyRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const Password3$inboundSchema: z.ZodType<Password3, unknown> = z.object({
+  secretKeyRef: z.lazy(() => SecretKeyRef2$inboundSchema),
+});
+/** @internal */
+export type Password3$Outbound = {
+  secretKeyRef: SecretKeyRef2$Outbound;
+};
+
+/** @internal */
+export const Password3$outboundSchema: z.ZodType<
+  Password3$Outbound,
+  Password3
+> = z.object({
+  secretKeyRef: z.lazy(() => SecretKeyRef2$outboundSchema),
+});
+
+export function password3ToJSON(password3: Password3): string {
+  return JSON.stringify(Password3$outboundSchema.parse(password3));
+}
+export function password3FromJSON(
+  jsonString: string,
+): SafeParseResult<Password3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Password3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Password3' from JSON`,
+  );
+}
+
+/** @internal */
+export const PasswordUnion2$inboundSchema: z.ZodType<PasswordUnion2, unknown> =
+  z.union([z.lazy(() => Password3$inboundSchema), z.string()]);
+/** @internal */
+export type PasswordUnion2$Outbound = Password3$Outbound | string;
+
+/** @internal */
+export const PasswordUnion2$outboundSchema: z.ZodType<
+  PasswordUnion2$Outbound,
+  PasswordUnion2
+> = z.union([z.lazy(() => Password3$outboundSchema), z.string()]);
+
+export function passwordUnion2ToJSON(passwordUnion2: PasswordUnion2): string {
+  return JSON.stringify(PasswordUnion2$outboundSchema.parse(passwordUnion2));
+}
+export function passwordUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<PasswordUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PasswordUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PasswordUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortSecretRef10$inboundSchema: z.ZodType<
+  PortSecretRef10,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type PortSecretRef10$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PortSecretRef10$outboundSchema: z.ZodType<
+  PortSecretRef10$Outbound,
+  PortSecretRef10
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function portSecretRef10ToJSON(
+  portSecretRef10: PortSecretRef10,
+): string {
+  return JSON.stringify(PortSecretRef10$outboundSchema.parse(portSecretRef10));
+}
+export function portSecretRef10FromJSON(
+  jsonString: string,
+): SafeParseResult<PortSecretRef10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortSecretRef10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortSecretRef10' from JSON`,
+  );
+}
+
+/** @internal */
+export const Port10$inboundSchema: z.ZodType<Port10, unknown> = z.object({
+  secretRef: z.lazy(() => PortSecretRef10$inboundSchema),
+});
+/** @internal */
+export type Port10$Outbound = {
+  secretRef: PortSecretRef10$Outbound;
+};
+
+/** @internal */
+export const Port10$outboundSchema: z.ZodType<Port10$Outbound, Port10> = z
+  .object({
+    secretRef: z.lazy(() => PortSecretRef10$outboundSchema),
+  });
+
+export function port10ToJSON(port10: Port10): string {
+  return JSON.stringify(Port10$outboundSchema.parse(port10));
+}
+export function port10FromJSON(
+  jsonString: string,
+): SafeParseResult<Port10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Port10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Port10' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortUnion10$inboundSchema: z.ZodType<PortUnion10, unknown> = z
+  .union([z.lazy(() => Port10$inboundSchema), z.int(), z.any(), z.string()]);
+/** @internal */
+export type PortUnion10$Outbound = Port10$Outbound | number | any | string;
+
+/** @internal */
+export const PortUnion10$outboundSchema: z.ZodType<
+  PortUnion10$Outbound,
+  PortUnion10
+> = z.union([
+  z.lazy(() => Port10$outboundSchema),
+  z.int(),
+  z.any(),
+  z.string(),
+]);
+
+export function portUnion10ToJSON(portUnion10: PortUnion10): string {
+  return JSON.stringify(PortUnion10$outboundSchema.parse(portUnion10));
+}
+export function portUnion10FromJSON(
+  jsonString: string,
+): SafeParseResult<PortUnion10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortUnion10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortUnion10' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeRedis4$inboundSchema: z.ZodEnum<typeof TypeRedis4> = z.enum(
+  TypeRedis4,
+);
+/** @internal */
+export const TypeRedis4$outboundSchema: z.ZodEnum<typeof TypeRedis4> =
+  TypeRedis4$inboundSchema;
+
+/** @internal */
+export const ExternalBindingExternalRedis$inboundSchema: z.ZodType<
+  ExternalBindingExternalRedis,
+  unknown
+> = z.object({
+  host: z.nullable(z.any()),
+  password: z.union([z.lazy(() => Password3$inboundSchema), z.string()]),
+  port: z.nullable(
+    z.union([z.lazy(() => Port10$inboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  tls: z.boolean().optional(),
+  username: z.nullable(z.any()),
+  service: z.literal("external"),
+  type: TypeRedis4$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingExternalRedis$Outbound = {
+  host: any | null;
+  password: Password3$Outbound | string;
+  port: Port10$Outbound | number | any | string | null;
+  tls?: boolean | undefined;
+  username: any | null;
+  service: "external";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingExternalRedis$outboundSchema: z.ZodType<
+  ExternalBindingExternalRedis$Outbound,
+  ExternalBindingExternalRedis
+> = z.object({
+  host: z.nullable(z.any()),
+  password: z.union([z.lazy(() => Password3$outboundSchema), z.string()]),
+  port: z.nullable(
+    z.union([
+      z.lazy(() => Port10$outboundSchema),
+      z.int(),
+      z.any(),
+      z.string(),
+    ]),
+  ),
+  tls: z.boolean().optional(),
+  username: z.nullable(z.any()),
+  service: z.literal("external"),
+  type: TypeRedis4$outboundSchema,
+});
+
+export function externalBindingExternalRedisToJSON(
+  externalBindingExternalRedis: ExternalBindingExternalRedis,
+): string {
+  return JSON.stringify(
+    ExternalBindingExternalRedis$outboundSchema.parse(
+      externalBindingExternalRedis,
+    ),
+  );
+}
+export function externalBindingExternalRedisFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingExternalRedis, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingExternalRedis$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingExternalRedis' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortSecretRef9$inboundSchema: z.ZodType<PortSecretRef9, unknown> =
+  z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+/** @internal */
+export type PortSecretRef9$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PortSecretRef9$outboundSchema: z.ZodType<
+  PortSecretRef9$Outbound,
+  PortSecretRef9
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function portSecretRef9ToJSON(portSecretRef9: PortSecretRef9): string {
+  return JSON.stringify(PortSecretRef9$outboundSchema.parse(portSecretRef9));
+}
+export function portSecretRef9FromJSON(
+  jsonString: string,
+): SafeParseResult<PortSecretRef9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortSecretRef9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortSecretRef9' from JSON`,
+  );
+}
+
+/** @internal */
+export const Port9$inboundSchema: z.ZodType<Port9, unknown> = z.object({
+  secretRef: z.lazy(() => PortSecretRef9$inboundSchema),
+});
+/** @internal */
+export type Port9$Outbound = {
+  secretRef: PortSecretRef9$Outbound;
+};
+
+/** @internal */
+export const Port9$outboundSchema: z.ZodType<Port9$Outbound, Port9> = z.object({
+  secretRef: z.lazy(() => PortSecretRef9$outboundSchema),
+});
+
+export function port9ToJSON(port9: Port9): string {
+  return JSON.stringify(Port9$outboundSchema.parse(port9));
+}
+export function port9FromJSON(
+  jsonString: string,
+): SafeParseResult<Port9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Port9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Port9' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortUnion9$inboundSchema: z.ZodType<PortUnion9, unknown> = z.union(
+  [z.lazy(() => Port9$inboundSchema), z.int(), z.any(), z.string()],
+);
+/** @internal */
+export type PortUnion9$Outbound = Port9$Outbound | number | any | string;
+
+/** @internal */
+export const PortUnion9$outboundSchema: z.ZodType<
+  PortUnion9$Outbound,
+  PortUnion9
+> = z.union([z.lazy(() => Port9$outboundSchema), z.int(), z.any(), z.string()]);
+
+export function portUnion9ToJSON(portUnion9: PortUnion9): string {
+  return JSON.stringify(PortUnion9$outboundSchema.parse(portUnion9));
+}
+export function portUnion9FromJSON(
+  jsonString: string,
+): SafeParseResult<PortUnion9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortUnion9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortUnion9' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeRedis3$inboundSchema: z.ZodEnum<typeof TypeRedis3> = z.enum(
+  TypeRedis3,
+);
+/** @internal */
+export const TypeRedis3$outboundSchema: z.ZodEnum<typeof TypeRedis3> =
+  TypeRedis3$inboundSchema;
+
+/** @internal */
+export const ExternalBindingAzureManagedRedis$inboundSchema: z.ZodType<
+  ExternalBindingAzureManagedRedis,
+  unknown
+> = z.object({
+  databaseResourceId: z.nullable(z.any()),
+  host: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port9$inboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("azure-managed-redis"),
+  type: TypeRedis3$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingAzureManagedRedis$Outbound = {
+  databaseResourceId: any | null;
+  host: any | null;
+  port: Port9$Outbound | number | any | string | null;
+  username: any | null;
+  service: "azure-managed-redis";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingAzureManagedRedis$outboundSchema: z.ZodType<
+  ExternalBindingAzureManagedRedis$Outbound,
+  ExternalBindingAzureManagedRedis
+> = z.object({
+  databaseResourceId: z.nullable(z.any()),
+  host: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port9$outboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("azure-managed-redis"),
+  type: TypeRedis3$outboundSchema,
+});
+
+export function externalBindingAzureManagedRedisToJSON(
+  externalBindingAzureManagedRedis: ExternalBindingAzureManagedRedis,
+): string {
+  return JSON.stringify(
+    ExternalBindingAzureManagedRedis$outboundSchema.parse(
+      externalBindingAzureManagedRedis,
+    ),
+  );
+}
+export function externalBindingAzureManagedRedisFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingAzureManagedRedis, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingAzureManagedRedis$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingAzureManagedRedis' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortSecretRef8$inboundSchema: z.ZodType<PortSecretRef8, unknown> =
+  z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+/** @internal */
+export type PortSecretRef8$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PortSecretRef8$outboundSchema: z.ZodType<
+  PortSecretRef8$Outbound,
+  PortSecretRef8
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function portSecretRef8ToJSON(portSecretRef8: PortSecretRef8): string {
+  return JSON.stringify(PortSecretRef8$outboundSchema.parse(portSecretRef8));
+}
+export function portSecretRef8FromJSON(
+  jsonString: string,
+): SafeParseResult<PortSecretRef8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortSecretRef8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortSecretRef8' from JSON`,
+  );
+}
+
+/** @internal */
+export const Port8$inboundSchema: z.ZodType<Port8, unknown> = z.object({
+  secretRef: z.lazy(() => PortSecretRef8$inboundSchema),
+});
+/** @internal */
+export type Port8$Outbound = {
+  secretRef: PortSecretRef8$Outbound;
+};
+
+/** @internal */
+export const Port8$outboundSchema: z.ZodType<Port8$Outbound, Port8> = z.object({
+  secretRef: z.lazy(() => PortSecretRef8$outboundSchema),
+});
+
+export function port8ToJSON(port8: Port8): string {
+  return JSON.stringify(Port8$outboundSchema.parse(port8));
+}
+export function port8FromJSON(
+  jsonString: string,
+): SafeParseResult<Port8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Port8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Port8' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortUnion8$inboundSchema: z.ZodType<PortUnion8, unknown> = z.union(
+  [z.lazy(() => Port8$inboundSchema), z.int(), z.any(), z.string()],
+);
+/** @internal */
+export type PortUnion8$Outbound = Port8$Outbound | number | any | string;
+
+/** @internal */
+export const PortUnion8$outboundSchema: z.ZodType<
+  PortUnion8$Outbound,
+  PortUnion8
+> = z.union([z.lazy(() => Port8$outboundSchema), z.int(), z.any(), z.string()]);
+
+export function portUnion8ToJSON(portUnion8: PortUnion8): string {
+  return JSON.stringify(PortUnion8$outboundSchema.parse(portUnion8));
+}
+export function portUnion8FromJSON(
+  jsonString: string,
+): SafeParseResult<PortUnion8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortUnion8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortUnion8' from JSON`,
+  );
+}
+
+/** @internal */
+export const ServerCaCertificatesSecretRef2$inboundSchema: z.ZodType<
+  ServerCaCertificatesSecretRef2,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type ServerCaCertificatesSecretRef2$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const ServerCaCertificatesSecretRef2$outboundSchema: z.ZodType<
+  ServerCaCertificatesSecretRef2$Outbound,
+  ServerCaCertificatesSecretRef2
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function serverCaCertificatesSecretRef2ToJSON(
+  serverCaCertificatesSecretRef2: ServerCaCertificatesSecretRef2,
+): string {
+  return JSON.stringify(
+    ServerCaCertificatesSecretRef2$outboundSchema.parse(
+      serverCaCertificatesSecretRef2,
+    ),
+  );
+}
+export function serverCaCertificatesSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<ServerCaCertificatesSecretRef2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ServerCaCertificatesSecretRef2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ServerCaCertificatesSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ServerCaCertificates2$inboundSchema: z.ZodType<
+  ServerCaCertificates2,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => ServerCaCertificatesSecretRef2$inboundSchema),
+});
+/** @internal */
+export type ServerCaCertificates2$Outbound = {
+  secretRef: ServerCaCertificatesSecretRef2$Outbound;
+};
+
+/** @internal */
+export const ServerCaCertificates2$outboundSchema: z.ZodType<
+  ServerCaCertificates2$Outbound,
+  ServerCaCertificates2
+> = z.object({
+  secretRef: z.lazy(() => ServerCaCertificatesSecretRef2$outboundSchema),
+});
+
+export function serverCaCertificates2ToJSON(
+  serverCaCertificates2: ServerCaCertificates2,
+): string {
+  return JSON.stringify(
+    ServerCaCertificates2$outboundSchema.parse(serverCaCertificates2),
+  );
+}
+export function serverCaCertificates2FromJSON(
+  jsonString: string,
+): SafeParseResult<ServerCaCertificates2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ServerCaCertificates2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ServerCaCertificates2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ServerCaCertificatesUnion2$inboundSchema: z.ZodType<
+  ServerCaCertificatesUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => ServerCaCertificates2$inboundSchema),
+  z.array(z.string()),
+  z.any(),
+  z.string(),
+]);
+/** @internal */
+export type ServerCaCertificatesUnion2$Outbound =
+  | ServerCaCertificates2$Outbound
+  | Array<string>
+  | any
+  | string;
+
+/** @internal */
+export const ServerCaCertificatesUnion2$outboundSchema: z.ZodType<
+  ServerCaCertificatesUnion2$Outbound,
+  ServerCaCertificatesUnion2
+> = z.union([
+  z.lazy(() => ServerCaCertificates2$outboundSchema),
+  z.array(z.string()),
+  z.any(),
+  z.string(),
+]);
+
+export function serverCaCertificatesUnion2ToJSON(
+  serverCaCertificatesUnion2: ServerCaCertificatesUnion2,
+): string {
+  return JSON.stringify(
+    ServerCaCertificatesUnion2$outboundSchema.parse(serverCaCertificatesUnion2),
+  );
+}
+export function serverCaCertificatesUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<ServerCaCertificatesUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ServerCaCertificatesUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ServerCaCertificatesUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeRedis2$inboundSchema: z.ZodEnum<typeof TypeRedis2> = z.enum(
+  TypeRedis2,
+);
+/** @internal */
+export const TypeRedis2$outboundSchema: z.ZodEnum<typeof TypeRedis2> =
+  TypeRedis2$inboundSchema;
+
+/** @internal */
+export const ExternalBindingMemorystore$inboundSchema: z.ZodType<
+  ExternalBindingMemorystore,
+  unknown
+> = z.object({
+  host: z.nullable(z.any()),
+  instanceName: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port8$inboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  serverCaCertificates: z.nullable(
+    z.union([
+      z.lazy(() => ServerCaCertificates2$inboundSchema),
+      z.array(z.string()),
+      z.any(),
+      z.string(),
+    ]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("memorystore"),
+  type: TypeRedis2$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingMemorystore$Outbound = {
+  host: any | null;
+  instanceName: any | null;
+  port: Port8$Outbound | number | any | string | null;
+  serverCaCertificates:
+    | ServerCaCertificates2$Outbound
+    | Array<string>
+    | any
+    | string
+    | null;
+  username: any | null;
+  service: "memorystore";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingMemorystore$outboundSchema: z.ZodType<
+  ExternalBindingMemorystore$Outbound,
+  ExternalBindingMemorystore
+> = z.object({
+  host: z.nullable(z.any()),
+  instanceName: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port8$outboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  serverCaCertificates: z.nullable(
+    z.union([
+      z.lazy(() => ServerCaCertificates2$outboundSchema),
+      z.array(z.string()),
+      z.any(),
+      z.string(),
+    ]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("memorystore"),
+  type: TypeRedis2$outboundSchema,
+});
+
+export function externalBindingMemorystoreToJSON(
+  externalBindingMemorystore: ExternalBindingMemorystore,
+): string {
+  return JSON.stringify(
+    ExternalBindingMemorystore$outboundSchema.parse(externalBindingMemorystore),
+  );
+}
+export function externalBindingMemorystoreFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingMemorystore, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingMemorystore$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingMemorystore' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortSecretRef7$inboundSchema: z.ZodType<PortSecretRef7, unknown> =
+  z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+/** @internal */
+export type PortSecretRef7$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PortSecretRef7$outboundSchema: z.ZodType<
+  PortSecretRef7$Outbound,
+  PortSecretRef7
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function portSecretRef7ToJSON(portSecretRef7: PortSecretRef7): string {
+  return JSON.stringify(PortSecretRef7$outboundSchema.parse(portSecretRef7));
+}
+export function portSecretRef7FromJSON(
+  jsonString: string,
+): SafeParseResult<PortSecretRef7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortSecretRef7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortSecretRef7' from JSON`,
+  );
+}
+
+/** @internal */
+export const Port7$inboundSchema: z.ZodType<Port7, unknown> = z.object({
+  secretRef: z.lazy(() => PortSecretRef7$inboundSchema),
+});
+/** @internal */
+export type Port7$Outbound = {
+  secretRef: PortSecretRef7$Outbound;
+};
+
+/** @internal */
+export const Port7$outboundSchema: z.ZodType<Port7$Outbound, Port7> = z.object({
+  secretRef: z.lazy(() => PortSecretRef7$outboundSchema),
+});
+
+export function port7ToJSON(port7: Port7): string {
+  return JSON.stringify(Port7$outboundSchema.parse(port7));
+}
+export function port7FromJSON(
+  jsonString: string,
+): SafeParseResult<Port7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Port7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Port7' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortUnion7$inboundSchema: z.ZodType<PortUnion7, unknown> = z.union(
+  [z.lazy(() => Port7$inboundSchema), z.int(), z.any(), z.string()],
+);
+/** @internal */
+export type PortUnion7$Outbound = Port7$Outbound | number | any | string;
+
+/** @internal */
+export const PortUnion7$outboundSchema: z.ZodType<
+  PortUnion7$Outbound,
+  PortUnion7
+> = z.union([z.lazy(() => Port7$outboundSchema), z.int(), z.any(), z.string()]);
+
+export function portUnion7ToJSON(portUnion7: PortUnion7): string {
+  return JSON.stringify(PortUnion7$outboundSchema.parse(portUnion7));
+}
+export function portUnion7FromJSON(
+  jsonString: string,
+): SafeParseResult<PortUnion7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortUnion7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortUnion7' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeRedis1$inboundSchema: z.ZodEnum<typeof TypeRedis1> = z.enum(
+  TypeRedis1,
+);
+/** @internal */
+export const TypeRedis1$outboundSchema: z.ZodEnum<typeof TypeRedis1> =
+  TypeRedis1$inboundSchema;
+
+/** @internal */
+export const ExternalBindingElasticache$inboundSchema: z.ZodType<
+  ExternalBindingElasticache,
+  unknown
+> = z.object({
+  host: z.nullable(z.any()),
+  passwordSecretArn: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port7$inboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("elasticache"),
+  type: TypeRedis1$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingElasticache$Outbound = {
+  host: any | null;
+  passwordSecretArn: any | null;
+  port: Port7$Outbound | number | any | string | null;
+  username: any | null;
+  service: "elasticache";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingElasticache$outboundSchema: z.ZodType<
+  ExternalBindingElasticache$Outbound,
+  ExternalBindingElasticache
+> = z.object({
+  host: z.nullable(z.any()),
+  passwordSecretArn: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port7$outboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("elasticache"),
+  type: TypeRedis1$outboundSchema,
+});
+
+export function externalBindingElasticacheToJSON(
+  externalBindingElasticache: ExternalBindingElasticache,
+): string {
+  return JSON.stringify(
+    ExternalBindingElasticache$outboundSchema.parse(externalBindingElasticache),
+  );
+}
+export function externalBindingElasticacheFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingElasticache, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingElasticache$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingElasticache' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExternalBindingUnion7$inboundSchema: z.ZodType<
+  ExternalBindingUnion7,
+  unknown
+> = z.union([
+  z.lazy(() => ExternalBindingElasticache$inboundSchema),
+  z.lazy(() => ExternalBindingMemorystore$inboundSchema),
+  z.lazy(() => ExternalBindingAzureManagedRedis$inboundSchema),
+  z.lazy(() => ExternalBindingExternalRedis$inboundSchema),
+  z.lazy(() => ExternalBindingLocalRedis$inboundSchema),
+]);
+/** @internal */
+export type ExternalBindingUnion7$Outbound =
+  | ExternalBindingElasticache$Outbound
+  | ExternalBindingMemorystore$Outbound
+  | ExternalBindingAzureManagedRedis$Outbound
+  | ExternalBindingExternalRedis$Outbound
+  | ExternalBindingLocalRedis$Outbound;
+
+/** @internal */
+export const ExternalBindingUnion7$outboundSchema: z.ZodType<
+  ExternalBindingUnion7$Outbound,
+  ExternalBindingUnion7
+> = z.union([
+  z.lazy(() => ExternalBindingElasticache$outboundSchema),
+  z.lazy(() => ExternalBindingMemorystore$outboundSchema),
+  z.lazy(() => ExternalBindingAzureManagedRedis$outboundSchema),
+  z.lazy(() => ExternalBindingExternalRedis$outboundSchema),
+  z.lazy(() => ExternalBindingLocalRedis$outboundSchema),
+]);
+
+export function externalBindingUnion7ToJSON(
+  externalBindingUnion7: ExternalBindingUnion7,
+): string {
+  return JSON.stringify(
+    ExternalBindingUnion7$outboundSchema.parse(externalBindingUnion7),
+  );
+}
+export function externalBindingUnion7FromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingUnion7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingUnion7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingUnion7' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortSecretRef6$inboundSchema: z.ZodType<PortSecretRef6, unknown> =
+  z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+/** @internal */
+export type PortSecretRef6$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PortSecretRef6$outboundSchema: z.ZodType<
+  PortSecretRef6$Outbound,
+  PortSecretRef6
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function portSecretRef6ToJSON(portSecretRef6: PortSecretRef6): string {
+  return JSON.stringify(PortSecretRef6$outboundSchema.parse(portSecretRef6));
+}
+export function portSecretRef6FromJSON(
+  jsonString: string,
+): SafeParseResult<PortSecretRef6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortSecretRef6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortSecretRef6' from JSON`,
+  );
+}
+
+/** @internal */
+export const Port6$inboundSchema: z.ZodType<Port6, unknown> = z.object({
+  secretRef: z.lazy(() => PortSecretRef6$inboundSchema),
+});
+/** @internal */
+export type Port6$Outbound = {
+  secretRef: PortSecretRef6$Outbound;
+};
+
+/** @internal */
+export const Port6$outboundSchema: z.ZodType<Port6$Outbound, Port6> = z.object({
+  secretRef: z.lazy(() => PortSecretRef6$outboundSchema),
+});
+
+export function port6ToJSON(port6: Port6): string {
+  return JSON.stringify(Port6$outboundSchema.parse(port6));
+}
+export function port6FromJSON(
+  jsonString: string,
+): SafeParseResult<Port6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Port6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Port6' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortUnion6$inboundSchema: z.ZodType<PortUnion6, unknown> = z.union(
+  [z.lazy(() => Port6$inboundSchema), z.int(), z.any(), z.string()],
+);
+/** @internal */
+export type PortUnion6$Outbound = Port6$Outbound | number | any | string;
+
+/** @internal */
+export const PortUnion6$outboundSchema: z.ZodType<
+  PortUnion6$Outbound,
+  PortUnion6
+> = z.union([z.lazy(() => Port6$outboundSchema), z.int(), z.any(), z.string()]);
+
+export function portUnion6ToJSON(portUnion6: PortUnion6): string {
+  return JSON.stringify(PortUnion6$outboundSchema.parse(portUnion6));
+}
+export function portUnion6FromJSON(
+  jsonString: string,
+): SafeParseResult<PortUnion6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortUnion6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortUnion6' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypePostgres6$inboundSchema: z.ZodEnum<typeof TypePostgres6> = z
+  .enum(TypePostgres6);
+/** @internal */
+export const TypePostgres6$outboundSchema: z.ZodEnum<typeof TypePostgres6> =
+  TypePostgres6$inboundSchema;
+
+/** @internal */
+export const ExternalBindingLocalPostgres$inboundSchema: z.ZodType<
+  ExternalBindingLocalPostgres,
+  unknown
+> = z.object({
+  database: z.nullable(z.any()),
+  host: z.nullable(z.any()),
+  password: z.string(),
+  port: z.nullable(
+    z.union([z.lazy(() => Port6$inboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("local-postgres"),
+  type: TypePostgres6$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingLocalPostgres$Outbound = {
+  database: any | null;
+  host: any | null;
+  password: string;
+  port: Port6$Outbound | number | any | string | null;
+  username: any | null;
+  service: "local-postgres";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingLocalPostgres$outboundSchema: z.ZodType<
+  ExternalBindingLocalPostgres$Outbound,
+  ExternalBindingLocalPostgres
+> = z.object({
+  database: z.nullable(z.any()),
+  host: z.nullable(z.any()),
+  password: z.string(),
+  port: z.nullable(
+    z.union([z.lazy(() => Port6$outboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("local-postgres"),
+  type: TypePostgres6$outboundSchema,
+});
+
+export function externalBindingLocalPostgresToJSON(
+  externalBindingLocalPostgres: ExternalBindingLocalPostgres,
+): string {
+  return JSON.stringify(
+    ExternalBindingLocalPostgres$outboundSchema.parse(
+      externalBindingLocalPostgres,
+    ),
+  );
+}
+export function externalBindingLocalPostgresFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingLocalPostgres, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingLocalPostgres$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingLocalPostgres' from JSON`,
+  );
+}
+
+/** @internal */
+export const SecretKeyRef1$inboundSchema: z.ZodType<SecretKeyRef1, unknown> = z
+  .object({
+    key: z.string(),
+    name: z.string(),
+  });
+/** @internal */
+export type SecretKeyRef1$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const SecretKeyRef1$outboundSchema: z.ZodType<
+  SecretKeyRef1$Outbound,
+  SecretKeyRef1
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function secretKeyRef1ToJSON(secretKeyRef1: SecretKeyRef1): string {
+  return JSON.stringify(SecretKeyRef1$outboundSchema.parse(secretKeyRef1));
+}
+export function secretKeyRef1FromJSON(
+  jsonString: string,
+): SafeParseResult<SecretKeyRef1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SecretKeyRef1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SecretKeyRef1' from JSON`,
+  );
+}
+
+/** @internal */
+export const Password2$inboundSchema: z.ZodType<Password2, unknown> = z.object({
+  secretKeyRef: z.lazy(() => SecretKeyRef1$inboundSchema),
+});
+/** @internal */
+export type Password2$Outbound = {
+  secretKeyRef: SecretKeyRef1$Outbound;
+};
+
+/** @internal */
+export const Password2$outboundSchema: z.ZodType<
+  Password2$Outbound,
+  Password2
+> = z.object({
+  secretKeyRef: z.lazy(() => SecretKeyRef1$outboundSchema),
+});
+
+export function password2ToJSON(password2: Password2): string {
+  return JSON.stringify(Password2$outboundSchema.parse(password2));
+}
+export function password2FromJSON(
+  jsonString: string,
+): SafeParseResult<Password2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Password2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Password2' from JSON`,
+  );
+}
+
+/** @internal */
+export const PasswordSecretRef$inboundSchema: z.ZodType<
+  PasswordSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type PasswordSecretRef$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PasswordSecretRef$outboundSchema: z.ZodType<
+  PasswordSecretRef$Outbound,
+  PasswordSecretRef
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function passwordSecretRefToJSON(
+  passwordSecretRef: PasswordSecretRef,
+): string {
+  return JSON.stringify(
+    PasswordSecretRef$outboundSchema.parse(passwordSecretRef),
+  );
+}
+export function passwordSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<PasswordSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PasswordSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PasswordSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const Password1$inboundSchema: z.ZodType<Password1, unknown> = z.object({
+  secretRef: z.lazy(() => PasswordSecretRef$inboundSchema),
+});
+/** @internal */
+export type Password1$Outbound = {
+  secretRef: PasswordSecretRef$Outbound;
+};
+
+/** @internal */
+export const Password1$outboundSchema: z.ZodType<
+  Password1$Outbound,
+  Password1
+> = z.object({
+  secretRef: z.lazy(() => PasswordSecretRef$outboundSchema),
+});
+
+export function password1ToJSON(password1: Password1): string {
+  return JSON.stringify(Password1$outboundSchema.parse(password1));
+}
+export function password1FromJSON(
+  jsonString: string,
+): SafeParseResult<Password1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Password1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Password1' from JSON`,
+  );
+}
+
+/** @internal */
+export const PasswordUnion1$inboundSchema: z.ZodType<PasswordUnion1, unknown> =
+  z.union([
+    z.lazy(() => Password1$inboundSchema),
+    z.lazy(() => Password2$inboundSchema),
+    z.string(),
+  ]);
+/** @internal */
+export type PasswordUnion1$Outbound =
+  | Password1$Outbound
+  | Password2$Outbound
+  | string;
+
+/** @internal */
+export const PasswordUnion1$outboundSchema: z.ZodType<
+  PasswordUnion1$Outbound,
+  PasswordUnion1
+> = z.union([
+  z.lazy(() => Password1$outboundSchema),
+  z.lazy(() => Password2$outboundSchema),
+  z.string(),
+]);
+
+export function passwordUnion1ToJSON(passwordUnion1: PasswordUnion1): string {
+  return JSON.stringify(PasswordUnion1$outboundSchema.parse(passwordUnion1));
+}
+export function passwordUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<PasswordUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PasswordUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PasswordUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortSecretRef5$inboundSchema: z.ZodType<PortSecretRef5, unknown> =
+  z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+/** @internal */
+export type PortSecretRef5$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PortSecretRef5$outboundSchema: z.ZodType<
+  PortSecretRef5$Outbound,
+  PortSecretRef5
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function portSecretRef5ToJSON(portSecretRef5: PortSecretRef5): string {
+  return JSON.stringify(PortSecretRef5$outboundSchema.parse(portSecretRef5));
+}
+export function portSecretRef5FromJSON(
+  jsonString: string,
+): SafeParseResult<PortSecretRef5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortSecretRef5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortSecretRef5' from JSON`,
+  );
+}
+
+/** @internal */
+export const Port5$inboundSchema: z.ZodType<Port5, unknown> = z.object({
+  secretRef: z.lazy(() => PortSecretRef5$inboundSchema),
+});
+/** @internal */
+export type Port5$Outbound = {
+  secretRef: PortSecretRef5$Outbound;
+};
+
+/** @internal */
+export const Port5$outboundSchema: z.ZodType<Port5$Outbound, Port5> = z.object({
+  secretRef: z.lazy(() => PortSecretRef5$outboundSchema),
+});
+
+export function port5ToJSON(port5: Port5): string {
+  return JSON.stringify(Port5$outboundSchema.parse(port5));
+}
+export function port5FromJSON(
+  jsonString: string,
+): SafeParseResult<Port5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Port5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Port5' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortUnion5$inboundSchema: z.ZodType<PortUnion5, unknown> = z.union(
+  [z.lazy(() => Port5$inboundSchema), z.int(), z.any(), z.string()],
+);
+/** @internal */
+export type PortUnion5$Outbound = Port5$Outbound | number | any | string;
+
+/** @internal */
+export const PortUnion5$outboundSchema: z.ZodType<
+  PortUnion5$Outbound,
+  PortUnion5
+> = z.union([z.lazy(() => Port5$outboundSchema), z.int(), z.any(), z.string()]);
+
+export function portUnion5ToJSON(portUnion5: PortUnion5): string {
+  return JSON.stringify(PortUnion5$outboundSchema.parse(portUnion5));
+}
+export function portUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<PortUnion5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortUnion5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const SslMode$inboundSchema: z.ZodEnum<typeof SslMode> = z.enum(SslMode);
+/** @internal */
+export const SslMode$outboundSchema: z.ZodEnum<typeof SslMode> =
+  SslMode$inboundSchema;
+
+/** @internal */
+export const TypePostgres5$inboundSchema: z.ZodEnum<typeof TypePostgres5> = z
+  .enum(TypePostgres5);
+/** @internal */
+export const TypePostgres5$outboundSchema: z.ZodEnum<typeof TypePostgres5> =
+  TypePostgres5$inboundSchema;
+
+/** @internal */
+export const ExternalBindingExternalPostgres$inboundSchema: z.ZodType<
+  ExternalBindingExternalPostgres,
+  unknown
+> = z.object({
+  database: z.nullable(z.any()),
+  host: z.nullable(z.any()),
+  password: z.union([
+    z.lazy(() => Password1$inboundSchema),
+    z.lazy(() => Password2$inboundSchema),
+    z.string(),
+  ]),
+  port: z.nullable(
+    z.union([z.lazy(() => Port5$inboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  sslMode: SslMode$inboundSchema.optional(),
+  username: z.nullable(z.any()),
+  service: z.literal("external"),
+  type: TypePostgres5$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingExternalPostgres$Outbound = {
+  database: any | null;
+  host: any | null;
+  password: Password1$Outbound | Password2$Outbound | string;
+  port: Port5$Outbound | number | any | string | null;
+  sslMode?: string | undefined;
+  username: any | null;
+  service: "external";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingExternalPostgres$outboundSchema: z.ZodType<
+  ExternalBindingExternalPostgres$Outbound,
+  ExternalBindingExternalPostgres
+> = z.object({
+  database: z.nullable(z.any()),
+  host: z.nullable(z.any()),
+  password: z.union([
+    z.lazy(() => Password1$outboundSchema),
+    z.lazy(() => Password2$outboundSchema),
+    z.string(),
+  ]),
+  port: z.nullable(
+    z.union([z.lazy(() => Port5$outboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  sslMode: SslMode$outboundSchema.optional(),
+  username: z.nullable(z.any()),
+  service: z.literal("external"),
+  type: TypePostgres5$outboundSchema,
+});
+
+export function externalBindingExternalPostgresToJSON(
+  externalBindingExternalPostgres: ExternalBindingExternalPostgres,
+): string {
+  return JSON.stringify(
+    ExternalBindingExternalPostgres$outboundSchema.parse(
+      externalBindingExternalPostgres,
+    ),
+  );
+}
+export function externalBindingExternalPostgresFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingExternalPostgres, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingExternalPostgres$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingExternalPostgres' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortSecretRef4$inboundSchema: z.ZodType<PortSecretRef4, unknown> =
+  z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+/** @internal */
+export type PortSecretRef4$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PortSecretRef4$outboundSchema: z.ZodType<
+  PortSecretRef4$Outbound,
+  PortSecretRef4
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function portSecretRef4ToJSON(portSecretRef4: PortSecretRef4): string {
+  return JSON.stringify(PortSecretRef4$outboundSchema.parse(portSecretRef4));
+}
+export function portSecretRef4FromJSON(
+  jsonString: string,
+): SafeParseResult<PortSecretRef4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortSecretRef4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortSecretRef4' from JSON`,
+  );
+}
+
+/** @internal */
+export const Port4$inboundSchema: z.ZodType<Port4, unknown> = z.object({
+  secretRef: z.lazy(() => PortSecretRef4$inboundSchema),
+});
+/** @internal */
+export type Port4$Outbound = {
+  secretRef: PortSecretRef4$Outbound;
+};
+
+/** @internal */
+export const Port4$outboundSchema: z.ZodType<Port4$Outbound, Port4> = z.object({
+  secretRef: z.lazy(() => PortSecretRef4$outboundSchema),
+});
+
+export function port4ToJSON(port4: Port4): string {
+  return JSON.stringify(Port4$outboundSchema.parse(port4));
+}
+export function port4FromJSON(
+  jsonString: string,
+): SafeParseResult<Port4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Port4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Port4' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortUnion4$inboundSchema: z.ZodType<PortUnion4, unknown> = z.union(
+  [z.lazy(() => Port4$inboundSchema), z.int(), z.any(), z.string()],
+);
+/** @internal */
+export type PortUnion4$Outbound = Port4$Outbound | number | any | string;
+
+/** @internal */
+export const PortUnion4$outboundSchema: z.ZodType<
+  PortUnion4$Outbound,
+  PortUnion4
+> = z.union([z.lazy(() => Port4$outboundSchema), z.int(), z.any(), z.string()]);
+
+export function portUnion4ToJSON(portUnion4: PortUnion4): string {
+  return JSON.stringify(PortUnion4$outboundSchema.parse(portUnion4));
+}
+export function portUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<PortUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypePostgres4$inboundSchema: z.ZodEnum<typeof TypePostgres4> = z
+  .enum(TypePostgres4);
+/** @internal */
+export const TypePostgres4$outboundSchema: z.ZodEnum<typeof TypePostgres4> =
+  TypePostgres4$inboundSchema;
+
+/** @internal */
+export const ExternalBindingFlexibleServer$inboundSchema: z.ZodType<
+  ExternalBindingFlexibleServer,
+  unknown
+> = z.object({
+  database: z.nullable(z.any()),
+  host: z.nullable(z.any()),
+  passwordSecretUri: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port4$inboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("flexible-server"),
+  type: TypePostgres4$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingFlexibleServer$Outbound = {
+  database: any | null;
+  host: any | null;
+  passwordSecretUri: any | null;
+  port: Port4$Outbound | number | any | string | null;
+  username: any | null;
+  service: "flexible-server";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingFlexibleServer$outboundSchema: z.ZodType<
+  ExternalBindingFlexibleServer$Outbound,
+  ExternalBindingFlexibleServer
+> = z.object({
+  database: z.nullable(z.any()),
+  host: z.nullable(z.any()),
+  passwordSecretUri: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port4$outboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("flexible-server"),
+  type: TypePostgres4$outboundSchema,
+});
+
+export function externalBindingFlexibleServerToJSON(
+  externalBindingFlexibleServer: ExternalBindingFlexibleServer,
+): string {
+  return JSON.stringify(
+    ExternalBindingFlexibleServer$outboundSchema.parse(
+      externalBindingFlexibleServer,
+    ),
+  );
+}
+export function externalBindingFlexibleServerFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingFlexibleServer, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingFlexibleServer$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingFlexibleServer' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortSecretRef3$inboundSchema: z.ZodType<PortSecretRef3, unknown> =
+  z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+/** @internal */
+export type PortSecretRef3$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PortSecretRef3$outboundSchema: z.ZodType<
+  PortSecretRef3$Outbound,
+  PortSecretRef3
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function portSecretRef3ToJSON(portSecretRef3: PortSecretRef3): string {
+  return JSON.stringify(PortSecretRef3$outboundSchema.parse(portSecretRef3));
+}
+export function portSecretRef3FromJSON(
+  jsonString: string,
+): SafeParseResult<PortSecretRef3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortSecretRef3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortSecretRef3' from JSON`,
+  );
+}
+
+/** @internal */
+export const Port3$inboundSchema: z.ZodType<Port3, unknown> = z.object({
+  secretRef: z.lazy(() => PortSecretRef3$inboundSchema),
+});
+/** @internal */
+export type Port3$Outbound = {
+  secretRef: PortSecretRef3$Outbound;
+};
+
+/** @internal */
+export const Port3$outboundSchema: z.ZodType<Port3$Outbound, Port3> = z.object({
+  secretRef: z.lazy(() => PortSecretRef3$outboundSchema),
+});
+
+export function port3ToJSON(port3: Port3): string {
+  return JSON.stringify(Port3$outboundSchema.parse(port3));
+}
+export function port3FromJSON(
+  jsonString: string,
+): SafeParseResult<Port3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Port3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Port3' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortUnion3$inboundSchema: z.ZodType<PortUnion3, unknown> = z.union(
+  [z.lazy(() => Port3$inboundSchema), z.int(), z.any(), z.string()],
+);
+/** @internal */
+export type PortUnion3$Outbound = Port3$Outbound | number | any | string;
+
+/** @internal */
+export const PortUnion3$outboundSchema: z.ZodType<
+  PortUnion3$Outbound,
+  PortUnion3
+> = z.union([z.lazy(() => Port3$outboundSchema), z.int(), z.any(), z.string()]);
+
+export function portUnion3ToJSON(portUnion3: PortUnion3): string {
+  return JSON.stringify(PortUnion3$outboundSchema.parse(portUnion3));
+}
+export function portUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<PortUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const ServerCaCertificatesSecretRef1$inboundSchema: z.ZodType<
+  ServerCaCertificatesSecretRef1,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type ServerCaCertificatesSecretRef1$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const ServerCaCertificatesSecretRef1$outboundSchema: z.ZodType<
+  ServerCaCertificatesSecretRef1$Outbound,
+  ServerCaCertificatesSecretRef1
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function serverCaCertificatesSecretRef1ToJSON(
+  serverCaCertificatesSecretRef1: ServerCaCertificatesSecretRef1,
+): string {
+  return JSON.stringify(
+    ServerCaCertificatesSecretRef1$outboundSchema.parse(
+      serverCaCertificatesSecretRef1,
+    ),
+  );
+}
+export function serverCaCertificatesSecretRef1FromJSON(
+  jsonString: string,
+): SafeParseResult<ServerCaCertificatesSecretRef1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ServerCaCertificatesSecretRef1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ServerCaCertificatesSecretRef1' from JSON`,
+  );
+}
+
+/** @internal */
+export const ServerCaCertificates1$inboundSchema: z.ZodType<
+  ServerCaCertificates1,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => ServerCaCertificatesSecretRef1$inboundSchema),
+});
+/** @internal */
+export type ServerCaCertificates1$Outbound = {
+  secretRef: ServerCaCertificatesSecretRef1$Outbound;
+};
+
+/** @internal */
+export const ServerCaCertificates1$outboundSchema: z.ZodType<
+  ServerCaCertificates1$Outbound,
+  ServerCaCertificates1
+> = z.object({
+  secretRef: z.lazy(() => ServerCaCertificatesSecretRef1$outboundSchema),
+});
+
+export function serverCaCertificates1ToJSON(
+  serverCaCertificates1: ServerCaCertificates1,
+): string {
+  return JSON.stringify(
+    ServerCaCertificates1$outboundSchema.parse(serverCaCertificates1),
+  );
+}
+export function serverCaCertificates1FromJSON(
+  jsonString: string,
+): SafeParseResult<ServerCaCertificates1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ServerCaCertificates1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ServerCaCertificates1' from JSON`,
+  );
+}
+
+/** @internal */
+export const ServerCaCertificatesUnion1$inboundSchema: z.ZodType<
+  ServerCaCertificatesUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => ServerCaCertificates1$inboundSchema),
+  z.array(z.string()),
+  z.any(),
+  z.string(),
+]);
+/** @internal */
+export type ServerCaCertificatesUnion1$Outbound =
+  | ServerCaCertificates1$Outbound
+  | Array<string>
+  | any
+  | string;
+
+/** @internal */
+export const ServerCaCertificatesUnion1$outboundSchema: z.ZodType<
+  ServerCaCertificatesUnion1$Outbound,
+  ServerCaCertificatesUnion1
+> = z.union([
+  z.lazy(() => ServerCaCertificates1$outboundSchema),
+  z.array(z.string()),
+  z.any(),
+  z.string(),
+]);
+
+export function serverCaCertificatesUnion1ToJSON(
+  serverCaCertificatesUnion1: ServerCaCertificatesUnion1,
+): string {
+  return JSON.stringify(
+    ServerCaCertificatesUnion1$outboundSchema.parse(serverCaCertificatesUnion1),
+  );
+}
+export function serverCaCertificatesUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<ServerCaCertificatesUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ServerCaCertificatesUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ServerCaCertificatesUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypePostgres3$inboundSchema: z.ZodEnum<typeof TypePostgres3> = z
+  .enum(TypePostgres3);
+/** @internal */
+export const TypePostgres3$outboundSchema: z.ZodEnum<typeof TypePostgres3> =
+  TypePostgres3$inboundSchema;
+
+/** @internal */
+export const ExternalBindingCloudSQL$inboundSchema: z.ZodType<
+  ExternalBindingCloudSQL,
+  unknown
+> = z.object({
+  database: z.nullable(z.any()),
+  host: z.nullable(z.any()),
+  passwordSecretName: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port3$inboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  serverCaCertificates: z.nullable(
+    z.union([
+      z.lazy(() => ServerCaCertificates1$inboundSchema),
+      z.array(z.string()),
+      z.any(),
+      z.string(),
+    ]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("cloud-sql"),
+  type: TypePostgres3$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingCloudSQL$Outbound = {
+  database: any | null;
+  host: any | null;
+  passwordSecretName: any | null;
+  port: Port3$Outbound | number | any | string | null;
+  serverCaCertificates:
+    | ServerCaCertificates1$Outbound
+    | Array<string>
+    | any
+    | string
+    | null;
+  username: any | null;
+  service: "cloud-sql";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingCloudSQL$outboundSchema: z.ZodType<
+  ExternalBindingCloudSQL$Outbound,
+  ExternalBindingCloudSQL
+> = z.object({
+  database: z.nullable(z.any()),
+  host: z.nullable(z.any()),
+  passwordSecretName: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port3$outboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  serverCaCertificates: z.nullable(
+    z.union([
+      z.lazy(() => ServerCaCertificates1$outboundSchema),
+      z.array(z.string()),
+      z.any(),
+      z.string(),
+    ]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("cloud-sql"),
+  type: TypePostgres3$outboundSchema,
+});
+
+export function externalBindingCloudSQLToJSON(
+  externalBindingCloudSQL: ExternalBindingCloudSQL,
+): string {
+  return JSON.stringify(
+    ExternalBindingCloudSQL$outboundSchema.parse(externalBindingCloudSQL),
+  );
+}
+export function externalBindingCloudSQLFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingCloudSQL, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingCloudSQL$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingCloudSQL' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortSecretRef2$inboundSchema: z.ZodType<PortSecretRef2, unknown> =
+  z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+/** @internal */
+export type PortSecretRef2$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PortSecretRef2$outboundSchema: z.ZodType<
+  PortSecretRef2$Outbound,
+  PortSecretRef2
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function portSecretRef2ToJSON(portSecretRef2: PortSecretRef2): string {
+  return JSON.stringify(PortSecretRef2$outboundSchema.parse(portSecretRef2));
+}
+export function portSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<PortSecretRef2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortSecretRef2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const Port2$inboundSchema: z.ZodType<Port2, unknown> = z.object({
+  secretRef: z.lazy(() => PortSecretRef2$inboundSchema),
+});
+/** @internal */
+export type Port2$Outbound = {
+  secretRef: PortSecretRef2$Outbound;
+};
+
+/** @internal */
+export const Port2$outboundSchema: z.ZodType<Port2$Outbound, Port2> = z.object({
+  secretRef: z.lazy(() => PortSecretRef2$outboundSchema),
+});
+
+export function port2ToJSON(port2: Port2): string {
+  return JSON.stringify(Port2$outboundSchema.parse(port2));
+}
+export function port2FromJSON(
+  jsonString: string,
+): SafeParseResult<Port2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Port2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Port2' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortUnion2$inboundSchema: z.ZodType<PortUnion2, unknown> = z.union(
+  [z.lazy(() => Port2$inboundSchema), z.int(), z.any(), z.string()],
+);
+/** @internal */
+export type PortUnion2$Outbound = Port2$Outbound | number | any | string;
+
+/** @internal */
+export const PortUnion2$outboundSchema: z.ZodType<
+  PortUnion2$Outbound,
+  PortUnion2
+> = z.union([z.lazy(() => Port2$outboundSchema), z.int(), z.any(), z.string()]);
+
+export function portUnion2ToJSON(portUnion2: PortUnion2): string {
+  return JSON.stringify(PortUnion2$outboundSchema.parse(portUnion2));
+}
+export function portUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<PortUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypePostgres2$inboundSchema: z.ZodEnum<typeof TypePostgres2> = z
+  .enum(TypePostgres2);
+/** @internal */
+export const TypePostgres2$outboundSchema: z.ZodEnum<typeof TypePostgres2> =
+  TypePostgres2$inboundSchema;
+
+/** @internal */
+export const ExternalBindingAuroraManaged$inboundSchema: z.ZodType<
+  ExternalBindingAuroraManaged,
+  unknown
+> = z.object({
+  clusterEndpoint: z.nullable(z.any()),
+  database: z.nullable(z.any()),
+  passwordSecretArn: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port2$inboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("aurora-managed"),
+  type: TypePostgres2$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingAuroraManaged$Outbound = {
+  clusterEndpoint: any | null;
+  database: any | null;
+  passwordSecretArn: any | null;
+  port: Port2$Outbound | number | any | string | null;
+  username: any | null;
+  service: "aurora-managed";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingAuroraManaged$outboundSchema: z.ZodType<
+  ExternalBindingAuroraManaged$Outbound,
+  ExternalBindingAuroraManaged
+> = z.object({
+  clusterEndpoint: z.nullable(z.any()),
+  database: z.nullable(z.any()),
+  passwordSecretArn: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port2$outboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("aurora-managed"),
+  type: TypePostgres2$outboundSchema,
+});
+
+export function externalBindingAuroraManagedToJSON(
+  externalBindingAuroraManaged: ExternalBindingAuroraManaged,
+): string {
+  return JSON.stringify(
+    ExternalBindingAuroraManaged$outboundSchema.parse(
+      externalBindingAuroraManaged,
+    ),
+  );
+}
+export function externalBindingAuroraManagedFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingAuroraManaged, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingAuroraManaged$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingAuroraManaged' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortSecretRef1$inboundSchema: z.ZodType<PortSecretRef1, unknown> =
+  z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+/** @internal */
+export type PortSecretRef1$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PortSecretRef1$outboundSchema: z.ZodType<
+  PortSecretRef1$Outbound,
+  PortSecretRef1
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function portSecretRef1ToJSON(portSecretRef1: PortSecretRef1): string {
+  return JSON.stringify(PortSecretRef1$outboundSchema.parse(portSecretRef1));
+}
+export function portSecretRef1FromJSON(
+  jsonString: string,
+): SafeParseResult<PortSecretRef1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortSecretRef1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortSecretRef1' from JSON`,
+  );
+}
+
+/** @internal */
+export const Port1$inboundSchema: z.ZodType<Port1, unknown> = z.object({
+  secretRef: z.lazy(() => PortSecretRef1$inboundSchema),
+});
+/** @internal */
+export type Port1$Outbound = {
+  secretRef: PortSecretRef1$Outbound;
+};
+
+/** @internal */
+export const Port1$outboundSchema: z.ZodType<Port1$Outbound, Port1> = z.object({
+  secretRef: z.lazy(() => PortSecretRef1$outboundSchema),
+});
+
+export function port1ToJSON(port1: Port1): string {
+  return JSON.stringify(Port1$outboundSchema.parse(port1));
+}
+export function port1FromJSON(
+  jsonString: string,
+): SafeParseResult<Port1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Port1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Port1' from JSON`,
+  );
+}
+
+/** @internal */
+export const PortUnion1$inboundSchema: z.ZodType<PortUnion1, unknown> = z.union(
+  [z.lazy(() => Port1$inboundSchema), z.int(), z.any(), z.string()],
+);
+/** @internal */
+export type PortUnion1$Outbound = Port1$Outbound | number | any | string;
+
+/** @internal */
+export const PortUnion1$outboundSchema: z.ZodType<
+  PortUnion1$Outbound,
+  PortUnion1
+> = z.union([z.lazy(() => Port1$outboundSchema), z.int(), z.any(), z.string()]);
+
+export function portUnion1ToJSON(portUnion1: PortUnion1): string {
+  return JSON.stringify(PortUnion1$outboundSchema.parse(portUnion1));
+}
+export function portUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<PortUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PortUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PortUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypePostgres1$inboundSchema: z.ZodEnum<typeof TypePostgres1> = z
+  .enum(TypePostgres1);
+/** @internal */
+export const TypePostgres1$outboundSchema: z.ZodEnum<typeof TypePostgres1> =
+  TypePostgres1$inboundSchema;
+
+/** @internal */
+export const ExternalBindingAurora$inboundSchema: z.ZodType<
+  ExternalBindingAurora,
+  unknown
+> = z.object({
+  clusterEndpoint: z.nullable(z.any()),
+  database: z.nullable(z.any()),
+  passwordSecretArn: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port1$inboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("aurora"),
+  type: TypePostgres1$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingAurora$Outbound = {
+  clusterEndpoint: any | null;
+  database: any | null;
+  passwordSecretArn: any | null;
+  port: Port1$Outbound | number | any | string | null;
+  username: any | null;
+  service: "aurora";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingAurora$outboundSchema: z.ZodType<
+  ExternalBindingAurora$Outbound,
+  ExternalBindingAurora
+> = z.object({
+  clusterEndpoint: z.nullable(z.any()),
+  database: z.nullable(z.any()),
+  passwordSecretArn: z.nullable(z.any()),
+  port: z.nullable(
+    z.union([z.lazy(() => Port1$outboundSchema), z.int(), z.any(), z.string()]),
+  ),
+  username: z.nullable(z.any()),
+  service: z.literal("aurora"),
+  type: TypePostgres1$outboundSchema,
+});
+
+export function externalBindingAuroraToJSON(
+  externalBindingAurora: ExternalBindingAurora,
+): string {
+  return JSON.stringify(
+    ExternalBindingAurora$outboundSchema.parse(externalBindingAurora),
+  );
+}
+export function externalBindingAuroraFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingAurora, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingAurora$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingAurora' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExternalBindingUnion6$inboundSchema: z.ZodType<
+  ExternalBindingUnion6,
+  unknown
+> = z.union([
+  z.lazy(() => ExternalBindingAurora$inboundSchema),
+  z.lazy(() => ExternalBindingAuroraManaged$inboundSchema),
+  z.lazy(() => ExternalBindingCloudSQL$inboundSchema),
+  z.lazy(() => ExternalBindingFlexibleServer$inboundSchema),
+  z.lazy(() => ExternalBindingExternalPostgres$inboundSchema),
+  z.lazy(() => ExternalBindingLocalPostgres$inboundSchema),
+]);
+/** @internal */
+export type ExternalBindingUnion6$Outbound =
+  | ExternalBindingAurora$Outbound
+  | ExternalBindingAuroraManaged$Outbound
+  | ExternalBindingCloudSQL$Outbound
+  | ExternalBindingFlexibleServer$Outbound
+  | ExternalBindingExternalPostgres$Outbound
+  | ExternalBindingLocalPostgres$Outbound;
+
+/** @internal */
+export const ExternalBindingUnion6$outboundSchema: z.ZodType<
+  ExternalBindingUnion6$Outbound,
+  ExternalBindingUnion6
+> = z.union([
+  z.lazy(() => ExternalBindingAurora$outboundSchema),
+  z.lazy(() => ExternalBindingAuroraManaged$outboundSchema),
+  z.lazy(() => ExternalBindingCloudSQL$outboundSchema),
+  z.lazy(() => ExternalBindingFlexibleServer$outboundSchema),
+  z.lazy(() => ExternalBindingExternalPostgres$outboundSchema),
+  z.lazy(() => ExternalBindingLocalPostgres$outboundSchema),
+]);
+
+export function externalBindingUnion6ToJSON(
+  externalBindingUnion6: ExternalBindingUnion6,
+): string {
+  return JSON.stringify(
+    ExternalBindingUnion6$outboundSchema.parse(externalBindingUnion6),
+  );
+}
+export function externalBindingUnion6FromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingUnion6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingUnion6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingUnion6' from JSON`,
+  );
+}
+
+/** @internal */
+export const StaticIpSecretRef$inboundSchema: z.ZodType<
+  StaticIpSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type StaticIpSecretRef$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const StaticIpSecretRef$outboundSchema: z.ZodType<
+  StaticIpSecretRef$Outbound,
+  StaticIpSecretRef
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function staticIpSecretRefToJSON(
+  staticIpSecretRef: StaticIpSecretRef,
+): string {
+  return JSON.stringify(
+    StaticIpSecretRef$outboundSchema.parse(staticIpSecretRef),
+  );
+}
+export function staticIpSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<StaticIpSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => StaticIpSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'StaticIpSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const StaticIp$inboundSchema: z.ZodType<StaticIp, unknown> = z.object({
+  secretRef: z.lazy(() => StaticIpSecretRef$inboundSchema),
+});
+/** @internal */
+export type StaticIp$Outbound = {
+  secretRef: StaticIpSecretRef$Outbound;
+};
+
+/** @internal */
+export const StaticIp$outboundSchema: z.ZodType<StaticIp$Outbound, StaticIp> = z
+  .object({
+    secretRef: z.lazy(() => StaticIpSecretRef$outboundSchema),
+  });
+
+export function staticIpToJSON(staticIp: StaticIp): string {
+  return JSON.stringify(StaticIp$outboundSchema.parse(staticIp));
+}
+export function staticIpFromJSON(
+  jsonString: string,
+): SafeParseResult<StaticIp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => StaticIp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'StaticIp' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeContainerAppsEnvironment$inboundSchema: z.ZodEnum<
+  typeof TypeContainerAppsEnvironment
+> = z.enum(TypeContainerAppsEnvironment);
+/** @internal */
+export const TypeContainerAppsEnvironment$outboundSchema: z.ZodEnum<
+  typeof TypeContainerAppsEnvironment
+> = TypeContainerAppsEnvironment$inboundSchema;
+
+/** @internal */
+export const ExternalBindingContainerAppsEnvironment$inboundSchema: z.ZodType<
+  ExternalBindingContainerAppsEnvironment,
+  unknown
+> = z.object({
+  defaultDomain: z.nullable(z.any()),
+  environmentName: z.nullable(z.any()),
+  resourceGroupName: z.nullable(z.any()),
+  resourceId: z.nullable(z.any()),
+  staticIp: z.nullable(z.any()).optional(),
+  type: TypeContainerAppsEnvironment$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingContainerAppsEnvironment$Outbound = {
+  defaultDomain: any | null;
+  environmentName: any | null;
+  resourceGroupName: any | null;
+  resourceId: any | null;
+  staticIp?: any | null | undefined;
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingContainerAppsEnvironment$outboundSchema: z.ZodType<
+  ExternalBindingContainerAppsEnvironment$Outbound,
+  ExternalBindingContainerAppsEnvironment
+> = z.object({
+  defaultDomain: z.nullable(z.any()),
+  environmentName: z.nullable(z.any()),
+  resourceGroupName: z.nullable(z.any()),
+  resourceId: z.nullable(z.any()),
+  staticIp: z.nullable(z.any()).optional(),
+  type: TypeContainerAppsEnvironment$outboundSchema,
+});
+
+export function externalBindingContainerAppsEnvironmentToJSON(
+  externalBindingContainerAppsEnvironment:
+    ExternalBindingContainerAppsEnvironment,
+): string {
+  return JSON.stringify(
+    ExternalBindingContainerAppsEnvironment$outboundSchema.parse(
+      externalBindingContainerAppsEnvironment,
+    ),
+  );
+}
+export function externalBindingContainerAppsEnvironmentFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ExternalBindingContainerAppsEnvironment,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ExternalBindingContainerAppsEnvironment$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ExternalBindingContainerAppsEnvironment' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeVault5$inboundSchema: z.ZodEnum<typeof TypeVault5> = z.enum(
+  TypeVault5,
+);
+/** @internal */
+export const TypeVault5$outboundSchema: z.ZodEnum<typeof TypeVault5> =
+  TypeVault5$inboundSchema;
+
+/** @internal */
+export const ExternalBindingLocalVault$inboundSchema: z.ZodType<
+  ExternalBindingLocalVault,
+  unknown
+> = z.object({
+  dataDir: z.nullable(z.any()),
+  vaultName: z.string(),
+  service: z.literal("local-vault"),
+  type: TypeVault5$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingLocalVault$Outbound = {
+  dataDir: any | null;
+  vaultName: string;
+  service: "local-vault";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingLocalVault$outboundSchema: z.ZodType<
+  ExternalBindingLocalVault$Outbound,
+  ExternalBindingLocalVault
+> = z.object({
+  dataDir: z.nullable(z.any()),
+  vaultName: z.string(),
+  service: z.literal("local-vault"),
+  type: TypeVault5$outboundSchema,
+});
+
+export function externalBindingLocalVaultToJSON(
+  externalBindingLocalVault: ExternalBindingLocalVault,
+): string {
+  return JSON.stringify(
+    ExternalBindingLocalVault$outboundSchema.parse(externalBindingLocalVault),
+  );
+}
+export function externalBindingLocalVaultFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingLocalVault, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingLocalVault$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingLocalVault' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeVault4$inboundSchema: z.ZodEnum<typeof TypeVault4> = z.enum(
+  TypeVault4,
+);
+/** @internal */
+export const TypeVault4$outboundSchema: z.ZodEnum<typeof TypeVault4> =
+  TypeVault4$inboundSchema;
+
+/** @internal */
+export const ExternalBindingKubernetesSecret$inboundSchema: z.ZodType<
+  ExternalBindingKubernetesSecret,
+  unknown
+> = z.object({
+  namespace: z.nullable(z.any()),
+  vaultPrefix: z.nullable(z.any()),
+  service: z.literal("kubernetes-secret"),
+  type: TypeVault4$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingKubernetesSecret$Outbound = {
+  namespace: any | null;
+  vaultPrefix: any | null;
+  service: "kubernetes-secret";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingKubernetesSecret$outboundSchema: z.ZodType<
+  ExternalBindingKubernetesSecret$Outbound,
+  ExternalBindingKubernetesSecret
+> = z.object({
+  namespace: z.nullable(z.any()),
+  vaultPrefix: z.nullable(z.any()),
+  service: z.literal("kubernetes-secret"),
+  type: TypeVault4$outboundSchema,
+});
+
+export function externalBindingKubernetesSecretToJSON(
+  externalBindingKubernetesSecret: ExternalBindingKubernetesSecret,
+): string {
+  return JSON.stringify(
+    ExternalBindingKubernetesSecret$outboundSchema.parse(
+      externalBindingKubernetesSecret,
+    ),
+  );
+}
+export function externalBindingKubernetesSecretFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingKubernetesSecret, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingKubernetesSecret$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingKubernetesSecret' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeVault3$inboundSchema: z.ZodEnum<typeof TypeVault3> = z.enum(
+  TypeVault3,
+);
+/** @internal */
+export const TypeVault3$outboundSchema: z.ZodEnum<typeof TypeVault3> =
+  TypeVault3$inboundSchema;
+
+/** @internal */
+export const ExternalBindingKeyVault$inboundSchema: z.ZodType<
+  ExternalBindingKeyVault,
+  unknown
+> = z.object({
+  vaultName: z.nullable(z.any()),
+  service: z.literal("key-vault"),
+  type: TypeVault3$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingKeyVault$Outbound = {
+  vaultName: any | null;
+  service: "key-vault";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingKeyVault$outboundSchema: z.ZodType<
+  ExternalBindingKeyVault$Outbound,
+  ExternalBindingKeyVault
+> = z.object({
+  vaultName: z.nullable(z.any()),
+  service: z.literal("key-vault"),
+  type: TypeVault3$outboundSchema,
+});
+
+export function externalBindingKeyVaultToJSON(
+  externalBindingKeyVault: ExternalBindingKeyVault,
+): string {
+  return JSON.stringify(
+    ExternalBindingKeyVault$outboundSchema.parse(externalBindingKeyVault),
+  );
+}
+export function externalBindingKeyVaultFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingKeyVault, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingKeyVault$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingKeyVault' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeVault2$inboundSchema: z.ZodEnum<typeof TypeVault2> = z.enum(
+  TypeVault2,
+);
+/** @internal */
+export const TypeVault2$outboundSchema: z.ZodEnum<typeof TypeVault2> =
+  TypeVault2$inboundSchema;
+
+/** @internal */
+export const ExternalBindingSecretManager$inboundSchema: z.ZodType<
+  ExternalBindingSecretManager,
+  unknown
+> = z.object({
+  vaultPrefix: z.nullable(z.any()),
+  service: z.literal("secret-manager"),
+  type: TypeVault2$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingSecretManager$Outbound = {
+  vaultPrefix: any | null;
+  service: "secret-manager";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingSecretManager$outboundSchema: z.ZodType<
+  ExternalBindingSecretManager$Outbound,
+  ExternalBindingSecretManager
+> = z.object({
+  vaultPrefix: z.nullable(z.any()),
+  service: z.literal("secret-manager"),
+  type: TypeVault2$outboundSchema,
+});
+
+export function externalBindingSecretManagerToJSON(
+  externalBindingSecretManager: ExternalBindingSecretManager,
+): string {
+  return JSON.stringify(
+    ExternalBindingSecretManager$outboundSchema.parse(
+      externalBindingSecretManager,
+    ),
+  );
+}
+export function externalBindingSecretManagerFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingSecretManager, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingSecretManager$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingSecretManager' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeVault1$inboundSchema: z.ZodEnum<typeof TypeVault1> = z.enum(
+  TypeVault1,
+);
+/** @internal */
+export const TypeVault1$outboundSchema: z.ZodEnum<typeof TypeVault1> =
+  TypeVault1$inboundSchema;
+
+/** @internal */
+export const ExternalBindingParameterStore$inboundSchema: z.ZodType<
+  ExternalBindingParameterStore,
+  unknown
+> = z.object({
+  vaultPrefix: z.nullable(z.any()),
+  service: z.literal("parameter-store"),
+  type: TypeVault1$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingParameterStore$Outbound = {
+  vaultPrefix: any | null;
+  service: "parameter-store";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingParameterStore$outboundSchema: z.ZodType<
+  ExternalBindingParameterStore$Outbound,
+  ExternalBindingParameterStore
+> = z.object({
+  vaultPrefix: z.nullable(z.any()),
+  service: z.literal("parameter-store"),
+  type: TypeVault1$outboundSchema,
+});
+
+export function externalBindingParameterStoreToJSON(
+  externalBindingParameterStore: ExternalBindingParameterStore,
+): string {
+  return JSON.stringify(
+    ExternalBindingParameterStore$outboundSchema.parse(
+      externalBindingParameterStore,
+    ),
+  );
+}
+export function externalBindingParameterStoreFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingParameterStore, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingParameterStore$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingParameterStore' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExternalBindingUnion5$inboundSchema: z.ZodType<
+  ExternalBindingUnion5,
+  unknown
+> = z.union([
+  z.lazy(() => ExternalBindingParameterStore$inboundSchema),
+  z.lazy(() => ExternalBindingSecretManager$inboundSchema),
+  z.lazy(() => ExternalBindingKeyVault$inboundSchema),
+  z.lazy(() => ExternalBindingKubernetesSecret$inboundSchema),
+  z.lazy(() => ExternalBindingLocalVault$inboundSchema),
+]);
+/** @internal */
+export type ExternalBindingUnion5$Outbound =
+  | ExternalBindingParameterStore$Outbound
+  | ExternalBindingSecretManager$Outbound
+  | ExternalBindingKeyVault$Outbound
+  | ExternalBindingKubernetesSecret$Outbound
+  | ExternalBindingLocalVault$Outbound;
+
+/** @internal */
+export const ExternalBindingUnion5$outboundSchema: z.ZodType<
+  ExternalBindingUnion5$Outbound,
+  ExternalBindingUnion5
+> = z.union([
+  z.lazy(() => ExternalBindingParameterStore$outboundSchema),
+  z.lazy(() => ExternalBindingSecretManager$outboundSchema),
+  z.lazy(() => ExternalBindingKeyVault$outboundSchema),
+  z.lazy(() => ExternalBindingKubernetesSecret$outboundSchema),
+  z.lazy(() => ExternalBindingLocalVault$outboundSchema),
+]);
+
+export function externalBindingUnion5ToJSON(
+  externalBindingUnion5: ExternalBindingUnion5,
+): string {
+  return JSON.stringify(
+    ExternalBindingUnion5$outboundSchema.parse(externalBindingUnion5),
+  );
+}
+export function externalBindingUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingUnion5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingUnion5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDirSecretRef$inboundSchema: z.ZodType<
+  DataDirSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type DataDirSecretRef$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const DataDirSecretRef$outboundSchema: z.ZodType<
+  DataDirSecretRef$Outbound,
+  DataDirSecretRef
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function dataDirSecretRefToJSON(
+  dataDirSecretRef: DataDirSecretRef,
+): string {
+  return JSON.stringify(
+    DataDirSecretRef$outboundSchema.parse(dataDirSecretRef),
+  );
+}
+export function dataDirSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDirSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDirSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDirSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDir$inboundSchema: z.ZodType<DataDir, unknown> = z.object({
+  secretRef: z.lazy(() => DataDirSecretRef$inboundSchema),
+});
+/** @internal */
+export type DataDir$Outbound = {
+  secretRef: DataDirSecretRef$Outbound;
+};
+
+/** @internal */
+export const DataDir$outboundSchema: z.ZodType<DataDir$Outbound, DataDir> = z
+  .object({
+    secretRef: z.lazy(() => DataDirSecretRef$outboundSchema),
+  });
+
+export function dataDirToJSON(dataDir: DataDir): string {
+  return JSON.stringify(DataDir$outboundSchema.parse(dataDir));
+}
+export function dataDirFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDir, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDir$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDir' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeArtifactRegistry4$inboundSchema: z.ZodEnum<
+  typeof TypeArtifactRegistry4
+> = z.enum(TypeArtifactRegistry4);
+/** @internal */
+export const TypeArtifactRegistry4$outboundSchema: z.ZodEnum<
+  typeof TypeArtifactRegistry4
+> = TypeArtifactRegistry4$inboundSchema;
+
+/** @internal */
+export const ExternalBindingLocal$inboundSchema: z.ZodType<
+  ExternalBindingLocal,
+  unknown
+> = z.object({
+  dataDir: z.nullable(z.any()),
+  registryUrl: z.nullable(z.any()),
+  service: z.literal("local"),
+  type: TypeArtifactRegistry4$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingLocal$Outbound = {
+  dataDir: any | null;
+  registryUrl: any | null;
+  service: "local";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingLocal$outboundSchema: z.ZodType<
+  ExternalBindingLocal$Outbound,
+  ExternalBindingLocal
+> = z.object({
+  dataDir: z.nullable(z.any()),
+  registryUrl: z.nullable(z.any()),
+  service: z.literal("local"),
+  type: TypeArtifactRegistry4$outboundSchema,
+});
+
+export function externalBindingLocalToJSON(
+  externalBindingLocal: ExternalBindingLocal,
+): string {
+  return JSON.stringify(
+    ExternalBindingLocal$outboundSchema.parse(externalBindingLocal),
+  );
+}
+export function externalBindingLocalFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingLocal, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingLocal$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingLocal' from JSON`,
+  );
+}
+
+/** @internal */
+export const PullServiceAccountEmailSecretRef$inboundSchema: z.ZodType<
+  PullServiceAccountEmailSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type PullServiceAccountEmailSecretRef$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PullServiceAccountEmailSecretRef$outboundSchema: z.ZodType<
+  PullServiceAccountEmailSecretRef$Outbound,
+  PullServiceAccountEmailSecretRef
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function pullServiceAccountEmailSecretRefToJSON(
+  pullServiceAccountEmailSecretRef: PullServiceAccountEmailSecretRef,
+): string {
+  return JSON.stringify(
+    PullServiceAccountEmailSecretRef$outboundSchema.parse(
+      pullServiceAccountEmailSecretRef,
+    ),
+  );
+}
+export function pullServiceAccountEmailSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<PullServiceAccountEmailSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PullServiceAccountEmailSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PullServiceAccountEmailSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const PullServiceAccountEmail$inboundSchema: z.ZodType<
+  PullServiceAccountEmail,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => PullServiceAccountEmailSecretRef$inboundSchema),
+});
+/** @internal */
+export type PullServiceAccountEmail$Outbound = {
+  secretRef: PullServiceAccountEmailSecretRef$Outbound;
+};
+
+/** @internal */
+export const PullServiceAccountEmail$outboundSchema: z.ZodType<
+  PullServiceAccountEmail$Outbound,
+  PullServiceAccountEmail
+> = z.object({
+  secretRef: z.lazy(() => PullServiceAccountEmailSecretRef$outboundSchema),
+});
+
+export function pullServiceAccountEmailToJSON(
+  pullServiceAccountEmail: PullServiceAccountEmail,
+): string {
+  return JSON.stringify(
+    PullServiceAccountEmail$outboundSchema.parse(pullServiceAccountEmail),
+  );
+}
+export function pullServiceAccountEmailFromJSON(
+  jsonString: string,
+): SafeParseResult<PullServiceAccountEmail, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PullServiceAccountEmail$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PullServiceAccountEmail' from JSON`,
+  );
+}
+
+/** @internal */
+export const PushServiceAccountEmailSecretRef$inboundSchema: z.ZodType<
+  PushServiceAccountEmailSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type PushServiceAccountEmailSecretRef$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PushServiceAccountEmailSecretRef$outboundSchema: z.ZodType<
+  PushServiceAccountEmailSecretRef$Outbound,
+  PushServiceAccountEmailSecretRef
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function pushServiceAccountEmailSecretRefToJSON(
+  pushServiceAccountEmailSecretRef: PushServiceAccountEmailSecretRef,
+): string {
+  return JSON.stringify(
+    PushServiceAccountEmailSecretRef$outboundSchema.parse(
+      pushServiceAccountEmailSecretRef,
+    ),
+  );
+}
+export function pushServiceAccountEmailSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<PushServiceAccountEmailSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PushServiceAccountEmailSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PushServiceAccountEmailSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const PushServiceAccountEmail$inboundSchema: z.ZodType<
+  PushServiceAccountEmail,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => PushServiceAccountEmailSecretRef$inboundSchema),
+});
+/** @internal */
+export type PushServiceAccountEmail$Outbound = {
+  secretRef: PushServiceAccountEmailSecretRef$Outbound;
+};
+
+/** @internal */
+export const PushServiceAccountEmail$outboundSchema: z.ZodType<
+  PushServiceAccountEmail$Outbound,
+  PushServiceAccountEmail
+> = z.object({
+  secretRef: z.lazy(() => PushServiceAccountEmailSecretRef$outboundSchema),
+});
+
+export function pushServiceAccountEmailToJSON(
+  pushServiceAccountEmail: PushServiceAccountEmail,
+): string {
+  return JSON.stringify(
+    PushServiceAccountEmail$outboundSchema.parse(pushServiceAccountEmail),
+  );
+}
+export function pushServiceAccountEmailFromJSON(
+  jsonString: string,
+): SafeParseResult<PushServiceAccountEmail, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PushServiceAccountEmail$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PushServiceAccountEmail' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeArtifactRegistry3$inboundSchema: z.ZodEnum<
+  typeof TypeArtifactRegistry3
+> = z.enum(TypeArtifactRegistry3);
+/** @internal */
+export const TypeArtifactRegistry3$outboundSchema: z.ZodEnum<
+  typeof TypeArtifactRegistry3
+> = TypeArtifactRegistry3$inboundSchema;
+
+/** @internal */
+export const ExternalBindingGar$inboundSchema: z.ZodType<
+  ExternalBindingGar,
+  unknown
+> = z.object({
+  pullServiceAccountEmail: z.nullable(z.any()).optional(),
+  pushServiceAccountEmail: z.nullable(z.any()).optional(),
+  repositoryName: z.nullable(z.any()),
+  service: z.literal("gar"),
+  type: TypeArtifactRegistry3$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingGar$Outbound = {
+  pullServiceAccountEmail?: any | null | undefined;
+  pushServiceAccountEmail?: any | null | undefined;
+  repositoryName: any | null;
+  service: "gar";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingGar$outboundSchema: z.ZodType<
+  ExternalBindingGar$Outbound,
+  ExternalBindingGar
+> = z.object({
+  pullServiceAccountEmail: z.nullable(z.any()).optional(),
+  pushServiceAccountEmail: z.nullable(z.any()).optional(),
+  repositoryName: z.nullable(z.any()),
+  service: z.literal("gar"),
+  type: TypeArtifactRegistry3$outboundSchema,
+});
+
+export function externalBindingGarToJSON(
+  externalBindingGar: ExternalBindingGar,
+): string {
+  return JSON.stringify(
+    ExternalBindingGar$outboundSchema.parse(externalBindingGar),
+  );
+}
+export function externalBindingGarFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingGar, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingGar$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingGar' from JSON`,
+  );
+}
+
+/** @internal */
+export const RepositoryPrefixSecretRef$inboundSchema: z.ZodType<
+  RepositoryPrefixSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type RepositoryPrefixSecretRef$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const RepositoryPrefixSecretRef$outboundSchema: z.ZodType<
+  RepositoryPrefixSecretRef$Outbound,
+  RepositoryPrefixSecretRef
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function repositoryPrefixSecretRefToJSON(
+  repositoryPrefixSecretRef: RepositoryPrefixSecretRef,
+): string {
+  return JSON.stringify(
+    RepositoryPrefixSecretRef$outboundSchema.parse(repositoryPrefixSecretRef),
+  );
+}
+export function repositoryPrefixSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<RepositoryPrefixSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RepositoryPrefixSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RepositoryPrefixSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const RepositoryPrefix$inboundSchema: z.ZodType<
+  RepositoryPrefix,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => RepositoryPrefixSecretRef$inboundSchema),
+});
+/** @internal */
+export type RepositoryPrefix$Outbound = {
+  secretRef: RepositoryPrefixSecretRef$Outbound;
+};
+
+/** @internal */
+export const RepositoryPrefix$outboundSchema: z.ZodType<
+  RepositoryPrefix$Outbound,
+  RepositoryPrefix
+> = z.object({
+  secretRef: z.lazy(() => RepositoryPrefixSecretRef$outboundSchema),
+});
+
+export function repositoryPrefixToJSON(
+  repositoryPrefix: RepositoryPrefix,
+): string {
+  return JSON.stringify(
+    RepositoryPrefix$outboundSchema.parse(repositoryPrefix),
+  );
+}
+export function repositoryPrefixFromJSON(
+  jsonString: string,
+): SafeParseResult<RepositoryPrefix, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RepositoryPrefix$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RepositoryPrefix' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeArtifactRegistry2$inboundSchema: z.ZodEnum<
+  typeof TypeArtifactRegistry2
+> = z.enum(TypeArtifactRegistry2);
+/** @internal */
+export const TypeArtifactRegistry2$outboundSchema: z.ZodEnum<
+  typeof TypeArtifactRegistry2
+> = TypeArtifactRegistry2$inboundSchema;
+
+/** @internal */
+export const ExternalBindingAcr$inboundSchema: z.ZodType<
+  ExternalBindingAcr,
+  unknown
+> = z.object({
+  registryName: z.nullable(z.any()),
+  repositoryPrefix: z.nullable(z.any()).optional(),
+  resourceGroupName: z.nullable(z.any()),
+  service: z.literal("acr"),
+  type: TypeArtifactRegistry2$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingAcr$Outbound = {
+  registryName: any | null;
+  repositoryPrefix?: any | null | undefined;
+  resourceGroupName: any | null;
+  service: "acr";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingAcr$outboundSchema: z.ZodType<
+  ExternalBindingAcr$Outbound,
+  ExternalBindingAcr
+> = z.object({
+  registryName: z.nullable(z.any()),
+  repositoryPrefix: z.nullable(z.any()).optional(),
+  resourceGroupName: z.nullable(z.any()),
+  service: z.literal("acr"),
+  type: TypeArtifactRegistry2$outboundSchema,
+});
+
+export function externalBindingAcrToJSON(
+  externalBindingAcr: ExternalBindingAcr,
+): string {
+  return JSON.stringify(
+    ExternalBindingAcr$outboundSchema.parse(externalBindingAcr),
+  );
+}
+export function externalBindingAcrFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingAcr, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingAcr$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingAcr' from JSON`,
+  );
+}
+
+/** @internal */
+export const PullRoleArnSecretRef$inboundSchema: z.ZodType<
+  PullRoleArnSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type PullRoleArnSecretRef$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PullRoleArnSecretRef$outboundSchema: z.ZodType<
+  PullRoleArnSecretRef$Outbound,
+  PullRoleArnSecretRef
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function pullRoleArnSecretRefToJSON(
+  pullRoleArnSecretRef: PullRoleArnSecretRef,
+): string {
+  return JSON.stringify(
+    PullRoleArnSecretRef$outboundSchema.parse(pullRoleArnSecretRef),
+  );
+}
+export function pullRoleArnSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<PullRoleArnSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PullRoleArnSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PullRoleArnSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const PullRoleArn$inboundSchema: z.ZodType<PullRoleArn, unknown> = z
+  .object({
+    secretRef: z.lazy(() => PullRoleArnSecretRef$inboundSchema),
+  });
+/** @internal */
+export type PullRoleArn$Outbound = {
+  secretRef: PullRoleArnSecretRef$Outbound;
+};
+
+/** @internal */
+export const PullRoleArn$outboundSchema: z.ZodType<
+  PullRoleArn$Outbound,
+  PullRoleArn
+> = z.object({
+  secretRef: z.lazy(() => PullRoleArnSecretRef$outboundSchema),
+});
+
+export function pullRoleArnToJSON(pullRoleArn: PullRoleArn): string {
+  return JSON.stringify(PullRoleArn$outboundSchema.parse(pullRoleArn));
+}
+export function pullRoleArnFromJSON(
+  jsonString: string,
+): SafeParseResult<PullRoleArn, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PullRoleArn$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PullRoleArn' from JSON`,
+  );
+}
+
+/** @internal */
+export const PushRoleArnSecretRef$inboundSchema: z.ZodType<
+  PushRoleArnSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type PushRoleArnSecretRef$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const PushRoleArnSecretRef$outboundSchema: z.ZodType<
+  PushRoleArnSecretRef$Outbound,
+  PushRoleArnSecretRef
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function pushRoleArnSecretRefToJSON(
+  pushRoleArnSecretRef: PushRoleArnSecretRef,
+): string {
+  return JSON.stringify(
+    PushRoleArnSecretRef$outboundSchema.parse(pushRoleArnSecretRef),
+  );
+}
+export function pushRoleArnSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<PushRoleArnSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PushRoleArnSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PushRoleArnSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const PushRoleArn$inboundSchema: z.ZodType<PushRoleArn, unknown> = z
+  .object({
+    secretRef: z.lazy(() => PushRoleArnSecretRef$inboundSchema),
+  });
+/** @internal */
+export type PushRoleArn$Outbound = {
+  secretRef: PushRoleArnSecretRef$Outbound;
+};
+
+/** @internal */
+export const PushRoleArn$outboundSchema: z.ZodType<
+  PushRoleArn$Outbound,
+  PushRoleArn
+> = z.object({
+  secretRef: z.lazy(() => PushRoleArnSecretRef$outboundSchema),
+});
+
+export function pushRoleArnToJSON(pushRoleArn: PushRoleArn): string {
+  return JSON.stringify(PushRoleArn$outboundSchema.parse(pushRoleArn));
+}
+export function pushRoleArnFromJSON(
+  jsonString: string,
+): SafeParseResult<PushRoleArn, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PushRoleArn$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PushRoleArn' from JSON`,
+  );
+}
+
+/** @internal */
+export const SandboxRepositoryPrefixSecretRef$inboundSchema: z.ZodType<
+  SandboxRepositoryPrefixSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type SandboxRepositoryPrefixSecretRef$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const SandboxRepositoryPrefixSecretRef$outboundSchema: z.ZodType<
+  SandboxRepositoryPrefixSecretRef$Outbound,
+  SandboxRepositoryPrefixSecretRef
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function sandboxRepositoryPrefixSecretRefToJSON(
+  sandboxRepositoryPrefixSecretRef: SandboxRepositoryPrefixSecretRef,
+): string {
+  return JSON.stringify(
+    SandboxRepositoryPrefixSecretRef$outboundSchema.parse(
+      sandboxRepositoryPrefixSecretRef,
+    ),
+  );
+}
+export function sandboxRepositoryPrefixSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<SandboxRepositoryPrefixSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SandboxRepositoryPrefixSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SandboxRepositoryPrefixSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SandboxRepositoryPrefix$inboundSchema: z.ZodType<
+  SandboxRepositoryPrefix,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SandboxRepositoryPrefixSecretRef$inboundSchema),
+});
+/** @internal */
+export type SandboxRepositoryPrefix$Outbound = {
+  secretRef: SandboxRepositoryPrefixSecretRef$Outbound;
+};
+
+/** @internal */
+export const SandboxRepositoryPrefix$outboundSchema: z.ZodType<
+  SandboxRepositoryPrefix$Outbound,
+  SandboxRepositoryPrefix
+> = z.object({
+  secretRef: z.lazy(() => SandboxRepositoryPrefixSecretRef$outboundSchema),
+});
+
+export function sandboxRepositoryPrefixToJSON(
+  sandboxRepositoryPrefix: SandboxRepositoryPrefix,
+): string {
+  return JSON.stringify(
+    SandboxRepositoryPrefix$outboundSchema.parse(sandboxRepositoryPrefix),
+  );
+}
+export function sandboxRepositoryPrefixFromJSON(
+  jsonString: string,
+): SafeParseResult<SandboxRepositoryPrefix, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SandboxRepositoryPrefix$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SandboxRepositoryPrefix' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeArtifactRegistry1$inboundSchema: z.ZodEnum<
+  typeof TypeArtifactRegistry1
+> = z.enum(TypeArtifactRegistry1);
+/** @internal */
+export const TypeArtifactRegistry1$outboundSchema: z.ZodEnum<
+  typeof TypeArtifactRegistry1
+> = TypeArtifactRegistry1$inboundSchema;
+
+/** @internal */
+export const ExternalBindingEcr$inboundSchema: z.ZodType<
+  ExternalBindingEcr,
+  unknown
+> = z.object({
+  legacyRepositoryPrefixes: z.array(z.string()).optional(),
+  legacySandboxRepositoryPrefixes: z.array(z.string()).optional(),
+  pullRoleArn: z.nullable(z.any()).optional(),
+  pushRoleArn: z.nullable(z.any()).optional(),
+  repositoryPrefix: z.nullable(z.any()),
+  sandboxRepositoryPrefix: z.nullable(z.any()).optional(),
+  service: z.literal("ecr"),
+  type: TypeArtifactRegistry1$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingEcr$Outbound = {
+  legacyRepositoryPrefixes?: Array<string> | undefined;
+  legacySandboxRepositoryPrefixes?: Array<string> | undefined;
+  pullRoleArn?: any | null | undefined;
+  pushRoleArn?: any | null | undefined;
+  repositoryPrefix: any | null;
+  sandboxRepositoryPrefix?: any | null | undefined;
+  service: "ecr";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingEcr$outboundSchema: z.ZodType<
+  ExternalBindingEcr$Outbound,
+  ExternalBindingEcr
+> = z.object({
+  legacyRepositoryPrefixes: z.array(z.string()).optional(),
+  legacySandboxRepositoryPrefixes: z.array(z.string()).optional(),
+  pullRoleArn: z.nullable(z.any()).optional(),
+  pushRoleArn: z.nullable(z.any()).optional(),
+  repositoryPrefix: z.nullable(z.any()),
+  sandboxRepositoryPrefix: z.nullable(z.any()).optional(),
+  service: z.literal("ecr"),
+  type: TypeArtifactRegistry1$outboundSchema,
+});
+
+export function externalBindingEcrToJSON(
+  externalBindingEcr: ExternalBindingEcr,
+): string {
+  return JSON.stringify(
+    ExternalBindingEcr$outboundSchema.parse(externalBindingEcr),
+  );
+}
+export function externalBindingEcrFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingEcr, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingEcr$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingEcr' from JSON`,
+  );
+}
 
 /** @internal */
 export const ExternalBindingUnion4$inboundSchema: z.ZodType<
   ExternalBindingUnion4,
   unknown
 > = z.union([
-  ExternalBindingEcr$inboundSchema,
-  ExternalBindingAcr$inboundSchema,
-  ExternalBindingGar$inboundSchema,
-  ExternalBindingLocal$inboundSchema,
+  z.lazy(() => ExternalBindingEcr$inboundSchema),
+  z.lazy(() => ExternalBindingAcr$inboundSchema),
+  z.lazy(() => ExternalBindingGar$inboundSchema),
+  z.lazy(() => ExternalBindingLocal$inboundSchema),
 ]);
 /** @internal */
 export type ExternalBindingUnion4$Outbound =
@@ -949,10 +5867,10 @@ export const ExternalBindingUnion4$outboundSchema: z.ZodType<
   ExternalBindingUnion4$Outbound,
   ExternalBindingUnion4
 > = z.union([
-  ExternalBindingEcr$outboundSchema,
-  ExternalBindingAcr$outboundSchema,
-  ExternalBindingGar$outboundSchema,
-  ExternalBindingLocal$outboundSchema,
+  z.lazy(() => ExternalBindingEcr$outboundSchema),
+  z.lazy(() => ExternalBindingAcr$outboundSchema),
+  z.lazy(() => ExternalBindingGar$outboundSchema),
+  z.lazy(() => ExternalBindingLocal$outboundSchema),
 ]);
 
 export function externalBindingUnion4ToJSON(
@@ -969,74 +5887,6 @@ export function externalBindingUnion4FromJSON(
     jsonString,
     (x) => ExternalBindingUnion4$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ExternalBindingUnion4' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataDirSecretRef1$inboundSchema: z.ZodType<
-  DataDirSecretRef1,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type DataDirSecretRef1$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const DataDirSecretRef1$outboundSchema: z.ZodType<
-  DataDirSecretRef1$Outbound,
-  DataDirSecretRef1
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function dataDirSecretRef1ToJSON(
-  dataDirSecretRef1: DataDirSecretRef1,
-): string {
-  return JSON.stringify(
-    DataDirSecretRef1$outboundSchema.parse(dataDirSecretRef1),
-  );
-}
-export function dataDirSecretRef1FromJSON(
-  jsonString: string,
-): SafeParseResult<DataDirSecretRef1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataDirSecretRef1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataDirSecretRef1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataDir1$inboundSchema: z.ZodType<DataDir1, unknown> = z.object({
-  secretRef: z.lazy(() => DataDirSecretRef1$inboundSchema),
-});
-/** @internal */
-export type DataDir1$Outbound = {
-  secretRef: DataDirSecretRef1$Outbound;
-};
-
-/** @internal */
-export const DataDir1$outboundSchema: z.ZodType<DataDir1$Outbound, DataDir1> = z
-  .object({
-    secretRef: z.lazy(() => DataDirSecretRef1$outboundSchema),
-  });
-
-export function dataDir1ToJSON(dataDir1: DataDir1): string {
-  return JSON.stringify(DataDir1$outboundSchema.parse(dataDir1));
-}
-export function dataDir1FromJSON(
-  jsonString: string,
-): SafeParseResult<DataDir1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataDir1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataDir1' from JSON`,
   );
 }
 
@@ -1164,158 +6014,85 @@ export function externalBindingLocalKvFromJSON(
 }
 
 /** @internal */
-export const ConnectionUrlSecretRef$inboundSchema: z.ZodType<
-  ConnectionUrlSecretRef,
+export const DatabaseSecretRef$inboundSchema: z.ZodType<
+  DatabaseSecretRef,
   unknown
 > = z.object({
   key: z.string(),
   name: z.string(),
 });
 /** @internal */
-export type ConnectionUrlSecretRef$Outbound = {
+export type DatabaseSecretRef$Outbound = {
   key: string;
   name: string;
 };
 
 /** @internal */
-export const ConnectionUrlSecretRef$outboundSchema: z.ZodType<
-  ConnectionUrlSecretRef$Outbound,
-  ConnectionUrlSecretRef
+export const DatabaseSecretRef$outboundSchema: z.ZodType<
+  DatabaseSecretRef$Outbound,
+  DatabaseSecretRef
 > = z.object({
   key: z.string(),
   name: z.string(),
 });
 
-export function connectionUrlSecretRefToJSON(
-  connectionUrlSecretRef: ConnectionUrlSecretRef,
+export function databaseSecretRefToJSON(
+  databaseSecretRef: DatabaseSecretRef,
 ): string {
   return JSON.stringify(
-    ConnectionUrlSecretRef$outboundSchema.parse(connectionUrlSecretRef),
+    DatabaseSecretRef$outboundSchema.parse(databaseSecretRef),
   );
 }
-export function connectionUrlSecretRefFromJSON(
+export function databaseSecretRefFromJSON(
   jsonString: string,
-): SafeParseResult<ConnectionUrlSecretRef, SDKValidationError> {
+): SafeParseResult<DatabaseSecretRef, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => ConnectionUrlSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ConnectionUrlSecretRef' from JSON`,
+    (x) => DatabaseSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DatabaseSecretRef' from JSON`,
   );
 }
 
 /** @internal */
-export const ConnectionUrl$inboundSchema: z.ZodType<ConnectionUrl, unknown> = z
+export const Database$inboundSchema: z.ZodType<Database, unknown> = z.object({
+  secretRef: z.lazy(() => DatabaseSecretRef$inboundSchema),
+});
+/** @internal */
+export type Database$Outbound = {
+  secretRef: DatabaseSecretRef$Outbound;
+};
+
+/** @internal */
+export const Database$outboundSchema: z.ZodType<Database$Outbound, Database> = z
   .object({
-    secretRef: z.lazy(() => ConnectionUrlSecretRef$inboundSchema),
+    secretRef: z.lazy(() => DatabaseSecretRef$outboundSchema),
   });
-/** @internal */
-export type ConnectionUrl$Outbound = {
-  secretRef: ConnectionUrlSecretRef$Outbound;
-};
 
-/** @internal */
-export const ConnectionUrl$outboundSchema: z.ZodType<
-  ConnectionUrl$Outbound,
-  ConnectionUrl
-> = z.object({
-  secretRef: z.lazy(() => ConnectionUrlSecretRef$outboundSchema),
-});
-
-export function connectionUrlToJSON(connectionUrl: ConnectionUrl): string {
-  return JSON.stringify(ConnectionUrl$outboundSchema.parse(connectionUrl));
+export function databaseToJSON(database: Database): string {
+  return JSON.stringify(Database$outboundSchema.parse(database));
 }
-export function connectionUrlFromJSON(
+export function databaseFromJSON(
   jsonString: string,
-): SafeParseResult<ConnectionUrl, SDKValidationError> {
+): SafeParseResult<Database, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => ConnectionUrl$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ConnectionUrl' from JSON`,
-  );
-}
-
-/** @internal */
-export const DatabaseSecretRef1$inboundSchema: z.ZodType<
-  DatabaseSecretRef1,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type DatabaseSecretRef1$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const DatabaseSecretRef1$outboundSchema: z.ZodType<
-  DatabaseSecretRef1$Outbound,
-  DatabaseSecretRef1
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function databaseSecretRef1ToJSON(
-  databaseSecretRef1: DatabaseSecretRef1,
-): string {
-  return JSON.stringify(
-    DatabaseSecretRef1$outboundSchema.parse(databaseSecretRef1),
-  );
-}
-export function databaseSecretRef1FromJSON(
-  jsonString: string,
-): SafeParseResult<DatabaseSecretRef1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DatabaseSecretRef1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DatabaseSecretRef1' from JSON`,
-  );
-}
-
-/** @internal */
-export const Database1$inboundSchema: z.ZodType<Database1, unknown> = z.object({
-  secretRef: z.lazy(() => DatabaseSecretRef1$inboundSchema),
-});
-/** @internal */
-export type Database1$Outbound = {
-  secretRef: DatabaseSecretRef1$Outbound;
-};
-
-/** @internal */
-export const Database1$outboundSchema: z.ZodType<
-  Database1$Outbound,
-  Database1
-> = z.object({
-  secretRef: z.lazy(() => DatabaseSecretRef1$outboundSchema),
-});
-
-export function database1ToJSON(database1: Database1): string {
-  return JSON.stringify(Database1$outboundSchema.parse(database1));
-}
-export function database1FromJSON(
-  jsonString: string,
-): SafeParseResult<Database1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Database1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Database1' from JSON`,
+    (x) => Database$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Database' from JSON`,
   );
 }
 
 /** @internal */
 export const DatabaseUnion$inboundSchema: z.ZodType<DatabaseUnion, unknown> = z
-  .union([z.lazy(() => Database1$inboundSchema), z.int(), z.any(), z.string()]);
+  .union([z.lazy(() => Database$inboundSchema), z.int(), z.any(), z.string()]);
 /** @internal */
-export type DatabaseUnion$Outbound = Database1$Outbound | number | any | string;
+export type DatabaseUnion$Outbound = Database$Outbound | number | any | string;
 
 /** @internal */
 export const DatabaseUnion$outboundSchema: z.ZodType<
   DatabaseUnion$Outbound,
   DatabaseUnion
 > = z.union([
-  z.lazy(() => Database1$outboundSchema),
+  z.lazy(() => Database$outboundSchema),
   z.int(),
   z.any(),
   z.string(),
@@ -1412,14 +6189,14 @@ export const TypeKv4$outboundSchema: z.ZodEnum<typeof TypeKv4> =
   TypeKv4$inboundSchema;
 
 /** @internal */
-export const ExternalBindingRedis$inboundSchema: z.ZodType<
-  ExternalBindingRedis,
+export const ExternalBindingRedisKv$inboundSchema: z.ZodType<
+  ExternalBindingRedisKv,
   unknown
 > = z.object({
   connectionUrl: z.nullable(z.any()),
   database: z.nullable(
     z.union([
-      z.lazy(() => Database1$inboundSchema),
+      z.lazy(() => Database$inboundSchema),
       z.int(),
       z.any(),
       z.string(),
@@ -1430,23 +6207,23 @@ export const ExternalBindingRedis$inboundSchema: z.ZodType<
   type: TypeKv4$inboundSchema,
 });
 /** @internal */
-export type ExternalBindingRedis$Outbound = {
+export type ExternalBindingRedisKv$Outbound = {
   connectionUrl: any | null;
-  database?: Database1$Outbound | number | any | string | null | undefined;
+  database?: Database$Outbound | number | any | string | null | undefined;
   keyPrefix?: any | null | undefined;
   service: "redis";
   type: string;
 };
 
 /** @internal */
-export const ExternalBindingRedis$outboundSchema: z.ZodType<
-  ExternalBindingRedis$Outbound,
-  ExternalBindingRedis
+export const ExternalBindingRedisKv$outboundSchema: z.ZodType<
+  ExternalBindingRedisKv$Outbound,
+  ExternalBindingRedisKv
 > = z.object({
   connectionUrl: z.nullable(z.any()),
   database: z.nullable(
     z.union([
-      z.lazy(() => Database1$outboundSchema),
+      z.lazy(() => Database$outboundSchema),
       z.int(),
       z.any(),
       z.string(),
@@ -1457,241 +6234,20 @@ export const ExternalBindingRedis$outboundSchema: z.ZodType<
   type: TypeKv4$outboundSchema,
 });
 
-export function externalBindingRedisToJSON(
-  externalBindingRedis: ExternalBindingRedis,
+export function externalBindingRedisKvToJSON(
+  externalBindingRedisKv: ExternalBindingRedisKv,
 ): string {
   return JSON.stringify(
-    ExternalBindingRedis$outboundSchema.parse(externalBindingRedis),
+    ExternalBindingRedisKv$outboundSchema.parse(externalBindingRedisKv),
   );
 }
-export function externalBindingRedisFromJSON(
+export function externalBindingRedisKvFromJSON(
   jsonString: string,
-): SafeParseResult<ExternalBindingRedis, SDKValidationError> {
+): SafeParseResult<ExternalBindingRedisKv, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => ExternalBindingRedis$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ExternalBindingRedis' from JSON`,
-  );
-}
-
-/** @internal */
-export const AccountNameSecretRef2$inboundSchema: z.ZodType<
-  AccountNameSecretRef2,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type AccountNameSecretRef2$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const AccountNameSecretRef2$outboundSchema: z.ZodType<
-  AccountNameSecretRef2$Outbound,
-  AccountNameSecretRef2
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function accountNameSecretRef2ToJSON(
-  accountNameSecretRef2: AccountNameSecretRef2,
-): string {
-  return JSON.stringify(
-    AccountNameSecretRef2$outboundSchema.parse(accountNameSecretRef2),
-  );
-}
-export function accountNameSecretRef2FromJSON(
-  jsonString: string,
-): SafeParseResult<AccountNameSecretRef2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => AccountNameSecretRef2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'AccountNameSecretRef2' from JSON`,
-  );
-}
-
-/** @internal */
-export const AccountName2$inboundSchema: z.ZodType<AccountName2, unknown> = z
-  .object({
-    secretRef: z.lazy(() => AccountNameSecretRef2$inboundSchema),
-  });
-/** @internal */
-export type AccountName2$Outbound = {
-  secretRef: AccountNameSecretRef2$Outbound;
-};
-
-/** @internal */
-export const AccountName2$outboundSchema: z.ZodType<
-  AccountName2$Outbound,
-  AccountName2
-> = z.object({
-  secretRef: z.lazy(() => AccountNameSecretRef2$outboundSchema),
-});
-
-export function accountName2ToJSON(accountName2: AccountName2): string {
-  return JSON.stringify(AccountName2$outboundSchema.parse(accountName2));
-}
-export function accountName2FromJSON(
-  jsonString: string,
-): SafeParseResult<AccountName2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => AccountName2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'AccountName2' from JSON`,
-  );
-}
-
-/** @internal */
-export const ResourceGroupNameSecretRef1$inboundSchema: z.ZodType<
-  ResourceGroupNameSecretRef1,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type ResourceGroupNameSecretRef1$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const ResourceGroupNameSecretRef1$outboundSchema: z.ZodType<
-  ResourceGroupNameSecretRef1$Outbound,
-  ResourceGroupNameSecretRef1
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function resourceGroupNameSecretRef1ToJSON(
-  resourceGroupNameSecretRef1: ResourceGroupNameSecretRef1,
-): string {
-  return JSON.stringify(
-    ResourceGroupNameSecretRef1$outboundSchema.parse(
-      resourceGroupNameSecretRef1,
-    ),
-  );
-}
-export function resourceGroupNameSecretRef1FromJSON(
-  jsonString: string,
-): SafeParseResult<ResourceGroupNameSecretRef1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ResourceGroupNameSecretRef1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ResourceGroupNameSecretRef1' from JSON`,
-  );
-}
-
-/** @internal */
-export const ResourceGroupName1$inboundSchema: z.ZodType<
-  ResourceGroupName1,
-  unknown
-> = z.object({
-  secretRef: z.lazy(() => ResourceGroupNameSecretRef1$inboundSchema),
-});
-/** @internal */
-export type ResourceGroupName1$Outbound = {
-  secretRef: ResourceGroupNameSecretRef1$Outbound;
-};
-
-/** @internal */
-export const ResourceGroupName1$outboundSchema: z.ZodType<
-  ResourceGroupName1$Outbound,
-  ResourceGroupName1
-> = z.object({
-  secretRef: z.lazy(() => ResourceGroupNameSecretRef1$outboundSchema),
-});
-
-export function resourceGroupName1ToJSON(
-  resourceGroupName1: ResourceGroupName1,
-): string {
-  return JSON.stringify(
-    ResourceGroupName1$outboundSchema.parse(resourceGroupName1),
-  );
-}
-export function resourceGroupName1FromJSON(
-  jsonString: string,
-): SafeParseResult<ResourceGroupName1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ResourceGroupName1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ResourceGroupName1' from JSON`,
-  );
-}
-
-/** @internal */
-export const TableNameSecretRef2$inboundSchema: z.ZodType<
-  TableNameSecretRef2,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type TableNameSecretRef2$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const TableNameSecretRef2$outboundSchema: z.ZodType<
-  TableNameSecretRef2$Outbound,
-  TableNameSecretRef2
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function tableNameSecretRef2ToJSON(
-  tableNameSecretRef2: TableNameSecretRef2,
-): string {
-  return JSON.stringify(
-    TableNameSecretRef2$outboundSchema.parse(tableNameSecretRef2),
-  );
-}
-export function tableNameSecretRef2FromJSON(
-  jsonString: string,
-): SafeParseResult<TableNameSecretRef2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TableNameSecretRef2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TableNameSecretRef2' from JSON`,
-  );
-}
-
-/** @internal */
-export const TableName2$inboundSchema: z.ZodType<TableName2, unknown> = z
-  .object({
-    secretRef: z.lazy(() => TableNameSecretRef2$inboundSchema),
-  });
-/** @internal */
-export type TableName2$Outbound = {
-  secretRef: TableNameSecretRef2$Outbound;
-};
-
-/** @internal */
-export const TableName2$outboundSchema: z.ZodType<
-  TableName2$Outbound,
-  TableName2
-> = z.object({
-  secretRef: z.lazy(() => TableNameSecretRef2$outboundSchema),
-});
-
-export function tableName2ToJSON(tableName2: TableName2): string {
-  return JSON.stringify(TableName2$outboundSchema.parse(tableName2));
-}
-export function tableName2FromJSON(
-  jsonString: string,
-): SafeParseResult<TableName2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TableName2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TableName2' from JSON`,
+    (x) => ExternalBindingRedisKv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingRedisKv' from JSON`,
   );
 }
 
@@ -1749,218 +6305,6 @@ export function externalBindingTablestorageFromJSON(
     jsonString,
     (x) => ExternalBindingTablestorage$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ExternalBindingTablestorage' from JSON`,
-  );
-}
-
-/** @internal */
-export const CollectionNameSecretRef$inboundSchema: z.ZodType<
-  CollectionNameSecretRef,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type CollectionNameSecretRef$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const CollectionNameSecretRef$outboundSchema: z.ZodType<
-  CollectionNameSecretRef$Outbound,
-  CollectionNameSecretRef
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function collectionNameSecretRefToJSON(
-  collectionNameSecretRef: CollectionNameSecretRef,
-): string {
-  return JSON.stringify(
-    CollectionNameSecretRef$outboundSchema.parse(collectionNameSecretRef),
-  );
-}
-export function collectionNameSecretRefFromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionNameSecretRef, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionNameSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionNameSecretRef' from JSON`,
-  );
-}
-
-/** @internal */
-export const CollectionName$inboundSchema: z.ZodType<CollectionName, unknown> =
-  z.object({
-    secretRef: z.lazy(() => CollectionNameSecretRef$inboundSchema),
-  });
-/** @internal */
-export type CollectionName$Outbound = {
-  secretRef: CollectionNameSecretRef$Outbound;
-};
-
-/** @internal */
-export const CollectionName$outboundSchema: z.ZodType<
-  CollectionName$Outbound,
-  CollectionName
-> = z.object({
-  secretRef: z.lazy(() => CollectionNameSecretRef$outboundSchema),
-});
-
-export function collectionNameToJSON(collectionName: CollectionName): string {
-  return JSON.stringify(CollectionName$outboundSchema.parse(collectionName));
-}
-export function collectionNameFromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionName, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionName$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionName' from JSON`,
-  );
-}
-
-/** @internal */
-export const DatabaseIdSecretRef$inboundSchema: z.ZodType<
-  DatabaseIdSecretRef,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type DatabaseIdSecretRef$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const DatabaseIdSecretRef$outboundSchema: z.ZodType<
-  DatabaseIdSecretRef$Outbound,
-  DatabaseIdSecretRef
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function databaseIdSecretRefToJSON(
-  databaseIdSecretRef: DatabaseIdSecretRef,
-): string {
-  return JSON.stringify(
-    DatabaseIdSecretRef$outboundSchema.parse(databaseIdSecretRef),
-  );
-}
-export function databaseIdSecretRefFromJSON(
-  jsonString: string,
-): SafeParseResult<DatabaseIdSecretRef, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DatabaseIdSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DatabaseIdSecretRef' from JSON`,
-  );
-}
-
-/** @internal */
-export const DatabaseId$inboundSchema: z.ZodType<DatabaseId, unknown> = z
-  .object({
-    secretRef: z.lazy(() => DatabaseIdSecretRef$inboundSchema),
-  });
-/** @internal */
-export type DatabaseId$Outbound = {
-  secretRef: DatabaseIdSecretRef$Outbound;
-};
-
-/** @internal */
-export const DatabaseId$outboundSchema: z.ZodType<
-  DatabaseId$Outbound,
-  DatabaseId
-> = z.object({
-  secretRef: z.lazy(() => DatabaseIdSecretRef$outboundSchema),
-});
-
-export function databaseIdToJSON(databaseId: DatabaseId): string {
-  return JSON.stringify(DatabaseId$outboundSchema.parse(databaseId));
-}
-export function databaseIdFromJSON(
-  jsonString: string,
-): SafeParseResult<DatabaseId, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DatabaseId$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DatabaseId' from JSON`,
-  );
-}
-
-/** @internal */
-export const ProjectIdSecretRef$inboundSchema: z.ZodType<
-  ProjectIdSecretRef,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type ProjectIdSecretRef$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const ProjectIdSecretRef$outboundSchema: z.ZodType<
-  ProjectIdSecretRef$Outbound,
-  ProjectIdSecretRef
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function projectIdSecretRefToJSON(
-  projectIdSecretRef: ProjectIdSecretRef,
-): string {
-  return JSON.stringify(
-    ProjectIdSecretRef$outboundSchema.parse(projectIdSecretRef),
-  );
-}
-export function projectIdSecretRefFromJSON(
-  jsonString: string,
-): SafeParseResult<ProjectIdSecretRef, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ProjectIdSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ProjectIdSecretRef' from JSON`,
-  );
-}
-
-/** @internal */
-export const ProjectId$inboundSchema: z.ZodType<ProjectId, unknown> = z.object({
-  secretRef: z.lazy(() => ProjectIdSecretRef$inboundSchema),
-});
-/** @internal */
-export type ProjectId$Outbound = {
-  secretRef: ProjectIdSecretRef$Outbound;
-};
-
-/** @internal */
-export const ProjectId$outboundSchema: z.ZodType<
-  ProjectId$Outbound,
-  ProjectId
-> = z.object({
-  secretRef: z.lazy(() => ProjectIdSecretRef$outboundSchema),
-});
-
-export function projectIdToJSON(projectId: ProjectId): string {
-  return JSON.stringify(ProjectId$outboundSchema.parse(projectId));
-}
-export function projectIdFromJSON(
-  jsonString: string,
-): SafeParseResult<ProjectId, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ProjectId$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ProjectId' from JSON`,
   );
 }
 
@@ -2091,145 +6435,6 @@ export function endpointUrlFromJSON(
 }
 
 /** @internal */
-export const RegionSecretRef2$inboundSchema: z.ZodType<
-  RegionSecretRef2,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type RegionSecretRef2$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const RegionSecretRef2$outboundSchema: z.ZodType<
-  RegionSecretRef2$Outbound,
-  RegionSecretRef2
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function regionSecretRef2ToJSON(
-  regionSecretRef2: RegionSecretRef2,
-): string {
-  return JSON.stringify(
-    RegionSecretRef2$outboundSchema.parse(regionSecretRef2),
-  );
-}
-export function regionSecretRef2FromJSON(
-  jsonString: string,
-): SafeParseResult<RegionSecretRef2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => RegionSecretRef2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'RegionSecretRef2' from JSON`,
-  );
-}
-
-/** @internal */
-export const Region2$inboundSchema: z.ZodType<Region2, unknown> = z.object({
-  secretRef: z.lazy(() => RegionSecretRef2$inboundSchema),
-});
-/** @internal */
-export type Region2$Outbound = {
-  secretRef: RegionSecretRef2$Outbound;
-};
-
-/** @internal */
-export const Region2$outboundSchema: z.ZodType<Region2$Outbound, Region2> = z
-  .object({
-    secretRef: z.lazy(() => RegionSecretRef2$outboundSchema),
-  });
-
-export function region2ToJSON(region2: Region2): string {
-  return JSON.stringify(Region2$outboundSchema.parse(region2));
-}
-export function region2FromJSON(
-  jsonString: string,
-): SafeParseResult<Region2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Region2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Region2' from JSON`,
-  );
-}
-
-/** @internal */
-export const TableNameSecretRef1$inboundSchema: z.ZodType<
-  TableNameSecretRef1,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type TableNameSecretRef1$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const TableNameSecretRef1$outboundSchema: z.ZodType<
-  TableNameSecretRef1$Outbound,
-  TableNameSecretRef1
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function tableNameSecretRef1ToJSON(
-  tableNameSecretRef1: TableNameSecretRef1,
-): string {
-  return JSON.stringify(
-    TableNameSecretRef1$outboundSchema.parse(tableNameSecretRef1),
-  );
-}
-export function tableNameSecretRef1FromJSON(
-  jsonString: string,
-): SafeParseResult<TableNameSecretRef1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TableNameSecretRef1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TableNameSecretRef1' from JSON`,
-  );
-}
-
-/** @internal */
-export const TableName1$inboundSchema: z.ZodType<TableName1, unknown> = z
-  .object({
-    secretRef: z.lazy(() => TableNameSecretRef1$inboundSchema),
-  });
-/** @internal */
-export type TableName1$Outbound = {
-  secretRef: TableNameSecretRef1$Outbound;
-};
-
-/** @internal */
-export const TableName1$outboundSchema: z.ZodType<
-  TableName1$Outbound,
-  TableName1
-> = z.object({
-  secretRef: z.lazy(() => TableNameSecretRef1$outboundSchema),
-});
-
-export function tableName1ToJSON(tableName1: TableName1): string {
-  return JSON.stringify(TableName1$outboundSchema.parse(tableName1));
-}
-export function tableName1FromJSON(
-  jsonString: string,
-): SafeParseResult<TableName1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TableName1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TableName1' from JSON`,
-  );
-}
-
-/** @internal */
 export const TypeKv1$inboundSchema: z.ZodEnum<typeof TypeKv1> = z.enum(TypeKv1);
 /** @internal */
 export const TypeKv1$outboundSchema: z.ZodEnum<typeof TypeKv1> =
@@ -2292,7 +6497,7 @@ export const ExternalBindingUnion3$inboundSchema: z.ZodType<
   z.lazy(() => ExternalBindingDynamodb$inboundSchema),
   z.lazy(() => ExternalBindingFirestore$inboundSchema),
   z.lazy(() => ExternalBindingTablestorage$inboundSchema),
-  z.lazy(() => ExternalBindingRedis$inboundSchema),
+  z.lazy(() => ExternalBindingRedisKv$inboundSchema),
   z.lazy(() => ExternalBindingLocalKv$inboundSchema),
 ]);
 /** @internal */
@@ -2300,7 +6505,7 @@ export type ExternalBindingUnion3$Outbound =
   | ExternalBindingDynamodb$Outbound
   | ExternalBindingFirestore$Outbound
   | ExternalBindingTablestorage$Outbound
-  | ExternalBindingRedis$Outbound
+  | ExternalBindingRedisKv$Outbound
   | ExternalBindingLocalKv$Outbound;
 
 /** @internal */
@@ -2311,7 +6516,7 @@ export const ExternalBindingUnion3$outboundSchema: z.ZodType<
   z.lazy(() => ExternalBindingDynamodb$outboundSchema),
   z.lazy(() => ExternalBindingFirestore$outboundSchema),
   z.lazy(() => ExternalBindingTablestorage$outboundSchema),
-  z.lazy(() => ExternalBindingRedis$outboundSchema),
+  z.lazy(() => ExternalBindingRedisKv$outboundSchema),
   z.lazy(() => ExternalBindingLocalKv$outboundSchema),
 ]);
 
@@ -2329,83 +6534,6 @@ export function externalBindingUnion3FromJSON(
     jsonString,
     (x) => ExternalBindingUnion3$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ExternalBindingUnion3' from JSON`,
-  );
-}
-
-/** @internal */
-export const EndpointSecretRef2$inboundSchema: z.ZodType<
-  EndpointSecretRef2,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type EndpointSecretRef2$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const EndpointSecretRef2$outboundSchema: z.ZodType<
-  EndpointSecretRef2$Outbound,
-  EndpointSecretRef2
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function endpointSecretRef2ToJSON(
-  endpointSecretRef2: EndpointSecretRef2,
-): string {
-  return JSON.stringify(
-    EndpointSecretRef2$outboundSchema.parse(endpointSecretRef2),
-  );
-}
-export function endpointSecretRef2FromJSON(
-  jsonString: string,
-): SafeParseResult<EndpointSecretRef2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => EndpointSecretRef2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EndpointSecretRef2' from JSON`,
-  );
-}
-
-/** @internal */
-export const ExternalBindingEndpoint2$inboundSchema: z.ZodType<
-  ExternalBindingEndpoint2,
-  unknown
-> = z.object({
-  secretRef: z.lazy(() => EndpointSecretRef2$inboundSchema),
-});
-/** @internal */
-export type ExternalBindingEndpoint2$Outbound = {
-  secretRef: EndpointSecretRef2$Outbound;
-};
-
-/** @internal */
-export const ExternalBindingEndpoint2$outboundSchema: z.ZodType<
-  ExternalBindingEndpoint2$Outbound,
-  ExternalBindingEndpoint2
-> = z.object({
-  secretRef: z.lazy(() => EndpointSecretRef2$outboundSchema),
-});
-
-export function externalBindingEndpoint2ToJSON(
-  externalBindingEndpoint2: ExternalBindingEndpoint2,
-): string {
-  return JSON.stringify(
-    ExternalBindingEndpoint2$outboundSchema.parse(externalBindingEndpoint2),
-  );
-}
-export function externalBindingEndpoint2FromJSON(
-  jsonString: string,
-): SafeParseResult<ExternalBindingEndpoint2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ExternalBindingEndpoint2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ExternalBindingEndpoint2' from JSON`,
   );
 }
 
@@ -2466,76 +6594,6 @@ export function externalBindingLocalQueueHTTPFromJSON(
 }
 
 /** @internal */
-export const QueuePathSecretRef$inboundSchema: z.ZodType<
-  QueuePathSecretRef,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type QueuePathSecretRef$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const QueuePathSecretRef$outboundSchema: z.ZodType<
-  QueuePathSecretRef$Outbound,
-  QueuePathSecretRef
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function queuePathSecretRefToJSON(
-  queuePathSecretRef: QueuePathSecretRef,
-): string {
-  return JSON.stringify(
-    QueuePathSecretRef$outboundSchema.parse(queuePathSecretRef),
-  );
-}
-export function queuePathSecretRefFromJSON(
-  jsonString: string,
-): SafeParseResult<QueuePathSecretRef, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => QueuePathSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'QueuePathSecretRef' from JSON`,
-  );
-}
-
-/** @internal */
-export const QueuePath$inboundSchema: z.ZodType<QueuePath, unknown> = z.object({
-  secretRef: z.lazy(() => QueuePathSecretRef$inboundSchema),
-});
-/** @internal */
-export type QueuePath$Outbound = {
-  secretRef: QueuePathSecretRef$Outbound;
-};
-
-/** @internal */
-export const QueuePath$outboundSchema: z.ZodType<
-  QueuePath$Outbound,
-  QueuePath
-> = z.object({
-  secretRef: z.lazy(() => QueuePathSecretRef$outboundSchema),
-});
-
-export function queuePathToJSON(queuePath: QueuePath): string {
-  return JSON.stringify(QueuePath$outboundSchema.parse(queuePath));
-}
-export function queuePathFromJSON(
-  jsonString: string,
-): SafeParseResult<QueuePath, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => QueuePath$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'QueuePath' from JSON`,
-  );
-}
-
-/** @internal */
 export const TypeQueue4$inboundSchema: z.ZodEnum<typeof TypeQueue4> = z.enum(
   TypeQueue4,
 );
@@ -2583,147 +6641,6 @@ export function externalBindingLocalQueueFromJSON(
     jsonString,
     (x) => ExternalBindingLocalQueue$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ExternalBindingLocalQueue' from JSON`,
-  );
-}
-
-/** @internal */
-export const NamespaceSecretRef1$inboundSchema: z.ZodType<
-  NamespaceSecretRef1,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type NamespaceSecretRef1$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const NamespaceSecretRef1$outboundSchema: z.ZodType<
-  NamespaceSecretRef1$Outbound,
-  NamespaceSecretRef1
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function namespaceSecretRef1ToJSON(
-  namespaceSecretRef1: NamespaceSecretRef1,
-): string {
-  return JSON.stringify(
-    NamespaceSecretRef1$outboundSchema.parse(namespaceSecretRef1),
-  );
-}
-export function namespaceSecretRef1FromJSON(
-  jsonString: string,
-): SafeParseResult<NamespaceSecretRef1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => NamespaceSecretRef1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'NamespaceSecretRef1' from JSON`,
-  );
-}
-
-/** @internal */
-export const Namespace1$inboundSchema: z.ZodType<Namespace1, unknown> = z
-  .object({
-    secretRef: z.lazy(() => NamespaceSecretRef1$inboundSchema),
-  });
-/** @internal */
-export type Namespace1$Outbound = {
-  secretRef: NamespaceSecretRef1$Outbound;
-};
-
-/** @internal */
-export const Namespace1$outboundSchema: z.ZodType<
-  Namespace1$Outbound,
-  Namespace1
-> = z.object({
-  secretRef: z.lazy(() => NamespaceSecretRef1$outboundSchema),
-});
-
-export function namespace1ToJSON(namespace1: Namespace1): string {
-  return JSON.stringify(Namespace1$outboundSchema.parse(namespace1));
-}
-export function namespace1FromJSON(
-  jsonString: string,
-): SafeParseResult<Namespace1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Namespace1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Namespace1' from JSON`,
-  );
-}
-
-/** @internal */
-export const QueueNameSecretRef$inboundSchema: z.ZodType<
-  QueueNameSecretRef,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type QueueNameSecretRef$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const QueueNameSecretRef$outboundSchema: z.ZodType<
-  QueueNameSecretRef$Outbound,
-  QueueNameSecretRef
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function queueNameSecretRefToJSON(
-  queueNameSecretRef: QueueNameSecretRef,
-): string {
-  return JSON.stringify(
-    QueueNameSecretRef$outboundSchema.parse(queueNameSecretRef),
-  );
-}
-export function queueNameSecretRefFromJSON(
-  jsonString: string,
-): SafeParseResult<QueueNameSecretRef, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => QueueNameSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'QueueNameSecretRef' from JSON`,
-  );
-}
-
-/** @internal */
-export const QueueName$inboundSchema: z.ZodType<QueueName, unknown> = z.object({
-  secretRef: z.lazy(() => QueueNameSecretRef$inboundSchema),
-});
-/** @internal */
-export type QueueName$Outbound = {
-  secretRef: QueueNameSecretRef$Outbound;
-};
-
-/** @internal */
-export const QueueName$outboundSchema: z.ZodType<
-  QueueName$Outbound,
-  QueueName
-> = z.object({
-  secretRef: z.lazy(() => QueueNameSecretRef$outboundSchema),
-});
-
-export function queueNameToJSON(queueName: QueueName): string {
-  return JSON.stringify(QueueName$outboundSchema.parse(queueName));
-}
-export function queueNameFromJSON(
-  jsonString: string,
-): SafeParseResult<QueueName, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => QueueName$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'QueueName' from JSON`,
   );
 }
 
@@ -2782,138 +6699,6 @@ export function externalBindingServicebusFromJSON(
 }
 
 /** @internal */
-export const SubscriptionSecretRef$inboundSchema: z.ZodType<
-  SubscriptionSecretRef,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type SubscriptionSecretRef$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const SubscriptionSecretRef$outboundSchema: z.ZodType<
-  SubscriptionSecretRef$Outbound,
-  SubscriptionSecretRef
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function subscriptionSecretRefToJSON(
-  subscriptionSecretRef: SubscriptionSecretRef,
-): string {
-  return JSON.stringify(
-    SubscriptionSecretRef$outboundSchema.parse(subscriptionSecretRef),
-  );
-}
-export function subscriptionSecretRefFromJSON(
-  jsonString: string,
-): SafeParseResult<SubscriptionSecretRef, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SubscriptionSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SubscriptionSecretRef' from JSON`,
-  );
-}
-
-/** @internal */
-export const Subscription$inboundSchema: z.ZodType<Subscription, unknown> = z
-  .object({
-    secretRef: z.lazy(() => SubscriptionSecretRef$inboundSchema),
-  });
-/** @internal */
-export type Subscription$Outbound = {
-  secretRef: SubscriptionSecretRef$Outbound;
-};
-
-/** @internal */
-export const Subscription$outboundSchema: z.ZodType<
-  Subscription$Outbound,
-  Subscription
-> = z.object({
-  secretRef: z.lazy(() => SubscriptionSecretRef$outboundSchema),
-});
-
-export function subscriptionToJSON(subscription: Subscription): string {
-  return JSON.stringify(Subscription$outboundSchema.parse(subscription));
-}
-export function subscriptionFromJSON(
-  jsonString: string,
-): SafeParseResult<Subscription, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Subscription$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Subscription' from JSON`,
-  );
-}
-
-/** @internal */
-export const TopicSecretRef$inboundSchema: z.ZodType<TopicSecretRef, unknown> =
-  z.object({
-    key: z.string(),
-    name: z.string(),
-  });
-/** @internal */
-export type TopicSecretRef$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const TopicSecretRef$outboundSchema: z.ZodType<
-  TopicSecretRef$Outbound,
-  TopicSecretRef
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function topicSecretRefToJSON(topicSecretRef: TopicSecretRef): string {
-  return JSON.stringify(TopicSecretRef$outboundSchema.parse(topicSecretRef));
-}
-export function topicSecretRefFromJSON(
-  jsonString: string,
-): SafeParseResult<TopicSecretRef, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TopicSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TopicSecretRef' from JSON`,
-  );
-}
-
-/** @internal */
-export const Topic$inboundSchema: z.ZodType<Topic, unknown> = z.object({
-  secretRef: z.lazy(() => TopicSecretRef$inboundSchema),
-});
-/** @internal */
-export type Topic$Outbound = {
-  secretRef: TopicSecretRef$Outbound;
-};
-
-/** @internal */
-export const Topic$outboundSchema: z.ZodType<Topic$Outbound, Topic> = z.object({
-  secretRef: z.lazy(() => TopicSecretRef$outboundSchema),
-});
-
-export function topicToJSON(topic: Topic): string {
-  return JSON.stringify(Topic$outboundSchema.parse(topic));
-}
-export function topicFromJSON(
-  jsonString: string,
-): SafeParseResult<Topic, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Topic$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Topic' from JSON`,
-  );
-}
-
-/** @internal */
 export const TypeQueue2$inboundSchema: z.ZodEnum<typeof TypeQueue2> = z.enum(
   TypeQueue2,
 );
@@ -2964,74 +6749,6 @@ export function externalBindingPubsubFromJSON(
     jsonString,
     (x) => ExternalBindingPubsub$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ExternalBindingPubsub' from JSON`,
-  );
-}
-
-/** @internal */
-export const QueueUrlSecretRef$inboundSchema: z.ZodType<
-  QueueUrlSecretRef,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type QueueUrlSecretRef$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const QueueUrlSecretRef$outboundSchema: z.ZodType<
-  QueueUrlSecretRef$Outbound,
-  QueueUrlSecretRef
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function queueUrlSecretRefToJSON(
-  queueUrlSecretRef: QueueUrlSecretRef,
-): string {
-  return JSON.stringify(
-    QueueUrlSecretRef$outboundSchema.parse(queueUrlSecretRef),
-  );
-}
-export function queueUrlSecretRefFromJSON(
-  jsonString: string,
-): SafeParseResult<QueueUrlSecretRef, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => QueueUrlSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'QueueUrlSecretRef' from JSON`,
-  );
-}
-
-/** @internal */
-export const QueueUrl$inboundSchema: z.ZodType<QueueUrl, unknown> = z.object({
-  secretRef: z.lazy(() => QueueUrlSecretRef$inboundSchema),
-});
-/** @internal */
-export type QueueUrl$Outbound = {
-  secretRef: QueueUrlSecretRef$Outbound;
-};
-
-/** @internal */
-export const QueueUrl$outboundSchema: z.ZodType<QueueUrl$Outbound, QueueUrl> = z
-  .object({
-    secretRef: z.lazy(() => QueueUrlSecretRef$outboundSchema),
-  });
-
-export function queueUrlToJSON(queueUrl: QueueUrl): string {
-  return JSON.stringify(QueueUrl$outboundSchema.parse(queueUrl));
-}
-export function queueUrlFromJSON(
-  jsonString: string,
-): SafeParseResult<QueueUrl, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => QueueUrl$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'QueueUrl' from JSON`,
   );
 }
 
@@ -3135,77 +6852,6 @@ export function externalBindingUnion2FromJSON(
 }
 
 /** @internal */
-export const StoragePathSecretRef$inboundSchema: z.ZodType<
-  StoragePathSecretRef,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type StoragePathSecretRef$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const StoragePathSecretRef$outboundSchema: z.ZodType<
-  StoragePathSecretRef$Outbound,
-  StoragePathSecretRef
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function storagePathSecretRefToJSON(
-  storagePathSecretRef: StoragePathSecretRef,
-): string {
-  return JSON.stringify(
-    StoragePathSecretRef$outboundSchema.parse(storagePathSecretRef),
-  );
-}
-export function storagePathSecretRefFromJSON(
-  jsonString: string,
-): SafeParseResult<StoragePathSecretRef, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => StoragePathSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'StoragePathSecretRef' from JSON`,
-  );
-}
-
-/** @internal */
-export const StoragePath$inboundSchema: z.ZodType<StoragePath, unknown> = z
-  .object({
-    secretRef: z.lazy(() => StoragePathSecretRef$inboundSchema),
-  });
-/** @internal */
-export type StoragePath$Outbound = {
-  secretRef: StoragePathSecretRef$Outbound;
-};
-
-/** @internal */
-export const StoragePath$outboundSchema: z.ZodType<
-  StoragePath$Outbound,
-  StoragePath
-> = z.object({
-  secretRef: z.lazy(() => StoragePathSecretRef$outboundSchema),
-});
-
-export function storagePathToJSON(storagePath: StoragePath): string {
-  return JSON.stringify(StoragePath$outboundSchema.parse(storagePath));
-}
-export function storagePathFromJSON(
-  jsonString: string,
-): SafeParseResult<StoragePath, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => StoragePath$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'StoragePath' from JSON`,
-  );
-}
-
-/** @internal */
 export const TypeStorage4$inboundSchema: z.ZodEnum<typeof TypeStorage4> = z
   .enum(TypeStorage4);
 /** @internal */
@@ -3258,77 +6904,6 @@ export function externalBindingLocalStorageFromJSON(
 }
 
 /** @internal */
-export const BucketNameSecretRef2$inboundSchema: z.ZodType<
-  BucketNameSecretRef2,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type BucketNameSecretRef2$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const BucketNameSecretRef2$outboundSchema: z.ZodType<
-  BucketNameSecretRef2$Outbound,
-  BucketNameSecretRef2
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function bucketNameSecretRef2ToJSON(
-  bucketNameSecretRef2: BucketNameSecretRef2,
-): string {
-  return JSON.stringify(
-    BucketNameSecretRef2$outboundSchema.parse(bucketNameSecretRef2),
-  );
-}
-export function bucketNameSecretRef2FromJSON(
-  jsonString: string,
-): SafeParseResult<BucketNameSecretRef2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => BucketNameSecretRef2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'BucketNameSecretRef2' from JSON`,
-  );
-}
-
-/** @internal */
-export const BucketName2$inboundSchema: z.ZodType<BucketName2, unknown> = z
-  .object({
-    secretRef: z.lazy(() => BucketNameSecretRef2$inboundSchema),
-  });
-/** @internal */
-export type BucketName2$Outbound = {
-  secretRef: BucketNameSecretRef2$Outbound;
-};
-
-/** @internal */
-export const BucketName2$outboundSchema: z.ZodType<
-  BucketName2$Outbound,
-  BucketName2
-> = z.object({
-  secretRef: z.lazy(() => BucketNameSecretRef2$outboundSchema),
-});
-
-export function bucketName2ToJSON(bucketName2: BucketName2): string {
-  return JSON.stringify(BucketName2$outboundSchema.parse(bucketName2));
-}
-export function bucketName2FromJSON(
-  jsonString: string,
-): SafeParseResult<BucketName2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => BucketName2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'BucketName2' from JSON`,
-  );
-}
-
-/** @internal */
 export const TypeStorage3$inboundSchema: z.ZodEnum<typeof TypeStorage3> = z
   .enum(TypeStorage3);
 /** @internal */
@@ -3375,148 +6950,6 @@ export function externalBindingGcsFromJSON(
     jsonString,
     (x) => ExternalBindingGcs$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ExternalBindingGcs' from JSON`,
-  );
-}
-
-/** @internal */
-export const AccountNameSecretRef1$inboundSchema: z.ZodType<
-  AccountNameSecretRef1,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type AccountNameSecretRef1$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const AccountNameSecretRef1$outboundSchema: z.ZodType<
-  AccountNameSecretRef1$Outbound,
-  AccountNameSecretRef1
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function accountNameSecretRef1ToJSON(
-  accountNameSecretRef1: AccountNameSecretRef1,
-): string {
-  return JSON.stringify(
-    AccountNameSecretRef1$outboundSchema.parse(accountNameSecretRef1),
-  );
-}
-export function accountNameSecretRef1FromJSON(
-  jsonString: string,
-): SafeParseResult<AccountNameSecretRef1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => AccountNameSecretRef1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'AccountNameSecretRef1' from JSON`,
-  );
-}
-
-/** @internal */
-export const AccountName1$inboundSchema: z.ZodType<AccountName1, unknown> = z
-  .object({
-    secretRef: z.lazy(() => AccountNameSecretRef1$inboundSchema),
-  });
-/** @internal */
-export type AccountName1$Outbound = {
-  secretRef: AccountNameSecretRef1$Outbound;
-};
-
-/** @internal */
-export const AccountName1$outboundSchema: z.ZodType<
-  AccountName1$Outbound,
-  AccountName1
-> = z.object({
-  secretRef: z.lazy(() => AccountNameSecretRef1$outboundSchema),
-});
-
-export function accountName1ToJSON(accountName1: AccountName1): string {
-  return JSON.stringify(AccountName1$outboundSchema.parse(accountName1));
-}
-export function accountName1FromJSON(
-  jsonString: string,
-): SafeParseResult<AccountName1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => AccountName1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'AccountName1' from JSON`,
-  );
-}
-
-/** @internal */
-export const ContainerNameSecretRef$inboundSchema: z.ZodType<
-  ContainerNameSecretRef,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type ContainerNameSecretRef$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const ContainerNameSecretRef$outboundSchema: z.ZodType<
-  ContainerNameSecretRef$Outbound,
-  ContainerNameSecretRef
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function containerNameSecretRefToJSON(
-  containerNameSecretRef: ContainerNameSecretRef,
-): string {
-  return JSON.stringify(
-    ContainerNameSecretRef$outboundSchema.parse(containerNameSecretRef),
-  );
-}
-export function containerNameSecretRefFromJSON(
-  jsonString: string,
-): SafeParseResult<ContainerNameSecretRef, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ContainerNameSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ContainerNameSecretRef' from JSON`,
-  );
-}
-
-/** @internal */
-export const ContainerName$inboundSchema: z.ZodType<ContainerName, unknown> = z
-  .object({
-    secretRef: z.lazy(() => ContainerNameSecretRef$inboundSchema),
-  });
-/** @internal */
-export type ContainerName$Outbound = {
-  secretRef: ContainerNameSecretRef$Outbound;
-};
-
-/** @internal */
-export const ContainerName$outboundSchema: z.ZodType<
-  ContainerName$Outbound,
-  ContainerName
-> = z.object({
-  secretRef: z.lazy(() => ContainerNameSecretRef$outboundSchema),
-});
-
-export function containerNameToJSON(containerName: ContainerName): string {
-  return JSON.stringify(ContainerName$outboundSchema.parse(containerName));
-}
-export function containerNameFromJSON(
-  jsonString: string,
-): SafeParseResult<ContainerName, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ContainerName$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ContainerName' from JSON`,
   );
 }
 
@@ -3645,218 +7078,145 @@ export function accessKeyIdFromJSON(
 }
 
 /** @internal */
-export const BucketNameSecretRef1$inboundSchema: z.ZodType<
-  BucketNameSecretRef1,
+export const EndpointSecretRef$inboundSchema: z.ZodType<
+  EndpointSecretRef,
   unknown
 > = z.object({
   key: z.string(),
   name: z.string(),
 });
 /** @internal */
-export type BucketNameSecretRef1$Outbound = {
+export type EndpointSecretRef$Outbound = {
   key: string;
   name: string;
 };
 
 /** @internal */
-export const BucketNameSecretRef1$outboundSchema: z.ZodType<
-  BucketNameSecretRef1$Outbound,
-  BucketNameSecretRef1
+export const EndpointSecretRef$outboundSchema: z.ZodType<
+  EndpointSecretRef$Outbound,
+  EndpointSecretRef
 > = z.object({
   key: z.string(),
   name: z.string(),
 });
 
-export function bucketNameSecretRef1ToJSON(
-  bucketNameSecretRef1: BucketNameSecretRef1,
+export function endpointSecretRefToJSON(
+  endpointSecretRef: EndpointSecretRef,
 ): string {
   return JSON.stringify(
-    BucketNameSecretRef1$outboundSchema.parse(bucketNameSecretRef1),
+    EndpointSecretRef$outboundSchema.parse(endpointSecretRef),
   );
 }
-export function bucketNameSecretRef1FromJSON(
+export function endpointSecretRefFromJSON(
   jsonString: string,
-): SafeParseResult<BucketNameSecretRef1, SDKValidationError> {
+): SafeParseResult<EndpointSecretRef, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => BucketNameSecretRef1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'BucketNameSecretRef1' from JSON`,
+    (x) => EndpointSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EndpointSecretRef' from JSON`,
   );
 }
 
 /** @internal */
-export const BucketName1$inboundSchema: z.ZodType<BucketName1, unknown> = z
+export const ExternalBindingEndpoint$inboundSchema: z.ZodType<
+  ExternalBindingEndpoint,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => EndpointSecretRef$inboundSchema),
+});
+/** @internal */
+export type ExternalBindingEndpoint$Outbound = {
+  secretRef: EndpointSecretRef$Outbound;
+};
+
+/** @internal */
+export const ExternalBindingEndpoint$outboundSchema: z.ZodType<
+  ExternalBindingEndpoint$Outbound,
+  ExternalBindingEndpoint
+> = z.object({
+  secretRef: z.lazy(() => EndpointSecretRef$outboundSchema),
+});
+
+export function externalBindingEndpointToJSON(
+  externalBindingEndpoint: ExternalBindingEndpoint,
+): string {
+  return JSON.stringify(
+    ExternalBindingEndpoint$outboundSchema.parse(externalBindingEndpoint),
+  );
+}
+export function externalBindingEndpointFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingEndpoint, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingEndpoint$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingEndpoint' from JSON`,
+  );
+}
+
+/** @internal */
+export const RegionSecretRef$inboundSchema: z.ZodType<
+  RegionSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type RegionSecretRef$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const RegionSecretRef$outboundSchema: z.ZodType<
+  RegionSecretRef$Outbound,
+  RegionSecretRef
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function regionSecretRefToJSON(
+  regionSecretRef: RegionSecretRef,
+): string {
+  return JSON.stringify(RegionSecretRef$outboundSchema.parse(regionSecretRef));
+}
+export function regionSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<RegionSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RegionSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RegionSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const Region$inboundSchema: z.ZodType<Region, unknown> = z.object({
+  secretRef: z.lazy(() => RegionSecretRef$inboundSchema),
+});
+/** @internal */
+export type Region$Outbound = {
+  secretRef: RegionSecretRef$Outbound;
+};
+
+/** @internal */
+export const Region$outboundSchema: z.ZodType<Region$Outbound, Region> = z
   .object({
-    secretRef: z.lazy(() => BucketNameSecretRef1$inboundSchema),
-  });
-/** @internal */
-export type BucketName1$Outbound = {
-  secretRef: BucketNameSecretRef1$Outbound;
-};
-
-/** @internal */
-export const BucketName1$outboundSchema: z.ZodType<
-  BucketName1$Outbound,
-  BucketName1
-> = z.object({
-  secretRef: z.lazy(() => BucketNameSecretRef1$outboundSchema),
-});
-
-export function bucketName1ToJSON(bucketName1: BucketName1): string {
-  return JSON.stringify(BucketName1$outboundSchema.parse(bucketName1));
-}
-export function bucketName1FromJSON(
-  jsonString: string,
-): SafeParseResult<BucketName1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => BucketName1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'BucketName1' from JSON`,
-  );
-}
-
-/** @internal */
-export const EndpointSecretRef1$inboundSchema: z.ZodType<
-  EndpointSecretRef1,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type EndpointSecretRef1$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const EndpointSecretRef1$outboundSchema: z.ZodType<
-  EndpointSecretRef1$Outbound,
-  EndpointSecretRef1
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function endpointSecretRef1ToJSON(
-  endpointSecretRef1: EndpointSecretRef1,
-): string {
-  return JSON.stringify(
-    EndpointSecretRef1$outboundSchema.parse(endpointSecretRef1),
-  );
-}
-export function endpointSecretRef1FromJSON(
-  jsonString: string,
-): SafeParseResult<EndpointSecretRef1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => EndpointSecretRef1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EndpointSecretRef1' from JSON`,
-  );
-}
-
-/** @internal */
-export const ExternalBindingEndpoint1$inboundSchema: z.ZodType<
-  ExternalBindingEndpoint1,
-  unknown
-> = z.object({
-  secretRef: z.lazy(() => EndpointSecretRef1$inboundSchema),
-});
-/** @internal */
-export type ExternalBindingEndpoint1$Outbound = {
-  secretRef: EndpointSecretRef1$Outbound;
-};
-
-/** @internal */
-export const ExternalBindingEndpoint1$outboundSchema: z.ZodType<
-  ExternalBindingEndpoint1$Outbound,
-  ExternalBindingEndpoint1
-> = z.object({
-  secretRef: z.lazy(() => EndpointSecretRef1$outboundSchema),
-});
-
-export function externalBindingEndpoint1ToJSON(
-  externalBindingEndpoint1: ExternalBindingEndpoint1,
-): string {
-  return JSON.stringify(
-    ExternalBindingEndpoint1$outboundSchema.parse(externalBindingEndpoint1),
-  );
-}
-export function externalBindingEndpoint1FromJSON(
-  jsonString: string,
-): SafeParseResult<ExternalBindingEndpoint1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ExternalBindingEndpoint1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ExternalBindingEndpoint1' from JSON`,
-  );
-}
-
-/** @internal */
-export const RegionSecretRef1$inboundSchema: z.ZodType<
-  RegionSecretRef1,
-  unknown
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-/** @internal */
-export type RegionSecretRef1$Outbound = {
-  key: string;
-  name: string;
-};
-
-/** @internal */
-export const RegionSecretRef1$outboundSchema: z.ZodType<
-  RegionSecretRef1$Outbound,
-  RegionSecretRef1
-> = z.object({
-  key: z.string(),
-  name: z.string(),
-});
-
-export function regionSecretRef1ToJSON(
-  regionSecretRef1: RegionSecretRef1,
-): string {
-  return JSON.stringify(
-    RegionSecretRef1$outboundSchema.parse(regionSecretRef1),
-  );
-}
-export function regionSecretRef1FromJSON(
-  jsonString: string,
-): SafeParseResult<RegionSecretRef1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => RegionSecretRef1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'RegionSecretRef1' from JSON`,
-  );
-}
-
-/** @internal */
-export const Region1$inboundSchema: z.ZodType<Region1, unknown> = z.object({
-  secretRef: z.lazy(() => RegionSecretRef1$inboundSchema),
-});
-/** @internal */
-export type Region1$Outbound = {
-  secretRef: RegionSecretRef1$Outbound;
-};
-
-/** @internal */
-export const Region1$outboundSchema: z.ZodType<Region1$Outbound, Region1> = z
-  .object({
-    secretRef: z.lazy(() => RegionSecretRef1$outboundSchema),
+    secretRef: z.lazy(() => RegionSecretRef$outboundSchema),
   });
 
-export function region1ToJSON(region1: Region1): string {
-  return JSON.stringify(Region1$outboundSchema.parse(region1));
+export function regionToJSON(region: Region): string {
+  return JSON.stringify(Region$outboundSchema.parse(region));
 }
-export function region1FromJSON(
+export function regionFromJSON(
   jsonString: string,
-): SafeParseResult<Region1, SDKValidationError> {
+): SafeParseResult<Region, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Region1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Region1' from JSON`,
+    (x) => Region$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Region' from JSON`,
   );
 }
 
@@ -4050,8 +7410,7 @@ export const ExternalBindingUnion$inboundSchema: z.ZodType<
   ExternalBindingUnion,
   unknown
 > = z.union([
-  ExternalBindingContainerAppsEnvironment$inboundSchema,
-  ExternalBindingAi$inboundSchema,
+  z.lazy(() => ExternalBindingContainerAppsEnvironment$inboundSchema),
   z.union([
     z.lazy(() => ExternalBindingS3$inboundSchema),
     z.lazy(() => ExternalBindingBlob$inboundSchema),
@@ -4069,22 +7428,45 @@ export const ExternalBindingUnion$inboundSchema: z.ZodType<
     z.lazy(() => ExternalBindingDynamodb$inboundSchema),
     z.lazy(() => ExternalBindingFirestore$inboundSchema),
     z.lazy(() => ExternalBindingTablestorage$inboundSchema),
-    z.lazy(() => ExternalBindingRedis$inboundSchema),
+    z.lazy(() => ExternalBindingRedisKv$inboundSchema),
     z.lazy(() => ExternalBindingLocalKv$inboundSchema),
   ]),
   z.union([
-    ExternalBindingEcr$inboundSchema,
-    ExternalBindingAcr$inboundSchema,
-    ExternalBindingGar$inboundSchema,
-    ExternalBindingLocal$inboundSchema,
+    z.lazy(() => ExternalBindingEcr$inboundSchema),
+    z.lazy(() => ExternalBindingAcr$inboundSchema),
+    z.lazy(() => ExternalBindingGar$inboundSchema),
+    z.lazy(() => ExternalBindingLocal$inboundSchema),
   ]),
-  ExternalBindingUnion5$inboundSchema,
-  ExternalBindingUnion6$inboundSchema,
+  z.union([
+    z.lazy(() => ExternalBindingParameterStore$inboundSchema),
+    z.lazy(() => ExternalBindingSecretManager$inboundSchema),
+    z.lazy(() => ExternalBindingKeyVault$inboundSchema),
+    z.lazy(() => ExternalBindingKubernetesSecret$inboundSchema),
+    z.lazy(() => ExternalBindingLocalVault$inboundSchema),
+  ]),
+  z.union([
+    z.lazy(() => ExternalBindingAurora$inboundSchema),
+    z.lazy(() => ExternalBindingAuroraManaged$inboundSchema),
+    z.lazy(() => ExternalBindingCloudSQL$inboundSchema),
+    z.lazy(() => ExternalBindingFlexibleServer$inboundSchema),
+    z.lazy(() => ExternalBindingExternalPostgres$inboundSchema),
+    z.lazy(() => ExternalBindingLocalPostgres$inboundSchema),
+  ]),
+  z.union([
+    z.lazy(() => ExternalBindingElasticache$inboundSchema),
+    z.lazy(() => ExternalBindingMemorystore$inboundSchema),
+    z.lazy(() => ExternalBindingAzureManagedRedis$inboundSchema),
+    z.lazy(() => ExternalBindingExternalRedis$inboundSchema),
+    z.lazy(() => ExternalBindingLocalRedis$inboundSchema),
+  ]),
+  z.union([
+    z.lazy(() => ExternalBindingBedrock$inboundSchema),
+    z.lazy(() => ExternalBindingAi$inboundSchema),
+  ]),
 ]);
 /** @internal */
 export type ExternalBindingUnion$Outbound =
   | ExternalBindingContainerAppsEnvironment$Outbound
-  | ExternalBindingAi$Outbound
   | ExternalBindingS3$Outbound
   | ExternalBindingBlob$Outbound
   | ExternalBindingGcs$Outbound
@@ -4097,22 +7479,37 @@ export type ExternalBindingUnion$Outbound =
   | ExternalBindingDynamodb$Outbound
   | ExternalBindingFirestore$Outbound
   | ExternalBindingTablestorage$Outbound
-  | ExternalBindingRedis$Outbound
+  | ExternalBindingRedisKv$Outbound
   | ExternalBindingLocalKv$Outbound
   | ExternalBindingEcr$Outbound
   | ExternalBindingAcr$Outbound
   | ExternalBindingGar$Outbound
   | ExternalBindingLocal$Outbound
-  | ExternalBindingUnion5$Outbound
-  | ExternalBindingUnion6$Outbound;
+  | ExternalBindingParameterStore$Outbound
+  | ExternalBindingSecretManager$Outbound
+  | ExternalBindingKeyVault$Outbound
+  | ExternalBindingKubernetesSecret$Outbound
+  | ExternalBindingLocalVault$Outbound
+  | ExternalBindingAurora$Outbound
+  | ExternalBindingAuroraManaged$Outbound
+  | ExternalBindingCloudSQL$Outbound
+  | ExternalBindingFlexibleServer$Outbound
+  | ExternalBindingExternalPostgres$Outbound
+  | ExternalBindingLocalPostgres$Outbound
+  | ExternalBindingElasticache$Outbound
+  | ExternalBindingMemorystore$Outbound
+  | ExternalBindingAzureManagedRedis$Outbound
+  | ExternalBindingExternalRedis$Outbound
+  | ExternalBindingLocalRedis$Outbound
+  | ExternalBindingBedrock$Outbound
+  | ExternalBindingAi$Outbound;
 
 /** @internal */
 export const ExternalBindingUnion$outboundSchema: z.ZodType<
   ExternalBindingUnion$Outbound,
   ExternalBindingUnion
 > = z.union([
-  ExternalBindingContainerAppsEnvironment$outboundSchema,
-  ExternalBindingAi$outboundSchema,
+  z.lazy(() => ExternalBindingContainerAppsEnvironment$outboundSchema),
   z.union([
     z.lazy(() => ExternalBindingS3$outboundSchema),
     z.lazy(() => ExternalBindingBlob$outboundSchema),
@@ -4130,17 +7527,41 @@ export const ExternalBindingUnion$outboundSchema: z.ZodType<
     z.lazy(() => ExternalBindingDynamodb$outboundSchema),
     z.lazy(() => ExternalBindingFirestore$outboundSchema),
     z.lazy(() => ExternalBindingTablestorage$outboundSchema),
-    z.lazy(() => ExternalBindingRedis$outboundSchema),
+    z.lazy(() => ExternalBindingRedisKv$outboundSchema),
     z.lazy(() => ExternalBindingLocalKv$outboundSchema),
   ]),
   z.union([
-    ExternalBindingEcr$outboundSchema,
-    ExternalBindingAcr$outboundSchema,
-    ExternalBindingGar$outboundSchema,
-    ExternalBindingLocal$outboundSchema,
+    z.lazy(() => ExternalBindingEcr$outboundSchema),
+    z.lazy(() => ExternalBindingAcr$outboundSchema),
+    z.lazy(() => ExternalBindingGar$outboundSchema),
+    z.lazy(() => ExternalBindingLocal$outboundSchema),
   ]),
-  ExternalBindingUnion5$outboundSchema,
-  ExternalBindingUnion6$outboundSchema,
+  z.union([
+    z.lazy(() => ExternalBindingParameterStore$outboundSchema),
+    z.lazy(() => ExternalBindingSecretManager$outboundSchema),
+    z.lazy(() => ExternalBindingKeyVault$outboundSchema),
+    z.lazy(() => ExternalBindingKubernetesSecret$outboundSchema),
+    z.lazy(() => ExternalBindingLocalVault$outboundSchema),
+  ]),
+  z.union([
+    z.lazy(() => ExternalBindingAurora$outboundSchema),
+    z.lazy(() => ExternalBindingAuroraManaged$outboundSchema),
+    z.lazy(() => ExternalBindingCloudSQL$outboundSchema),
+    z.lazy(() => ExternalBindingFlexibleServer$outboundSchema),
+    z.lazy(() => ExternalBindingExternalPostgres$outboundSchema),
+    z.lazy(() => ExternalBindingLocalPostgres$outboundSchema),
+  ]),
+  z.union([
+    z.lazy(() => ExternalBindingElasticache$outboundSchema),
+    z.lazy(() => ExternalBindingMemorystore$outboundSchema),
+    z.lazy(() => ExternalBindingAzureManagedRedis$outboundSchema),
+    z.lazy(() => ExternalBindingExternalRedis$outboundSchema),
+    z.lazy(() => ExternalBindingLocalRedis$outboundSchema),
+  ]),
+  z.union([
+    z.lazy(() => ExternalBindingBedrock$outboundSchema),
+    z.lazy(() => ExternalBindingAi$outboundSchema),
+  ]),
 ]);
 
 export function externalBindingUnionToJSON(
@@ -4160,16 +7581,310 @@ export function externalBindingUnionFromJSON(
   );
 }
 
-// Published external-binding endpoint compatibility exports.
-export type { EndpointSecretRef1 as EndpointSecretRef };
-export type { EndpointSecretRef1$Outbound as EndpointSecretRef$Outbound };
-export { EndpointSecretRef1$inboundSchema as EndpointSecretRef$inboundSchema };
-export { EndpointSecretRef1$outboundSchema as EndpointSecretRef$outboundSchema };
-export { endpointSecretRef1FromJSON as endpointSecretRefFromJSON };
-export { endpointSecretRef1ToJSON as endpointSecretRefToJSON };
-export type { ExternalBindingEndpoint1 as ExternalBindingEndpoint };
-export type { ExternalBindingEndpoint1$Outbound as ExternalBindingEndpoint$Outbound };
-export { ExternalBindingEndpoint1$inboundSchema as ExternalBindingEndpoint$inboundSchema };
-export { ExternalBindingEndpoint1$outboundSchema as ExternalBindingEndpoint$outboundSchema };
-export { externalBindingEndpoint1FromJSON as externalBindingEndpointFromJSON };
-export { externalBindingEndpoint1ToJSON as externalBindingEndpointToJSON };
+// Published compatibility exports. Generated by generate-compatibility-exports.mjs.
+export type { AccessKeyId as AccountName1 };
+export { AccessKeyId$inboundSchema as AccountName1$inboundSchema };
+export type { AccessKeyId$Outbound as AccountName1$Outbound };
+export { AccessKeyId$outboundSchema as AccountName1$outboundSchema };
+export { accessKeyIdFromJSON as accountName1FromJSON };
+export { accessKeyIdToJSON as accountName1ToJSON };
+export type { AccessKeyId as AccountName2 };
+export { AccessKeyId$inboundSchema as AccountName2$inboundSchema };
+export type { AccessKeyId$Outbound as AccountName2$Outbound };
+export { AccessKeyId$outboundSchema as AccountName2$outboundSchema };
+export { accessKeyIdFromJSON as accountName2FromJSON };
+export { accessKeyIdToJSON as accountName2ToJSON };
+export type { AccessKeyIdSecretRef as AccountNameSecretRef1 };
+export { AccessKeyIdSecretRef$inboundSchema as AccountNameSecretRef1$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as AccountNameSecretRef1$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as AccountNameSecretRef1$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as accountNameSecretRef1FromJSON };
+export { accessKeyIdSecretRefToJSON as accountNameSecretRef1ToJSON };
+export type { AccessKeyIdSecretRef as AccountNameSecretRef2 };
+export { AccessKeyIdSecretRef$inboundSchema as AccountNameSecretRef2$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as AccountNameSecretRef2$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as AccountNameSecretRef2$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as accountNameSecretRef2FromJSON };
+export { accessKeyIdSecretRefToJSON as accountNameSecretRef2ToJSON };
+export type { AccessKeyId as BucketName1 };
+export { AccessKeyId$inboundSchema as BucketName1$inboundSchema };
+export type { AccessKeyId$Outbound as BucketName1$Outbound };
+export { AccessKeyId$outboundSchema as BucketName1$outboundSchema };
+export { accessKeyIdFromJSON as bucketName1FromJSON };
+export { accessKeyIdToJSON as bucketName1ToJSON };
+export type { AccessKeyId as BucketName2 };
+export { AccessKeyId$inboundSchema as BucketName2$inboundSchema };
+export type { AccessKeyId$Outbound as BucketName2$Outbound };
+export { AccessKeyId$outboundSchema as BucketName2$outboundSchema };
+export { accessKeyIdFromJSON as bucketName2FromJSON };
+export { accessKeyIdToJSON as bucketName2ToJSON };
+export type { AccessKeyIdSecretRef as BucketNameSecretRef1 };
+export { AccessKeyIdSecretRef$inboundSchema as BucketNameSecretRef1$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as BucketNameSecretRef1$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as BucketNameSecretRef1$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as bucketNameSecretRef1FromJSON };
+export { accessKeyIdSecretRefToJSON as bucketNameSecretRef1ToJSON };
+export type { AccessKeyIdSecretRef as BucketNameSecretRef2 };
+export { AccessKeyIdSecretRef$inboundSchema as BucketNameSecretRef2$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as BucketNameSecretRef2$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as BucketNameSecretRef2$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as bucketNameSecretRef2FromJSON };
+export { accessKeyIdSecretRefToJSON as bucketNameSecretRef2ToJSON };
+export type { AccessKeyId as CollectionName };
+export { AccessKeyId$inboundSchema as CollectionName$inboundSchema };
+export type { AccessKeyId$Outbound as CollectionName$Outbound };
+export { AccessKeyId$outboundSchema as CollectionName$outboundSchema };
+export { accessKeyIdFromJSON as collectionNameFromJSON };
+export type { AccessKeyIdSecretRef as CollectionNameSecretRef };
+export { AccessKeyIdSecretRef$inboundSchema as CollectionNameSecretRef$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as CollectionNameSecretRef$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as CollectionNameSecretRef$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as collectionNameSecretRefFromJSON };
+export { accessKeyIdSecretRefToJSON as collectionNameSecretRefToJSON };
+export { accessKeyIdToJSON as collectionNameToJSON };
+export type { AccessKeyId as ConnectionUrl };
+export { AccessKeyId$inboundSchema as ConnectionUrl$inboundSchema };
+export type { AccessKeyId$Outbound as ConnectionUrl$Outbound };
+export { AccessKeyId$outboundSchema as ConnectionUrl$outboundSchema };
+export { accessKeyIdFromJSON as connectionUrlFromJSON };
+export type { AccessKeyIdSecretRef as ConnectionUrlSecretRef };
+export { AccessKeyIdSecretRef$inboundSchema as ConnectionUrlSecretRef$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as ConnectionUrlSecretRef$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as ConnectionUrlSecretRef$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as connectionUrlSecretRefFromJSON };
+export { accessKeyIdSecretRefToJSON as connectionUrlSecretRefToJSON };
+export { accessKeyIdToJSON as connectionUrlToJSON };
+export type { AccessKeyId as ContainerName };
+export { AccessKeyId$inboundSchema as ContainerName$inboundSchema };
+export type { AccessKeyId$Outbound as ContainerName$Outbound };
+export { AccessKeyId$outboundSchema as ContainerName$outboundSchema };
+export { accessKeyIdFromJSON as containerNameFromJSON };
+export type { AccessKeyIdSecretRef as ContainerNameSecretRef };
+export { AccessKeyIdSecretRef$inboundSchema as ContainerNameSecretRef$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as ContainerNameSecretRef$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as ContainerNameSecretRef$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as containerNameSecretRefFromJSON };
+export { accessKeyIdSecretRefToJSON as containerNameSecretRefToJSON };
+export { accessKeyIdToJSON as containerNameToJSON };
+export type { Database as Database1 };
+export { Database$inboundSchema as Database1$inboundSchema };
+export type { Database$Outbound as Database1$Outbound };
+export { Database$outboundSchema as Database1$outboundSchema };
+export { databaseFromJSON as database1FromJSON };
+export { databaseToJSON as database1ToJSON };
+export type { AccessKeyId as DatabaseId };
+export { AccessKeyId$inboundSchema as DatabaseId$inboundSchema };
+export type { AccessKeyId$Outbound as DatabaseId$Outbound };
+export { AccessKeyId$outboundSchema as DatabaseId$outboundSchema };
+export { accessKeyIdFromJSON as databaseIdFromJSON };
+export type { AccessKeyIdSecretRef as DatabaseIdSecretRef };
+export { AccessKeyIdSecretRef$inboundSchema as DatabaseIdSecretRef$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as DatabaseIdSecretRef$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as DatabaseIdSecretRef$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as databaseIdSecretRefFromJSON };
+export { accessKeyIdSecretRefToJSON as databaseIdSecretRefToJSON };
+export { accessKeyIdToJSON as databaseIdToJSON };
+export type { DatabaseSecretRef as DatabaseSecretRef1 };
+export { DatabaseSecretRef$inboundSchema as DatabaseSecretRef1$inboundSchema };
+export type { DatabaseSecretRef$Outbound as DatabaseSecretRef1$Outbound };
+export { DatabaseSecretRef$outboundSchema as DatabaseSecretRef1$outboundSchema };
+export { databaseSecretRefFromJSON as databaseSecretRef1FromJSON };
+export { databaseSecretRefToJSON as databaseSecretRef1ToJSON };
+export type { DataDir as DataDir1 };
+export { DataDir$inboundSchema as DataDir1$inboundSchema };
+export type { DataDir$Outbound as DataDir1$Outbound };
+export { DataDir$outboundSchema as DataDir1$outboundSchema };
+export { dataDirFromJSON as dataDir1FromJSON };
+export { dataDirToJSON as dataDir1ToJSON };
+export type { DataDirSecretRef as DataDirSecretRef1 };
+export { DataDirSecretRef$inboundSchema as DataDirSecretRef1$inboundSchema };
+export type { DataDirSecretRef$Outbound as DataDirSecretRef1$Outbound };
+export { DataDirSecretRef$outboundSchema as DataDirSecretRef1$outboundSchema };
+export { dataDirSecretRefFromJSON as dataDirSecretRef1FromJSON };
+export { dataDirSecretRefToJSON as dataDirSecretRef1ToJSON };
+export type { EndpointSecretRef as EndpointSecretRef1 };
+export { EndpointSecretRef$inboundSchema as EndpointSecretRef1$inboundSchema };
+export type { EndpointSecretRef$Outbound as EndpointSecretRef1$Outbound };
+export { EndpointSecretRef$outboundSchema as EndpointSecretRef1$outboundSchema };
+export { endpointSecretRefFromJSON as endpointSecretRef1FromJSON };
+export { endpointSecretRefToJSON as endpointSecretRef1ToJSON };
+export type { EndpointSecretRef as EndpointSecretRef2 };
+export { EndpointSecretRef$inboundSchema as EndpointSecretRef2$inboundSchema };
+export type { EndpointSecretRef$Outbound as EndpointSecretRef2$Outbound };
+export { EndpointSecretRef$outboundSchema as EndpointSecretRef2$outboundSchema };
+export { endpointSecretRefFromJSON as endpointSecretRef2FromJSON };
+export { endpointSecretRefToJSON as endpointSecretRef2ToJSON };
+export type { ExternalBindingEndpoint as ExternalBindingEndpoint1 };
+export { ExternalBindingEndpoint$inboundSchema as ExternalBindingEndpoint1$inboundSchema };
+export type { ExternalBindingEndpoint$Outbound as ExternalBindingEndpoint1$Outbound };
+export { ExternalBindingEndpoint$outboundSchema as ExternalBindingEndpoint1$outboundSchema };
+export { externalBindingEndpointFromJSON as externalBindingEndpoint1FromJSON };
+export { externalBindingEndpointToJSON as externalBindingEndpoint1ToJSON };
+export type { ExternalBindingEndpoint as ExternalBindingEndpoint2 };
+export { ExternalBindingEndpoint$inboundSchema as ExternalBindingEndpoint2$inboundSchema };
+export type { ExternalBindingEndpoint$Outbound as ExternalBindingEndpoint2$Outbound };
+export { ExternalBindingEndpoint$outboundSchema as ExternalBindingEndpoint2$outboundSchema };
+export { externalBindingEndpointFromJSON as externalBindingEndpoint2FromJSON };
+export { externalBindingEndpointToJSON as externalBindingEndpoint2ToJSON };
+export type { ExternalBindingRedisKv as ExternalBindingRedis };
+export { ExternalBindingRedisKv$inboundSchema as ExternalBindingRedis$inboundSchema };
+export type { ExternalBindingRedisKv$Outbound as ExternalBindingRedis$Outbound };
+export { ExternalBindingRedisKv$outboundSchema as ExternalBindingRedis$outboundSchema };
+export { externalBindingRedisKvFromJSON as externalBindingRedisFromJSON };
+export { externalBindingRedisKvToJSON as externalBindingRedisToJSON };
+export type { AccessKeyId as Namespace1 };
+export { AccessKeyId$inboundSchema as Namespace1$inboundSchema };
+export type { AccessKeyId$Outbound as Namespace1$Outbound };
+export { AccessKeyId$outboundSchema as Namespace1$outboundSchema };
+export { accessKeyIdFromJSON as namespace1FromJSON };
+export { accessKeyIdToJSON as namespace1ToJSON };
+export type { AccessKeyIdSecretRef as NamespaceSecretRef1 };
+export { AccessKeyIdSecretRef$inboundSchema as NamespaceSecretRef1$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as NamespaceSecretRef1$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as NamespaceSecretRef1$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as namespaceSecretRef1FromJSON };
+export { accessKeyIdSecretRefToJSON as namespaceSecretRef1ToJSON };
+export type { AccessKeyId as ProjectId };
+export { AccessKeyId$inboundSchema as ProjectId$inboundSchema };
+export type { AccessKeyId$Outbound as ProjectId$Outbound };
+export { AccessKeyId$outboundSchema as ProjectId$outboundSchema };
+export { accessKeyIdFromJSON as projectIdFromJSON };
+export type { AccessKeyIdSecretRef as ProjectIdSecretRef };
+export { AccessKeyIdSecretRef$inboundSchema as ProjectIdSecretRef$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as ProjectIdSecretRef$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as ProjectIdSecretRef$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as projectIdSecretRefFromJSON };
+export { accessKeyIdSecretRefToJSON as projectIdSecretRefToJSON };
+export { accessKeyIdToJSON as projectIdToJSON };
+export type { AccessKeyId as QueueName };
+export { AccessKeyId$inboundSchema as QueueName$inboundSchema };
+export type { AccessKeyId$Outbound as QueueName$Outbound };
+export { AccessKeyId$outboundSchema as QueueName$outboundSchema };
+export { accessKeyIdFromJSON as queueNameFromJSON };
+export type { AccessKeyIdSecretRef as QueueNameSecretRef };
+export { AccessKeyIdSecretRef$inboundSchema as QueueNameSecretRef$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as QueueNameSecretRef$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as QueueNameSecretRef$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as queueNameSecretRefFromJSON };
+export { accessKeyIdSecretRefToJSON as queueNameSecretRefToJSON };
+export { accessKeyIdToJSON as queueNameToJSON };
+export type { AccessKeyId as QueuePath };
+export { AccessKeyId$inboundSchema as QueuePath$inboundSchema };
+export type { AccessKeyId$Outbound as QueuePath$Outbound };
+export { AccessKeyId$outboundSchema as QueuePath$outboundSchema };
+export { accessKeyIdFromJSON as queuePathFromJSON };
+export type { AccessKeyIdSecretRef as QueuePathSecretRef };
+export { AccessKeyIdSecretRef$inboundSchema as QueuePathSecretRef$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as QueuePathSecretRef$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as QueuePathSecretRef$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as queuePathSecretRefFromJSON };
+export { accessKeyIdSecretRefToJSON as queuePathSecretRefToJSON };
+export { accessKeyIdToJSON as queuePathToJSON };
+export type { AccessKeyId as QueueUrl };
+export { AccessKeyId$inboundSchema as QueueUrl$inboundSchema };
+export type { AccessKeyId$Outbound as QueueUrl$Outbound };
+export { AccessKeyId$outboundSchema as QueueUrl$outboundSchema };
+export { accessKeyIdFromJSON as queueUrlFromJSON };
+export type { AccessKeyIdSecretRef as QueueUrlSecretRef };
+export { AccessKeyIdSecretRef$inboundSchema as QueueUrlSecretRef$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as QueueUrlSecretRef$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as QueueUrlSecretRef$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as queueUrlSecretRefFromJSON };
+export { accessKeyIdSecretRefToJSON as queueUrlSecretRefToJSON };
+export { accessKeyIdToJSON as queueUrlToJSON };
+export type { Region as Region1 };
+export { Region$inboundSchema as Region1$inboundSchema };
+export type { Region$Outbound as Region1$Outbound };
+export { Region$outboundSchema as Region1$outboundSchema };
+export { regionFromJSON as region1FromJSON };
+export { regionToJSON as region1ToJSON };
+export type { Region as Region2 };
+export { Region$inboundSchema as Region2$inboundSchema };
+export type { Region$Outbound as Region2$Outbound };
+export { Region$outboundSchema as Region2$outboundSchema };
+export { regionFromJSON as region2FromJSON };
+export { regionToJSON as region2ToJSON };
+export type { RegionSecretRef as RegionSecretRef1 };
+export { RegionSecretRef$inboundSchema as RegionSecretRef1$inboundSchema };
+export type { RegionSecretRef$Outbound as RegionSecretRef1$Outbound };
+export { RegionSecretRef$outboundSchema as RegionSecretRef1$outboundSchema };
+export { regionSecretRefFromJSON as regionSecretRef1FromJSON };
+export { regionSecretRefToJSON as regionSecretRef1ToJSON };
+export type { RegionSecretRef as RegionSecretRef2 };
+export { RegionSecretRef$inboundSchema as RegionSecretRef2$inboundSchema };
+export type { RegionSecretRef$Outbound as RegionSecretRef2$Outbound };
+export { RegionSecretRef$outboundSchema as RegionSecretRef2$outboundSchema };
+export { regionSecretRefFromJSON as regionSecretRef2FromJSON };
+export { regionSecretRefToJSON as regionSecretRef2ToJSON };
+export type { AccessKeyId as ResourceGroupName1 };
+export { AccessKeyId$inboundSchema as ResourceGroupName1$inboundSchema };
+export type { AccessKeyId$Outbound as ResourceGroupName1$Outbound };
+export { AccessKeyId$outboundSchema as ResourceGroupName1$outboundSchema };
+export { accessKeyIdFromJSON as resourceGroupName1FromJSON };
+export { accessKeyIdToJSON as resourceGroupName1ToJSON };
+export type { AccessKeyIdSecretRef as ResourceGroupNameSecretRef1 };
+export { AccessKeyIdSecretRef$inboundSchema as ResourceGroupNameSecretRef1$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as ResourceGroupNameSecretRef1$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as ResourceGroupNameSecretRef1$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as resourceGroupNameSecretRef1FromJSON };
+export { accessKeyIdSecretRefToJSON as resourceGroupNameSecretRef1ToJSON };
+export type { AccessKeyId as StoragePath };
+export { AccessKeyId$inboundSchema as StoragePath$inboundSchema };
+export type { AccessKeyId$Outbound as StoragePath$Outbound };
+export { AccessKeyId$outboundSchema as StoragePath$outboundSchema };
+export { accessKeyIdFromJSON as storagePathFromJSON };
+export type { AccessKeyIdSecretRef as StoragePathSecretRef };
+export { AccessKeyIdSecretRef$inboundSchema as StoragePathSecretRef$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as StoragePathSecretRef$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as StoragePathSecretRef$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as storagePathSecretRefFromJSON };
+export { accessKeyIdSecretRefToJSON as storagePathSecretRefToJSON };
+export { accessKeyIdToJSON as storagePathToJSON };
+export type { AccessKeyId as Subscription };
+export { AccessKeyId$inboundSchema as Subscription$inboundSchema };
+export type { AccessKeyId$Outbound as Subscription$Outbound };
+export { AccessKeyId$outboundSchema as Subscription$outboundSchema };
+export { accessKeyIdFromJSON as subscriptionFromJSON };
+export type { AccessKeyIdSecretRef as SubscriptionSecretRef };
+export { AccessKeyIdSecretRef$inboundSchema as SubscriptionSecretRef$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as SubscriptionSecretRef$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as SubscriptionSecretRef$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as subscriptionSecretRefFromJSON };
+export { accessKeyIdSecretRefToJSON as subscriptionSecretRefToJSON };
+export { accessKeyIdToJSON as subscriptionToJSON };
+export type { AccessKeyId as TableName1 };
+export { AccessKeyId$inboundSchema as TableName1$inboundSchema };
+export type { AccessKeyId$Outbound as TableName1$Outbound };
+export { AccessKeyId$outboundSchema as TableName1$outboundSchema };
+export { accessKeyIdFromJSON as tableName1FromJSON };
+export { accessKeyIdToJSON as tableName1ToJSON };
+export type { AccessKeyId as TableName2 };
+export { AccessKeyId$inboundSchema as TableName2$inboundSchema };
+export type { AccessKeyId$Outbound as TableName2$Outbound };
+export { AccessKeyId$outboundSchema as TableName2$outboundSchema };
+export { accessKeyIdFromJSON as tableName2FromJSON };
+export { accessKeyIdToJSON as tableName2ToJSON };
+export type { AccessKeyIdSecretRef as TableNameSecretRef1 };
+export { AccessKeyIdSecretRef$inboundSchema as TableNameSecretRef1$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as TableNameSecretRef1$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as TableNameSecretRef1$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as tableNameSecretRef1FromJSON };
+export { accessKeyIdSecretRefToJSON as tableNameSecretRef1ToJSON };
+export type { AccessKeyIdSecretRef as TableNameSecretRef2 };
+export { AccessKeyIdSecretRef$inboundSchema as TableNameSecretRef2$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as TableNameSecretRef2$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as TableNameSecretRef2$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as tableNameSecretRef2FromJSON };
+export { accessKeyIdSecretRefToJSON as tableNameSecretRef2ToJSON };
+export type { AccessKeyId as Topic };
+export { AccessKeyId$inboundSchema as Topic$inboundSchema };
+export type { AccessKeyId$Outbound as Topic$Outbound };
+export { AccessKeyId$outboundSchema as Topic$outboundSchema };
+export { accessKeyIdFromJSON as topicFromJSON };
+export type { AccessKeyIdSecretRef as TopicSecretRef };
+export { AccessKeyIdSecretRef$inboundSchema as TopicSecretRef$inboundSchema };
+export type { AccessKeyIdSecretRef$Outbound as TopicSecretRef$Outbound };
+export { AccessKeyIdSecretRef$outboundSchema as TopicSecretRef$outboundSchema };
+export { accessKeyIdSecretRefFromJSON as topicSecretRefFromJSON };
+export { accessKeyIdSecretRefToJSON as topicSecretRefToJSON };
+export { accessKeyIdToJSON as topicToJSON };

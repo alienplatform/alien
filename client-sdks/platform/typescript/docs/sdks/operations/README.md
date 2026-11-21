@@ -12,8 +12,8 @@
 * [createAccessRequest](#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
 * [listAccessRequests](#listaccessrequests) - List a project's access requests, newest first.
 * [queueAccessRequest](#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
-* [approveAccessRequest](#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
-* [denyAccessRequest](#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
+* [approveAccessRequest](#approveaccessrequest) - Approve a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester. When the customer approves, this fails with ACCESS_REQUEST_CUSTOMER_APPROVES.
+* [denyAccessRequest](#denyaccessrequest) - Deny a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester.
 * [getAccessRequestCoordinates](#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
 * [getLiveDebugGrant](#getlivedebuggrant) - Find an approved, unexpired access request the caller created whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request. Only the requester's own grants match: a debug session must present a grant its caller requested, so another principal's grant is never returned here.
 * [getAccessRequestActivity](#getaccessrequestactivity) - The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
@@ -37,7 +37,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.operations.listPlugins({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -63,7 +63,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await operationsListPlugins(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -200,7 +200,7 @@ import {
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 409                      | application/json         |
+| errors.APIError          | 404, 409                 | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -220,7 +220,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.publishPlugin("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.operations.publishPlugin("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -244,7 +244,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsPublishPlugin(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await operationsPublishPlugin(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -355,7 +355,7 @@ import {
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 402, 409            | application/json         |
+| errors.APIError          | 400, 402, 403, 404, 409  | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -375,7 +375,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.createBundleUploadUrl("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.operations.createBundleUploadUrl("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -399,7 +399,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsCreateBundleUploadUrl(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await operationsCreateBundleUploadUrl(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -510,7 +510,7 @@ import {
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 402                      | application/json         |
+| errors.APIError          | 402, 403, 404            | application/json         |
 | errors.APIError          | 503                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -530,7 +530,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.invoke("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.operations.invoke("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -554,7 +554,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsInvoke(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await operationsInvoke(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -685,7 +685,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.verifyCheck("prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const result = await alien.operations.verifyCheck("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     deploymentId: "<id>",
     commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
   });
@@ -712,7 +712,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsVerifyCheck(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const res = await operationsVerifyCheck(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     deploymentId: "<id>",
     commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
   });
@@ -957,7 +957,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.operations.listAccessRequests({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
 
@@ -984,7 +984,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await operationsListAccessRequests(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
   if (res.ok) {
@@ -1223,7 +1223,7 @@ import {
 
 ## approveAccessRequest
 
-Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
+Approve a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester. When the customer approves, this fails with ACCESS_REQUEST_CUSTOMER_APPROVES.
 
 ### Example Usage
 
@@ -1237,9 +1237,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.approveAccessRequest("<id>", {
-    method: "slack",
-  });
+  const result = await alien.operations.approveAccessRequest("<id>", {});
 
   console.log(result);
 }
@@ -1263,9 +1261,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsApproveAccessRequest(alien, "<id>", {
-    method: "slack",
-  });
+  const res = await operationsApproveAccessRequest(alien, "<id>", {});
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -1318,7 +1314,7 @@ import {
 
 ## denyAccessRequest
 
-Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
+Deny a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester.
 
 ### Example Usage
 
@@ -1332,9 +1328,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.denyAccessRequest("<id>", {
-    method: "slack",
-  });
+  const result = await alien.operations.denyAccessRequest("<id>", {});
 
   console.log(result);
 }
@@ -1358,9 +1352,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsDenyAccessRequest(alien, "<id>", {
-    method: "slack",
-  });
+  const res = await operationsDenyAccessRequest(alien, "<id>", {});
   if (res.ok) {
     const { value: result } = res;
     console.log(result);

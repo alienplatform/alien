@@ -39,7 +39,7 @@ let value: DataAi = {
 
 ## Fields
 
-| Field                                    | Type                                     | Required                                 | Description                              |
-| ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
-| `data`                                   | *models.SyncReconcileRequestDataUnion16* | :heavy_check_mark:                       | N/A                                      |
-| `resourceType`                           | *"ai"*                                   | :heavy_check_mark:                       | N/A                                      |
+| Field                                                | Type                                                 | Required                                             | Description                                          |
+| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
+| `data`                                               | *models.SyncReconcileRequestDataUnion17*             | :heavy_check_mark:                                   | N/A                                                  |
+| `resourceType`                                       | [models.ResourceTypeAi](../models/resourcetypeai.md) | :heavy_check_mark:                                   | N/A                                                  |

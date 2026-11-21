@@ -19,6 +19,8 @@ import { getDeploymentCredentialRotation } from "../funcs/getDeploymentCredentia
 import { getDeploymentCredentialRotationValues } from "../funcs/getDeploymentCredentialRotationValues.js";
 import { getDeploymentMetricsHistory } from "../funcs/getDeploymentMetricsHistory.js";
 import { getDeploymentPreparation } from "../funcs/getDeploymentPreparation.js";
+import { getDeploymentProtectionUpdate } from "../funcs/getDeploymentProtectionUpdate.js";
+import { getDeploymentSignedSetupUpdate } from "../funcs/getDeploymentSignedSetupUpdate.js";
 import { getInstallationDeployment } from "../funcs/getInstallationDeployment.js";
 import { getLogExportDeliveryConfig } from "../funcs/getLogExportDeliveryConfig.js";
 import { getPendingWorkspaceInvitation } from "../funcs/getPendingWorkspaceInvitation.js";
@@ -26,11 +28,13 @@ import { getProjectLogExport } from "../funcs/getProjectLogExport.js";
 import { getTerraformKeySetupOperation } from "../funcs/getTerraformKeySetupOperation.js";
 import { getWorkspaceInvitationPreview } from "../funcs/getWorkspaceInvitationPreview.js";
 import { getWorkspaceInviteLink } from "../funcs/getWorkspaceInviteLink.js";
+import { issueDeploymentSetupKey } from "../funcs/issueDeploymentSetupKey.js";
 import { listAwsKeySetupCleanup } from "../funcs/listAwsKeySetupCleanup.js";
 import { listAwsVirtualKeys } from "../funcs/listAwsVirtualKeys.js";
 import { listWorkspaceInvitations } from "../funcs/listWorkspaceInvitations.js";
 import { prepareDeploymentCredentialRotation } from "../funcs/prepareDeploymentCredentialRotation.js";
 import { prepareDeploymentInstallation } from "../funcs/prepareDeploymentInstallation.js";
+import { recordAirgappedBundleSigned } from "../funcs/recordAirgappedBundleSigned.js";
 import { reportLogExportDelivery } from "../funcs/reportLogExportDelivery.js";
 import { requestDeploymentCheck } from "../funcs/requestDeploymentCheck.js";
 import { resendWorkspaceInvitation } from "../funcs/resendWorkspaceInvitation.js";
@@ -59,6 +63,7 @@ import { Deployments } from "./deployments.js";
 import { Domains } from "./domains.js";
 import { DynamicContainers } from "./dynamiccontainers.js";
 import { Events } from "./events.js";
+import { Extensions } from "./extensions.js";
 import { Gateways } from "./gateways.js";
 import { Incidents } from "./incidents.js";
 import { Machines } from "./machines.js";
@@ -73,6 +78,7 @@ import { RemoteBindings } from "./remotebindings.js";
 import { Resolve } from "./resolve.js";
 import { Resources } from "./resources.js";
 import { SetupLinks } from "./setuplinks.js";
+import { Signing } from "./signing.js";
 import { SlackIntegration } from "./slackintegration.js";
 import { Sync } from "./sync.js";
 import { User } from "./user.js";
@@ -80,6 +86,11 @@ import { Webhooks } from "./webhooks.js";
 import { Workspaces } from "./workspaces.js";
 
 export class Alien extends ClientSDK {
+  private _setupLinks?: SetupLinks;
+  get setupLinks(): SetupLinks {
+    return (this._setupLinks ??= new SetupLinks(this._options));
+  }
+
   private _user?: User;
   get user(): User {
     return (this._user ??= new User(this._options));
@@ -95,19 +106,14 @@ export class Alien extends ClientSDK {
     return (this._webhooks ??= new Webhooks(this._options));
   }
 
-  private _workspaces?: Workspaces;
-  get workspaces(): Workspaces {
-    return (this._workspaces ??= new Workspaces(this._options));
+  private _signing?: Signing;
+  get signing(): Signing {
+    return (this._signing ??= new Signing(this._options));
   }
 
-  private _projects?: Projects;
-  get projects(): Projects {
-    return (this._projects ??= new Projects(this._options));
-  }
-
-  private _remoteBindings?: RemoteBindings;
-  get remoteBindings(): RemoteBindings {
-    return (this._remoteBindings ??= new RemoteBindings(this._options));
+  private _deployments?: Deployments;
+  get deployments(): Deployments {
+    return (this._deployments ??= new Deployments(this._options));
   }
 
   private _deploymentGroups?: DeploymentGroups;
@@ -115,9 +121,19 @@ export class Alien extends ClientSDK {
     return (this._deploymentGroups ??= new DeploymentGroups(this._options));
   }
 
-  private _setupLinks?: SetupLinks;
-  get setupLinks(): SetupLinks {
-    return (this._setupLinks ??= new SetupLinks(this._options));
+  private _projects?: Projects;
+  get projects(): Projects {
+    return (this._projects ??= new Projects(this._options));
+  }
+
+  private _workspaces?: Workspaces;
+  get workspaces(): Workspaces {
+    return (this._workspaces ??= new Workspaces(this._options));
+  }
+
+  private _remoteBindings?: RemoteBindings;
+  get remoteBindings(): RemoteBindings {
+    return (this._remoteBindings ??= new RemoteBindings(this._options));
   }
 
   private _containerRegistry?: ContainerRegistry;
@@ -138,11 +154,6 @@ export class Alien extends ClientSDK {
   private _releaseChannels?: ReleaseChannels;
   get releaseChannels(): ReleaseChannels {
     return (this._releaseChannels ??= new ReleaseChannels(this._options));
-  }
-
-  private _deployments?: Deployments;
-  get deployments(): Deployments {
-    return (this._deployments ??= new Deployments(this._options));
   }
 
   private _dynamicContainers?: DynamicContainers;
@@ -213,6 +224,11 @@ export class Alien extends ClientSDK {
   private _operations?: Operations;
   get operations(): Operations {
     return (this._operations ??= new Operations(this._options));
+  }
+
+  private _extensions?: Extensions;
+  get extensions(): Extensions {
+    return (this._extensions ??= new Extensions(this._options));
   }
 
   private _sync?: Sync;
@@ -453,6 +469,45 @@ export class Alien extends ClientSDK {
     ));
   }
 
+  /**
+   * The setup update that protects this installed deployment: the signed template of the release it runs, published, and the exact steps for its setup method with the project's fingerprint. Whoever manages the deployment's setup runs them.
+   */
+  async getDeploymentProtectionUpdate(
+    request: operations.GetDeploymentProtectionUpdateRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentProtectionUpdate> {
+    return unwrapAsync(getDeploymentProtectionUpdate(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * The newer signed setup of a protected deployment: the signed template of the release it runs or moves to, published, when its digest isn't the one the install registered with, and the exact steps for its setup method. The fingerprint and the install's values stay. Whoever manages the deployment's setup runs them.
+   */
+  async getDeploymentSignedSetupUpdate(
+    request: operations.GetDeploymentSignedSetupUpdateRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentSignedSetupUpdate> {
+    return unwrapAsync(getDeploymentSignedSetupUpdate(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async issueDeploymentSetupKey(
+    request: operations.IssueDeploymentSetupKeyRequest,
+    options?: RequestOptions,
+  ): Promise<models.IssueDeploymentSetupKeyResponse> {
+    return unwrapAsync(issueDeploymentSetupKey(
+      this,
+      request,
+      options,
+    ));
+  }
+
   async resumeDeploymentInstallation(
     request: operations.ResumeDeploymentInstallationRequest,
     options?: RequestOptions,
@@ -476,7 +531,7 @@ export class Alien extends ClientSDK {
   }
 
   /**
-   * Metrics Horizon reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
+   * Metrics the machine agent reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
    */
   async getDeploymentMetricsHistory(
     request: operations.GetDeploymentMetricsHistoryRequest,
@@ -535,6 +590,17 @@ export class Alien extends ClientSDK {
       this,
       id,
       requestBody,
+      options,
+    ));
+  }
+
+  async recordAirgappedBundleSigned(
+    request?: operations.RecordAirgappedBundleSignedRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<operations.RecordAirgappedBundleSignedResponse> {
+    return unwrapAsync(recordAirgappedBundleSigned(
+      this,
+      request,
       options,
     ));
   }

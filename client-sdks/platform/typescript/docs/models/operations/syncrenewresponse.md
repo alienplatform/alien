@@ -11,7 +11,7 @@ let value: SyncRenewResponse = {
   success: false,
   leases: [
     {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
       renewed: false,
       leaseExpiresAt: new Date("2025-11-17T01:11:25.058Z"),
     },

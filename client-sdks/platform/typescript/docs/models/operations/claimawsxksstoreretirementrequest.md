@@ -6,7 +6,7 @@
 import { ClaimAwsXksStoreRetirementRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: ClaimAwsXksStoreRetirementRequest = {
-  id: "vkey_0p9nwqgtftugsoey99lqyqq",
+  id: "vkey_0p9nwqgtftugsoey99lqyqq8eq8z",
 };
 ```
 
@@ -14,4 +14,4 @@ let value: ClaimAwsXksStoreRetirementRequest = {
 
 | Field                                      | Type                                       | Required                                   | Description                                | Example                                    |
 | ------------------------------------------ | ------------------------------------------ | ------------------------------------------ | ------------------------------------------ | ------------------------------------------ |
-| `id`                                       | *string*                                   | :heavy_check_mark:                         | Unique identifier for the aws virtual key. | vkey_0p9nwqgtftugsoey99lqyqq               |
+| `id`                                       | *string*                                   | :heavy_check_mark:                         | Unique identifier for the aws virtual key. | vkey_0p9nwqgtftugsoey99lqyqq8eq8z          |

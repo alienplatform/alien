@@ -1,5 +1,7 @@
 # GetResourceDeploymentDetailDataStatus38
 
+Same fields as every other resource heartbeat status.
+
 ## Example Usage
 
 ```typescript

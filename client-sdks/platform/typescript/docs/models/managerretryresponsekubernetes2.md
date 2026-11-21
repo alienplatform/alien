@@ -17,7 +17,7 @@ let value: ManagerRetryResponseKubernetes2 = {};
 
 ## Fields
 
-| Field                                       | Type                                        | Required                                    | Description                                 |
-| ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
-| `cluster`                                   | *models.ManagerRetryResponseClusterUnion2*  | :heavy_minus_sign:                          | N/A                                         |
-| `exposure`                                  | *models.ManagerRetryResponseExposureUnion2* | :heavy_minus_sign:                          | N/A                                         |
+| Field                                      | Type                                       | Required                                   | Description                                |
+| ------------------------------------------ | ------------------------------------------ | ------------------------------------------ | ------------------------------------------ |
+| `cluster`                                  | *models.ManagerRetryResponseClusterUnion2* | :heavy_minus_sign:                         | N/A                                        |
+| `exposure`                                 | *models.ManagerRetryResponseExposure2*     | :heavy_minus_sign:                         | N/A                                        |

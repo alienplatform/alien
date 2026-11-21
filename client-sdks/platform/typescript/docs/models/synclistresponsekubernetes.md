@@ -17,7 +17,7 @@ let value: SyncListResponseKubernetes = {};
 
 ## Fields
 
-| Field                                  | Type                                   | Required                               | Description                            |
-| -------------------------------------- | -------------------------------------- | -------------------------------------- | -------------------------------------- |
-| `cluster`                              | *models.SyncListResponseClusterUnion*  | :heavy_minus_sign:                     | N/A                                    |
-| `exposure`                             | *models.SyncListResponseExposureUnion* | :heavy_minus_sign:                     | N/A                                    |
+| Field                                 | Type                                  | Required                              | Description                           |
+| ------------------------------------- | ------------------------------------- | ------------------------------------- | ------------------------------------- |
+| `cluster`                             | *models.SyncListResponseClusterUnion* | :heavy_minus_sign:                    | N/A                                   |
+| `exposure`                            | *models.SyncListResponseExposure*     | :heavy_minus_sign:                    | N/A                                   |

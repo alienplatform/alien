@@ -6,7 +6,7 @@
 import { WorkspaceInvitationPreviewWorkspace } from "@alienplatform/platform-api/models";
 
 let value: WorkspaceInvitationPreviewWorkspace = {
-  id: "ws_It13CUaGEhLLAB87simX0",
+  id: "ws_It13CUaGEhLLAB87simX07Xb",
   name: "<value>",
   logoUrl: null,
 };
@@ -16,6 +16,6 @@ let value: WorkspaceInvitationPreviewWorkspace = {
 
 | Field                                | Type                                 | Required                             | Description                          | Example                              |
 | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ |
-| `id`                                 | *string*                             | :heavy_check_mark:                   | Unique identifier for the workspace. | ws_It13CUaGEhLLAB87simX0             |
+| `id`                                 | *string*                             | :heavy_check_mark:                   | Unique identifier for the workspace. | ws_It13CUaGEhLLAB87simX07Xb          |
 | `name`                               | *string*                             | :heavy_check_mark:                   | N/A                                  |                                      |
 | `logoUrl`                            | *string*                             | :heavy_check_mark:                   | N/A                                  |                                      |

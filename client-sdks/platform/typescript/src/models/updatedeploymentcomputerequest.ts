@@ -48,6 +48,13 @@ export type UpdateDeploymentComputeRequestFailureDomainsUnion2 =
   | string;
 
 export type UpdateDeploymentComputeRequestPoolsAutoscale = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?:
     | UpdateDeploymentComputeRequestFailureDomains2
     | string
@@ -90,6 +97,13 @@ export type UpdateDeploymentComputeRequestFailureDomainsUnion1 =
   | string;
 
 export type UpdateDeploymentComputeRequestPoolsFixed = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?:
     | UpdateDeploymentComputeRequestFailureDomains1
     | string
@@ -238,6 +252,7 @@ export function updateDeploymentComputeRequestFailureDomainsUnion2ToJSON(
 
 /** @internal */
 export type UpdateDeploymentComputeRequestPoolsAutoscale$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?:
     | UpdateDeploymentComputeRequestFailureDomains2$Outbound
     | string
@@ -255,6 +270,7 @@ export const UpdateDeploymentComputeRequestPoolsAutoscale$outboundSchema:
     UpdateDeploymentComputeRequestPoolsAutoscale$Outbound,
     UpdateDeploymentComputeRequestPoolsAutoscale
   > = z.object({
+    dataDiskGib: z.nullable(z.int()).optional(),
     failureDomains: z.nullable(
       z.union([
         z.lazy(() =>
@@ -339,6 +355,7 @@ export function updateDeploymentComputeRequestFailureDomainsUnion1ToJSON(
 
 /** @internal */
 export type UpdateDeploymentComputeRequestPoolsFixed$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?:
     | UpdateDeploymentComputeRequestFailureDomains1$Outbound
     | string
@@ -354,6 +371,7 @@ export const UpdateDeploymentComputeRequestPoolsFixed$outboundSchema: z.ZodType<
   UpdateDeploymentComputeRequestPoolsFixed$Outbound,
   UpdateDeploymentComputeRequestPoolsFixed
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failureDomains: z.nullable(
     z.union([
       z.lazy(() =>
