@@ -28,9 +28,16 @@
 //! GOOGLE_TARGET_PROJECT_ID=... GOOGLE_TARGET_REGION=us-central1 \
 //! GOOGLE_TARGET_ACCESS_TOKEN=<short-lived token> \
 //! ALIEN_E2E_RESOURCE_PREFIX=<run prefix> \
+//! ALIEN_TEST_SANDBOX_AGENT_IMAGE=<agent image built from this tree> \
 //! ALIEN_TEST_PROOF_LOG=/path/to/proof.log \
 //!   cargo test -p alien-test --test gcp_sandbox_internet_live -- --ignored --nocapture
 //! ```
+//!
+//! The sandbox image is layered from `ALIEN_TEST_SANDBOX_AGENT_IMAGE`, not the released agent: the
+//! gateway path depends on the agent of the tree under test. Build it with
+//! `cargo build --release -p alien-sandbox-agent --target x86_64-unknown-linux-musl`, then
+//! `docker/Dockerfile.alien-sandbox-agent` (amd64), and push it to a registry the build can read,
+//! such as the E2E Artifact Registry repository.
 //!
 //! plus the variables the rest of the GCP E2E suite needs (manager, registry);
 //! `GOOGLE_TARGET_SERVICE_ACCOUNT_KEY` works in place of the token. `gcloud` must be on the
@@ -72,6 +79,12 @@ struct GcpInternetSandbox {
 
 impl test_context::AsyncTestContext for GcpInternetSandbox {
     async fn setup() -> Self {
+        // The gateway path needs the agent of this tree (its gateway replicas arrive over the
+        // control channel); a released agent would fail the test for the wrong reason.
+        assert!(
+            std::env::var("ALIEN_TEST_SANDBOX_AGENT_IMAGE").is_ok_and(|image| !image.trim().is_empty()),
+            "ALIEN_TEST_SANDBOX_AGENT_IMAGE must name an agent image built from this tree; see the module docs"
+        );
         // Build, manager and controllers run on this process's worker threads.
         plan::enable_internet_egress_for_process();
         alien_test::e2e::init_tracing();
@@ -482,39 +495,81 @@ async fn delete_relay(compute: &ComputeClient, relay: &Relay, proof: &mut Proof)
 }
 
 /// An IAP tunnel from a local port to one relay port, open until dropped.
+///
+/// `gcloud` checks the backend once and exits when the relay is not listening yet (IAP answers
+/// 4003 while the VM boots), so a tunnel that exits is started again until the deadline.
 async fn tunnel(relay: &Relay, port: u16) -> anyhow::Result<(tokio::process::Child, u16)> {
-    let local = std::net::TcpListener::bind("127.0.0.1:0")?
-        .local_addr()?
-        .port();
+    let deadline = Instant::now() + Duration::from_secs(600);
+    let mut attempts = 0;
+    while Instant::now() < deadline {
+        attempts += 1;
+        let local = std::net::TcpListener::bind("127.0.0.1:0")?
+            .local_addr()?
+            .port();
+        let mut gcloud = tokio::process::Command::new("gcloud");
+        if let Some(path) = gcloud_token_file() {
+            gcloud.arg(format!("--access-token-file={}", path.display()));
+        }
+        let mut child = gcloud
+            .args([
+                "compute",
+                "start-iap-tunnel",
+                &relay.vm,
+                &port.to_string(),
+                &format!("--local-host-port=127.0.0.1:{local}"),
+                &format!("--zone={}", relay.zone),
+                &format!("--project={}", gcp_config().project_id),
+            ])
+            .kill_on_drop(true)
+            .spawn()
+            .context("start gcloud compute start-iap-tunnel")?;
+        // Wait until the local port accepts, or gcloud gives up on this attempt.
+        while Instant::now() < deadline {
+            if tokio::net::TcpStream::connect(("127.0.0.1", local))
+                .await
+                .is_ok()
+            {
+                return Ok((child, local));
+            }
+            if child.try_wait()?.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    }
+    bail!(
+        "the tunnel to {}:{port} did not open after {attempts} attempts",
+        relay.vm
+    )
+}
+
+/// The last lines of the relay's serial console, kept in the proof when a run fails so the
+/// relay's boot can be read after the VM is gone.
+async fn relay_serial_tail(relay: &Relay) -> String {
     let mut gcloud = tokio::process::Command::new("gcloud");
     if let Some(path) = gcloud_token_file() {
         gcloud.arg(format!("--access-token-file={}", path.display()));
     }
-    let child = gcloud
+    match gcloud
         .args([
             "compute",
-            "start-iap-tunnel",
+            "instances",
+            "get-serial-port-output",
             &relay.vm,
-            &port.to_string(),
-            &format!("--local-host-port=127.0.0.1:{local}"),
             &format!("--zone={}", relay.zone),
             &format!("--project={}", gcp_config().project_id),
         ])
-        .kill_on_drop(true)
-        .spawn()
-        .context("start gcloud compute start-iap-tunnel")?;
-    // The relay boots and the tunnel opens; wait until the local port accepts.
-    let deadline = Instant::now() + Duration::from_secs(300);
-    while Instant::now() < deadline {
-        if tokio::net::TcpStream::connect(("127.0.0.1", local))
-            .await
-            .is_ok()
-        {
-            return Ok((child, local));
+        .output()
+        .await
+    {
+        Ok(output) => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let lines: Vec<&str> = text.lines().collect();
+            lines[lines.len().saturating_sub(40)..].join("\n")
         }
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        Err(error) => format!("unreadable: {error}"),
     }
-    bail!("the tunnel to {}:{port} did not open", relay.vm)
 }
 
 /// With `GOOGLE_TARGET_ACCESS_TOKEN` set, gcloud opens the tunnels with that same token, from a
@@ -715,6 +770,12 @@ async fn gcp_internet_sandbox_egress_goes_through_the_gateway_only(ctx: &mut Gcp
         }
         Err(error) => Err(anyhow::anyhow!("relay: {error:#}")),
     };
+    if outcome.is_err() && created_relay.is_ok() {
+        proof.note(format!(
+            "[relay] serial output tail:\n{}",
+            relay_serial_tail(&relay).await
+        ));
+    }
     // The relay sits in the gateway subnet: it goes before the deployment's teardown. Both
     // deletes run even when creation stopped half way (a rule without its VM still blocks the
     // network's deletion); a delete of a resource that was never created only logs a 404.

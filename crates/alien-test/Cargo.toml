@@ -85,6 +85,8 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 zip = { workspace = true }
 # The GCP internet live test plans and deploys the stack the flipped switch would allow.
 alien-core = { workspace = true, features = ["test-gcp-internet-egress"] }
+# The GCP internet live test layers the agent built from this tree (ALIEN_TEST_SANDBOX_AGENT_IMAGE).
+alien-build = { workspace = true, features = ["test-sandbox-agent-image"] }
 alien-ai-gateway = { workspace = true }
 # The GCP internet live test reads the sandbox binding from the template controller's state.
 alien-infra = { workspace = true, features = ["gcp"] }
