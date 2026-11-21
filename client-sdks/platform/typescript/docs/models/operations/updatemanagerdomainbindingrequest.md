@@ -6,7 +6,7 @@
 import { UpdateManagerDomainBindingRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: UpdateManagerDomainBindingRequest = {
-  id: "mgr_enxscjrqiiu2lrc672hwwuc5",
+  id: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
 };
 ```
 
@@ -14,5 +14,5 @@ let value: UpdateManagerDomainBindingRequest = {
 
 | Field                                                                           | Type                                                                            | Required                                                                        | Description                                                                     | Example                                                                         |
 | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `id`                                                                            | *string*                                                                        | :heavy_check_mark:                                                              | Unique identifier for a manager.                                                | mgr_enxscjrqiiu2lrc672hwwuc5                                                    |
+| `id`                                                                            | *string*                                                                        | :heavy_check_mark:                                                              | Unique identifier for a manager.                                                | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                |
 | `updateManagerDomainBinding`                                                    | [models.UpdateManagerDomainBinding](../../models/updatemanagerdomainbinding.md) | :heavy_minus_sign:                                                              | N/A                                                                             |                                                                                 |

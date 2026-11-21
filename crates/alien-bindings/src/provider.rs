@@ -1146,8 +1146,11 @@ impl BindingsProviderApi for BindingsProvider {
                         "Failed to extract vault_prefix from ParameterStore binding",
                     ))?;
 
-                let vault: Arc<dyn Vault> =
-                    Arc::new(AwsParameterStoreVault::new(client, vault_prefix));
+                let vault: Arc<dyn Vault> = Arc::new(AwsParameterStoreVault::new(
+                    client,
+                    vault_prefix,
+                    binding_name.to_string(),
+                ));
                 Ok(vault)
             }
             #[cfg(not(feature = "aws"))]
@@ -1186,7 +1189,11 @@ impl BindingsProviderApi for BindingsProvider {
                 // Azure Key Vault URLs typically follow: https://{vault-name}.vault.azure.net/
                 let vault_base_url = format!("https://{}.vault.azure.net", vault_name);
 
-                let vault: Arc<dyn Vault> = Arc::new(AzureKeyVault::new(client, vault_base_url));
+                let vault: Arc<dyn Vault> = Arc::new(AzureKeyVault::new(
+                    client,
+                    vault_base_url,
+                    binding_name.to_string(),
+                ));
                 Ok(vault)
             }
             #[cfg(not(feature = "azure"))]
@@ -1224,6 +1231,7 @@ impl BindingsProviderApi for BindingsProvider {
                     client,
                     vault_prefix,
                     gcp_config.project_id.clone(),
+                    binding_name.to_string(),
                 ));
                 Ok(vault)
             }

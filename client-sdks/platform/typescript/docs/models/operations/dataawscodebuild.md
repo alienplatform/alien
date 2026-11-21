@@ -14,13 +14,13 @@ let value: DataAwsCodeBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
+        reason: "api-unavailable",
         severity: "error",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "failed",
+    health: "degraded",
+    lifecycle: "unknown",
     partial: false,
     stale: true,
   },
@@ -51,6 +51,6 @@ let value: DataAwsCodeBuild = {
 | `s3LogsStatus`                                                                                                           | *string*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
 | `serviceRolePresent`                                                                                                     | *boolean*                                                                                                                | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `sourceType`                                                                                                             | *string*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
-| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus56](../../models/operations/getresourcedeploymentdetaildatastatus56.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus60](../../models/operations/getresourcedeploymentdetaildatastatus60.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `timeoutInMinutes`                                                                                                       | *number*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
 | `backend`                                                                                                                | *"awsCodeBuild"*                                                                                                         | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |

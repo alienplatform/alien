@@ -24,7 +24,7 @@ let value: DataKey = {
 
 ## Fields
 
-| Field                    | Type                     | Required                 | Description              |
-| ------------------------ | ------------------------ | ------------------------ | ------------------------ |
-| `data`                   | *operations.DataUnion17* | :heavy_check_mark:       | N/A                      |
-| `resourceType`           | *"key"*                  | :heavy_check_mark:       | N/A                      |
+| Field                                                                    | Type                                                                     | Required                                                                 | Description                                                              |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `data`                                                                   | *operations.DataUnion18*                                                 | :heavy_check_mark:                                                       | N/A                                                                      |
+| `resourceType`                                                           | [operations.ResourceTypeKey](../../models/operations/resourcetypekey.md) | :heavy_check_mark:                                                       | N/A                                                                      |

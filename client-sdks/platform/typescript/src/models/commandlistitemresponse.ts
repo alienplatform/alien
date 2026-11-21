@@ -82,14 +82,14 @@ export type CommandListItemResponseTarget = {
 };
 
 /**
- * Whether a successful operation result is included or withheld pending explicit confirmation
+ * Whether a successful operation result is included or withheld. `protected` means withheld: pending explicit confirmation, or kept in a Private Alien Instance (see `resultKeptInInstance`).
  */
 export const CommandListItemResponseResultAvailability = {
   Available: "available",
   Protected: "protected",
 } as const;
 /**
- * Whether a successful operation result is included or withheld pending explicit confirmation
+ * Whether a successful operation result is included or withheld. `protected` means withheld: pending explicit confirmation, or kept in a Private Alien Instance (see `resultKeptInInstance`).
  */
 export type CommandListItemResponseResultAvailability = ClosedEnum<
   typeof CommandListItemResponseResultAvailability
@@ -173,9 +173,13 @@ export type CommandListItemResponse = {
    */
   result?: any | null | undefined;
   /**
-   * Whether a successful operation result is included or withheld pending explicit confirmation
+   * Whether a successful operation result is included or withheld. `protected` means withheld: pending explicit confirmation, or kept in a Private Alien Instance (see `resultKeptInInstance`).
    */
   resultAvailability?: CommandListItemResponseResultAvailability | undefined;
+  /**
+   * True for a successful command on a Private Alien Instance. The result never passes through Alien, so read it there with a sender token from `POST /v1/commands/bootstrap`.
+   */
+  resultKeptInInstance?: boolean | undefined;
   deployment?: CommandDeploymentInfo | undefined;
   project?: CommandProjectInfo | undefined;
 };
@@ -251,6 +255,7 @@ export const CommandListItemResponse$inboundSchema: z.ZodType<
   result: z.nullable(z.any()).optional(),
   resultAvailability: CommandListItemResponseResultAvailability$inboundSchema
     .optional(),
+  resultKeptInInstance: z.boolean().optional(),
   deployment: CommandDeploymentInfo$inboundSchema.optional(),
   project: CommandProjectInfo$inboundSchema.optional(),
 });

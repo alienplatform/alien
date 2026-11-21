@@ -74,7 +74,7 @@ export function useDeploymentsUpdateEnvironmentVariablesMutation(
 export function mutationKeyDeploymentsUpdateEnvironmentVariables(): MutationKey {
   return [
     "@alienplatform/platform-api",
-    "deployments",
+    "Deployments",
     "updateEnvironmentVariables",
   ];
 }

@@ -271,7 +271,11 @@ fn critical_e2e_provider_operations_are_declared() {
         },
         OperationCoverage {
             permission_set_id: "vault/data-write",
-            aws_actions: &["ssm:PutParameter", "ssm:DeleteParameter"],
+            aws_actions: &[
+                "ssm:PutParameter",
+                "ssm:AddTagsToResource",
+                "ssm:DeleteParameter",
+            ],
             gcp_permissions: &["secretmanager.secrets.delete"],
             gcp_predefined_roles: &["roles/secretmanager.secretVersionAdder"],
             azure_actions: &[],

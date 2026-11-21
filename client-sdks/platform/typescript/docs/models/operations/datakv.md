@@ -32,7 +32,7 @@ let value: DataKv = {
 
 ## Fields
 
-| Field                   | Type                    | Required                | Description             |
-| ----------------------- | ----------------------- | ----------------------- | ----------------------- |
-| `data`                  | *operations.DataUnion7* | :heavy_check_mark:      | N/A                     |
-| `resourceType`          | *"kv"*                  | :heavy_check_mark:      | N/A                     |
+| Field                                                                  | Type                                                                   | Required                                                               | Description                                                            |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `data`                                                                 | *operations.DataUnion7*                                                | :heavy_check_mark:                                                     | N/A                                                                    |
+| `resourceType`                                                         | [operations.ResourceTypeKv](../../models/operations/resourcetypekv.md) | :heavy_check_mark:                                                     | N/A                                                                    |

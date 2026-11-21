@@ -13,15 +13,15 @@ let value: DataGcpServiceUsage = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
+        reason: "timed-out",
         severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "stopped",
-    partial: true,
-    stale: true,
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: false,
+    stale: false,
   },
   backend: "gcpServiceUsage",
 };
@@ -37,6 +37,6 @@ let value: DataGcpServiceUsage = {
 | `serviceName`                                                              | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `serviceResourceName`                                                      | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `state`                                                                    | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus60](../models/resourceheartbeatstatus60.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus64](../models/resourceheartbeatstatus64.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `title`                                                                    | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `backend`                                                                  | *"gcpServiceUsage"*                                                        | :heavy_check_mark:                                                         | N/A                                                                        |

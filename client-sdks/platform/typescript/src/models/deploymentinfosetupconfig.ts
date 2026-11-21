@@ -362,6 +362,24 @@ export type DeploymentInfoSetupConfigValidationUnion =
   | string;
 
 /**
+ * A boolean input condition controlling whether another input applies.
+ */
+export type DeploymentInfoSetupConfigWhen = {
+  /**
+   * Boolean value for which this input applies.
+   */
+  equals: boolean;
+  /**
+   * ID of an unconditional boolean input in the same stack.
+   */
+  input: string;
+};
+
+export type DeploymentInfoSetupConfigWhenUnion =
+  | DeploymentInfoSetupConfigWhen
+  | string;
+
+/**
  * Stack input definition serialized into a release stack.
  */
 export type DeploymentInfoSetupConfigInput = {
@@ -411,6 +429,7 @@ export type DeploymentInfoSetupConfigInput = {
    */
   required: boolean;
   validation?: DeploymentInfoSetupConfigValidation | string | null | undefined;
+  when?: DeploymentInfoSetupConfigWhen | string | null | undefined;
 };
 
 export type DeploymentInfoSetupConfig = {
@@ -907,6 +926,45 @@ export function deploymentInfoSetupConfigValidationUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentInfoSetupConfigWhen$inboundSchema: z.ZodType<
+  DeploymentInfoSetupConfigWhen,
+  unknown
+> = z.object({
+  equals: z.boolean(),
+  input: z.string(),
+});
+
+export function deploymentInfoSetupConfigWhenFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoSetupConfigWhen, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoSetupConfigWhen$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoSetupConfigWhen' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoSetupConfigWhenUnion$inboundSchema: z.ZodType<
+  DeploymentInfoSetupConfigWhenUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentInfoSetupConfigWhen$inboundSchema),
+  z.string(),
+]);
+
+export function deploymentInfoSetupConfigWhenUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoSetupConfigWhenUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoSetupConfigWhenUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoSetupConfigWhenUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentInfoSetupConfigInput$inboundSchema: z.ZodType<
   DeploymentInfoSetupConfigInput,
   unknown
@@ -941,6 +999,12 @@ export const DeploymentInfoSetupConfigInput$inboundSchema: z.ZodType<
   validation: z.nullable(
     z.union([
       z.lazy(() => DeploymentInfoSetupConfigValidation$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  when: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentInfoSetupConfigWhen$inboundSchema),
       z.string(),
     ]),
   ).optional(),

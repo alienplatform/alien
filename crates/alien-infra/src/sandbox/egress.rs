@@ -1231,7 +1231,11 @@ mod aws_tests {
                 }),
             }),
         );
-        let vault = AwsParameterStoreVault::new(Arc::new(client), "test-secrets".to_string());
+        let vault = AwsParameterStoreVault::new(
+            Arc::new(client),
+            "test-secrets".to_string(),
+            "secrets".to_string(),
+        );
 
         let error = delete_shared_secrets(&vault, "test-secrets")
             .await
@@ -1276,7 +1280,11 @@ mod aws_tests {
                 }),
             }),
         );
-        AwsParameterStoreVault::new(Arc::new(client), "test-secrets".to_string())
+        AwsParameterStoreVault::new(
+            Arc::new(client),
+            "test-secrets".to_string(),
+            "secrets".to_string(),
+        )
     }
 
     /// The owner refreshes the gateway configuration every minute. Republishing the same

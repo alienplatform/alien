@@ -8,7 +8,7 @@ Request schema for pinning/unpinning deployment release
 import { PinReleaseRequest } from "@alienplatform/platform-api/models";
 
 let value: PinReleaseRequest = {
-  releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+  releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
 };
 ```
 
@@ -16,4 +16,4 @@ let value: PinReleaseRequest = {
 
 | Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      | Example                                                                          |
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `releaseId`                                                                      | *string*                                                                         | :heavy_minus_sign:                                                               | Release ID to pin the deployment to. Set to null to resume its followed channel. | rel_WbhQgksrawSKIpEN0NAssHX9                                                     |
+| `releaseId`                                                                      | *string*                                                                         | :heavy_minus_sign:                                                               | Release ID to pin the deployment to. Set to null to resume its followed channel. | rel_WbhQgksrawSKIpEN0NAssHX9E2Su                                                 |

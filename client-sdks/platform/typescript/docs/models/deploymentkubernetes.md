@@ -17,7 +17,7 @@ let value: DeploymentKubernetes = {};
 
 ## Fields
 
-| Field                            | Type                             | Required                         | Description                      |
-| -------------------------------- | -------------------------------- | -------------------------------- | -------------------------------- |
-| `cluster`                        | *models.DeploymentClusterUnion*  | :heavy_minus_sign:               | N/A                              |
-| `exposure`                       | *models.DeploymentExposureUnion* | :heavy_minus_sign:               | N/A                              |
+| Field                           | Type                            | Required                        | Description                     |
+| ------------------------------- | ------------------------------- | ------------------------------- | ------------------------------- |
+| `cluster`                       | *models.DeploymentClusterUnion* | :heavy_minus_sign:              | N/A                             |
+| `exposure`                      | *models.DeploymentExposure*     | :heavy_minus_sign:              | N/A                             |

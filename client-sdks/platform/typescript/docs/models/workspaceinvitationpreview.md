@@ -8,7 +8,7 @@ import { WorkspaceInvitationPreview } from "@alienplatform/platform-api/models";
 let value: WorkspaceInvitationPreview = {
   kind: "link",
   workspace: {
-    id: "ws_It13CUaGEhLLAB87simX0",
+    id: "ws_It13CUaGEhLLAB87simX07Xb",
     name: "<value>",
     logoUrl: "https://deficient-draft.com/",
   },

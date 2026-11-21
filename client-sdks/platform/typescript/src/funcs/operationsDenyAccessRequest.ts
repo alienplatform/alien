@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
+ * Deny a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester.
  */
 export function operationsDenyAccessRequest(
   client: AlienCore,

@@ -119,7 +119,7 @@ export function invalidateDeploymentsGetUpdateOperation(
     ...filters,
     queryKey: [
       "@alienplatform/platform-api",
-      "deployments",
+      "Deployments",
       "getUpdateOperation",
       ...queryKeyBase,
     ],
@@ -134,7 +134,7 @@ export function invalidateAllDeploymentsGetUpdateOperation(
     ...filters,
     queryKey: [
       "@alienplatform/platform-api",
-      "deployments",
+      "Deployments",
       "getUpdateOperation",
     ],
   });

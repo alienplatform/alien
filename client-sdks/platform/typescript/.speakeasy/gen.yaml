@@ -35,7 +35,7 @@ generation:
     generateNewTests: true
     skipResponseBodyAssertions: false
 typescript:
-  version: 3.3.70
+  version: 3.3.71
   acceptHeaderEnum: true
   additionalDependencies:
     dependencies: {}
@@ -48,7 +48,9 @@ typescript:
       directory: client-sdks/platform/typescript
       type: git
       url: https://github.com/alienplatform/alien.git
-  additionalScripts: {}
+  additionalScripts:
+    build: tsc --noCheck
+    typecheck: tsc --noEmit
   alwaysIncludeInboundAndOutbound: false
   apiPromiseHelpers: false
   author: Alien Software, Inc. <hi@alien.dev>

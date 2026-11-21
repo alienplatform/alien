@@ -3,35 +3,18 @@
 
 ## Supported Types
 
-### `operations.DataAwsIamRole2`
+### `operations.DataAwsVpc`
 
 ```typescript
-const value: operations.DataAwsIamRole2 = {
-  managementPermissionsApplied: true,
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "api-unavailable",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "stopping",
-    partial: true,
-    stale: true,
-  },
-  backend: "awsIamRole",
-};
-```
-
-### `operations.DataGcpServiceAccount2`
-
-```typescript
-const value: operations.DataGcpServiceAccount2 = {
-  impersonationGranted: false,
-  roleBound: false,
+const value: operations.DataAwsVpc = {
+  availabilityZones: [
+    "<value 1>",
+    "<value 2>",
+  ],
+  isByoVpc: true,
+  privateSubnetIds: [],
+  publicSubnetIds: [],
+  routeTableCount: 759318,
   status: {
     collectionIssues: [
       {
@@ -41,32 +24,43 @@ const value: operations.DataGcpServiceAccount2 = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "deleted",
-    partial: false,
-    stale: false,
+    health: "unhealthy",
+    lifecycle: "scaling",
+    partial: true,
+    stale: true,
   },
-  backend: "gcpServiceAccount",
+  backend: "awsVpc",
 };
 ```
 
-### `operations.DataAzureManagedIdentity2`
+### `operations.DataGcpVpc`
 
 ```typescript
-const value: operations.DataAzureManagedIdentity2 = {
-  roleAssignmentIds: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
+const value: operations.DataGcpVpc = {
+  isByoVpc: true,
   status: {
     collectionIssues: [],
-    health: "healthy",
-    lifecycle: "creating",
+    health: "degraded",
+    lifecycle: "deleting",
     partial: true,
     stale: false,
   },
-  backend: "azureManagedIdentity",
+  backend: "gcpVpc",
 };
 ```
 
+### `operations.DataAzureVnet`
+
+```typescript
+const value: operations.DataAzureVnet = {
+  isByoVnet: true,
+  status: {
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "unknown",
+    partial: true,
+    stale: true,
+  },
+  backend: "azureVnet",
+};
+```

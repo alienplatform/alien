@@ -7,7 +7,7 @@ import { DeleteAPIKeysRequest } from "@alienplatform/platform-api/models";
 
 let value: DeleteAPIKeysRequest = {
   ids: [
-    "apikey_ye96yxs1tjnrrwulp8frh",
+    "apikey_ye96yxs1tjnrrwulp8frh6w5t6e0",
   ],
 };
 ```

@@ -11,15 +11,50 @@ use std::sync::Arc;
 pub struct AzureKeyVault {
     client: Arc<AzureKeyVaultSecretsClient>,
     vault_base_url: String,
+    vault_id: String,
 }
 
 impl AzureKeyVault {
-    /// Create a new Azure Key Vault binding
-    pub fn new(client: Arc<AzureKeyVaultSecretsClient>, vault_base_url: String) -> Self {
+    /// Create a new Azure Key Vault binding. `vault_id` is the id of the vault resource; it
+    /// marks the values this binding writes.
+    pub fn new(
+        client: Arc<AzureKeyVaultSecretsClient>,
+        vault_base_url: String,
+        vault_id: String,
+    ) -> Self {
         Self {
             client,
             vault_base_url,
+            vault_id,
         }
+    }
+
+    /// Tags that mark a secret as written by this vault: the Key Vault name stands in for the
+    /// vault prefix, which Key Vault does not have, and the vault id.
+    ///
+    /// Key Vault tags belong to a secret version, so a write without them drops the marker of
+    /// the previous version. The markers therefore go on every write, not only on create. That
+    /// is safe here because each vault is a dedicated Key Vault: nothing else writes to it.
+    /// Tags are part of the `SetSecret` request, so no extra permission is needed.
+    fn marker_tags(&self) -> std::collections::HashMap<String, String> {
+        use alien_core::vault_naming::{
+            vault_marker_value, VAULT_ID_MARKER_KEY, VAULT_PREFIX_MARKER_KEY,
+        };
+        let host = self
+            .vault_base_url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://");
+        let key_vault_name = host.split('.').next().unwrap_or(host);
+        std::collections::HashMap::from([
+            (
+                VAULT_PREFIX_MARKER_KEY.to_string(),
+                vault_marker_value(key_vault_name),
+            ),
+            (
+                VAULT_ID_MARKER_KEY.to_string(),
+                vault_marker_value(&self.vault_id),
+            ),
+        ])
     }
 
     /// Azure Key Vault secret names only allow alphanumerics and hyphens.
@@ -157,7 +192,7 @@ impl crate::traits::Vault for AzureKeyVault {
             value: value.to_string(),
             content_type: None,
             attributes: None,
-            tags: std::collections::HashMap::new(),
+            tags: self.marker_tags(),
         };
 
         self.client
@@ -217,7 +252,7 @@ impl crate::traits::Vault for AzureKeyVault {
             value: value.to_string(),
             content_type: None,
             attributes: None,
-            tags: std::collections::HashMap::new(),
+            tags: self.marker_tags(),
         };
         match self
             .client
@@ -288,6 +323,8 @@ impl crate::traits::Vault for AzureKeyVault {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_azure_clients::{AzureClientConfig, AzureClientConfigExt as _, AzureTokenCache};
+    use httpmock::prelude::*;
 
     const NOW: i64 = 1_800_000_000;
 
@@ -392,5 +429,90 @@ mod tests {
     #[test]
     fn a_secret_without_versions_is_missing() {
         assert_eq!(presence(&[]), SecretPresence::Missing);
+    }
+
+    fn vault_for(server: &MockServer) -> AzureKeyVault {
+        let config = AzureClientConfig::mock().with_service_overrides(
+            alien_azure_clients::ServiceOverrides {
+                endpoints: std::collections::HashMap::from([(
+                    "keyvault".to_string(),
+                    server.base_url(),
+                )]),
+            },
+        );
+        let client = Arc::new(AzureKeyVaultSecretsClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config),
+        ));
+        AzureKeyVault::new(
+            client,
+            "https://kv-acme-1a2b.vault.azure.net".to_string(),
+            "secrets".to_string(),
+        )
+    }
+
+    fn set_secret_mock<'a>(server: &'a MockServer, name: &str) -> httpmock::Mock<'a> {
+        server.mock(|when, then| {
+            when.method(PUT)
+                .path(format!("/secrets/{name}"))
+                .json_body_partial(
+                    serde_json::json!({
+                        "tags": {"alien-vault-prefix": "kv-acme-1a2b", "alien-vault": "secrets"}
+                    })
+                    .to_string(),
+                );
+            then.status(200)
+                .json_body(serde_json::json!({"value": "v"}));
+        })
+    }
+
+    #[tokio::test]
+    async fn set_secret_sends_the_marker_tags_on_every_write() {
+        let server = MockServer::start_async().await;
+        let mock = set_secret_mock(&server, "api-key");
+        let vault = vault_for(&server);
+        // The first write creates the secret, the second adds a version: both carry the tags.
+        crate::traits::Vault::set_secret(&vault, "api-key", "one")
+            .await
+            .unwrap();
+        crate::traits::Vault::set_secret(&vault, "api-key", "two")
+            .await
+            .unwrap();
+        mock.assert_hits(2);
+    }
+
+    #[tokio::test]
+    async fn create_secret_sends_the_marker_tags() {
+        let server = MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(GET).path("/secrets/api-key/versions");
+            then.status(404).json_body(
+                serde_json::json!({"error": {"code": "SecretNotFound", "message": "none"}}),
+            );
+        });
+        let mock = set_secret_mock(&server, "api-key");
+        let vault = vault_for(&server);
+        crate::traits::Vault::create_secret(&vault, "api-key", "one")
+            .await
+            .unwrap();
+        mock.assert_hits(1);
+    }
+
+    #[test]
+    fn marker_tags_use_the_key_vault_name_and_the_vault_id() {
+        let server_free = AzureKeyVault::new(
+            Arc::new(AzureKeyVaultSecretsClient::new(
+                reqwest::Client::new(),
+                AzureTokenCache::new(AzureClientConfig::mock()),
+            )),
+            "https://Kv-Mixed.vault.azure.net".to_string(),
+            "secrets".to_string(),
+        );
+        let tags = server_free.marker_tags();
+        assert_eq!(
+            tags["alien-vault-prefix"],
+            alien_core::vault_naming::vault_marker_value("Kv-Mixed")
+        );
+        assert!(tags["alien-vault-prefix"].starts_with("h-"));
     }
 }
