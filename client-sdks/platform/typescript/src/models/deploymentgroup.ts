@@ -5,10 +5,6 @@
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
-import {
-  AccessApprover,
-  AccessApprover$inboundSchema,
-} from "./accessapprover.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type DeploymentGroup = {
@@ -36,14 +32,6 @@ export type DeploymentGroup = {
    * Maximum number of deployments allowed in this deployment group
    */
   maxDeployments: number;
-  /**
-   * Whether new deployments from this group are protected once the project's signing is ready. On by default; the vendor may turn it off.
-   */
-  protectNewDeployments: boolean;
-  /**
-   * Who approves access requests. `customer`: the customer approves on the Slack card (through the Alien app or your own Slack app) or, on Kubernetes, with kubectl. Slack cannot prove who a customer is, so the Slack click is approval in Slack through your control plane, not a verified customer identity. `team`: your own team approves in the Alien Slack app or the dashboard. Every group defaults to `customer`, and only a workspace admin changes it.
-   */
-  accessApprover: AccessApprover;
   createdAt: Date;
 };
 
@@ -58,8 +46,6 @@ export const DeploymentGroup$inboundSchema: z.ZodType<
   projectId: z.string(),
   workspaceId: z.string(),
   maxDeployments: z.int().default(100),
-  protectNewDeployments: z.boolean().default(true),
-  accessApprover: AccessApprover$inboundSchema,
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 

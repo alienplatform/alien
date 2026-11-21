@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Approve a queued access request as the vendor team. Only for a deployment group whose team approves access, and only by a workspace member or administrator other than the requester. When the customer approves, this fails with ACCESS_REQUEST_CUSTOMER_APPROVES.
+ * Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
  */
 export function operationsApproveAccessRequest(
   client: AlienCore,

@@ -55,11 +55,11 @@ const value: models.ExternalBindingTablestorage = {
 };
 ```
 
-### `models.ExternalBindingRedisKv`
+### `models.ExternalBindingRedis`
 
 ```typescript
-const value: models.ExternalBindingRedisKv = {
-  connectionUrl: "https://old-maintainer.org/",
+const value: models.ExternalBindingRedis = {
+  connectionUrl: "https://smoggy-consistency.info",
   service: "redis",
   type: "kv",
 };
@@ -74,3 +74,4 @@ const value: models.ExternalBindingLocalKv = {
   type: "kv",
 };
 ```
+

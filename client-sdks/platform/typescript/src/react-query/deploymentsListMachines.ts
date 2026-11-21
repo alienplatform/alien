@@ -113,7 +113,7 @@ export function invalidateDeploymentsListMachines(
     ...filters,
     queryKey: [
       "@alienplatform/platform-api",
-      "Deployments",
+      "deployments",
       "listMachines",
       ...queryKeyBase,
     ],
@@ -126,6 +126,6 @@ export function invalidateAllDeploymentsListMachines(
 ): Promise<void> {
   return client.invalidateQueries({
     ...filters,
-    queryKey: ["@alienplatform/platform-api", "Deployments", "listMachines"],
+    queryKey: ["@alienplatform/platform-api", "deployments", "listMachines"],
   });
 }

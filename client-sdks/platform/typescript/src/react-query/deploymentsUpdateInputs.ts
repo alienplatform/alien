@@ -71,7 +71,7 @@ export function useDeploymentsUpdateInputsMutation(
 }
 
 export function mutationKeyDeploymentsUpdateInputs(): MutationKey {
-  return ["@alienplatform/platform-api", "Deployments", "updateInputs"];
+  return ["@alienplatform/platform-api", "deployments", "updateInputs"];
 }
 
 export function buildDeploymentsUpdateInputsMutation(

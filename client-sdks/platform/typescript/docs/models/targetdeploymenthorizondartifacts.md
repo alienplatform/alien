@@ -1,6 +1,6 @@
 # TargetDeploymentHorizondArtifacts
 
-Machine agent download for one release platform.
+Download artifact for one horizond release platform.
 
 ## Example Usage
 

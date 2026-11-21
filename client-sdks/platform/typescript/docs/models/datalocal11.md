@@ -6,14 +6,14 @@
 import { DataLocal11 } from "@alienplatform/platform-api/models";
 
 let value: DataLocal11 = {
-  configured: false,
-  identity: "<value>",
+  reachable: false,
+  registryUrl: "https://well-documented-remark.biz/",
   status: {
     collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "creating",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "local",
 };
@@ -23,7 +23,7 @@ let value: DataLocal11 = {
 
 | Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
 | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `configured`                                                               | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
-| `identity`                                                                 | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus49](../models/resourceheartbeatstatus49.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `reachable`                                                                | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
+| `registryUrl`                                                              | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus55](../models/resourceheartbeatstatus55.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `backend`                                                                  | *"local"*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |

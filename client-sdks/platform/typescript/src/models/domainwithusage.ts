@@ -12,12 +12,6 @@ import {
 } from "./domainendpoint.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
-export const Dns = {
-  Alien: "alien",
-  Customer: "customer",
-} as const;
-export type Dns = ClosedEnum<typeof Dns>;
-
 export const DomainWithUsageStatus = {
   PendingZoneCreation: "pending-zone-creation",
   PendingVerification: "pending-verification",
@@ -69,8 +63,6 @@ export type DomainWithUsage = {
    */
   workspaceId: string;
   domain: string;
-  dns: Dns;
-  acmeChallengeTarget?: string | null | undefined;
   isSystem: boolean;
   claimToken: string;
   hostedZoneId?: string | null | undefined;
@@ -80,13 +72,9 @@ export type DomainWithUsage = {
   createdAt: Date;
   updatedAt: Date;
   verifiedAt?: Date | null | undefined;
-  verificationFailingSince?: Date | null | undefined;
   endpoints: Array<DomainEndpoint | null>;
   usage: DomainWithUsageUsage;
 };
-
-/** @internal */
-export const Dns$inboundSchema: z.ZodEnum<typeof Dns> = z.enum(Dns);
 
 /** @internal */
 export const DomainWithUsageStatus$inboundSchema: z.ZodEnum<
@@ -198,8 +186,6 @@ export const DomainWithUsage$inboundSchema: z.ZodType<
   id: z.string(),
   workspaceId: z.string(),
   domain: z.string(),
-  dns: Dns$inboundSchema,
-  acmeChallengeTarget: z.nullable(z.string()).optional(),
   isSystem: z.boolean(),
   claimToken: z.string(),
   hostedZoneId: z.nullable(z.string()).optional(),
@@ -209,9 +195,6 @@ export const DomainWithUsage$inboundSchema: z.ZodType<
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   verifiedAt: z.nullable(
-    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  ).optional(),
-  verificationFailingSince: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   endpoints: z.array(z.nullable(DomainEndpoint$inboundSchema)),

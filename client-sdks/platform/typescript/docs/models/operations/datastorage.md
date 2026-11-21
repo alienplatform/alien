@@ -31,7 +31,7 @@ let value: DataStorage = {
 
 ## Fields
 
-| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `data`                                                                           | *operations.DataUnion1*                                                          | :heavy_check_mark:                                                               | N/A                                                                              |
-| `resourceType`                                                                   | [operations.ResourceTypeStorage](../../models/operations/resourcetypestorage.md) | :heavy_check_mark:                                                               | N/A                                                                              |
+| Field                   | Type                    | Required                | Description             |
+| ----------------------- | ----------------------- | ----------------------- | ----------------------- |
+| `data`                  | *operations.DataUnion1* | :heavy_check_mark:      | N/A                     |
+| `resourceType`          | *"storage"*             | :heavy_check_mark:      | N/A                     |

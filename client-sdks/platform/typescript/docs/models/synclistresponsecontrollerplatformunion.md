@@ -3,10 +3,10 @@
 
 ## Supported Types
 
-### `models.SyncListResponseControllerPlatformStackStateEnum`
+### `models.SyncListResponseControllerPlatformEnum`
 
 ```typescript
-const value: models.SyncListResponseControllerPlatformStackStateEnum = "local";
+const value: models.SyncListResponseControllerPlatformEnum = "kubernetes";
 ```
 
 ### `string`
@@ -14,3 +14,4 @@ const value: models.SyncListResponseControllerPlatformStackStateEnum = "local";
 ```typescript
 const value: string = "<value>";
 ```
+

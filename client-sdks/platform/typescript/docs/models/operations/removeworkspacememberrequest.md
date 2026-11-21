@@ -6,7 +6,7 @@
 import { RemoveWorkspaceMemberRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: RemoveWorkspaceMemberRequest = {
-  id: "ws_It13CUaGEhLLAB87simX07Xb",
+  id: "ws_It13CUaGEhLLAB87simX0",
   userId: "<id>",
 };
 ```
@@ -15,5 +15,5 @@ let value: RemoveWorkspaceMemberRequest = {
 
 | Field                                | Type                                 | Required                             | Description                          | Example                              |
 | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ |
-| `id`                                 | *string*                             | :heavy_check_mark:                   | Unique identifier for the workspace. | ws_It13CUaGEhLLAB87simX07Xb          |
+| `id`                                 | *string*                             | :heavy_check_mark:                   | Unique identifier for the workspace. | ws_It13CUaGEhLLAB87simX0             |
 | `userId`                             | *string*                             | :heavy_check_mark:                   | N/A                                  |                                      |

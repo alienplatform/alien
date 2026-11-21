@@ -1,6 +1,6 @@
 # TargetDeploymentBaseImage
 
-Base image metadata for the machine image.
+Base image metadata for the Horizon machine image.
 
 ## Example Usage
 

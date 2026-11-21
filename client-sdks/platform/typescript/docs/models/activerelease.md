@@ -6,7 +6,7 @@
 import { ActiveRelease } from "@alienplatform/platform-api/models";
 
 let value: ActiveRelease = {
-  id: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+  id: "rel_WbhQgksrawSKIpEN0NAssHX9",
   version: "<value>",
   stack: {},
 };
@@ -16,6 +16,6 @@ let value: ActiveRelease = {
 
 | Field                                                                                    | Type                                                                                     | Required                                                                                 | Description                                                                              | Example                                                                                  |
 | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `id`                                                                                     | *string*                                                                                 | :heavy_check_mark:                                                                       | Unique identifier for the release.                                                       | rel_WbhQgksrawSKIpEN0NAssHX9E2Su                                                         |
+| `id`                                                                                     | *string*                                                                                 | :heavy_check_mark:                                                                       | Unique identifier for the release.                                                       | rel_WbhQgksrawSKIpEN0NAssHX9                                                             |
 | `version`                                                                                | *string*                                                                                 | :heavy_check_mark:                                                                       | N/A                                                                                      |                                                                                          |
 | `stack`                                                                                  | [models.DeploymentLinkSetupResponseStack](../models/deploymentlinksetupresponsestack.md) | :heavy_check_mark:                                                                       | N/A                                                                                      |                                                                                          |

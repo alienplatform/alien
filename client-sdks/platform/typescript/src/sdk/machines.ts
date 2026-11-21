@@ -4,7 +4,6 @@
 
 import { machinesCancelMachineDrain } from "../funcs/machinesCancelMachineDrain.js";
 import { machinesCreateJoinToken } from "../funcs/machinesCreateJoinToken.js";
-import { machinesCreateRecoveryCommand } from "../funcs/machinesCreateRecoveryCommand.js";
 import { machinesDrainMachine } from "../funcs/machinesDrainMachine.js";
 import { machinesListJoinTokens } from "../funcs/machinesListJoinTokens.js";
 import { machinesRemoveMachine } from "../funcs/machinesRemoveMachine.js";
@@ -76,17 +75,6 @@ export class Machines extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.CancelMachinesMachineDrainResponse> {
     return unwrapAsync(machinesCancelMachineDrain(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  async createRecoveryCommand(
-    request: operations.CreateMachinesRecoveryCommandRequest,
-    options?: RequestOptions,
-  ): Promise<models.CreateMachinesRecoveryCommandResponse> {
-    return unwrapAsync(machinesCreateRecoveryCommand(
       this,
       request,
       options,

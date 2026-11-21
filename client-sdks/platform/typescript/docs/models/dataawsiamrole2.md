@@ -16,10 +16,10 @@ let value: DataAwsIamRole2 = {
         source: "<value>",
       },
     ],
-    health: "degraded",
+    health: "unknown",
     lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "awsIamRole",
 };
@@ -32,5 +32,5 @@ let value: DataAwsIamRole2 = {
 | `managementPermissionsApplied`                                             | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
 | `roleArn`                                                                  | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `roleName`                                                                 | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus53](../models/resourceheartbeatstatus53.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus49](../models/resourceheartbeatstatus49.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `backend`                                                                  | *"awsIamRole"*                                                             | :heavy_check_mark:                                                         | N/A                                                                        |

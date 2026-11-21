@@ -10,17 +10,12 @@ export type SyncContextRequest = {
    * Unique identifier for the deployment.
    */
   deploymentId: string;
-  /**
-   * Capabilities of the manager replica making this request, in the same form as the heartbeat. A replica that does not send `values: 1` is refused (503) a deployment that has values stored in the manager, because it cannot load them.
-   */
-  capabilities?: { [k: string]: number } | undefined;
 };
 
 /** @internal */
 export type SyncContextRequest$Outbound = {
   managerId?: string | undefined;
   deploymentId: string;
-  capabilities?: { [k: string]: number } | undefined;
 };
 
 /** @internal */
@@ -30,7 +25,6 @@ export const SyncContextRequest$outboundSchema: z.ZodType<
 > = z.object({
   managerId: z.string().optional(),
   deploymentId: z.string(),
-  capabilities: z.record(z.string(), z.int()).optional(),
 });
 
 export function syncContextRequestToJSON(

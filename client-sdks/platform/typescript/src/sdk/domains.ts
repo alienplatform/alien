@@ -73,7 +73,7 @@ export class Domains extends ClientSDK {
   }
 
   /**
-   * Delete a workspace domain and immediately stop serving its custom hostnames. Removing only the challenge CNAME instead blocks issuance while the current matching certificate keeps serving until expiry.
+   * Delete a workspace domain.
    */
   async delete(
     request: operations.DeleteDomainRequest,
@@ -87,7 +87,7 @@ export class Domains extends ClientSDK {
   }
 
   /**
-   * Refresh workspace domain verification. Removing the challenge CNAME blocks new issuance; a matching, unexpired certificate keeps serving until it expires. Deleting the domain stops serving its custom hostnames immediately.
+   * Refresh workspace domain verification.
    */
   async refresh(
     request: operations.RefreshDomainRequest,

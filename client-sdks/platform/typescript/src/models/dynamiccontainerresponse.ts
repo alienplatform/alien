@@ -7,10 +7,6 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
-  ContainerValueRef,
-  ContainerValueRef$inboundSchema,
-} from "./containervalueref.js";
-import {
   DynamicContainerSpec,
   DynamicContainerSpec$inboundSchema,
 } from "./dynamiccontainerspec.js";
@@ -40,7 +36,6 @@ export type DynamicContainerResponse = {
   statusMessage: string | null;
   internalServices: Array<InternalService>;
   deleted: boolean;
-  secretEnvRefs?: { [k: string]: ContainerValueRef } | undefined;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -82,8 +77,6 @@ export const DynamicContainerResponse$inboundSchema: z.ZodType<
   statusMessage: z.nullable(z.string()),
   internalServices: z.array(z.lazy(() => InternalService$inboundSchema)),
   deleted: z.boolean(),
-  secretEnvRefs: z.record(z.string(), ContainerValueRef$inboundSchema)
-    .optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });

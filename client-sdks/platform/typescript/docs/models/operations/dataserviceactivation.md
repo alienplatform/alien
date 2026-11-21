@@ -14,15 +14,15 @@ let value: DataServiceActivation = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "collection-failed",
-          severity: "warning",
+          reason: "api-unavailable",
+          severity: "error",
           source: "<value>",
         },
       ],
-      health: "healthy",
-      lifecycle: "deleted",
-      partial: false,
-      stale: false,
+      health: "unhealthy",
+      lifecycle: "stopped",
+      partial: true,
+      stale: true,
     },
     backend: "gcpServiceUsage",
   },
@@ -32,7 +32,7 @@ let value: DataServiceActivation = {
 
 ## Fields
 
-| Field                                                                                                | Type                                                                                                 | Required                                                                                             | Description                                                                                          |
-| ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `data`                                                                                               | *operations.DataUnion16*                                                                             | :heavy_check_mark:                                                                                   | N/A                                                                                                  |
-| `resourceType`                                                                                       | [operations.ResourceTypeServiceActivation](../../models/operations/resourcetypeserviceactivation.md) | :heavy_check_mark:                                                                                   | N/A                                                                                                  |
+| Field                    | Type                     | Required                 | Description              |
+| ------------------------ | ------------------------ | ------------------------ | ------------------------ |
+| `data`                   | *operations.DataUnion15* | :heavy_check_mark:       | N/A                      |
+| `resourceType`           | *"service_activation"*   | :heavy_check_mark:       | N/A                      |

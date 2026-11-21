@@ -13,8 +13,8 @@ let value: DataAzureResourceGroup = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "collection-failed",
-          severity: "warning",
+          reason: "api-unavailable",
+          severity: "error",
           source: "<value>",
         },
       ],
@@ -33,4 +33,4 @@ let value: DataAzureResourceGroup = {
 | Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                |
 | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `data`                                                                                                     | [operations.GetResourceDeploymentDetailData2](../../models/operations/getresourcedeploymentdetaildata2.md) | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
-| `resourceType`                                                                                             | [operations.ResourceTypeAzureResourceGroup](../../models/operations/resourcetypeazureresourcegroup.md)     | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
+| `resourceType`                                                                                             | *"azure_resource_group"*                                                                                   | :heavy_check_mark:                                                                                         | N/A                                                                                                        |

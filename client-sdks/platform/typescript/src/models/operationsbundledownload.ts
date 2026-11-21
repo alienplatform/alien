@@ -7,11 +7,6 @@ import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
-export type EnvSlots = {
-  slot: string;
-  digest: string;
-};
-
 export type OperationsBundleDownload = {
   plugin: string;
   pluginVersion: string;
@@ -23,27 +18,7 @@ export type OperationsBundleDownload = {
    * Environment the plugin process runs with: its settings, which may hold secrets. Never persisted.
    */
   env?: { [k: string]: string } | undefined;
-  /**
-   * Settings whose value the deployment's manager holds, by environment variable name. The manager fills them in from its own store.
-   */
-  envSlots?: { [k: string]: EnvSlots } | undefined;
 };
-
-/** @internal */
-export const EnvSlots$inboundSchema: z.ZodType<EnvSlots, unknown> = z.object({
-  slot: z.string(),
-  digest: z.string(),
-});
-
-export function envSlotsFromJSON(
-  jsonString: string,
-): SafeParseResult<EnvSlots, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => EnvSlots$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EnvSlots' from JSON`,
-  );
-}
 
 /** @internal */
 export const OperationsBundleDownload$inboundSchema: z.ZodType<
@@ -54,8 +29,6 @@ export const OperationsBundleDownload$inboundSchema: z.ZodType<
   pluginVersion: z.string(),
   url: z.string(),
   env: z.record(z.string(), z.string()).optional(),
-  envSlots: z.record(z.string(), z.lazy(() => EnvSlots$inboundSchema))
-    .optional(),
 });
 
 export function operationsBundleDownloadFromJSON(

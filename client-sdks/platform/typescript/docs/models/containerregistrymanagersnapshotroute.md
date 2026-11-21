@@ -6,7 +6,7 @@
 import { ContainerRegistryManagerSnapshotRoute } from "@alienplatform/platform-api/models";
 
 let value: ContainerRegistryManagerSnapshotRoute = {
-  id: "crroute_c9t4xoy7fmiq7equtu209zyjuoe9",
+  id: "crroute_c9t4xoy7fmiq7equtu20",
   deploymentId: "<id>",
   resourceId: "<id>",
   resourceRevision: "<value>",
@@ -15,7 +15,7 @@ let value: ContainerRegistryManagerSnapshotRoute = {
   status: "resolving",
   repositories: [
     {
-      id: "crrepo_625temdq3bnu25jw9rcuxc4t058m",
+      id: "crrepo_625temdq3bnu25jw9rcux",
       logicalName: "<value>",
       desiredState: "deleteRequested",
       routableUpstreamName: "<value>",
@@ -30,7 +30,7 @@ let value: ContainerRegistryManagerSnapshotRoute = {
 
 | Field                                                                                                          | Type                                                                                                           | Required                                                                                                       | Description                                                                                                    | Example                                                                                                        |
 | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `id`                                                                                                           | *string*                                                                                                       | :heavy_check_mark:                                                                                             | Unique identifier for the container registry route.                                                            | crroute_c9t4xoy7fmiq7equtu209zyjuoe9                                                                           |
+| `id`                                                                                                           | *string*                                                                                                       | :heavy_check_mark:                                                                                             | Unique identifier for the container registry route.                                                            | crroute_c9t4xoy7fmiq7equtu20                                                                                   |
 | `deploymentId`                                                                                                 | *string*                                                                                                       | :heavy_check_mark:                                                                                             | N/A                                                                                                            |                                                                                                                |
 | `resourceId`                                                                                                   | *string*                                                                                                       | :heavy_check_mark:                                                                                             | N/A                                                                                                            |                                                                                                                |
 | `resourceRevision`                                                                                             | *string*                                                                                                       | :heavy_check_mark:                                                                                             | N/A                                                                                                            |                                                                                                                |

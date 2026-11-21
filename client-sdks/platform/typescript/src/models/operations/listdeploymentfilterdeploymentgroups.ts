@@ -48,10 +48,6 @@ export type ListDeploymentFilterDeploymentGroupsItem = {
    * Number of deployments in an in-progress status (provisioning, updating, etc.)
    */
   inProgressCount: number;
-  /**
-   * Number of deployments the deployment list shows under 'Needs attention'
-   */
-  attentionCount: number;
 };
 
 /**
@@ -101,7 +97,6 @@ export const ListDeploymentFilterDeploymentGroupsItem$inboundSchema: z.ZodType<
   runningCount: z.number(),
   failedCount: z.number(),
   inProgressCount: z.number(),
-  attentionCount: z.number(),
 });
 
 export function listDeploymentFilterDeploymentGroupsItemFromJSON(

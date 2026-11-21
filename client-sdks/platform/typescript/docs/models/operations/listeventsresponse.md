@@ -10,24 +10,25 @@ import { ListEventsResponse } from "@alienplatform/platform-api/models/operation
 let value: ListEventsResponse = {
   items: [
     {
-      id: "event_MtSA24M3pWuAkQYxgZxuRIg6I5i2",
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
-      debugSessionId: "dbg_HOXmkmT9UPYlsnxqSNlEGoXLGcNV",
+      id: "event_MtSA24M3pWuAkQYxgZxuRI",
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      debugSessionId: "dbg_HOXmkmT9UPYlsnxqSNlEGoXL",
       data: {
-        language: "<value>",
-        type: "CompilingCode",
+        agentId: "<id>",
+        releaseId: "<id>",
+        type: "DeletingAgent",
       },
       state: "none",
-      projectId: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
+      projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
       createdAt: new Date("2026-05-23T10:59:53.935Z"),
-      workspaceId: "ws_It13CUaGEhLLAB87simX07Xb",
+      workspaceId: "ws_It13CUaGEhLLAB87simX0",
     },
   ],
   nextCursor: "<value>",
   releases: [
     {
-      id: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+      id: "rel_WbhQgksrawSKIpEN0NAssHX9",
       version: "<value>",
       gitMetadata: {
         commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
@@ -50,13 +51,8 @@ let value: ListEventsResponse = {
 
 ## Fields
 
-| Field                                                                                                                                                                                        | Type                                                                                                                                                                                         | Required                                                                                                                                                                                     | Description                                                                                                                                                                                  |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `items`                                                                                                                                                                                      | [models.EventListItemResponse](../../models/eventlistitemresponse.md)[]                                                                                                                      | :heavy_check_mark:                                                                                                                                                                           | Items in this page                                                                                                                                                                           |
-| `nextCursor`                                                                                                                                                                                 | *string*                                                                                                                                                                                     | :heavy_check_mark:                                                                                                                                                                           | Cursor for the next page, null if last page                                                                                                                                                  |
-| `cloudAccounts`                                                                                                                                                                              | [operations.CloudAccount](../../models/operations/cloudaccount.md)[]                                                                                                                         | :heavy_minus_sign:                                                                                                                                                                           | Subaccounts referenced by events, with ?include=cloudAccounts                                                                                                                                |
-| `deployments`                                                                                                                                                                                | [operations.ListEventsDeployment](../../models/operations/listeventsdeployment.md)[]                                                                                                         | :heavy_minus_sign:                                                                                                                                                                           | Deployments the listed events reference, with ?include=deployments                                                                                                                           |
-| `releases`                                                                                                                                                                                   | [operations.ListEventsRelease](../../models/operations/listeventsrelease.md)[]                                                                                                               | :heavy_minus_sign:                                                                                                                                                                           | Releases the listed events reference, with ?include=releases                                                                                                                                 |
-| `actors`                                                                                                                                                                                     | [operations.Actor](../../models/operations/actor.md)[]                                                                                                                                       | :heavy_minus_sign:                                                                                                                                                                           | People the listed events name as their actor, with their display name and avatar, with ?include=actors                                                                                       |
-| `apiKeys`                                                                                                                                                                                    | [operations.ApiKey](../../models/operations/apikey.md)[]                                                                                                                                     | :heavy_minus_sign:                                                                                                                                                                           | API keys the listed events name as their actor, by name, with ?include=actors; only keys the caller can read                                                                                 |
-| `rollouts`                                                                                                                                                                                   | [operations.ListEventsRollout](../../models/operations/listeventsrollout.md)[]                                                                                                               | :heavy_minus_sign:                                                                                                                                                                           | For each release the listed DeploymentReleased events name, how many deployments it reached on each of their UTC days, counted over all events rather than this page, with ?include=rollouts |
+| Field                                                                          | Type                                                                           | Required                                                                       | Description                                                                    |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `items`                                                                        | [models.EventListItemResponse](../../models/eventlistitemresponse.md)[]        | :heavy_check_mark:                                                             | Items in this page                                                             |
+| `nextCursor`                                                                   | *string*                                                                       | :heavy_check_mark:                                                             | Cursor for the next page, null if last page                                    |
+| `releases`                                                                     | [operations.ListEventsRelease](../../models/operations/listeventsrelease.md)[] | :heavy_minus_sign:                                                             | Releases the listed events reference, with ?include=releases                   |

@@ -12,8 +12,8 @@ let value: GetResourceDeploymentDetailData2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
+        reason: "api-unavailable",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -34,4 +34,4 @@ let value: GetResourceDeploymentDetailData2 = {
 | `name`                                                                                                                   | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
 | `provisioningState`                                                                                                      | *string*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
 | `resourceId`                                                                                                             | *string*                                                                                                                 | :heavy_minus_sign:                                                                                                       | N/A                                                                                                                      |
-| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus66](../../models/operations/getresourcedeploymentdetaildatastatus66.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus62](../../models/operations/getresourcedeploymentdetaildatastatus62.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |

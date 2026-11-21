@@ -17,7 +17,7 @@ let value: ApproveAccessRequestResponse = {
     id: "<id>",
     name: "<value>",
     deploymentGroup: {
-      id: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
+      id: "dg_r27ict8c7vcgsumpj90ackf7b",
       name: "prod-us-east-1",
       externalId: "ext_example_01",
     },
@@ -39,36 +39,17 @@ let value: ApproveAccessRequestResponse = {
   createdAt: "1707614278049",
   queuedBy: "<value>",
   queuedAt: "<value>",
-  approver: "customer",
   approvedBy: {
     method: "<value>",
     actorId: "<id>",
-    slack: {
-      userId: "<id>",
-      userName: "Dusty_Simonis",
-      teamId: "<id>",
-      teamName: "<value>",
-      channelId: "<id>",
-      messageTs: "<value>",
-      app: "<value>",
-    },
     at: "<value>",
   },
   deniedBy: {
     actorId: "<id>",
-    slack: {
-      userId: "<id>",
-      userName: "Dusty_Simonis",
-      teamId: "<id>",
-      teamName: "<value>",
-      channelId: "<id>",
-      messageTs: "<value>",
-      app: "<value>",
-    },
     at: "<value>",
   },
   revokedBy: {
-    actorKind: "user",
+    actorKind: "serviceAccount",
     actorId: "<id>",
     at: "<value>",
     reason: "<value>",
@@ -100,8 +81,7 @@ let value: ApproveAccessRequestResponse = {
 | `createdAt`                                                                                                  | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `queuedBy`                                                                                                   | *string*                                                                                                     | :heavy_check_mark:                                                                                           | Who passed the engineer gate; the requester for a plan-less request.                                         |                                                                                                              |
 | `queuedAt`                                                                                                   | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
-| `approver`                                                                                                   | [models.AccessApprover](../../models/accessapprover.md)                                                      | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
-| `approvedBy`                                                                                                 | [operations.ApproveAccessRequestApprovedBy](../../models/operations/approveaccessrequestapprovedby.md)       | :heavy_check_mark:                                                                                           | How, when and by whom the request was approved. Null until approved.                                         |                                                                                                              |
+| `approvedBy`                                                                                                 | [operations.ApproveAccessRequestApprovedBy](../../models/operations/approveaccessrequestapprovedby.md)       | :heavy_check_mark:                                                                                           | How and when the customer gate was passed. Null until approved.                                              |                                                                                                              |
 | `deniedBy`                                                                                                   | [operations.ApproveAccessRequestDeniedBy](../../models/operations/approveaccessrequestdeniedby.md)           | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `revokedBy`                                                                                                  | [operations.ApproveAccessRequestRevokedBy](../../models/operations/approveaccessrequestrevokedby.md)         | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `approvalChannels`                                                                                           | [models.AccessRequestApprovalChannel](../../models/accessrequestapprovalchannel.md)[]                        | :heavy_minus_sign:                                                                                           | N/A                                                                                                          |                                                                                                              |

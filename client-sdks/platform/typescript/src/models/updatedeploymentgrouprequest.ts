@@ -3,10 +3,6 @@
  */
 
 import * as z from "zod/v4";
-import {
-  AccessApprover,
-  AccessApprover$outboundSchema,
-} from "./accessapprover.js";
 
 export type UpdateDeploymentGroupRequest = {
   /**
@@ -17,19 +13,12 @@ export type UpdateDeploymentGroupRequest = {
    * Maximum number of deployments in this deployment group
    */
   maxDeployments?: number | undefined;
-  /**
-   * Protect new deployments once the project's signing is ready. Existing deployments are unchanged.
-   */
-  protectNewDeployments?: boolean | undefined;
-  accessApprover?: AccessApprover | undefined;
 };
 
 /** @internal */
 export type UpdateDeploymentGroupRequest$Outbound = {
   name?: string | undefined;
   maxDeployments?: number | undefined;
-  protectNewDeployments?: boolean | undefined;
-  accessApprover?: string | undefined;
 };
 
 /** @internal */
@@ -39,8 +28,6 @@ export const UpdateDeploymentGroupRequest$outboundSchema: z.ZodType<
 > = z.object({
   name: z.string().optional(),
   maxDeployments: z.int().optional(),
-  protectNewDeployments: z.boolean().optional(),
-  accessApprover: AccessApprover$outboundSchema.optional(),
 });
 
 export function updateDeploymentGroupRequestToJSON(

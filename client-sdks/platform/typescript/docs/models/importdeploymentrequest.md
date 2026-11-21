@@ -9,12 +9,12 @@ Request schema for importing a deployment from resolved setup infrastructure
 
 ```typescript
 const value: models.ForwardImportRequest = {
-  deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
-  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
+  deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
+  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   source: {
     deploymentName: "<value>",
     resourcePrefix: "<value>",
-    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     platform: "machines",
     region: "<value>",
     setupTarget: "<value>",
@@ -43,16 +43,17 @@ const value: models.ForwardImportRequest = {
 const value: models.PersistImportedDeploymentRequest = {
   mode: "persist",
   name: "<value>",
-  deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
-  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
+  deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
+  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   platform: "kubernetes",
   stackSettings: {},
   runtimeMetadata: {},
   deploymentProtocolVersion: 75885,
-  currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
-  desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+  currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+  desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   setupTarget: "<value>",
   setupFingerprint: "<value>",
   setupFingerprintVersion: 119877,
 };
 ```
+

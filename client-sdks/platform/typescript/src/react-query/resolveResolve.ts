@@ -53,7 +53,7 @@ export type ResolveResolveQueryError =
   | SDKValidationError;
 
 /**
- * Resolve the instance for a project and platform
+ * Resolve manager for a project and platform
  *
  * @remarks
  * Returns the manager URL for a given project and platform. The project can be provided as a query parameter, or derived from the token's scope (project-scoped, deployment-group-scoped, or deployment-scoped tokens carry an implicit project). This is the single entry point for all CLI tools to discover which manager to talk to.
@@ -74,7 +74,7 @@ export function useResolveResolve(
 }
 
 /**
- * Resolve the instance for a project and platform
+ * Resolve manager for a project and platform
  *
  * @remarks
  * Returns the manager URL for a given project and platform. The project can be provided as a query parameter, or derived from the token's scope (project-scoped, deployment-group-scoped, or deployment-scoped tokens carry an implicit project). This is the single entry point for all CLI tools to discover which manager to talk to.

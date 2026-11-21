@@ -13,9 +13,6 @@ export type SetDeploymentReleaseChannelGlobals = {
 };
 
 export type SetDeploymentReleaseChannelRequestBody = {
-  /**
-   * Channel the release was signed for
-   */
   channel: string;
 };
 

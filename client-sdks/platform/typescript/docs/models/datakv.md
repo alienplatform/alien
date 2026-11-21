@@ -32,7 +32,7 @@ let value: DataKv = {
 
 ## Fields
 
-| Field                                                | Type                                                 | Required                                             | Description                                          |
-| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| `data`                                               | *models.SyncReconcileRequestDataUnion7*              | :heavy_check_mark:                                   | N/A                                                  |
-| `resourceType`                                       | [models.ResourceTypeKv](../models/resourcetypekv.md) | :heavy_check_mark:                                   | N/A                                                  |
+| Field                                   | Type                                    | Required                                | Description                             |
+| --------------------------------------- | --------------------------------------- | --------------------------------------- | --------------------------------------- |
+| `data`                                  | *models.SyncReconcileRequestDataUnion7* | :heavy_check_mark:                      | N/A                                     |
+| `resourceType`                          | *"kv"*                                  | :heavy_check_mark:                      | N/A                                     |

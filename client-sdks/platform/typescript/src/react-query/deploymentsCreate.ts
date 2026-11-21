@@ -67,7 +67,7 @@ export function useDeploymentsCreateMutation(
 }
 
 export function mutationKeyDeploymentsCreate(): MutationKey {
-  return ["@alienplatform/platform-api", "Deployments", "create"];
+  return ["@alienplatform/platform-api", "deployments", "create"];
 }
 
 export function buildDeploymentsCreateMutation(

@@ -16,9 +16,6 @@ import {
 } from "./promotioneffectcounts.js";
 
 export type ReleaseChannelImpact = {
-  /**
-   * Channel the release was signed for
-   */
   channel: string;
   currentRelease: DeploymentReleaseInfo | null;
   /**

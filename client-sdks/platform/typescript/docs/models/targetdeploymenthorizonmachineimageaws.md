@@ -1,6 +1,6 @@
 # TargetDeploymentHorizonMachineImageAws
 
-AWS machine image catalog.
+AWS Horizon machine image catalog.
 
 ## Example Usage
 

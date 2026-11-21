@@ -3,7 +3,7 @@
  */
 
 import { AlienCore } from "../core.js";
-import { encodeFormQuery, encodeJSON, encodeSimple } from "../lib/encodings.js";
+import { encodeFormQuery, encodeSimple } from "../lib/encodings.js";
 import { matchStatusCode } from "../lib/http.js";
 import * as M from "../lib/matchers.js";
 import { compactMap } from "../lib/primitives.js";
@@ -35,10 +35,7 @@ import { Result } from "../types/fp.js";
  */
 export function deploymentGroupsCreateFirstPartyDeploymentSession(
   client: AlienCore,
-  id: string,
-  createFirstPartyDeploymentSessionRequest?:
-    | models.CreateFirstPartyDeploymentSessionRequest
-    | undefined,
+  request: operations.CreateFirstPartyDeploymentSessionRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -56,18 +53,14 @@ export function deploymentGroupsCreateFirstPartyDeploymentSession(
 > {
   return new APIPromise($do(
     client,
-    id,
-    createFirstPartyDeploymentSessionRequest,
+    request,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  id: string,
-  createFirstPartyDeploymentSessionRequest?:
-    | models.CreateFirstPartyDeploymentSessionRequest
-    | undefined,
+  request: operations.CreateFirstPartyDeploymentSessionRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -86,14 +79,8 @@ async function $do(
     APICall,
   ]
 > {
-  const input: operations.CreateFirstPartyDeploymentSessionRequest = {
-    id: id,
-    createFirstPartyDeploymentSessionRequest:
-      createFirstPartyDeploymentSessionRequest,
-  };
-
   const parsed = safeParse(
-    input,
+    request,
     (value) =>
       operations.CreateFirstPartyDeploymentSessionRequest$outboundSchema.parse(
         value,
@@ -104,11 +91,7 @@ async function $do(
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = encodeJSON(
-    "body",
-    payload.CreateFirstPartyDeploymentSessionRequest,
-    { explode: true },
-  );
+  const body = null;
 
   const pathParams = {
     id: encodeSimple("id", payload.id, {
@@ -125,7 +108,6 @@ async function $do(
   });
 
   const headers = new Headers(compactMap({
-    "Content-Type": "application/json",
     Accept: "application/json",
   }));
 

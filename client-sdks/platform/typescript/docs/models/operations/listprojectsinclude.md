@@ -11,5 +11,5 @@ let value: ListProjectsInclude = "deploymentCount";
 ## Values
 
 ```typescript
-"deploymentCount" | "latestRelease" | "health"
+"deploymentCount" | "latestRelease"
 ```

@@ -1,0 +1,22 @@
+# CreateManagerResponseProviderAzureApplicationGatewayForContainers10
+
+## Example Usage
+
+```typescript
+import { CreateManagerResponseProviderAzureApplicationGatewayForContainers10 } from "@alienplatform/platform-api/models";
+
+let value: CreateManagerResponseProviderAzureApplicationGatewayForContainers10 =
+  {
+    frontend: "<value>",
+    provider: "azureApplicationGatewayForContainers",
+  };
+```
+
+## Fields
+
+| Field                                                                                                                                                                  | Type                                                                                                                                                                   | Required                                                                                                                                                               | Description                                                                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `albName`                                                                                                                                                              | *string*                                                                                                                                                               | :heavy_minus_sign:                                                                                                                                                     | Optional ALB name when using BYO Application Gateway resources.                                                                                                        |
+| `albNamespace`                                                                                                                                                         | *string*                                                                                                                                                               | :heavy_minus_sign:                                                                                                                                                     | Optional ALB namespace when using BYO Application Gateway resources.                                                                                                   |
+| `frontend`                                                                                                                                                             | *string*                                                                                                                                                               | :heavy_check_mark:                                                                                                                                                     | Public or internal frontend exposure.                                                                                                                                  |
+| `provider`                                                                                                                                                             | [models.CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum10](../models/createmanagerresponseproviderazureapplicationgatewayforcontainersenum10.md) | :heavy_check_mark:                                                                                                                                                     | N/A                                                                                                                                                                    |

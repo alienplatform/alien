@@ -1,56 +1,108 @@
 # SyncReconcileRequestDataUnion18
 
+Content-free telemetry about what a sandbox resource is running.
+
+Never anything from inside a sandbox. A controller reaches only the cloud's management APIs,
+and the whole point of the resource is that the control plane cannot see what runs in it.
+
 
 ## Supported Types
 
-### `models.DataAwsKms`
+### `models.DataAwsMicrovm`
 
 ```typescript
-const value: models.DataAwsKms = {
-  data: {
-    enabled: true,
-    keyArn: "<value>",
-    keySpec: "<value>",
-    keyState: "<value>",
-    keyUsage: "<value>",
-    status: {
-      health: "unhealthy",
-      lifecycle: "stopped",
-    },
+const value: models.DataAwsMicrovm = {
+  imageIdentifier: "<value>",
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "api-unavailable",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "updating",
+    partial: false,
+    stale: true,
   },
-  provider: "aws-kms",
+  backend: "awsMicrovm",
 };
 ```
 
-### `models.DataGcpCloudKms`
+### `models.DataAzureSandboxGroup`
 
 ```typescript
-const value: models.DataGcpCloudKms = {
-  data: {
-    cryptoKeyName: "<value>",
-    purpose: "<value>",
-    status: {
-      health: "degraded",
-      lifecycle: "running",
-    },
+const value: models.DataAzureSandboxGroup = {
+  sandboxGroup: "<value>",
+  status: {
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: true,
+    stale: false,
   },
-  provider: "gcp-cloud-kms",
+  backend: "azureSandboxGroup",
 };
 ```
 
-### `models.DataAzureKeyVault2`
+### `models.DataGcpAgentPlatform`
 
 ```typescript
-const value: models.DataAzureKeyVault2 = {
-  data: {
-    keyId: "<id>",
-    keyOperations: [],
-    keyType: "<value>",
-    status: {
-      health: "unknown",
-      lifecycle: "deleting",
-    },
+const value: models.DataGcpAgentPlatform = {
+  engine: "<value>",
+  status: {
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "stopping",
+    partial: false,
+    stale: false,
   },
-  provider: "azure-key-vault",
+  templateId: "<id>",
+  backend: "gcpAgentPlatform",
 };
 ```
+
+### `models.DataKubernetesPods`
+
+```typescript
+const value: models.DataKubernetesPods = {
+  activeSessions: 284392,
+  idlePods: 443425,
+  namespace: "<value>",
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "collection-failed",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "degraded",
+    lifecycle: "unknown",
+    partial: false,
+    stale: true,
+  },
+  backend: "kubernetesPods",
+};
+```
+
+### `models.DataLocal12`
+
+```typescript
+const value: models.DataLocal12 = {
+  activeSessions: 111146,
+  routeServing: true,
+  status: {
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "deleted",
+    partial: true,
+    stale: true,
+  },
+  backend: "local",
+};
+```
+

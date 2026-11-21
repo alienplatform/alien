@@ -6,7 +6,7 @@
 import { IncrementCommandAttemptRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: IncrementCommandAttemptRequest = {
-  id: "cmd_2sxjXxvOYct7IohT3ukliAzf7Nzb",
+  id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
 };
 ```
 
@@ -14,4 +14,4 @@ let value: IncrementCommandAttemptRequest = {
 
 | Field                              | Type                               | Required                           | Description                        | Example                            |
 | ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- |
-| `id`                               | *string*                           | :heavy_check_mark:                 | Unique identifier for the command. | cmd_2sxjXxvOYct7IohT3ukliAzf7Nzb   |
+| `id`                               | *string*                           | :heavy_check_mark:                 | Unique identifier for the command. | cmd_2sxjXxvOYct7IohT3ukliAzf       |

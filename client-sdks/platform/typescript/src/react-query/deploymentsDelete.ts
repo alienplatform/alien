@@ -68,7 +68,7 @@ export function useDeploymentsDeleteMutation(
 }
 
 export function mutationKeyDeploymentsDelete(): MutationKey {
-  return ["@alienplatform/platform-api", "Deployments", "delete"];
+  return ["@alienplatform/platform-api", "deployments", "delete"];
 }
 
 export function buildDeploymentsDeleteMutation(

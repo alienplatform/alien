@@ -10,18 +10,17 @@ import { ListManagerEventsResponse } from "@alienplatform/platform-api/models/op
 let value: ListManagerEventsResponse = {
   items: [
     {
-      id: "event_MtSA24M3pWuAkQYxgZxuRIg6I5i2",
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
-      debugSessionId: "dbg_HOXmkmT9UPYlsnxqSNlEGoXLGcNV",
+      id: "event_MtSA24M3pWuAkQYxgZxuRI",
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      debugSessionId: "dbg_HOXmkmT9UPYlsnxqSNlEGoXL",
       data: {
-        type: "DeploymentCheckRequested",
-        deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+        type: "Finished",
       },
       state: "started",
-      projectId: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
+      projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
       createdAt: new Date("2026-01-05T03:00:56.315Z"),
-      workspaceId: "ws_It13CUaGEhLLAB87simX07Xb",
+      workspaceId: "ws_It13CUaGEhLLAB87simX0",
     },
   ],
 };

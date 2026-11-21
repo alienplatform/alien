@@ -45,7 +45,7 @@ let value: DataDaemon = {
 
 ## Fields
 
-| Field                                                        | Type                                                         | Required                                                     | Description                                                  |
-| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| `data`                                                       | *models.SyncReconcileRequestDataUnion4*                      | :heavy_check_mark:                                           | N/A                                                          |
-| `resourceType`                                               | [models.ResourceTypeDaemon](../models/resourcetypedaemon.md) | :heavy_check_mark:                                           | N/A                                                          |
+| Field                                   | Type                                    | Required                                | Description                             |
+| --------------------------------------- | --------------------------------------- | --------------------------------------- | --------------------------------------- |
+| `data`                                  | *models.SyncReconcileRequestDataUnion4* | :heavy_check_mark:                      | N/A                                     |
+| `resourceType`                          | *"daemon"*                              | :heavy_check_mark:                      | N/A                                     |

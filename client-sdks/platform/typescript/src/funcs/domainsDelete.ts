@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Delete a workspace domain and immediately stop serving its custom hostnames. Removing only the challenge CNAME instead blocks issuance while the current matching certificate keeps serving until expiry.
+ * Delete a workspace domain.
  */
 export function domainsDelete(
   client: AlienCore,

@@ -3,114 +3,55 @@
 
 ## Supported Types
 
-### `operations.DataAwsBedrock`
+### `operations.DataAwsKms`
 
 ```typescript
-const value: operations.DataAwsBedrock = {
-  availability: {
-    catalogRevision: "<value>",
-    models: [],
-    source: "aws-bedrock",
+const value: operations.DataAwsKms = {
+  data: {
+    enabled: true,
+    keyArn: "<value>",
+    keySpec: "<value>",
+    keyState: "<value>",
+    keyUsage: "<value>",
+    status: {
+      health: "unknown",
+      lifecycle: "unknown",
+    },
   },
-  region: "<value>",
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "timed-out",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
-    lifecycle: "deleting",
-    partial: false,
-    stale: false,
-  },
-  backend: "awsBedrock",
+  provider: "aws-kms",
 };
 ```
 
-### `operations.DataGcpVertex`
+### `operations.DataGcpCloudKms`
 
 ```typescript
-const value: operations.DataGcpVertex = {
-  availability: {
-    catalogRevision: "<value>",
-    models: [
-      {
-        accessTest: "not-checked",
-        availability: "unknown",
-        blockers: [],
-        clientApis: [],
-        publicModelId: "<id>",
-      },
-    ],
-    source: "anthropic",
+const value: operations.DataGcpCloudKms = {
+  data: {
+    cryptoKeyName: "<value>",
+    purpose: "<value>",
+    status: {
+      health: "degraded",
+      lifecycle: "updating",
+    },
   },
-  location: "<value>",
-  project: "<value>",
-  status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "unknown",
-    partial: false,
-    stale: false,
-  },
-  backend: "gcpVertex",
+  provider: "gcp-cloud-kms",
 };
 ```
 
-### `operations.DataAzureFoundry`
+### `operations.DataAzureKeyVault2`
 
 ```typescript
-const value: operations.DataAzureFoundry = {
-  accountName: "<value>",
-  availability: {
-    catalogRevision: "<value>",
-    models: [
-      {
-        accessTest: "verified",
-        availability: "available",
-        blockers: [],
-        clientApis: [
-          "anthropic-messages",
-        ],
-        publicModelId: "<id>",
-      },
-    ],
-    source: "azure-foundry",
+const value: operations.DataAzureKeyVault2 = {
+  data: {
+    keyId: "<id>",
+    keyOperations: [],
+    keyType: "<value>",
+    status: {
+      health: "unknown",
+      lifecycle: "running",
+    },
   },
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "stopping",
-    partial: false,
-    stale: false,
-  },
-  backend: "azureFoundry",
+  provider: "azure-key-vault",
 };
 ```
 
-### `operations.DataExternal`
-
-```typescript
-const value: operations.DataExternal = {
-  provider: "<value>",
-  status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
-    partial: true,
-    stale: false,
-  },
-  backend: "external",
-};
-```

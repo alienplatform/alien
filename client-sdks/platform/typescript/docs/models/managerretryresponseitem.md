@@ -10,7 +10,7 @@ let value: ManagerRetryResponseItem = {
   source: {
     type: "project-release",
     releaseChannel: "<value>",
-    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   },
   required: false,
 };

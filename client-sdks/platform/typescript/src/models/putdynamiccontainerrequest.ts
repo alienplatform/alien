@@ -4,11 +4,6 @@
 
 import * as z from "zod/v4";
 import {
-  ContainerValueRef,
-  ContainerValueRef$Outbound,
-  ContainerValueRef$outboundSchema,
-} from "./containervalueref.js";
-import {
   DynamicContainerSpec,
   DynamicContainerSpec$Outbound,
   DynamicContainerSpec$outboundSchema,
@@ -17,14 +12,12 @@ import {
 export type PutDynamicContainerRequest = {
   spec: DynamicContainerSpec;
   secretEnv?: { [k: string]: string } | undefined;
-  secretEnvRefs?: { [k: string]: ContainerValueRef } | undefined;
 };
 
 /** @internal */
 export type PutDynamicContainerRequest$Outbound = {
   spec: DynamicContainerSpec$Outbound;
   secretEnv?: { [k: string]: string } | undefined;
-  secretEnvRefs?: { [k: string]: ContainerValueRef$Outbound } | undefined;
 };
 
 /** @internal */
@@ -34,8 +27,6 @@ export const PutDynamicContainerRequest$outboundSchema: z.ZodType<
 > = z.object({
   spec: DynamicContainerSpec$outboundSchema,
   secretEnv: z.record(z.string(), z.string()).optional(),
-  secretEnvRefs: z.record(z.string(), ContainerValueRef$outboundSchema)
-    .optional(),
 });
 
 export function putDynamicContainerRequestToJSON(

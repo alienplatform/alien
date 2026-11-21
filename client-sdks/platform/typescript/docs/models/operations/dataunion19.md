@@ -1,114 +1,625 @@
 # DataUnion19
 
-Content-free telemetry about what a sandbox resource is running.
-
-Never anything from inside a sandbox. A controller reaches only the cloud's management APIs,
-and the whole point of the resource is that the control plane cannot see what runs in it.
-
 
 ## Supported Types
 
-### `operations.DataAwsMicrovm`
+### `operations.DataStorage`
 
 ```typescript
-const value: operations.DataAwsMicrovm = {
-  imageIdentifier: "<value>",
-  status: {
-    collectionIssues: [
+const value: operations.DataStorage = {
+  data: {
+    path: "/home",
+    pathExists: false,
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "timed-out",
+          severity: "warning",
+          source: "<value>",
+        },
+      ],
+      health: "unhealthy",
+      lifecycle: "scaling",
+      partial: false,
+      stale: false,
+    },
+    backend: "local",
+  },
+  resourceType: "storage",
+};
+```
+
+### `operations.DataWorker`
+
+```typescript
+const value: operations.DataWorker = {
+  data: {
+    commandSupported: false,
+    events: [
       {
+        kind: "<value>",
         message: "<value>",
-        reason: "api-unavailable",
         severity: "info",
-        source: "<value>",
+        timestamp: new Date("2024-07-21T11:12:11.792Z"),
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
-    partial: false,
-    stale: true,
+    imagePathPresent: true,
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "collection-failed",
+          severity: "info",
+          source: "<value>",
+        },
+      ],
+      health: "unknown",
+      lifecycle: "deleting",
+      partial: false,
+      stale: false,
+    },
+    triggerCount: 71218,
+    backend: "local",
   },
-  backend: "awsMicrovm",
+  resourceType: "worker",
 };
 ```
 
-### `operations.DataAzureSandboxGroup`
+### `operations.DataContainer`
 
 ```typescript
-const value: operations.DataAzureSandboxGroup = {
-  sandboxGroup: "<value>",
-  status: {
-    collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "stopped",
-    partial: true,
-    stale: false,
+const value: operations.DataContainer = {
+  data: {
+    attentionCount: 486054,
+    containerId: "<id>",
+    events: [],
+    replicaUnits: [],
+    replicas: {},
+    schedulingMode: "stateful",
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "not-installed",
+          severity: "info",
+          source: "<value>",
+        },
+      ],
+      health: "degraded",
+      lifecycle: "failed",
+      partial: false,
+      stale: true,
+    },
+    backend: "horizonPlatform",
   },
-  backend: "azureSandboxGroup",
+  resourceType: "container",
 };
 ```
 
-### `operations.DataGcpAgentPlatform`
+### `operations.DataDaemon`
 
 ```typescript
-const value: operations.DataGcpAgentPlatform = {
-  engine: "<value>",
-  status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "stopping",
-    partial: false,
-    stale: false,
-  },
-  templateId: "<id>",
-  backend: "gcpAgentPlatform",
-};
-```
-
-### `operations.DataKubernetesPods`
-
-```typescript
-const value: operations.DataKubernetesPods = {
-  activeSessions: 284392,
-  idlePods: 443425,
-  namespace: "<value>",
-  status: {
-    collectionIssues: [
+const value: operations.DataDaemon = {
+  data: {
+    assignedMachines: 489905,
+    capacityGroup: "<value>",
+    commandSupported: true,
+    daemonInstances: [],
+    desiredMachines: 665477,
+    events: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "error",
-        source: "<value>",
+        reason: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleted",
-    partial: false,
-    stale: true,
+    healthyInstances: 921353,
+    horizonClusterId: "<id>",
+    horizonStatus: "<value>",
+    latestUpdateTimestamp: "<value>",
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "not-installed",
+          severity: "warning",
+          source: "<value>",
+        },
+      ],
+      health: "unknown",
+      lifecycle: "running",
+      partial: false,
+      stale: false,
+    },
+    unavailableInstances: 431179,
+    backend: "azure",
   },
-  backend: "kubernetesPods",
+  resourceType: "daemon",
 };
 ```
 
-### `operations.DataLocal13`
+### `operations.DataComputeCluster`
 
 ```typescript
-const value: operations.DataLocal13 = {
-  activeSessions: 879062,
-  routeServing: false,
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "collection-failed",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
-    health: "degraded",
-    lifecycle: "stopping",
-    partial: true,
-    stale: true,
+const value: operations.DataComputeCluster = {
+  data: {
+    dockerAvailable: true,
+    name: "<value>",
+    networkAvailable: true,
+    nodes: {},
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "forbidden",
+          severity: "info",
+          source: "<value>",
+        },
+      ],
+      health: "unknown",
+      lifecycle: "stopped",
+      partial: true,
+      stale: true,
+    },
+    backend: "local",
   },
-  backend: "local",
+  resourceType: "compute-cluster",
 };
 ```
+
+### `operations.DataKubernetesCluster`
+
+```typescript
+const value: operations.DataKubernetesCluster = {
+  data: {
+    events: [
+      {
+        message: "<value>",
+        reason: "<value>",
+      },
+    ],
+    name: "<value>",
+    nodeCounts: {},
+    podCounts: {},
+    status: {
+      collectionIssues: [],
+      health: "healthy",
+      lifecycle: "deleting",
+      partial: true,
+      stale: true,
+    },
+  },
+  resourceType: "kubernetes-cluster",
+};
+```
+
+### `operations.DataQueue`
+
+```typescript
+const value: operations.DataQueue = {
+  data: {
+    messageStorageAllowedPersistenceRegions: [
+      "<value 1>",
+      "<value 2>",
+    ],
+    status: {
+      collectionIssues: [],
+      health: "healthy",
+      lifecycle: "failed",
+      partial: true,
+      stale: true,
+    },
+    subscriptionLabels: {
+      "key": "<value>",
+    },
+    subscriptionPushAttributes: {
+      "key": "<value>",
+      "key1": "<value>",
+      "key2": "<value>",
+    },
+    topicLabels: {},
+    topicName: "<value>",
+    backend: "gcpPubSub",
+  },
+  resourceType: "queue",
+};
+```
+
+### `operations.DataKv`
+
+```typescript
+const value: operations.DataKv = {
+  data: {
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "api-unavailable",
+          severity: "warning",
+          source: "<value>",
+        },
+      ],
+      health: "degraded",
+      lifecycle: "unknown",
+      partial: true,
+      stale: false,
+    },
+    storageAccountName: "<value>",
+    tableExists: false,
+    tableName: "<value>",
+    backend: "azureTable",
+  },
+  resourceType: "kv",
+};
+```
+
+### `operations.DataPostgres`
+
+```typescript
+const value: operations.DataPostgres = {
+  data: {
+    serverName: "<value>",
+    status: {
+      collectionIssues: [],
+      health: "unknown",
+      lifecycle: "stopped",
+      partial: true,
+      stale: false,
+    },
+    backend: "flexibleServer",
+  },
+  resourceType: "postgres",
+};
+```
+
+### `operations.DataVault`
+
+```typescript
+const value: operations.DataVault = {
+  data: {
+    accountId: "<id>",
+    parameterMetadataSampled: true,
+    prefix: "<value>",
+    region: "<value>",
+    status: {
+      collectionIssues: [],
+      health: "unknown",
+      lifecycle: "unknown",
+      partial: true,
+      stale: false,
+    },
+    backend: "awsParameterStore",
+  },
+  resourceType: "vault",
+};
+```
+
+### `operations.DataServiceAccount`
+
+```typescript
+const value: operations.DataServiceAccount = {
+  data: {
+    customRoleDefinitionCount: 991371,
+    customRoleDefinitionIds: [
+      "<value 1>",
+      "<value 2>",
+      "<value 3>",
+    ],
+    location: "<value>",
+    managedTagCount: 438151,
+    name: "<value>",
+    resourceGroup: "<value>",
+    resourceId: "<id>",
+    roleAssignmentCount: 703891,
+    roleAssignmentIds: [
+      "<value 1>",
+    ],
+    stackPermissionsApplied: true,
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "not-installed",
+          severity: "warning",
+          source: "<value>",
+        },
+      ],
+      health: "healthy",
+      lifecycle: "stopped",
+      partial: true,
+      stale: false,
+    },
+    backend: "azureManagedIdentity",
+  },
+  resourceType: "service-account",
+};
+```
+
+### `operations.DataNetwork`
+
+```typescript
+const value: operations.DataNetwork = {
+  data: {
+    isByoVnet: true,
+    status: {
+      collectionIssues: [],
+      health: "unhealthy",
+      lifecycle: "unknown",
+      partial: true,
+      stale: true,
+    },
+    backend: "azureVnet",
+  },
+  resourceType: "network",
+};
+```
+
+### `operations.DataRemoteStackManagement`
+
+```typescript
+const value: operations.DataRemoteStackManagement = {
+  data: {
+    managementPermissionsApplied: true,
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "api-unavailable",
+          severity: "warning",
+          source: "<value>",
+        },
+      ],
+      health: "unknown",
+      lifecycle: "stopping",
+      partial: true,
+      stale: true,
+    },
+    backend: "awsIamRole",
+  },
+  resourceType: "remote-stack-management",
+};
+```
+
+### `operations.DataArtifactRegistry`
+
+```typescript
+const value: operations.DataArtifactRegistry = {
+  data: {
+    reachable: false,
+    registryUrl: "https://tedious-reach.com",
+    status: {
+      collectionIssues: [],
+      health: "unknown",
+      lifecycle: "creating",
+      partial: true,
+      stale: false,
+    },
+    backend: "local",
+  },
+  resourceType: "artifact-registry",
+};
+```
+
+### `operations.DataBuild`
+
+```typescript
+const value: operations.DataBuild = {
+  data: {
+    encryptionKeyPresent: false,
+    environmentVariableCount: 19119,
+    projectName: "<value>",
+    serviceRolePresent: true,
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "timed-out",
+          severity: "error",
+          source: "<value>",
+        },
+      ],
+      health: "healthy",
+      lifecycle: "failed",
+      partial: false,
+      stale: true,
+    },
+    backend: "awsCodeBuild",
+  },
+  resourceType: "build",
+};
+```
+
+### `operations.DataServiceActivation`
+
+```typescript
+const value: operations.DataServiceActivation = {
+  data: {
+    enabled: true,
+    projectId: "<id>",
+    serviceName: "<value>",
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "api-unavailable",
+          severity: "error",
+          source: "<value>",
+        },
+      ],
+      health: "unhealthy",
+      lifecycle: "stopped",
+      partial: true,
+      stale: true,
+    },
+    backend: "gcpServiceUsage",
+  },
+  resourceType: "service_activation",
+};
+```
+
+### `operations.DataAzureResourceGroup`
+
+```typescript
+const value: operations.DataAzureResourceGroup = {
+  data: {
+    managedTags: {},
+    name: "<value>",
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "api-unavailable",
+          severity: "error",
+          source: "<value>",
+        },
+      ],
+      health: "healthy",
+      lifecycle: "unknown",
+      partial: false,
+      stale: true,
+    },
+  },
+  resourceType: "azure_resource_group",
+};
+```
+
+### `operations.DataAzureStorageAccount`
+
+```typescript
+const value: operations.DataAzureStorageAccount = {
+  data: {
+    name: "<value>",
+    primaryEndpoints: {},
+    secondaryEndpoints: {},
+    status: {
+      collectionIssues: [],
+      health: "unknown",
+      lifecycle: "stopped",
+      partial: true,
+      stale: true,
+    },
+  },
+  resourceType: "azure_storage_account",
+};
+```
+
+### `operations.DataAzureContainerAppsEnvironment`
+
+```typescript
+const value: operations.DataAzureContainerAppsEnvironment = {
+  data: {
+    name: "<value>",
+    status: {
+      collectionIssues: [],
+      health: "healthy",
+      lifecycle: "deleted",
+      partial: true,
+      stale: true,
+    },
+    workloadProfileCount: 415280,
+    workloadProfiles: [],
+  },
+  resourceType: "azure_container_apps_environment",
+};
+```
+
+### `operations.DataAzureServiceBusNamespace`
+
+```typescript
+const value: operations.DataAzureServiceBusNamespace = {
+  data: {
+    name: "<value>",
+    privateEndpointConnectionCount: 152029,
+    status: {
+      collectionIssues: [],
+      health: "unknown",
+      lifecycle: "failed",
+      partial: true,
+      stale: true,
+    },
+  },
+  resourceType: "azure_service_bus_namespace",
+};
+```
+
+### `operations.DataAi`
+
+```typescript
+const value: operations.DataAi = {
+  data: {
+    availability: {
+      catalogRevision: "<value>",
+      models: [
+        {
+          accessTest: "not-checked",
+          availability: "unknown",
+          blockers: [],
+          clientApis: [],
+          publicModelId: "<id>",
+        },
+      ],
+      source: "anthropic",
+    },
+    location: "<value>",
+    project: "<value>",
+    status: {
+      collectionIssues: [],
+      health: "degraded",
+      lifecycle: "unknown",
+      partial: false,
+      stale: false,
+    },
+    backend: "gcpVertex",
+  },
+  resourceType: "ai",
+};
+```
+
+### `operations.DataKey`
+
+```typescript
+const value: operations.DataKey = {
+  data: {
+    data: {
+      keyId: "<id>",
+      keyOperations: [],
+      keyType: "<value>",
+      status: {
+        health: "unknown",
+        lifecycle: "running",
+      },
+    },
+    provider: "azure-key-vault",
+  },
+  resourceType: "key",
+};
+```
+
+### `operations.DataSandbox`
+
+```typescript
+const value: operations.DataSandbox = {
+  data: {
+    activeSessions: 473650,
+    idlePods: 968711,
+    namespace: "<value>",
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "collection-failed",
+          severity: "warning",
+          source: "<value>",
+        },
+      ],
+      health: "unhealthy",
+      lifecycle: "deleted",
+      partial: false,
+      stale: true,
+    },
+    backend: "kubernetesPods",
+  },
+  resourceType: "sandbox",
+};
+```
+
