@@ -851,6 +851,7 @@ pub(crate) async fn publish_azure_config(
     ctx: &crate::core::ResourceControllerContext<'_>,
     key: &GatewayPublicKey,
     vpc_cidrs: &[String],
+    private_cidrs: &[String],
     gateway_ips: &[String],
     published: &mut Option<String>,
     replica_secret_ready: &mut bool,
@@ -864,7 +865,7 @@ pub(crate) async fn publish_azure_config(
         return Ok(());
     };
     // Omitted without links, so a stack without them publishes the same configuration.
-    let links = azure_gateway_links(ctx);
+    let links = azure_gateway_links(ctx, private_cidrs);
     if !links.is_empty() {
         value["links"] = serde_json::to_value(links).expect("links serialize");
     }
@@ -883,15 +884,23 @@ pub(crate) async fn publish_azure_config(
 }
 
 /// The Azure gateway reaches a linked Container at the static frontend IP of the internal load
-/// balancer its controller puts in front of it, recorded in the Container's outputs. A Container
-/// without that output yet is left out, and the next publish adds it.
+/// balancer its controller puts in front of it, recorded in the Container's outputs; that
+/// address must lie in the private subnet (`private_cidrs`, as Azure reports it) where those
+/// frontends are created. A Container without that output yet is left out, and the next
+/// publish adds it.
 #[cfg(feature = "azure")]
 pub(crate) fn azure_gateway_links(
     ctx: &crate::core::ResourceControllerContext<'_>,
+    private_cidrs: &[String],
 ) -> std::collections::BTreeMap<String, Vec<alien_core::sandbox_links::GatewayLink>> {
+    let ranges: Vec<ipnet::Ipv4Net> = private_cidrs
+        .iter()
+        .filter_map(|cidr| cidr.parse().ok())
+        .collect();
     alien_core::sandbox_links::addressed_gateway_links(
         ctx.desired_stack,
         ctx.resource_prefix,
+        &ranges,
         |id| {
             ctx.state
                 .resources

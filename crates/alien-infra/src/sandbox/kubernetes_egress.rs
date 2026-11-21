@@ -294,13 +294,19 @@ async fn linked_service(
             }
         }
     };
-    Ok(Some(alien_core::sandbox_links::GatewayLink {
+    let link = alien_core::sandbox_links::GatewayLink {
         id: id.to_string(),
         host: link_host(ctx, namespace, id)?,
         ports,
         ranges,
         addresses: Vec::new(),
-    }))
+    };
+    // The gateway refuses a whole configuration with one bad link, so one is never published.
+    if let Err(reason) = link.validate() {
+        tracing::warn!(link = id, %reason, "Leaving a sandbox link out of the gateway configuration");
+        return Ok(None);
+    }
+    Ok(Some(link))
 }
 
 /// The key the owner records: one another sandbox already recorded, else a new one written

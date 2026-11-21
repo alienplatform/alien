@@ -12,7 +12,17 @@ use ipnet::Ipv4Net;
 use serde::{Deserialize, Serialize};
 
 /// Most links one sandbox resource may declare.
-pub const MAX_SANDBOX_LINKS: usize = 64;
+pub const MAX_SANDBOX_LINKS: usize = 16;
+
+/// Most services the sandboxes of one deployment may link in total: the gateway's own network
+/// rules open each one, and the compute cluster's runtime takes at most this many.
+pub const MAX_GATEWAY_LINKED_SERVICES: usize = 16;
+
+/// Most ports one linked service may declare.
+pub const MAX_LINK_PORTS: usize = 16;
+
+/// Ports a link never opens: the gateway answers DNS itself, so a link cannot name port 53.
+const REFUSED_LINK_PORTS: &[u16] = &[0, 53];
 
 /// The only ranges a link's addresses may come from: the private and shared address spaces a
 /// deployment's internal network uses. Loopback, link-local (every cloud metadata address),
@@ -75,9 +85,15 @@ impl GatewayLink {
                 self.id
             ));
         }
-        if self.ports.is_empty() || self.ports.iter().any(|&port| port == 0 || port == 53) {
+        if self.ports.is_empty()
+            || self.ports.len() > MAX_LINK_PORTS
+            || self
+                .ports
+                .iter()
+                .any(|port| REFUSED_LINK_PORTS.contains(port))
+        {
             return Err(format!(
-                "link '{}': ports must be nonzero, not 53, and at least one",
+                "link '{}': ports must be 1 to {MAX_LINK_PORTS}, nonzero and not 53",
                 self.id
             ));
         }
@@ -253,6 +269,13 @@ pub fn validate_sandbox_links(
     if sandbox.gateway_links.len() > MAX_SANDBOX_LINKS {
         return Err(format!("at most {MAX_SANDBOX_LINKS} links are allowed"));
     }
+    let linked_services = gateway_link_targets(stack).len();
+    if linked_services > MAX_GATEWAY_LINKED_SERVICES {
+        return Err(format!(
+            "the deployment's sandboxes link {linked_services} services; at most \
+             {MAX_GATEWAY_LINKED_SERVICES} are allowed"
+        ));
+    }
     if !crate::sandbox_egress::gateway_image_serves_links(
         crate::sandbox_egress::planned_gateway_image(stack),
     ) {
@@ -263,8 +286,20 @@ pub fn validate_sandbox_links(
         );
     }
     for link in &sandbox.gateway_links {
-        internal_ports(stack, &link.id)
+        let ports = internal_ports(stack, &link.id)
             .map_err(|reason| format!("link '{}': {reason}", link.id))?;
+        if ports.len() > MAX_LINK_PORTS {
+            return Err(format!(
+                "link '{}': a linked service may declare at most {MAX_LINK_PORTS} ports",
+                link.id
+            ));
+        }
+        if let Some(port) = ports.iter().find(|port| REFUSED_LINK_PORTS.contains(port)) {
+            return Err(format!(
+                "link '{}': port {port} cannot be linked; the egress gateway answers DNS itself",
+                link.id
+            ));
+        }
         if platform == crate::Platform::Azure {
             if let Some(reason) = azure_link_refusal(stack, &link.id) {
                 return Err(format!("link '{}': {reason}", link.id));
@@ -302,13 +337,15 @@ pub fn cluster_gateway_link(stack: &crate::Stack, id: &str) -> Option<GatewayLin
         .config
         .downcast_ref::<crate::ComputeCluster>()?;
     let range: Ipv4Net = cluster.container_cidr().parse().ok()?;
-    is_link_range(range).then(|| GatewayLink {
+    let link = GatewayLink {
         id: id.to_string(),
         host: format!("{}.svc", id.to_ascii_lowercase()),
         ports,
         ranges: vec![range],
         addresses: Vec::new(),
-    })
+    };
+    // The gateway refuses a whole configuration with one bad link, so one is never published.
+    link.validate().is_ok().then_some(link)
 }
 
 /// Every internet sandbox's compute-cluster links, keyed by its audience `<prefix>/<id>`. Empty for a
@@ -334,12 +371,14 @@ pub fn cluster_gateway_links(
 
 /// Every internet sandbox's links where the deployment owns a fixed address for each linked
 /// Container (on Azure, its internal load balancer's static frontend IP), keyed by audience
-/// `<prefix>/<id>`. Each link keeps the overlay name `<id>.svc` and the declared ports, carries
-/// that one address, and admits only it (`<address>/32`). A link whose Container has no address
-/// yet is left out until it has one. Empty for a stack without links.
+/// `<prefix>/<id>`. Each link keeps the overlay name `<id>.svc` and the declared ports, and
+/// carries that one address, which must lie in `ranges` (on Azure, the private subnet the load
+/// balancers' frontends sit in). A link whose Container has no address yet, or one outside
+/// `ranges`, is left out. Empty for a stack without links.
 pub fn addressed_gateway_links(
     stack: &crate::Stack,
     resource_prefix: &str,
+    ranges: &[Ipv4Net],
     address_of: impl Fn(&str) -> Option<Ipv4Addr>,
 ) -> std::collections::BTreeMap<String, Vec<GatewayLink>> {
     stack
@@ -356,7 +395,7 @@ pub fn addressed_gateway_links(
                         id: link.id.clone(),
                         host: format!("{}.svc", link.id.to_ascii_lowercase()),
                         ports: internal_ports(stack, &link.id).ok()?,
-                        ranges: vec![Ipv4Net::new_assert(address, 32)],
+                        ranges: ranges.to_vec(),
                         addresses: vec![address],
                     };
                     link.validate().is_ok().then_some(link)
@@ -597,6 +636,18 @@ mod builder_tests {
         // Without links nothing is published; a public overlay is never a link range.
         assert!(cluster_gateway_links(&stack("10.244.0.0/16", false), "p").is_empty());
         assert!(cluster_gateway_links(&stack("11.244.0.0/16", true), "p").is_empty());
+        // A link the gateway would refuse (here port 53) is never published, so it cannot stop
+        // the gateway from loading every other sandbox's configuration.
+        let mut dns = stack("10.244.0.0/16", true);
+        dns.resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .ports[0]
+            .port = 53;
+        assert!(cluster_gateway_links(&dns, "p").is_empty());
     }
 }
 
@@ -701,7 +752,8 @@ mod addressed_tests {
             .add(sandbox, ResourceLifecycle::Live)
             .build();
         // billing has no address yet; a metadata address is never accepted.
-        let links = addressed_gateway_links(&stack, "prefix", |id| match id {
+        let private: Vec<ipnet::Ipv4Net> = vec!["10.0.2.0/24".parse().unwrap()];
+        let links = addressed_gateway_links(&stack, "prefix", &private, |id| match id {
             "api" => Some("10.0.2.9".parse().unwrap()),
             _ => None,
         });
@@ -713,12 +765,17 @@ mod addressed_tests {
             agents[0].addresses,
             vec!["10.0.2.9".parse::<std::net::Ipv4Addr>().unwrap()]
         );
-        assert_eq!(agents[0].ranges, vec!["10.0.2.9/32".parse().unwrap()]);
+        assert_eq!(agents[0].ranges, private);
         assert!(agents[0].validate().is_ok());
-        assert!(addressed_gateway_links(&stack, "prefix", |_| Some(
-            "169.254.169.254".parse().unwrap()
-        ))
-        .is_empty());
-        assert!(addressed_gateway_links(&stack, "prefix", |_| None).is_empty());
+        for outside in ["169.254.169.254", "10.0.3.9", "172.16.0.4"] {
+            assert!(
+                addressed_gateway_links(&stack, "prefix", &private, |_| Some(
+                    outside.parse().unwrap()
+                ))
+                .is_empty(),
+                "{outside}"
+            );
+        }
+        assert!(addressed_gateway_links(&stack, "prefix", &private, |_| None).is_empty());
     }
 }

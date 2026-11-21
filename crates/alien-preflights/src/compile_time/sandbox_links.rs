@@ -206,6 +206,79 @@ mod tests {
         }
     }
 
+    /// Planning refuses every link the gateway would refuse, so a published configuration never
+    /// carries one that stops the gateway from loading it, and the union stays within what the
+    /// compute cluster's runtime takes.
+    #[tokio::test]
+    async fn planning_refuses_what_the_gateway_and_the_runtime_refuse() {
+        let to = |id: &str| alien_core::ResourceRef::new(Container::RESOURCE_TYPE, id);
+        let linking = |id: &str, links: Vec<alien_core::ResourceRef>| {
+            let mut linking = sandbox(SandboxEgress::Internet, &[]);
+            linking.id = id.into();
+            linking.gateway_links = links;
+            linking
+        };
+        let planned = |services: Vec<Container>, sandboxes: Vec<Sandbox>| {
+            let mut stack = Stack::new("links".into()).add(
+                container(
+                    alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID,
+                    &[3128, 3129],
+                    LINKS_GATEWAY,
+                ),
+                ResourceLifecycle::Live,
+            );
+            for service in services {
+                stack = stack.add(service, ResourceLifecycle::Live);
+            }
+            for sandbox in sandboxes {
+                stack = stack.add(sandbox, ResourceLifecycle::Live);
+            }
+            stack.build()
+        };
+
+        let dns = planned(
+            vec![container("dns", &[53], "example.com/dns:1")],
+            vec![linking("agents", vec![to("dns")])],
+        );
+        let refused = errors(&dns, Platform::Kubernetes).await;
+        assert!(
+            refused[0].contains("port 53 cannot be linked"),
+            "{refused:?}"
+        );
+
+        let wide = |count: u16| {
+            let ports: Vec<u16> = (8000..8000 + count).collect();
+            planned(
+                vec![container("wide", &ports, "example.com/wide:1")],
+                vec![linking("agents", vec![to("wide")])],
+            )
+        };
+        let refused = errors(&wide(17), Platform::Kubernetes).await;
+        assert!(refused[0].contains("at most 16 ports"), "{refused:?}");
+        assert!(errors(&wide(16), Platform::Kubernetes).await.is_empty());
+
+        // 16 services across the deployment plan; a 17th, linked by a second sandbox, does not.
+        let services = || -> Vec<Container> {
+            (0..17)
+                .map(|n| container(&format!("svc{n}"), &[8080], "example.com/svc:1"))
+                .collect()
+        };
+        let sixteen = linking("agents", (0..16).map(|n| to(&format!("svc{n}"))).collect());
+        let fits = planned(services(), vec![sixteen.clone()]);
+        assert!(errors(&fits, Platform::Kubernetes).await.is_empty());
+        let over = planned(
+            services(),
+            vec![sixteen, linking("workers", vec![to("svc16")])],
+        );
+        let refused = errors(&over, Platform::Kubernetes).await;
+        assert!(
+            refused
+                .iter()
+                .any(|error| error.contains("link 17 services; at most 16")),
+            "{refused:?}"
+        );
+    }
+
     #[tokio::test]
     async fn a_stack_without_links_is_not_checked() {
         let stack = stack(sandbox(SandboxEgress::Internet, &[]), None);

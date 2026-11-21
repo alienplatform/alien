@@ -70,6 +70,21 @@ pub async fn validate_azure_sandbox_network(
     resource: &str,
     network: &AzureNetworkController,
 ) -> Result<AzureSandboxNetwork> {
+    Ok(
+        validate_azure_sandbox_network_with_hosting(client, resource, network)
+            .await?
+            .0,
+    )
+}
+
+/// [`validate_azure_sandbox_network`], also answering the address prefixes Azure reports for the
+/// private subnet that hosts the gateway VMs and the deployment's workloads (and the internal
+/// load balancers in front of linked containers).
+pub async fn validate_azure_sandbox_network_with_hosting(
+    client: &dyn NetworkApi,
+    resource: &str,
+    network: &AzureNetworkController,
+) -> Result<(AzureSandboxNetwork, Vec<String>)> {
     let missing = || {
         invalid(
             resource,
@@ -313,14 +328,17 @@ pub async fn validate_azure_sandbox_network(
         &network.egress_public_ips,
     )
     .await?;
-    Ok(AzureSandboxNetwork {
-        sandbox_cidrs: sandbox_cidrs.into_iter().collect(),
-        gateway_cidrs: gateway_cidrs.into_iter().collect(),
-        gateway_ips: declared.gateway_ips.clone(),
-        workload_cidrs: workload_cidrs.into_iter().collect(),
-        vpc_cidrs: vpc_cidrs.into_iter().collect(),
-        ..declared.clone()
-    })
+    Ok((
+        AzureSandboxNetwork {
+            sandbox_cidrs: sandbox_cidrs.into_iter().collect(),
+            gateway_cidrs: gateway_cidrs.into_iter().collect(),
+            gateway_ips: declared.gateway_ips.clone(),
+            workload_cidrs: workload_cidrs.into_iter().collect(),
+            vpc_cidrs: vpc_cidrs.into_iter().collect(),
+            ..declared.clone()
+        },
+        prefixes(hosting).into_iter().collect(),
+    ))
 }
 
 async fn validate_sandbox_nsg(

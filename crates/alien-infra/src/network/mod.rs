@@ -45,4 +45,6 @@ pub use aws_sandbox::validate_aws_sandbox_network;
 #[cfg(feature = "azure")]
 pub(crate) mod azure_sandbox;
 #[cfg(feature = "azure")]
-pub use azure_sandbox::validate_azure_sandbox_network;
+pub use azure_sandbox::{
+    validate_azure_sandbox_network, validate_azure_sandbox_network_with_hosting,
+};

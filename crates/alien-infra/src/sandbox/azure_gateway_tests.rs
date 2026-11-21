@@ -546,14 +546,20 @@ async fn a_linked_container_is_published_at_its_load_balancer_address_once_it_ha
         "{params}"
     );
 
-    // The address arrives after the sandbox is Running: the next heartbeat publishes it.
+    // An address outside the private subnet (10.0.1.0/24 here) is never published.
     run.insert_saved_resource("api", api_with_link_address(Some("10.0.2.9")));
+    run.step().await.unwrap();
+    assert!(stored().await.get("links").is_none());
+
+    // The address arrives after the sandbox is Running: the next heartbeat publishes it, bounded
+    // by the private subnet Azure reports.
+    run.insert_saved_resource("api", api_with_link_address(Some("10.0.1.9")));
     run.step().await.unwrap();
     assert_eq!(
         stored().await["links"],
         serde_json::json!({"test/sandbox": [{
             "id": "api", "host": "api.svc", "ports": [8080],
-            "ranges": ["10.0.2.9/32"], "addresses": ["10.0.2.9"]
+            "ranges": ["10.0.1.0/24"], "addresses": ["10.0.1.9"]
         }]})
     );
     // Removing the link reaches no update of the owner when another sandbox held it; here the
