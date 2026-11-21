@@ -18,8 +18,9 @@ use crate::openapi_filter::POSITION_MARKER;
 /// `positioned` are the clients generated from the marked copies. Returns the number of
 /// aliases.
 ///
-/// Fails when a removed type has no merged type at its position: that would silently drop a
-/// public type from the complete client.
+/// Fails when a removed type has no merged type at its position or more than one, when a
+/// removed builder has no merged builder, or when a kept name is no longer a type at its
+/// position: each would silently drop or change a public type of the complete client.
 pub fn add_aliases(
     unmerged: &syn::File,
     positioned: &syn::File,
@@ -33,24 +34,37 @@ pub fn add_aliases(
     let after_builders = builder_names(types_module(merged)?);
     let before_builders = builder_names(before);
 
-    let mut by_position = HashMap::<String, String>::new();
-    for (name, docs) in type_docs(types_module(positioned)?) {
-        if let Some(position) = own_position(&docs) {
-            by_position.entry(position).or_insert(name);
-        }
+    let mut by_position = HashMap::<String, Vec<String>>::new();
+    for (name, position) in positions(types_module(positioned)?) {
+        by_position.entry(position).or_default().push(name);
     }
+    let before_positions = positions(before);
 
     let mut aliases = BTreeMap::<String, String>::new();
     let mut unmatched = Vec::new();
-    for (name, docs) in type_docs(before) {
+    let mut ambiguous = Vec::new();
+    let mut moved = Vec::new();
+    for (name, _) in type_docs(before) {
+        let targets = before_positions
+            .get(&name)
+            .and_then(|position| by_position.get(position));
         if after_names.contains(&name) {
+            // A kept name must still be a type at its own position, or code using it would
+            // silently get a different type.
+            if let Some(targets) = targets {
+                if !targets.contains(&name) {
+                    moved.push(format!("{name} -> {targets:?}"));
+                }
+            }
             continue;
         }
-        let target = own_position(&docs).and_then(|position| by_position.get(&position));
-        match target {
-            Some(target) if after_names.contains(target) => {
+        match targets.map(Vec::as_slice) {
+            Some([target]) if after_names.contains(target) => {
                 aliases.insert(name, target.clone());
             }
+            // The generator copies a schema into every type that flattens it, so one position
+            // can hold several types. An alias there could point at the wrong one.
+            Some(targets @ [_, _, ..]) => ambiguous.push(format!("{name} -> {targets:?}")),
             _ => unmatched.push(name),
         }
     }
@@ -60,6 +74,18 @@ pub fn add_aliases(
             unmatched.len()
         ));
     }
+    if !ambiguous.is_empty() {
+        return Err(format!(
+            "merging repeated schemas removed {} types whose position holds more than one merged type: {ambiguous:?}",
+            ambiguous.len()
+        ));
+    }
+    if !moved.is_empty() {
+        return Err(format!(
+            "merging repeated schemas gave {} kept type names a different type: {moved:?}",
+            moved.len()
+        ));
+    }
 
     let types = types_module_mut(merged)?;
     for (old, new) in &aliases {
@@ -67,8 +93,19 @@ pub fn add_aliases(
     }
     let builder_aliases: Vec<_> = aliases
         .iter()
-        .filter(|(old, new)| before_builders.contains(*old) && after_builders.contains(*new))
+        .filter(|(old, _)| before_builders.contains(*old))
         .collect();
+    let missing_builders: Vec<_> = builder_aliases
+        .iter()
+        .filter(|(_, new)| !after_builders.contains(*new))
+        .map(|(old, new)| format!("{old} -> {new}"))
+        .collect();
+    if !missing_builders.is_empty() {
+        return Err(format!(
+            "merging repeated schemas removed {} builder types whose merged type has no builder: {missing_builders:?}",
+            missing_builders.len()
+        ));
+    }
     if !builder_aliases.is_empty() {
         let builder = types
             .iter_mut()
@@ -86,17 +123,39 @@ pub fn add_aliases(
     Ok(aliases.len())
 }
 
-/// The first position in a type's docs. Its own description comes first; later positions
-/// belong to nested schemas quoted in its JSON schema section.
+/// The position of every type that has one, keyed by type name. A nullable object schema
+/// becomes two types with the same description, `<Name>(Option<<Name>Inner>)` and
+/// `<Name>Inner`; the inner one gets the position with an `/inner` suffix so each has its own.
+fn positions(items: &[syn::Item]) -> HashMap<String, String> {
+    let own: HashMap<String, String> = type_docs(items)
+        .into_iter()
+        .filter_map(|(name, docs)| own_position(&docs).map(|position| (name, position)))
+        .collect();
+    own.iter()
+        .map(|(name, position)| {
+            let outer = name.strip_suffix("Inner").and_then(|outer| own.get(outer));
+            let position = match outer {
+                Some(outer_position) if outer_position == position => format!("{position}/inner"),
+                _ => position.clone(),
+            };
+            (name.clone(), position)
+        })
+        .collect()
+}
+
+/// The position in a type's own description. The generator quotes the type's JSON schema
+/// after it in a `<details>` section, and nested schemas there carry their own positions, so
+/// only the text before that section is read.
 fn own_position(docs: &str) -> Option<String> {
-    let start = docs.find(POSITION_MARKER)? + POSITION_MARKER.len();
-    let position = docs[start..].lines().next()?.trim();
+    let own = docs.split("<details>").next().unwrap_or_default();
+    let start = own.find(POSITION_MARKER)? + POSITION_MARKER.len();
+    let position = own[start..].lines().next()?.trim();
     (!position.is_empty()).then(|| position.to_string())
 }
 
 fn alias_item(old: &str, new: &str) -> Result<syn::Item, String> {
     let source = format!(
-        "#[doc = \"Same type as [`{new}`]: the schemas behind both names are identical.\"]\npub type {old} = {new};"
+        "#[doc = \"Same type as [`{new}`]: the schemas behind both names are structurally identical (their descriptions can differ).\"]\n#[doc(hidden)]\npub type {old} = {new};"
     );
     syn::parse_str(&source).map_err(|error| format!("alias `{old}`: {error}"))
 }
