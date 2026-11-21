@@ -48,12 +48,27 @@ fn setup_gateway_ips(ctx: &ResourceControllerContext<'_>) -> Result<Vec<String>>
     let Some(state) = ctx.state.resources.get(&network_id) else {
         return Ok(Vec::new());
     };
-    let network =
-        state.get_internal_controller_typed::<crate::network::AzureNetworkController>()?;
-    Ok(network
-        .sandbox_network
-        .map(|declared| declared.gateway_ips)
-        .unwrap_or_default())
+    // GCP's gateway is the same two setup-created VMs, recorded on its own Network controller.
+    #[cfg(feature = "gcp")]
+    if ctx.platform == alien_core::Platform::Gcp {
+        let network =
+            state.get_internal_controller_typed::<crate::network::GcpNetworkController>()?;
+        return Ok(network
+            .sandbox_network
+            .map(|declared| declared.gateway_ips)
+            .unwrap_or_default());
+    }
+    #[cfg(feature = "azure")]
+    {
+        let network =
+            state.get_internal_controller_typed::<crate::network::AzureNetworkController>()?;
+        return Ok(network
+            .sandbox_network
+            .map(|declared| declared.gateway_ips)
+            .unwrap_or_default());
+    }
+    #[allow(unreachable_code)]
+    Ok(Vec::new())
 }
 
 #[controller]

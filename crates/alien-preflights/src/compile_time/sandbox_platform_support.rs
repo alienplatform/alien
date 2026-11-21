@@ -64,6 +64,20 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                         sandbox.id()
                     ));
                 }
+                // Google Cloud internet egress goes only through the gateway, and the gateway path
+                // is behind one switch. Refusing here stops build, release and the package render
+                // before any setup could create the attachment, the gateway VMs or Private Service
+                // Connect resources; the deployment prerequisite is the backstop.
+                if platform == Platform::Gcp
+                    && sandbox.egress == SandboxEgress::Internet
+                    && !alien_core::gcp_sandbox_gateway::internet_egress_available()
+                {
+                    return Some(format!(
+                        "Sandbox '{}': {}",
+                        sandbox.id(),
+                        alien_core::gcp_sandbox_gateway::INTERNET_SANDBOX_UNAVAILABLE
+                    ));
+                }
                 // Azure hosts the gateway as two VMs that setup creates in the deployment's VNet,
                 // and the sandbox reaches it through the agent's startup gate. A catalog image
                 // runs no agent, so nothing inside it could prove or use that path.
@@ -133,7 +147,7 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
             })
             .collect();
 
-        let warnings = stack
+        let mut warnings = stack
             .resources()
             .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
             .filter(|sandbox| {
@@ -149,6 +163,50 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                 )
             })
             .collect::<Vec<_>>();
+        // `allow` and `allowDomains` keep their released meaning on Google Cloud: open outbound
+        // through Google's own network. Only `internet` uses the deployment's egress gateway, so
+        // the hint to use it is given only once `internet` is available.
+        let gcp_internet = alien_core::gcp_sandbox_gateway::internet_egress_available();
+        warnings.extend(
+            stack
+                .resources()
+                .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+                .filter(|sandbox| {
+                    gcp_internet
+                        && platform == Platform::Gcp
+                        && matches!(
+                            sandbox.egress,
+                            SandboxEgress::Allow | SandboxEgress::AllowDomains { .. }
+                        )
+                })
+                .map(|sandbox| {
+                    format!(
+                        "Sandbox '{}': egress `allow` on Google Cloud is open outbound and has no \
+                         per-sandbox rules. Use `internet` for the deployment's egress gateway, \
+                         host and port rules and live `update_egress`; it needs a project that \
+                         has never run a sandbox without the deployment network.",
+                        sandbox.id()
+                    )
+                }),
+        );
+        // A project's first sandbox template fixes its network placement for good. A sandbox on
+        // Google's default network (`none`, `allow`) therefore keeps the project from ever
+        // hosting a gateway-backed `internet` sandbox, and deleting every sandbox does not undo it.
+        warnings.extend(
+            stack
+                .resources()
+                .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+                .filter(|sandbox| {
+                    platform == Platform::Gcp && sandbox.egress != SandboxEgress::Internet
+                })
+                .map(|sandbox| {
+                    format!(
+                        "Sandbox '{}': {}",
+                        sandbox.id(),
+                        alien_core::gcp_sandbox_gateway::DEFAULT_PLACEMENT_IS_PERMANENT
+                    )
+                }),
+        );
         if !errors.is_empty() {
             Ok(CheckResult::failed_with_warnings(errors, warnings))
         } else if !warnings.is_empty() {
@@ -542,7 +600,8 @@ mod tests {
             )]
         );
 
-        for platform in [Platform::Aws, Platform::Gcp, Platform::Kubernetes] {
+        // Google Cloud internet has its own switch, tested below.
+        for platform in [Platform::Aws, Platform::Kubernetes] {
             let result = SandboxPlatformSupportCheck
                 .check(&internet("agent", SandboxEgress::Internet), platform)
                 .await
@@ -685,5 +744,145 @@ mod tests {
                 .unwrap();
             assert!(result.success, "{platform}: {:?}", result.errors);
         }
+    }
+
+    /// While the switch is off, `allow` on Google Cloud gets no hint to move to `internet`.
+    #[tokio::test]
+    async fn gcp_allow_gets_no_internet_hint_while_the_switch_is_off() {
+        let stack = stack_with(sandbox("agents", None, SandboxEgress::Allow));
+        let result = SandboxPlatformSupportCheck
+            .check(&stack, Platform::Gcp)
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.errors);
+        assert!(
+            result.warnings.iter().all(|w| !w.contains("open outbound")),
+            "{:?}",
+            result.warnings
+        );
+    }
+
+    #[tokio::test]
+    async fn gcp_allow_warns_that_it_is_open_outbound_and_internet_does_not() {
+        let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
+        for (egress, warns) in [
+            (SandboxEgress::Allow, true),
+            (
+                SandboxEgress::AllowDomains {
+                    domains: vec!["example.com".into()],
+                },
+                true,
+            ),
+            (SandboxEgress::None, false),
+        ] {
+            let stack = stack_with(sandbox("agents", None, egress.clone()));
+            let result = SandboxPlatformSupportCheck
+                .check(&stack, Platform::Gcp)
+                .await
+                .unwrap();
+            let named = result
+                .warnings
+                .iter()
+                .any(|w| w.contains("open outbound") && w.contains("'agents'"));
+            assert_eq!(named, warns, "{egress:?}: {:?}", result.warnings);
+        }
+        // The same declaration is not called open outbound on a platform where it is not.
+        let stack = stack_with(sandbox("agents", None, SandboxEgress::Allow));
+        let result = SandboxPlatformSupportCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .unwrap();
+        assert!(result.warnings.iter().all(|w| !w.contains("open outbound")));
+    }
+
+    /// The one switch: with it off, Google Cloud `internet` is refused with exactly the message,
+    /// by the check that build, release and the package render all run; `none` and `allow` are
+    /// not affected. With it on, the same stack passes.
+    #[tokio::test]
+    async fn gcp_internet_is_refused_until_the_switch_flips() {
+        let stack = stack_with(sandbox("agent", None, SandboxEgress::Internet));
+        let refused = SandboxPlatformSupportCheck
+            .check(&stack, Platform::Gcp)
+            .await
+            .unwrap();
+        assert!(!refused.success);
+        assert_eq!(
+            refused.errors,
+            vec![format!(
+                "Sandbox 'agent': {}",
+                alien_core::gcp_sandbox_gateway::INTERNET_SANDBOX_UNAVAILABLE
+            )]
+        );
+        for egress in [SandboxEgress::None, SandboxEgress::Allow] {
+            let result = SandboxPlatformSupportCheck
+                .check(&stack_with(sandbox("agent", None, egress)), Platform::Gcp)
+                .await
+                .unwrap();
+            assert!(result.success, "{:?}", result.errors);
+        }
+
+        let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
+        let allowed = SandboxPlatformSupportCheck
+            .check(&stack, Platform::Gcp)
+            .await
+            .unwrap();
+        assert!(allowed.success, "{:?}", allowed.errors);
+    }
+
+    /// `alien build`, `alien release` and the Terraform/CloudFormation render all stop a Google
+    /// Cloud internet stack while the switch is off, so no package for it is ever rendered.
+    #[tokio::test]
+    async fn build_and_template_preflights_refuse_gcp_internet_while_the_switch_is_off() {
+        let stack = stack_with(sandbox("agent", None, SandboxEgress::Internet));
+        let runner = crate::runner::PreflightRunner::new();
+        let build = runner
+            .run_build_time_preflights(&stack, Platform::Gcp)
+            .await
+            .expect_err("build refuses");
+        let template = runner
+            .run_template_preflights(&stack, Platform::Gcp)
+            .await
+            .expect_err("render refuses");
+        for error in [format!("{build:?}"), format!("{template:?}")] {
+            assert!(
+                error.contains(alien_core::gcp_sandbox_gateway::INTERNET_SANDBOX_UNAVAILABLE),
+                "{error}"
+            );
+        }
+
+        let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
+        runner
+            .run_build_time_preflights(&stack, Platform::Gcp)
+            .await
+            .expect("build passes with the switch on");
+    }
+
+    /// Every Google Cloud sandbox on the default network is told that its project can never
+    /// switch to gateway-backed `internet`, and how to get there instead.
+    #[tokio::test]
+    async fn a_gcp_default_network_sandbox_is_told_its_project_cannot_switch_later() {
+        for egress in [SandboxEgress::None, SandboxEgress::Allow] {
+            let result = SandboxPlatformSupportCheck
+                .check(&stack_with(sandbox("agent", None, egress)), Platform::Gcp)
+                .await
+                .unwrap();
+            assert!(result.success, "{:?}", result.errors);
+            assert!(
+                result.warnings.contains(&format!(
+                    "Sandbox 'agent': {}",
+                    alien_core::gcp_sandbox_gateway::DEFAULT_PLACEMENT_IS_PERMANENT
+                )),
+                "{:?}",
+                result.warnings
+            );
+        }
+        let result = SandboxPlatformSupportCheck
+            .check(
+                &stack_with(sandbox("agent", None, SandboxEgress::None)),
+                Platform::Aws,
+            )
+            .await
+            .unwrap();
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 }

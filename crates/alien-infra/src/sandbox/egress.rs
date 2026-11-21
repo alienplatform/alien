@@ -1,12 +1,22 @@
 //! Signing material stays in the deployment vault; controllers retain only public data.
 
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "kubernetes"
+))]
 use crate::core::state_utils::StackResourceStateExt;
 #[cfg(feature = "aws")]
 use alien_aws_clients::secrets_manager::{
     CreateSecretRequest, DeleteSecretRequest, DescribeSecretRequest, SecretsManagerApi,
 };
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "kubernetes"
+))]
 use alien_bindings::BindingsProviderApi;
 use alien_bindings::Vault;
 #[cfg(feature = "aws")]
@@ -15,7 +25,12 @@ use alien_error::{AlienError, Context};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_compact::{KeyPair, SecretKey};
 use serde::{Deserialize, Serialize};
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "kubernetes"
+))]
 use sha2::{Digest, Sha256};
 
 use crate::{ErrorData, Result};
@@ -24,7 +39,7 @@ pub(crate) const SIGNING_KEY: &str = "sandbox-egress-signing-key";
 pub(crate) const GATEWAY_CONFIG: &str = "sandbox-egress-gateway-config";
 /// The secrets-vault entry holding the gateway's replica secret on Azure and Kubernetes. Its
 /// writer never reads it back; only the gateway does. AWS keeps it in Secrets Manager instead.
-#[cfg(any(feature = "azure", feature = "kubernetes"))]
+#[cfg(any(feature = "azure", feature = "gcp", feature = "kubernetes"))]
 pub(crate) const REPLICA_SECRET: &str = alien_core::sandbox_egress::SANDBOX_EGRESS_REPLICA_SECRET;
 /// Where a Kubernetes gateway pod mounts the Secret holding its configuration. The file is the
 /// Secret's `value` key, which the kubelet keeps current.
@@ -82,7 +97,12 @@ fn new_signing_key() -> Result<(String, GatewayPublicKey)> {
 /// policy is signed with it, and the managing identity cannot recover its public half without
 /// reading the private key, so a caller that lost the public half fails here instead of
 /// rotating the deployment's key.
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "kubernetes"
+))]
 pub(crate) async fn create_signing_key(vault: &dyn Vault) -> Result<GatewayPublicKey> {
     match try_create_signing_key(vault).await? {
         Some(public) => Ok(public),
@@ -104,7 +124,12 @@ pub(crate) async fn create_signing_key(vault: &dyn Vault) -> Result<GatewayPubli
 
 /// Writes a new signing key unless the vault already holds one, and returns its public half; an
 /// existing key is left unchanged and answered with `None`. Nothing is read.
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "kubernetes"
+))]
 pub(crate) async fn try_create_signing_key(vault: &dyn Vault) -> Result<Option<GatewayPublicKey>> {
     let (value, public) = new_signing_key()?;
     match vault.create_secret(SIGNING_KEY, &value).await {
@@ -163,7 +188,12 @@ mod tests {
 
     /// The safety net under re-registration: an existing signing key is never replaced, and the
     /// key the vault holds stays the one its recorded public half belongs to.
-    #[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+    #[cfg(any(
+        feature = "aws",
+        feature = "azure",
+        feature = "gcp",
+        feature = "kubernetes"
+    ))]
     #[tokio::test]
     async fn an_existing_signing_key_is_never_replaced() {
         let directory = tempfile::tempdir().unwrap();
@@ -297,7 +327,12 @@ mod tests {
     }
 }
 
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "kubernetes"
+))]
 pub(crate) async fn deployment_vault(
     ctx: &crate::core::ResourceControllerContext<'_>,
 ) -> Result<std::sync::Arc<dyn Vault>> {
@@ -365,7 +400,7 @@ pub(crate) fn internet_sandbox_ids(stack: &alien_core::Stack) -> Vec<String> {
 
 /// Whether an internet sandbox other than `sandbox_id` is still declared or not yet deleted.
 /// Those keep using the shared signing key and gateway configuration.
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "gcp"))]
 pub(crate) fn other_internet_sandbox_remains(
     ctx: &crate::core::ResourceControllerContext<'_>,
     sandbox_id: &str,
@@ -781,7 +816,12 @@ pub(crate) async fn publish_changed_gateway_config(
 /// Publishes `value` naming the replica secret `source`, without reading anything, unless its
 /// digest equals `published`. The gateway reads the secret with its own access; the configuration
 /// carries none.
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "kubernetes"
+))]
 pub(crate) async fn write_sourced_config(
     vault: &dyn Vault,
     mut value: serde_json::Value,
@@ -815,7 +855,7 @@ pub(crate) async fn write_sourced_config(
 /// Writes the gateway's replica secret to the secrets vault once, with a value its writer never
 /// reads back; an existing one is kept. Every replica must read the same value, so it is never
 /// replaced.
-#[cfg(any(feature = "azure", feature = "kubernetes"))]
+#[cfg(any(feature = "azure", feature = "gcp", feature = "kubernetes"))]
 pub(crate) async fn create_replica_secret(vault: &dyn Vault) -> Result<()> {
     // 44 printable characters; the gateway keys on the SHA-256 of the stored string.
     let value = STANDARD.encode(ed25519_compact::Seed::generate().as_ref());
@@ -838,15 +878,20 @@ pub(crate) async fn create_replica_secret(vault: &dyn Vault) -> Result<()> {
 
 /// Digest of a gateway configuration as this controller renders it, without any embedded
 /// replica secret. It identifies what was published without holding anything secret.
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "kubernetes"
+))]
 fn config_digest(value: &serde_json::Value) -> String {
     format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
 }
 
-/// Publishes the Azure gateway configuration. No Azure gateway has ever embedded its replica
-/// secret, so the configuration always names the vault entry the gateway reads, which the owner
-/// writes once and never reads. Nothing in the vault is read.
-#[cfg(feature = "azure")]
+/// Publishes the configuration of a gateway that runs as setup-created VMs (Azure and GCP). No such
+/// gateway has ever embedded its replica secret, so the configuration always names the vault entry
+/// the gateway reads, which the owner writes once and never reads. Nothing in the vault is read.
+#[cfg(any(feature = "azure", feature = "gcp"))]
 pub(crate) async fn publish_azure_config(
     ctx: &crate::core::ResourceControllerContext<'_>,
     key: &GatewayPublicKey,
@@ -878,7 +923,12 @@ pub(crate) async fn publish_azure_config(
 }
 
 /// A sandbox controller that keeps the deployment signing key's public half in its state.
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "kubernetes"
+))]
 pub(crate) trait RecordsEgressKey:
     crate::core::ResourceController + serde::de::DeserializeOwned + 'static
 {
@@ -887,7 +937,12 @@ pub(crate) trait RecordsEgressKey:
 
 /// The signing key's public half as the owner sandbox recorded it. Every other internet sandbox
 /// depends on the owner, so the owner has initialized it first; the vault is not read.
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "kubernetes"
+))]
 pub(crate) fn owner_public_key<C: RecordsEgressKey>(
     ctx: &crate::core::ResourceControllerContext<'_>,
     owner: &str,
@@ -914,7 +969,12 @@ pub(crate) fn owner_public_key<C: RecordsEgressKey>(
 /// A key another internet sandbox of this deployment already recorded, for an owner that has
 /// none: one added with a lower id than the previous owner, or one whose state was replaced.
 /// Adopting it keeps every sandbox and the gateway on the key the vault holds.
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "kubernetes"
+))]
 pub(crate) fn recorded_public_key<C: RecordsEgressKey>(
     ctx: &crate::core::ResourceControllerContext<'_>,
 ) -> Result<Option<GatewayPublicKey>> {

@@ -52,6 +52,7 @@ fn active() -> SandboxEnvironmentTemplate {
         display_name: None,
         custom_container_environment: None,
         egress_control_config: None,
+        ingress_control_config: None,
         state: Some("ACTIVE".to_string()),
         extra: Default::default(),
     }

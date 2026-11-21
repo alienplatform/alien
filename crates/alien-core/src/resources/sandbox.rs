@@ -261,14 +261,12 @@ impl SandboxEgress {
     }
 }
 
-/// What a caller is told when it asks a Google Cloud sandbox for a per-sandbox outbound policy.
-///
-/// On Google Cloud `internet` is Google's own open outbound path: any host and port, through
-/// Google's shared addresses. Nothing of ours sits on that path, so no host list can be enforced
-/// and there is no fixed egress IP. The binding and the plan-time check share this text.
-pub const GCP_NO_EGRESS_ALLOWLIST: &str = "Google Cloud sandboxes have no outbound allowlist: \
-`internet` is open outbound through Google's shared addresses (no fixed egress IP) and takes no \
-per-sandbox policy; declare `none` to block all outbound traffic";
+/// What a caller is told when it asks a Google Cloud sandbox that has no egress gateway for a
+/// per-sandbox outbound policy: `none` blocks everything and takes no policy, and `internet`
+/// always has a gateway (a binding without one is refused, never opened).
+pub const GCP_NO_GATEWAY_POLICY: &str = "this Google Cloud sandbox has no egress gateway, so it \
+takes no per-sandbox outbound policy: declare `internet` (and re-run setup) to use per-sandbox \
+host rules, or `none` to block all outbound traffic";
 
 /// Per-session deadline metadata read by the external lifecycle reaper.
 pub const SANDBOX_EXPIRY_LABEL: &str = "alienExpiresAtMs";
@@ -849,12 +847,6 @@ impl Sandbox {
                 }));
             }
             policy.validate()?;
-            if platform == Platform::Gcp {
-                return Err(AlienError::new(ErrorData::SandboxEgressInvalid {
-                    target: "defaultPolicy".into(),
-                    reason: GCP_NO_EGRESS_ALLOWLIST.into(),
-                }));
-            }
         }
         if self.image_user == Some(0) && platform == Platform::Local {
             return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
@@ -2039,7 +2031,7 @@ mod tests {
     /// A URI with no token must come back whole, because every bundle configured today has none
     /// and emitting one differently would change every existing customer's template.
     #[test]
-    fn gcp_takes_internet_as_open_outbound_and_refuses_an_allowlist_policy() {
+    fn gcp_takes_internet_and_a_default_policy_through_the_gateway() {
         sandbox_with(SandboxEgress::Internet, vec![])
             .validate_for_platform(Platform::Gcp)
             .unwrap();
@@ -2054,13 +2046,9 @@ mod tests {
         ] {
             let mut declared = sandbox_with(SandboxEgress::Internet, vec![]);
             declared.default_policy = Some(policy);
-            let refused = declared.validate_for_platform(Platform::Gcp).unwrap_err();
-            assert!(
-                refused
-                    .to_string()
-                    .contains("Google Cloud sandboxes have no outbound allowlist"),
-                "{refused}"
-            );
+            declared
+                .validate_for_platform(Platform::Gcp)
+                .expect("the gateway enforces a default policy on GCP as on every cloud");
         }
     }
 

@@ -818,7 +818,10 @@ impl TestManager {
                     if let Some(ref mgmt) = config.gcp_mgmt {
                         std::env::set_var("GCP_PROJECT_ID", &mgmt.project_id);
                         std::env::set_var("GCP_REGION", &mgmt.region);
-                        if let Some(ref creds) = mgmt.credentials_json {
+                        // The manager's resolver prefers GCP_ACCESS_TOKEN over the key.
+                        if let Some(ref token) = mgmt.access_token {
+                            std::env::set_var("GCP_ACCESS_TOKEN", token);
+                        } else if let Some(ref creds) = mgmt.credentials_json {
                             std::env::set_var("GOOGLE_SERVICE_ACCOUNT_KEY", creds);
                         }
                     }

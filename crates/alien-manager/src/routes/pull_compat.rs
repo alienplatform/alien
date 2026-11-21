@@ -210,6 +210,12 @@ pub(crate) const EXTENSIONS: Feature = feature(
     Action::Refuse,
     "older Operators cannot load an extension or parse the resource types it adds",
 );
+pub(crate) const GCP_SANDBOX_INTERNET: Feature = feature(
+    "internet egress for GCP sandboxes",
+    "3.3.71",
+    Action::Refuse,
+    "the setup-created gateway's binding carries the port sandboxes dial, which older Operators reject, and they have no GCP gateway to enforce the rules",
+);
 pub(crate) const CUSTOM_BASE_DOMAIN: Feature = feature(
     "custom base domains for Kubernetes endpoints",
     "3.3.44",
@@ -241,6 +247,7 @@ pub(crate) const FEATURES: &[&Feature] = &[
     &SIGNING_VERIFIER,
     &AZURE_SANDBOX_INTERNET,
     &AMBIENT_AI_BINDING,
+    &GCP_SANDBOX_INTERNET,
     &CUSTOM_BASE_DOMAIN,
     &EXTENSIONS,
 ];
@@ -459,24 +466,28 @@ pub(crate) fn apply(
 }
 
 /// The refusal for a feature that depends on the platform, which `apply` does
-/// not see: an Azure sandbox with `internet` egress gets a gateway binding with
-/// replica addresses and a protocol floor (`SandboxEgressReplicas.addresses`,
-/// `.min_protocol`). Operators before this release reject that state and have
-/// no Azure gateway, so the release is refused for them, never delivered
-/// without its enforcement.
+/// not see: an Azure or GCP sandbox with `internet` egress gets a gateway binding
+/// with replica addresses and a protocol floor (`SandboxEgressReplicas.addresses`,
+/// `.min_protocol`) and, on GCP, the port sandboxes dial (`.proxy_port`). Operators
+/// before this release reject that state and have no such gateway, so the release is
+/// refused for them, never delivered without its enforcement.
 pub(crate) fn refuse_for_platform(
     stack: &Stack,
     platform: alien_core::Platform,
     operator: &OperatorVersion,
 ) -> Option<&'static Feature> {
-    let internet = platform == alien_core::Platform::Azure
-        && stack.resources().any(|(_, entry)| {
-            entry
-                .config
-                .downcast_ref::<Sandbox>()
-                .is_some_and(|sandbox| sandbox.egress == alien_core::SandboxEgress::Internet)
-        });
-    (internet && !operator.reads(&AZURE_SANDBOX_INTERNET)).then_some(&AZURE_SANDBOX_INTERNET)
+    let internet = stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<Sandbox>()
+            .is_some_and(|sandbox| sandbox.egress == alien_core::SandboxEgress::Internet)
+    });
+    let feature = match platform {
+        alien_core::Platform::Azure => &AZURE_SANDBOX_INTERNET,
+        alien_core::Platform::Gcp => &GCP_SANDBOX_INTERNET,
+        _ => return None,
+    };
+    (internet && !operator.reads(feature)).then_some(feature)
 }
 
 /// Whether a declared `security` setting is one an older Operator would have
@@ -1051,7 +1062,13 @@ mod tests {
                 )
                 .build()
         };
-        for version in [None, Some("3.3.31"), Some("3.3.62"), Some("3.3.68"), Some("3.3.69")] {
+        for version in [
+            None,
+            Some("3.3.31"),
+            Some("3.3.62"),
+            Some("3.3.68"),
+            Some("3.3.69"),
+        ] {
             assert_eq!(
                 refused_for(&queue(true), version),
                 ["queue dead-letter targets"],
@@ -1063,6 +1080,22 @@ mod tests {
         let message = refusal_message(&[&QUEUE_DEAD_LETTER]);
         assert!(message.contains("queue dead-letter targets"));
         assert!(message.contains("must be 3.3.70 or newer"));
+    }
+
+    #[test]
+    fn a_gcp_internet_sandbox_is_refused_for_operators_before_its_gateway_binding() {
+        use alien_core::Platform;
+        let stack = internet_sandbox();
+        for version in [None, Some("3.3.31"), Some("3.3.62")] {
+            let operator = OperatorVersion::from_report(version);
+            assert_eq!(
+                refuse_for_platform(&stack, Platform::Gcp, &operator).map(|feature| feature.name),
+                Some("internet egress for GCP sandboxes"),
+                "{version:?}"
+            );
+        }
+        let reads = OperatorVersion::from_report(Some(NEXT_RELEASE));
+        assert!(refuse_for_platform(&stack, Platform::Gcp, &reads).is_none());
     }
 
     #[test]
