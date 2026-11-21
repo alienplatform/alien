@@ -849,6 +849,167 @@ fn provider(
         .map_err(|error| anyhow::anyhow!("bindings: {error}"))
 }
 
+// ---- Temporary: which credential the private (PSC) ingress edge accepts --------------------------
+// Removed once the private ingress fix is proven. Records only each variant's status and the
+// edge's error text; no token is ever written anywhere.
+
+async fn probe_private_ingress(
+    deployed: &Deployed,
+    workload: &GcpClientConfig,
+    endpoint_port: u16,
+    proof: &mut Proof,
+) -> anyhow::Result<()> {
+    use alien_gcp_clients::gcp::agent_platform::{
+        AgentPlatformApi, AgentPlatformClient, SandboxCreateRequest,
+    };
+    use alien_gcp_clients::gcp::iam::{GenerateIdTokenRequest, SignJwtRequest};
+    let field = |key: &str| {
+        deployed.binding[key]
+            .as_str()
+            .map(str::to_string)
+            .with_context(|| format!("the binding names no {key}"))
+    };
+    let engine = field("engine")?;
+    let template = field("template")?;
+    let signer = field("previewServiceAccount")?;
+    let http = reqwest::Client::new();
+    let platform = AgentPlatformClient::new(http.clone(), workload.clone());
+    let iam = IamClient::new(http.clone(), workload.clone());
+    let display = format!("probe-{}", uuid::Uuid::new_v4().simple());
+    platform
+        .create_sandbox(
+            &engine,
+            SandboxCreateRequest {
+                display_name: Some(display.clone()),
+                sandbox_environment_template: Some(template),
+                sandbox_environment_snapshot: None,
+                ttl: Some("900s".to_string()),
+            },
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("probe create: {error}"))?;
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let (name, routing, attachment) = loop {
+        let found = platform
+            .list_sandboxes_by_display_names(&engine, &[display.clone()])
+            .await
+            .map_err(|error| anyhow::anyhow!("probe list: {error}"))?;
+        let ready = found.into_iter().find_map(|sandbox| {
+            let info = sandbox.connection_info.clone()?;
+            let token = info.routing_token.clone()?;
+            (sandbox.state.as_deref() == Some("STATE_RUNNING")).then(|| {
+                let raw = serde_json::to_value(&info).unwrap_or_default();
+                (
+                    sandbox.name.clone().unwrap_or_default(),
+                    token,
+                    raw["serviceAttachment"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                )
+            })
+        });
+        if let Some(ready) = ready {
+            break ready;
+        }
+        if Instant::now() > deadline {
+            bail!("probe sandbox did not run within 300 s");
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    };
+    let id = name.rsplit('/').next().unwrap_or_default().to_string();
+    proof.note(format!("[probe] sandbox {name} attachment {attachment}"));
+    let endpoint_url = format!("http://{}/", deployed.private_endpoint);
+    let jwt = |aud: String| {
+        let iam = &iam;
+        let signer = signer.clone();
+        async move {
+            let now = chrono::Utc::now().timestamp();
+            let payload = serde_json::json!({
+                "iat": now, "exp": now + 300, "iss": signer, "sub": signer,
+                "nonce": uuid::Uuid::new_v4().as_u128() % 1_000_000_000 + 1, "aud": aud,
+            });
+            iam.sign_jwt(
+                signer.clone(),
+                SignJwtRequest {
+                    payload: payload.to_string(),
+                },
+            )
+            .await
+            .map(|signed| signed.signed_jwt)
+            .map_err(|error| format!("sign: {error}"))
+        }
+    };
+    let mut variants: Vec<(&str, Result<String, String>)> = vec![
+        (
+            "jwt aud=aiplatform",
+            jwt("https://aiplatform.googleapis.com/".into()).await,
+        ),
+        ("jwt aud=endpoint url", jwt(endpoint_url).await),
+        ("jwt aud=service attachment", jwt(attachment.clone()).await),
+        ("jwt aud=sandbox resource name", jwt(name.clone()).await),
+    ];
+    variants.push((
+        "signer access token",
+        iam.generate_access_token(
+            signer.clone(),
+            GenerateAccessTokenRequest {
+                scope: vec!["https://www.googleapis.com/auth/cloud-platform".to_string()],
+                delegates: None,
+                lifetime: Some("600s".to_string()),
+            },
+        )
+        .await
+        .map(|token| token.access_token)
+        .map_err(|error| format!("access token: {error}")),
+    ));
+    variants.push((
+        "signer id token aud=aiplatform",
+        iam.generate_id_token(
+            signer.clone(),
+            GenerateIdTokenRequest {
+                audience: "https://aiplatform.googleapis.com/".to_string(),
+            },
+        )
+        .await
+        .map(|token| token.token)
+        .map_err(|error| format!("id token: {error}")),
+    ));
+    let body = serde_json::json!({"v": 1, "op": "health"}).to_string();
+    for (label, credential) in variants {
+        let observed = match credential {
+            Err(error) => format!("no credential: {error}"),
+            Ok(credential) => match http
+                .post(format!("http://127.0.0.1:{endpoint_port}/"))
+                .bearer_auth(credential)
+                .header("X-Sandbox-Routing-Token", &routing)
+                .header(
+                    "X-Sandbox-Port",
+                    alien_core::sandbox_image::AGENT_PORT.to_string(),
+                )
+                .header("content-type", "application/json")
+                .timeout(Duration::from_secs(60))
+                .body(body.clone())
+                .send()
+                .await
+            {
+                Err(error) => format!("no answer: {error}"),
+                Ok(response) => {
+                    let status = response.status();
+                    let text = response.text().await.unwrap_or_default();
+                    let text: String = text.chars().take(240).collect();
+                    format!("{status} {}", text.replace('\n', " "))
+                }
+            },
+        };
+        proof.note(format!("[probe] {label}: {observed}"));
+    }
+    if let Err(error) = platform.delete_sandbox(&engine, &id).await {
+        proof.note(format!("[probe] delete {id}: {error}"));
+    }
+    Ok(())
+}
+
 async fn prove(
     sandbox: &dyn Sandbox,
     deployed: &Deployed,
@@ -977,6 +1138,11 @@ async fn gcp_internet_sandbox_egress_goes_through_the_gateway_only(ctx: &mut Gcp
                     _admin_tunnels.push((child, Forwarder::start(listen, port).await?));
                 }
                 let workload = act_as_workload(&deployed, &mut proof).await?;
+                if let Err(error) =
+                    probe_private_ingress(&deployed, &workload, endpoint_port, &mut proof).await
+                {
+                    proof.note(format!("[probe] stopped: {error:#}"));
+                }
                 let provider = provider(&deployed, workload, endpoint_port)?;
                 let sandbox = provider
                     .load_sandbox(SANDBOX)
