@@ -202,6 +202,36 @@ pub fn platform_refusal(platform: crate::Platform) -> Option<&'static str> {
     }
 }
 
+/// Why Azure cannot front the linked container `id` with an internal load balancer, if it
+/// cannot. A container on Azure joins exactly one load balancer pool through one host
+/// port, so the container must have no public endpoint (which already takes that pool) and
+/// exactly one port.
+pub fn azure_link_refusal(stack: &crate::Stack, id: &str) -> Option<String> {
+    let container = stack
+        .resources
+        .get(id)?
+        .config
+        .downcast_ref::<crate::Container>()?;
+    if !container.public_endpoints.is_empty() {
+        return Some(
+            "on Azure a linked container cannot also have a public endpoint: it joins one \
+             load balancer pool, which the public endpoint already uses"
+                .into(),
+        );
+    }
+    if container
+        .internal_ports()
+        .is_ok_and(|ports| ports.len() != 1)
+    {
+        return Some(
+            "on Azure a linked container must declare exactly one port: its internal load \
+             balancer forwards one host port"
+                .into(),
+        );
+    }
+    None
+}
+
 /// Checks a sandbox's declared links against the stack and the platform at plan time.
 pub fn validate_sandbox_links(
     stack: &crate::Stack,
@@ -234,6 +264,11 @@ pub fn validate_sandbox_links(
     for link in &sandbox.gateway_links {
         internal_ports(stack, &link.id)
             .map_err(|reason| format!("link '{}': {reason}", link.id))?;
+        if platform == crate::Platform::Azure {
+            if let Some(reason) = azure_link_refusal(stack, &link.id) {
+                return Err(format!("link '{}': {reason}", link.id));
+            }
+        }
     }
     Ok(())
 }
@@ -526,5 +561,62 @@ mod builder_tests {
         // Without links nothing is published; a public overlay is never a link range.
         assert!(cluster_gateway_links(&stack("10.244.0.0/16", false), "p").is_empty());
         assert!(cluster_gateway_links(&stack("11.244.0.0/16", true), "p").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod azure_tests {
+    use super::azure_link_refusal;
+    use crate::{
+        Container, ContainerCode, ExposeProtocol, PublicEndpoint, ResourceLifecycle, ResourceSpec,
+        Stack,
+    };
+
+    fn container(id: &str, ports: &[u16], public: bool) -> Container {
+        let mut builder = Container::new(id.into())
+            .code(ContainerCode::Image {
+                image: "example.com/api:1".into(),
+            })
+            .permissions("execution".into())
+            .cpu(ResourceSpec {
+                min: "1".into(),
+                desired: "1".into(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".into(),
+                desired: "1Gi".into(),
+            });
+        for &port in ports {
+            builder = builder.port(port);
+        }
+        if public {
+            builder = builder.public_endpoint(PublicEndpoint {
+                name: "web".into(),
+                port: ports[0],
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            });
+        }
+        builder.build()
+    }
+
+    #[test]
+    fn azure_links_a_single_port_container_without_a_public_endpoint() {
+        let stack = Stack::new("s".into())
+            .add(container("api", &[8080], false), ResourceLifecycle::Live)
+            .add(
+                container("two", &[8080, 9090], false),
+                ResourceLifecycle::Live,
+            )
+            .add(container("web", &[8080], true), ResourceLifecycle::Live)
+            .build();
+        assert_eq!(azure_link_refusal(&stack, "api"), None);
+        assert!(azure_link_refusal(&stack, "two")
+            .unwrap()
+            .contains("exactly one port"));
+        assert!(azure_link_refusal(&stack, "web")
+            .unwrap()
+            .contains("public endpoint"));
     }
 }
