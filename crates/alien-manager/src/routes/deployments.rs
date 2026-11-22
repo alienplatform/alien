@@ -2549,8 +2549,7 @@ mod tests {
             ..Default::default()
         };
         let settings =
-            stack_settings_for_platform(Platform::Kubernetes, Some(requested.clone()), false)
-                .unwrap();
+            stack_settings_for_platform(Platform::Kubernetes, Some(requested.clone()), false).unwrap();
         assert!(settings.airgapped);
         assert_eq!(settings.deployment_model, DeploymentModel::Pull);
         for platform in [
