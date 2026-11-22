@@ -22,6 +22,9 @@ pub enum SetupDriftCode {
     /// The management identity has no recorded permissions boundary (an install from before
     /// the boundary existed). Setup installs it. `resource` is the management resource id.
     PermissionsBoundaryMissing,
+    /// The installed permissions boundary differs from the one this version would install.
+    /// Setup rewrites it. `resource` is the management resource id.
+    PermissionsBoundaryChanged,
     /// A grant was denied while creating something setup's grant covers (CloudWatch alarms,
     /// point-in-time recovery). `resource` is the resource id; `detail` names what was denied.
     GrantDenied,

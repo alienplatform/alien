@@ -10,6 +10,8 @@
 #[cfg(feature = "aws")]
 mod boundary_audit;
 #[cfg(feature = "aws")]
+mod boundary_compare;
+#[cfg(feature = "aws")]
 pub use boundary_audit::{hand_added_policies_under_new_boundary, HandAddedPolicy};
 
 use std::collections::BTreeMap;
@@ -24,6 +26,16 @@ use crate::error::Result;
 use crate::remote_stack_management::{
     management_permission_set_digests, management_permissions_revision_of,
 };
+
+/// What the deployment's AWS target contributes to the permissions boundary document: the
+/// account and region it is installed in, and whether signing is pinned. The caller has these
+/// from its cloud configuration and the deployment's stack settings; state does not carry them.
+#[derive(Debug, Clone)]
+pub struct AwsBoundaryInputs {
+    pub account_id: String,
+    pub region: String,
+    pub signing_protected: bool,
+}
 
 /// What a setup run with this binary would change on an installed deployment, as reasons.
 ///
@@ -41,6 +53,7 @@ pub fn setup_drift(
     state: &StackState,
     platform: Platform,
     authority: InitialSetupAuthority,
+    boundary_inputs: Option<&AwsBoundaryInputs>,
 ) -> Result<Vec<SetupDriftReason>> {
     let denials = recorded_denials(state);
     if authority != InitialSetupAuthority::DirectSetup {
@@ -48,6 +61,17 @@ pub fn setup_drift(
     }
     let mut reasons = management_permissions_drift(installed_stack, state, platform)?;
     reasons.extend(missing_permissions_boundary(state, platform));
+    #[cfg(feature = "aws")]
+    if let Some(inputs) = boundary_inputs {
+        reasons.extend(boundary_compare::changed_permissions_boundary(
+            installed_stack,
+            state,
+            platform,
+            inputs,
+        ));
+    }
+    #[cfg(not(feature = "aws"))]
+    let _ = boundary_inputs;
     reasons.extend(missing_flow_logs(installed_stack, state, platform));
     if !reasons.is_empty() {
         reasons.extend(denials);
@@ -113,9 +137,8 @@ fn management_permissions_drift(
 /// revision can match while the boundary is absent (the boundary is not part of it), so this is
 /// checked on its own: a matching revision must not read as "setup is current".
 ///
-/// Only the presence is judged from state. The boundary's content depends on the account,
-/// region and management role of the install, which state alone does not carry; a setup run
-/// rewrites it whenever it differs.
+/// Only the presence is judged here; the content is compared by `boundary_compare` when the
+/// caller supplies the install's account and region.
 fn missing_permissions_boundary(state: &StackState, platform: Platform) -> Vec<SetupDriftReason> {
     if platform != Platform::Aws {
         return vec![];

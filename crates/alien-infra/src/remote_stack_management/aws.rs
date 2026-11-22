@@ -746,6 +746,26 @@ pub(crate) fn aws_network_scope_of(
     }
 }
 
+/// The permissions boundary document setup installs, from a permission context that carries the
+/// install's account, region, prefix and managing account. Setup and the drift check both call
+/// this, so they cannot disagree about what "the boundary this binary installs" is.
+pub(crate) fn desired_permissions_boundary(
+    stack: &alien_core::Stack,
+    state: &alien_core::StackState,
+    mut context: PermissionContext,
+    account_id: &str,
+) -> Result<serde_json::Value> {
+    context.aws_permissions_boundary_arn = Some(format!(
+        "arn:aws:iam::{account_id}:policy/{}",
+        permissions_boundary_name(&state.resource_prefix)
+    ));
+    // The boundary is a ceiling and management checks it without the stack's network
+    // (`validate_installed_aws_permissions_boundary`); the network narrows the role's own
+    // policies only.
+    context.aws_network = None;
+    aws_permissions_boundary_for_stack(stack, state, &context)
+}
+
 // Separate impl block for helper methods
 impl AwsRemoteStackManagementController {
     /// Generate trust policy for cross-account access with specific role restriction
@@ -810,16 +830,9 @@ impl AwsRemoteStackManagementController {
         &self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<serde_json::Value> {
-        let mut context = self.permission_context(ctx)?;
-        context.aws_permissions_boundary_arn = Some(self.management_policy_arn(
-            &ctx.get_aws_config()?.account_id,
-            &permissions_boundary_name(ctx.resource_prefix),
-        ));
-        // The boundary is a ceiling and management checks it without the stack's network
-        // (`validate_installed_aws_permissions_boundary`); the network narrows the role's own
-        // policies only.
-        context.aws_network = None;
-        aws_permissions_boundary_for_stack(ctx.desired_stack, ctx.state, &context)
+        let context = self.permission_context(ctx)?;
+        let account_id = ctx.get_aws_config()?.account_id.clone();
+        desired_permissions_boundary(ctx.desired_stack, ctx.state, context, &account_id)
     }
 
     async fn install_permissions_boundary(

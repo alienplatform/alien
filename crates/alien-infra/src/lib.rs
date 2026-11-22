@@ -57,9 +57,9 @@ mod sandbox;
 pub use sandbox::*;
 
 pub mod setup_drift;
-pub use setup_drift::{recorded_denials, setup_drift};
 #[cfg(feature = "aws")]
 pub use setup_drift::{hand_added_policies_under_new_boundary, HandAddedPolicy};
+pub use setup_drift::{recorded_denials, setup_drift, AwsBoundaryInputs};
 pub mod setup_scaffolding;
 
 mod kubernetes_cluster;

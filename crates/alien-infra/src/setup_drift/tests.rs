@@ -32,7 +32,9 @@ fn drift(
     authority: InitialSetupAuthority,
 ) -> Vec<SetupDriftReason> {
     executor
-        .with_context(|ctx| setup_drift(ctx.desired_stack, ctx.state, ctx.platform, authority))
+        .with_context(|ctx| {
+            setup_drift(ctx.desired_stack, ctx.state, ctx.platform, authority, None)
+        })
         .expect("drift")
 }
 
@@ -255,4 +257,105 @@ async fn a_template_install_is_not_judged_on_its_boundary() {
         drift(&executor, InitialSetupAuthority::ImportedHandoff),
         vec![]
     );
+}
+
+// ---- permissions boundary content ----
+
+const ACCOUNT: &str = "123456789012";
+const REGION: &str = "us-east-1";
+
+/// The boundary document setup would install for this executor's stack, for a managing account.
+fn desired_boundary(
+    executor: &SingleControllerExecutor,
+    managing_account: &str,
+) -> serde_json::Value {
+    executor.with_context(|ctx| {
+        let context = alien_permissions::PermissionContext::new()
+            .with_stack_prefix(ctx.state.resource_prefix.clone())
+            .with_aws_region(REGION)
+            .with_aws_account_id(ACCOUNT)
+            .with_managing_account_id(managing_account)
+            .with_managing_role_arn(format!("arn:aws:iam::{managing_account}:role/manager"));
+        crate::remote_stack_management::desired_permissions_boundary(
+            ctx.desired_stack,
+            ctx.state,
+            context,
+            ACCOUNT,
+        )
+        .expect("boundary renders")
+    })
+}
+
+/// A current install (revision and digests as this binary would record) holding `document`.
+async fn install_with_boundary(
+    document: impl FnOnce(&SingleControllerExecutor) -> serde_json::Value,
+) -> SingleControllerExecutor {
+    let probe = install(None, BTreeMap::new()).await;
+    let (revision, digests) = current(&probe);
+    let mut controller = AwsRemoteStackManagementController::mock_ready("test");
+    controller.management_permissions_revision = Some(revision);
+    controller.management_permission_set_digests = digests;
+    controller.permissions_boundary_arn = Some(format!(
+        "arn:aws:iam::{ACCOUNT}:policy/test-prefix-deployment-management-boundary"
+    ));
+    controller.permissions_boundary_document = Some(document(&probe));
+    SingleControllerExecutor::builder()
+        .resource(RemoteStackManagement::new("management".to_string()).build())
+        .controller(controller)
+        .platform(Platform::Aws)
+        .initial_setup_authority(DIRECT)
+        .build()
+        .await
+        .expect("executor builds")
+}
+
+fn boundary_drift(executor: &SingleControllerExecutor) -> Vec<SetupDriftReason> {
+    let inputs = AwsBoundaryInputs {
+        account_id: ACCOUNT.to_string(),
+        region: REGION.to_string(),
+        signing_protected: false,
+    };
+    executor
+        .with_context(|ctx| {
+            setup_drift(
+                ctx.desired_stack,
+                ctx.state,
+                ctx.platform,
+                DIRECT,
+                Some(&inputs),
+            )
+        })
+        .expect("drift")
+}
+
+#[tokio::test]
+async fn the_boundary_this_binary_would_install_is_current() {
+    let executor = install_with_boundary(|probe| desired_boundary(probe, "210987654321")).await;
+    assert_eq!(boundary_drift(&executor), vec![]);
+}
+
+#[tokio::test]
+async fn a_changed_boundary_document_is_drift() {
+    let executor = install_with_boundary(|probe| {
+        let mut document = desired_boundary(probe, "210987654321");
+        document["Statement"]
+            .as_array_mut()
+            .expect("statements")
+            .push(serde_json::json!({
+                "Effect": "Allow", "Action": "sqs:SendMessage", "Resource": "*"
+            }));
+        document
+    })
+    .await;
+    let reasons = boundary_drift(&executor);
+    assert_eq!(reasons.len(), 1, "{reasons:?}");
+    assert_eq!(reasons[0].code, SetupDriftCode::PermissionsBoundaryChanged);
+    assert_eq!(reasons[0].resource.as_deref(), Some("management"));
+}
+
+#[tokio::test]
+async fn a_document_with_one_account_everywhere_matches_whichever_managing_account_it_holds() {
+    // A different managing account than any other test uses: the account is not an input.
+    let executor = install_with_boundary(|probe| desired_boundary(probe, "555555555555")).await;
+    assert_eq!(boundary_drift(&executor), vec![]);
 }

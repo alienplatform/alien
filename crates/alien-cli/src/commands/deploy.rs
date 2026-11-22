@@ -2531,6 +2531,7 @@ async fn deploy_task_with_environment(
             typed_metadata.as_ref(),
             installed_stack_state.as_ref(),
             platform,
+            aws_boundary_inputs(&client_config, deployment.stack_settings.as_ref()),
         )?
     } else {
         Vec::new()
@@ -3757,11 +3758,29 @@ fn existing_deployment_plan(
     ExistingDeploymentPlan::Runtime
 }
 
+/// The AWS account, region and signing pin the permissions boundary is rendered with. `None`
+/// when the target is not AWS or the settings cannot be read: the boundary's content is then
+/// not compared (its presence still is).
+fn aws_boundary_inputs(
+    client_config: &alien_core::ClientConfig,
+    stack_settings: Option<&serde_json::Value>,
+) -> Option<alien_infra::AwsBoundaryInputs> {
+    let aws = client_config.aws_config()?;
+    let settings: alien_core::StackSettings =
+        serde_json::from_value(stack_settings?.clone()).ok()?;
+    Some(alien_infra::AwsBoundaryInputs {
+        account_id: aws.account_id.clone(),
+        region: aws.region.clone(),
+        signing_protected: settings.signing.is_some(),
+    })
+}
+
 /// What a setup run would still change on an installed deployment, from its recorded state alone.
 fn installed_setup_drift(
     metadata: Option<&alien_core::RuntimeMetadata>,
     stack_state: Option<&alien_core::StackState>,
     platform: Platform,
+    boundary_inputs: Option<alien_infra::AwsBoundaryInputs>,
 ) -> Result<Vec<alien_core::SetupDriftReason>> {
     let (Some(metadata), Some(stack_state)) = (metadata, stack_state) else {
         return Ok(Vec::new());
@@ -3775,6 +3794,7 @@ fn installed_setup_drift(
         stack_state,
         platform,
         metadata.initial_setup_authority,
+        boundary_inputs.as_ref(),
     )
     .into_alien_error()
     .context(ErrorData::ConfigurationError {
