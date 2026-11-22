@@ -362,20 +362,16 @@
         }
       },
       {
-        // Lambda CreateFunction with a cross-account ECR image requires the
-        // calling principal to have these permissions on the management ECR.
-        // Lambda internally calls BatchGetImage on behalf of the caller
-        // (verified via CloudTrail: invokedBy=lambda.amazonaws.com).
-        // GetRepositoryPolicy + SetRepositoryPolicy are needed so Lambda can
-        // verify/add the LambdaECRImageCrossAccountRetrievalPolicy.
+        // Lambda CreateFunction and UpdateFunctionCode with a cross-account ECR image
+        // need the calling principal to pull from the management ECR. The repository
+        // policy there already names the Lambda service, and Lambda needs no
+        // repository policy actions of its own.
         "label": "configure-lambda-image-pull-access",
-        "description": "Read deployment container images and maintain the ECR repository policy Lambda requires for cross-account image pulls.",
+        "description": "Read deployment container images from the managing account so Lambda can create and update functions from them.",
         "grant": {
           "actions": [
             "ecr:BatchGetImage",
-            "ecr:GetDownloadUrlForLayer",
-            "ecr:GetRepositoryPolicy",
-            "ecr:SetRepositoryPolicy"
+            "ecr:GetDownloadUrlForLayer"
           ]
         },
         "binding": {
