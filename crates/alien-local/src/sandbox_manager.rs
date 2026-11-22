@@ -79,6 +79,9 @@ pub struct SandboxSessionConfig {
     /// With `Allow`, the session sits alone on its own internal network with the gateway, which
     /// is its only way out; these are the services it can reach through it.
     pub links: Vec<SandboxLink>,
+    /// The declaration's `maxLifetimeSeconds`: the route ends each session this long after it
+    /// is created. `None`, a session runs until it is terminated.
+    pub max_lifetime: Option<std::time::Duration>,
 }
 
 /// A service a sandbox links: a container on `deployment-network`, by its resource id, on its
@@ -1484,6 +1487,7 @@ mod tests {
                         preview_ports: Vec::new(),
                         env: HashMap::from([(name.to_string(), "0".to_string())]),
                         links: Vec::new(),
+                        max_lifetime: None,
                     },
                 )
                 .await

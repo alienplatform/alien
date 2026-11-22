@@ -21,7 +21,7 @@ use crate::traits::{
     ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_core::bindings::LocalSandboxBinding;
-use alien_core::{Platform, SandboxCapabilities, SandboxCapability};
+use alien_core::{Platform, SandboxCapabilities};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 
 #[derive(Debug, Deserialize)]
@@ -299,20 +299,6 @@ impl super::interactive::BoundAgent for LocalBoundAgent {
 
 impl Binding for LocalSandbox {}
 
-/// Refused rather than dropped: Docker has no wall-clock ceiling, so accepting one would report a
-/// bounded sandbox and leave an unbounded container running on the developer's machine.
-fn refuse_create_time_lifetime(request: &CreateSandboxRequest) -> Result<()> {
-    if request.timeout_ms.is_none() {
-        return Ok(());
-    }
-    Err(AlienError::new(ErrorData::OperationNotSupported {
-        operation: SandboxCapability::SandboxLifetime.as_str().to_string(),
-        reason: "local sandboxes run as Docker containers, which carry no wall-clock ceiling; \
-                 terminate the sandbox when the caller is done with it"
-            .to_string(),
-    }))
-}
-
 #[async_trait]
 impl Sandbox for LocalSandbox {
     fn egress_declaration(&self) -> Option<&alien_core::SandboxEgress> {
@@ -324,18 +310,25 @@ impl Sandbox for LocalSandbox {
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
         super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
-        refuse_create_time_lifetime(&request)?;
+        // Whole seconds, as on every backend. The route applies the declared ceiling, so a request
+        // can only shorten a sandbox.
+        let timeout_ms = request
+            .timeout_ms
+            .map(|ms| super::requested_lifetime_seconds(ms, None, "sandbox.create"))
+            .transpose()?
+            .map(|seconds| u64::from(seconds) * 1_000);
         let sandbox_id = request
             .sandbox_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
 
-        // Only the id. Image, limits, egress and preview ports come from the controller's
-        // template, so an application cannot raise its own ceilings.
+        // The id, and a lifetime that can only shorten the declared one. Image, limits, egress
+        // and preview ports come from the controller's template, so an application cannot raise
+        // its own ceilings.
         let created: SessionBody = self
             .send(
                 self.client
                     .post(self.url("/v1/sessions"))
-                    .json(&json!({ "sessionId": sandbox_id })),
+                    .json(&json!({ "sessionId": sandbox_id, "timeoutMs": timeout_ms })),
                 "sandbox.create",
             )
             .await?;
@@ -357,9 +350,6 @@ impl Sandbox for LocalSandbox {
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
         super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
-        // Refused on the reconnect path too: an existing sandbox honors a lifetime no more than a
-        // fresh one would.
-        refuse_create_time_lifetime(&request)?;
         if let Some(id) = request.sandbox_id.as_deref() {
             if let Some(existing) = self.get(id).await? {
                 return Ok(ResolvedSandbox::found(existing));

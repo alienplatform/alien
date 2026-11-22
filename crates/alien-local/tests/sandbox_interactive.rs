@@ -44,6 +44,7 @@ async fn every_interactive_conformance_case_passes_on_local() {
             preview_ports: Vec::new(),
             env: Default::default(),
             links: Vec::new(),
+            max_lifetime: None,
         },
     )
     .await
@@ -113,6 +114,7 @@ async fn language_bindings_drive_interactive_commands_against_local() {
             preview_ports: Vec::new(),
             env: Default::default(),
             links: Vec::new(),
+            max_lifetime: None,
         },
     )
     .await
@@ -182,6 +184,7 @@ async fn local_session(sandbox_key: &str, pids_limit: i64) -> (TempDir, Arc<dyn 
             preview_ports: Vec::new(),
             env: Default::default(),
             links: Vec::new(),
+            max_lifetime: None,
         },
     )
     .await

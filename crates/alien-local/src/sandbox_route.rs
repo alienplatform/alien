@@ -43,6 +43,10 @@ fn token_file_name(sandbox: &str) -> String {
 pub struct CreateSessionBody {
     /// Session id within the sandbox
     pub session_id: String,
+    /// A lifetime the caller asks for. It can only shorten the declared ceiling, never lengthen
+    /// it, so it is safe to take from the client.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
 /// A request to run a command.
@@ -617,11 +621,66 @@ async fn create_session(
         .await
         .map_err(failed)?;
 
+    if let Some(lifetime) = session_lifetime(
+        template.max_lifetime,
+        body.timeout_ms.map(std::time::Duration::from_millis),
+    ) {
+        end_after(
+            state.manager.clone(),
+            state.sandbox.clone(),
+            handle.session_id.clone(),
+            handle.container_id.clone(),
+            lifetime,
+        );
+    }
+
     Ok(Json(SessionBody {
         session_id: handle.session_id,
         container_id: handle.container_id,
         running: handle.running,
     }))
+}
+
+/// How long a new session may run: the shorter of the declared ceiling and the caller's request.
+fn session_lifetime(
+    declared: Option<std::time::Duration>,
+    requested: Option<std::time::Duration>,
+) -> Option<std::time::Duration> {
+    match (declared, requested) {
+        (Some(declared), Some(requested)) => Some(declared.min(requested)),
+        (declared, requested) => declared.or(requested),
+    }
+}
+
+/// Ends the session after `lifetime`, as a cloud backend's deadline does. Only the container this
+/// create made: a session terminated and created again under the same id keeps its own deadline.
+/// The timer lives in this process, like the sessions themselves, which a restart removes.
+fn end_after(
+    manager: Arc<LocalSandboxManager>,
+    sandbox: String,
+    session_id: String,
+    container_id: String,
+    lifetime: std::time::Duration,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(lifetime).await;
+        let still_ours = match manager.list_sessions(&sandbox).await {
+            Ok(sessions) => sessions
+                .iter()
+                .any(|s| s.session_id == session_id && s.container_id == container_id),
+            Err(error) => {
+                tracing::warn!(%sandbox, %session_id, %error, "could not list sessions at the lifetime deadline; ending the session anyway");
+                true
+            }
+        };
+        if !still_ours {
+            return;
+        }
+        tracing::info!(%sandbox, %session_id, lifetime_secs = lifetime.as_secs(), "sandbox reached its lifetime; terminating");
+        if let Err(error) = manager.terminate(&sandbox, &session_id).await {
+            tracing::warn!(%sandbox, %session_id, %error, "could not end a sandbox at its lifetime");
+        }
+    });
 }
 
 async fn list_sessions(
@@ -1044,5 +1103,22 @@ mod tests {
             generate_token().len() >= 64,
             "a guessable token is not a token"
         );
+    }
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    use super::session_lifetime;
+    use std::time::Duration;
+
+    #[test]
+    fn the_shorter_of_the_declared_and_requested_lifetime_wins() {
+        let s = Duration::from_secs;
+        assert_eq!(session_lifetime(None, None), None);
+        assert_eq!(session_lifetime(Some(s(60)), None), Some(s(60)));
+        assert_eq!(session_lifetime(None, Some(s(5))), Some(s(5)));
+        assert_eq!(session_lifetime(Some(s(60)), Some(s(5))), Some(s(5)));
+        // A request cannot lengthen the declared ceiling.
+        assert_eq!(session_lifetime(Some(s(60)), Some(s(600))), Some(s(60)));
     }
 }

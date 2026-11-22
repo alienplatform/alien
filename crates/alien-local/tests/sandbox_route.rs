@@ -45,6 +45,7 @@ impl Harness {
             preview_ports: vec![8080],
             env: Default::default(),
             links: Vec::new(),
+            max_lifetime: None,
         };
 
         let route = SandboxRoute::ensure(manager, SANDBOX, template)
@@ -366,6 +367,7 @@ async fn a_create_in_flight_at_removal_is_visible_to_the_reap_that_follows() {
         preview_ports: Vec::new(),
         env: Default::default(),
         links: Vec::new(),
+        max_lifetime: None,
     };
     let route = SandboxRoute::ensure(Arc::clone(&manager), SANDBOX_SLOW, template)
         .await
@@ -620,4 +622,130 @@ async fn language_bindings_preserve_egress_requests_against_local() {
         "language tests must terminate their real containers"
     );
     SandboxRoute::remove(SANDBOX).await;
+}
+
+/// A route for `sandbox` whose sessions get `max_lifetime`, and the binding over it.
+async fn lifetime_route(
+    sandbox: &str,
+    max_lifetime: Option<std::time::Duration>,
+) -> (
+    TempDir,
+    Arc<LocalSandboxManager>,
+    alien_bindings::providers::sandbox::local::LocalSandbox,
+) {
+    use alien_core::bindings::{BindingValue, LocalSandboxBinding};
+    let dir = TempDir::new().expect("temp dir");
+    let manager = Arc::new(
+        LocalSandboxManager::new(dir.path().to_path_buf()).expect("Docker must be reachable"),
+    );
+    manager.reap(sandbox).await.expect("clean slate");
+    SandboxRoute::remove(sandbox).await;
+    let template = SandboxSessionConfig {
+        image: IMAGE.to_string(),
+        cpu_cores: 0.5,
+        memory_bytes: 268_435_456,
+        pids_limit: Some(64),
+        scratch_bytes: 16_777_216,
+        egress: SandboxEgressMode::Deny,
+        preview_ports: Vec::new(),
+        env: Default::default(),
+        links: Vec::new(),
+        max_lifetime,
+    };
+    let route = SandboxRoute::ensure(Arc::clone(&manager), sandbox, template)
+        .await
+        .expect("route binds on loopback");
+    let binding = alien_bindings::providers::sandbox::local::LocalSandbox::new(
+        "agent",
+        &LocalSandboxBinding {
+            default_policy: None,
+            egress: None,
+            manager_url: BindingValue::Value(route.base_url.clone()),
+            sandbox_key: BindingValue::Value(sandbox.to_string()),
+            token_path: BindingValue::Value(route.token_path.display().to_string()),
+            links: Default::default(),
+        },
+    )
+    .await
+    .expect("binding reads the route token");
+    (dir, manager, binding)
+}
+
+/// Polls until the sandbox is gone, up to `within`.
+async fn gone_within(
+    binding: &alien_bindings::providers::sandbox::local::LocalSandbox,
+    id: &str,
+    within: std::time::Duration,
+) -> bool {
+    use alien_bindings::traits::Sandbox;
+    let deadline = tokio::time::Instant::now() + within;
+    while tokio::time::Instant::now() < deadline {
+        if binding.get(id).await.expect("get").is_none() {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    false
+}
+
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_session_ends_at_the_declared_lifetime() {
+    use alien_bindings::traits::{CreateSandboxRequest, Sandbox};
+    const KEY: &str = "route-lifetime";
+    let (_dir, manager, binding) =
+        lifetime_route(KEY, Some(std::time::Duration::from_secs(3))).await;
+
+    let instance = binding
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("sandbox starts");
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    assert!(
+        binding
+            .get(&instance.sandbox_id)
+            .await
+            .expect("get")
+            .is_some(),
+        "the sandbox runs until its lifetime"
+    );
+    assert!(
+        gone_within(
+            &binding,
+            &instance.sandbox_id,
+            std::time::Duration::from_secs(10)
+        )
+        .await,
+        "the sandbox must end at its declared lifetime"
+    );
+    manager.reap(KEY).await.expect("cleanup");
+    SandboxRoute::remove(KEY).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_requested_lifetime_shortens_the_declared_one() {
+    use alien_bindings::traits::{CreateSandboxRequest, Sandbox};
+    const KEY: &str = "route-lifetime-request";
+    let (_dir, manager, binding) =
+        lifetime_route(KEY, Some(std::time::Duration::from_secs(3600))).await;
+
+    let instance = binding
+        .create(CreateSandboxRequest {
+            timeout_ms: Some(2_000),
+            ..Default::default()
+        })
+        .await
+        .expect("a local sandbox takes a create-time lifetime");
+    assert!(
+        gone_within(
+            &binding,
+            &instance.sandbox_id,
+            std::time::Duration::from_secs(10)
+        )
+        .await,
+        "the shorter, requested lifetime must win"
+    );
+    manager.reap(KEY).await.expect("cleanup");
+    SandboxRoute::remove(KEY).await;
 }

@@ -561,7 +561,11 @@ impl KubernetesDaemonController {
             });
             return self
                 .not_ready
-                .outcome(error, self.recovering, crate::kubernetes_workload_heartbeat::not_ready_now_unix())
+                .outcome(
+                    error,
+                    self.recovering,
+                    crate::kubernetes_workload_heartbeat::not_ready_now_unix(),
+                )
                 .map(|delay| HandlerAction::Stay {
                     max_times: None,
                     suggested_delay: Some(delay),
@@ -872,10 +876,8 @@ impl KubernetesDaemonController {
                 // Nothing rolled and the pods are not failing for good: the refresh check looks
                 // again later. An update failure is never checked again. The reason is kept as
                 // the resource error, so a retry applies the spec again.
-                self.update_timeout_reason = Some(
-                    self.rollout_timeout(ctx, live.as_ref(), pod_reason)
-                        .message,
-                );
+                self.update_timeout_reason =
+                    Some(self.rollout_timeout(ctx, live.as_ref(), pod_reason).message);
                 return Ok(HandlerAction::Continue {
                     state: RefreshFailed,
                     suggested_delay: Some(Duration::from_secs(10)),

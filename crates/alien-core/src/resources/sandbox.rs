@@ -308,10 +308,10 @@ pub const AZURE_GATEWAY_MAX_LIFETIME_SECONDS: u32 = 24 * 60 * 60;
 pub struct SandboxLifecyclePolicy {
     /// Wall-clock ceiling on a single sandbox, after which the platform terminates it.
     ///
-    /// Optional because not every backend has the primitive: Kubernetes has
-    /// `activeDeadlineSeconds` and AWS `maximumDurationInSeconds`, while neither Azure nor Local
-    /// expose one, so declaring a ceiling there is refused at plan time rather than accepted and
-    /// never applied. AWS caps it at 8 hours.
+    /// Optional: without it a sandbox runs until it is terminated. Kubernetes applies it as
+    /// `activeDeadlineSeconds`, AWS as `maximumDurationInSeconds`, Google Cloud as the sandbox's
+    /// TTL, Azure through the controller's reaper, and local development through the sandbox
+    /// manager, which ends the container. AWS caps it at 8 hours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lifetime_seconds: Option<u32>,
     /// Idle period after which the sandbox is paused, where the platform supports it.
@@ -487,7 +487,8 @@ impl SandboxCapabilities {
                 enforced_limits: true,
                 // Docker's `--pids-limit`.
                 process_limit: true,
-                sandbox_lifetime: false,
+                // The manager ends a session when its lifetime runs out.
+                sandbox_lifetime: true,
                 // Local has no in-sandbox agent: the manager drives Docker from outside, so
                 // there is no supervisor inside the sandbox to isolate from.
                 supervisor_pid_namespace: false,
@@ -2775,6 +2776,7 @@ mod tests {
                 Platform::Kubernetes,
                 Platform::Gcp,
                 Platform::Azure,
+                Platform::Local,
             ] {
                 let error = sandbox
                     .validate_for_platform(platform)
@@ -2785,17 +2787,6 @@ mod tests {
                 );
                 assert!(
                     error.to_string().contains("maxLifetimeSeconds"),
-                    "{platform} {declared} limits"
-                );
-            }
-
-            // Where the field is unsupported, that is the answer, not the value.
-            for platform in [Platform::Local] {
-                let error = sandbox
-                    .validate_for_platform(platform)
-                    .expect_err("a lifetime is refused where nothing applies it");
-                assert_eq!(
-                    error.code, "SANDBOX_CAPABILITY_UNSUPPORTED",
                     "{platform} {declared} limits"
                 );
             }
@@ -2961,8 +2952,8 @@ mod tests {
     }
 
     /// A deadline is accepted only where something terminates on it: the kubelet's
-    /// `activeDeadlineSeconds`, Lambda's `maximumDurationInSeconds`, or on Azure the controller's
-    /// reaper. Elsewhere it is refused rather than accepted and dropped.
+    /// `activeDeadlineSeconds`, Lambda's `maximumDurationInSeconds`, on Azure the controller's
+    /// reaper, and locally the sandbox route's timer.
     #[test]
     fn a_sandbox_deadline_is_accepted_only_where_the_platform_applies_it() {
         let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
@@ -2978,13 +2969,9 @@ mod tests {
         sandbox.validate_for_platform(Platform::Azure).expect(
             "the binding stamps a deadline label and the controller's reaper deletes by it",
         );
-
-        for platform in [Platform::Local] {
-            let error = sandbox
-                .validate_for_platform(platform)
-                .expect_err("a deadline nothing applies must be refused");
-            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        }
+        sandbox
+            .validate_for_platform(Platform::Local)
+            .expect("the local sandbox route ends a session at its lifetime");
     }
 
     /// A MicroVM bursts to four times its baseline with no way to opt out, so a ceiling is kept

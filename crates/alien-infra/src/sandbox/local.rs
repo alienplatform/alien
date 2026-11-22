@@ -405,6 +405,10 @@ fn session_template(
             .into_iter()
             .map(|(id, ports)| alien_local::SandboxLink { id, ports })
             .collect(),
+        max_lifetime: sandbox
+            .lifecycle
+            .max_lifetime_seconds
+            .map(|seconds| std::time::Duration::from_secs(u64::from(seconds))),
     })
 }
 
