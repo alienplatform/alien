@@ -143,6 +143,7 @@ fn deployment_on_platform(stack_state: StackState, platform: Platform) -> Deploy
         setup_metadata: None,
         setup_target: None,
         setup_fingerprint: None,
+        setup_drift_digest: None,
         setup_fingerprint_version: None,
         user_environment_variables: None,
         management_config: None,

@@ -75,6 +75,11 @@ pub struct DeploymentRecord {
     pub setup_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_fingerprint_version: Option<u32>,
+    /// Digest of the release's permission sets the control plane recorded at the last accepted
+    /// setup event. `None` for installs that predate it or for a control plane that does not
+    /// send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_drift_digest: Option<String>,
     pub user_environment_variables: Option<Vec<EnvironmentVariable>>,
     /// Management config from the platform API (platform mode only).
     /// In standalone/E2E mode this is None — the credential resolver derives it from bindings.

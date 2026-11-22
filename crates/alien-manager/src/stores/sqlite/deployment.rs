@@ -246,6 +246,7 @@ impl SqliteDeploymentStore {
             setup_metadata,
             setup_target: reservation.as_ref().map(|value| value.setup_target.clone()),
             setup_fingerprint: None,
+            setup_drift_digest: None,
             setup_fingerprint_version: reservation
                 .as_ref()
                 .map(|value| value.setup_fingerprint_version),
@@ -619,6 +620,7 @@ impl SqliteDeploymentStore {
             setup_metadata: p.optional_json(14, "setup_metadata")?,
             setup_target: p.optional_string(15, "setup_target")?,
             setup_fingerprint: p.optional_string(16, "setup_fingerprint")?,
+            setup_drift_digest: None,
             setup_fingerprint_version: p
                 .optional_i64(17, "setup_fingerprint_version")?
                 .map(|value| value as u32),
@@ -768,6 +770,7 @@ mod tests {
             setup_metadata: None,
             setup_target: None,
             setup_fingerprint: None,
+            setup_drift_digest: None,
             setup_fingerprint_version: None,
             user_environment_variables: None,
             deployment_token: None,
@@ -1020,6 +1023,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             setup_metadata: params.setup_metadata,
             setup_target: Some(params.setup_target),
             setup_fingerprint: Some(params.setup_fingerprint),
+            setup_drift_digest: None,
             setup_fingerprint_version: Some(params.setup_fingerprint_version),
             user_environment_variables: None,
             deployment_token: params.deployment_token,

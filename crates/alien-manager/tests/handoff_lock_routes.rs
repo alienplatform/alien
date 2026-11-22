@@ -401,7 +401,11 @@ async fn a_handoff_report_without_a_delete_request_hands_nothing_over() {
     for round in 1..=3 {
         s.operator_syncs(&other, "teardown-required").await;
         let record = s
-            .send(reqwest::Method::GET, &format!("/v1/deployments/{other}"), None)
+            .send(
+                reqwest::Method::GET,
+                &format!("/v1/deployments/{other}"),
+                None,
+            )
             .await;
         assert_eq!(record["status"], "running", "report {round}: {record}");
         assert_eq!(
@@ -451,10 +455,10 @@ async fn a_session_that_does_not_hold_the_lock_releases_nothing() {
 /// is refused with the lock given back, and a run that does finishes the acquire.
 #[tokio::test]
 async fn an_erase_reopen_is_checked_against_the_recorded_policy_under_the_lock() {
+    use alien_core::DeploymentModel;
     use alien_deployment::manager_api_transport::{
         acquire_setup_delete_deployment, SetupDeleteAcquireOutcome,
     };
-    use alien_core::DeploymentModel;
 
     let s = start().await;
     let id = s.deleting_deployment().await;
@@ -519,7 +523,8 @@ async fn an_erase_reopen_is_checked_against_the_recorded_policy_under_the_lock()
     // command is not offered the deployment yet.
     s.operator_syncs(&id, "retained").await;
     assert_eq!(
-        s.command_acquires(&id, "probe", Some("setup-teardown")).await,
+        s.command_acquires(&id, "probe", Some("setup-teardown"))
+            .await,
         0
     );
 

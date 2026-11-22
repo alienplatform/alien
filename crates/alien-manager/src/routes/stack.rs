@@ -1992,6 +1992,7 @@ pub(super) async fn prepare_setup_stack(
         deletion_policy: Default::default(),
         release_statements: None,
         signed_config: None,
+        installed_setup_marker: None,
     };
 
     let quota_activation_declared = source_stack.resources.contains_key("enable-cloud-quotas");
@@ -2831,6 +2832,7 @@ mod setup_update_authorization_tests {
             setup_metadata: None,
             setup_target: Some("target".to_string()),
             setup_fingerprint: Some("fingerprint".to_string()),
+            setup_drift_digest: None,
             setup_fingerprint_version: Some(1),
             user_environment_variables: None,
             management_config: None,

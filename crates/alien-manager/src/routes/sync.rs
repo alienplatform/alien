@@ -5573,6 +5573,7 @@ pub(crate) mod tests {
             deletion_policy: Default::default(),
             release_statements: None,
             signed_config: None,
+            installed_setup_marker: None,
         }
     }
 
@@ -5604,6 +5605,7 @@ pub(crate) mod tests {
             setup_metadata: None,
             setup_target: None,
             setup_fingerprint: None,
+            setup_drift_digest: None,
             setup_fingerprint_version: None,
             user_environment_variables: None,
             management_config: None,

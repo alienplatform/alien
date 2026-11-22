@@ -2086,6 +2086,9 @@ impl RunnerConfigSources<'_> {
             if config.input_values.is_empty() {
                 config.input_values = deployment.input_values.clone();
             }
+            // Only the v1 fingerprint is comparable with the release's
+            // `setupFingerprints` value; any other version is ignored.
+            config.installed_setup_marker = installed_setup_marker(deployment);
             config.manager_url = Some(self.config.base_url());
             config.native_image_host = native_image_host;
             config
@@ -2129,10 +2132,26 @@ impl RunnerConfigSources<'_> {
                 deletion_policy: Default::default(),
                 release_statements: None,
                 signed_config: None,
+                installed_setup_marker: installed_setup_marker(deployment),
             }
         };
         Ok(config)
     }
+}
+
+/// The opaque marker controllers compare to see that setup changed. The v1 setup fingerprint
+/// deliberately leaves out permission grant bodies, so a re-run that adds a grant under the same
+/// set ids keeps it; the control plane's recorded permission-set digest covers that. An older
+/// control plane sends no digest, and the marker is the fingerprint alone.
+pub(crate) fn installed_setup_marker(deployment: &DeploymentRecord) -> Option<String> {
+    let fingerprint = match deployment.setup_fingerprint_version {
+        Some(1) => deployment.setup_fingerprint.as_deref()?,
+        _ => return None,
+    };
+    Some(match deployment.setup_drift_digest.as_deref() {
+        Some(digest) if !digest.is_empty() => format!("{fingerprint}:{digest}"),
+        _ => fingerprint.to_string(),
+    })
 }
 
 /// The deployment's own environment variables plus those its stack inputs map
@@ -2712,6 +2731,41 @@ mod tests {
     use alien_commands::{dispatchers::NullCommandDispatcher, InMemoryCommandRegistry};
     use async_trait::async_trait;
 
+    #[test]
+    fn setup_marker_follows_the_fingerprint_and_the_recorded_digest() {
+        let mut record = deployment_record(DeploymentStatus::Running, None);
+        assert_eq!(super::installed_setup_marker(&record), None);
+
+        record.setup_fingerprint = Some("fp".to_string());
+        record.setup_fingerprint_version = Some(1);
+        // An older control plane records no digest: the fingerprint alone.
+        assert_eq!(
+            super::installed_setup_marker(&record).as_deref(),
+            Some("fp")
+        );
+
+        // A re-run under the same fingerprint that records a digest changes the marker.
+        record.setup_drift_digest = Some("d1".to_string());
+        assert_eq!(
+            super::installed_setup_marker(&record).as_deref(),
+            Some("fp:d1")
+        );
+        // The same inputs give the same marker, so nothing retries.
+        assert_eq!(
+            super::installed_setup_marker(&record),
+            super::installed_setup_marker(&record.clone())
+        );
+        record.setup_drift_digest = Some("d2".to_string());
+        assert_eq!(
+            super::installed_setup_marker(&record).as_deref(),
+            Some("fp:d2")
+        );
+
+        // Only the v1 fingerprint is comparable.
+        record.setup_fingerprint_version = Some(2);
+        assert_eq!(super::installed_setup_marker(&record), None);
+    }
+
     fn deployment_record(
         status: DeploymentStatus,
         stack_state: Option<StackState>,
@@ -2739,6 +2793,7 @@ mod tests {
             setup_metadata: None,
             setup_target: None,
             setup_fingerprint: None,
+            setup_drift_digest: None,
             setup_fingerprint_version: None,
             user_environment_variables: None,
             management_config: None,

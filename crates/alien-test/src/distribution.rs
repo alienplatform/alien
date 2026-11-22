@@ -1153,6 +1153,7 @@ async fn apply_render_mutations_with_management_config(
         deletion_policy: Default::default(),
         release_statements: None,
         signed_config: None,
+        installed_setup_marker: None,
     };
 
     runner
@@ -2454,6 +2455,7 @@ async fn terraform_kubernetes_stack_for_target(
         deletion_policy: Default::default(),
         release_statements: None,
         signed_config: None,
+        installed_setup_marker: None,
     };
 
     runner

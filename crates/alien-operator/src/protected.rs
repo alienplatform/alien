@@ -834,6 +834,7 @@ fn protect_config(
         native_image_host: None,
         release_statements: None,
         signed_config: None,
+        installed_setup_marker: None,
     })
 }
 
