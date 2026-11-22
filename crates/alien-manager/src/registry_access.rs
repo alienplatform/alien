@@ -3372,9 +3372,7 @@ mod tests {
             serde_json::json!([
                 "ecr:BatchCheckLayerAvailability",
                 "ecr:GetDownloadUrlForLayer",
-                "ecr:BatchGetImage",
-                "ecr:GetRepositoryPolicy",
-                "ecr:SetRepositoryPolicy"
+                "ecr:BatchGetImage"
             ]),
             "the MicroVM build pulls layers and manifests through this statement"
         );
@@ -3427,9 +3425,7 @@ mod tests {
                         "Action": [
                             "ecr:BatchCheckLayerAvailability",
                             "ecr:GetDownloadUrlForLayer",
-                            "ecr:BatchGetImage",
-                            "ecr:GetRepositoryPolicy",
-                            "ecr:SetRepositoryPolicy"
+                            "ecr:BatchGetImage"
                         ]
                     },
                     {

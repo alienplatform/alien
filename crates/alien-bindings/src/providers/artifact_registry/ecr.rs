@@ -76,8 +76,6 @@ fn repository_policy(aws_access: &AwsCrossAccountAccess, cached: bool) -> Value 
                 "ecr:BatchCheckLayerAvailability",
                 "ecr:GetDownloadUrlForLayer",
                 "ecr:BatchGetImage",
-                "ecr:GetRepositoryPolicy",
-                "ecr:SetRepositoryPolicy",
             ];
             if cached {
                 actions.extend(["ecr:BatchImportUpstreamImage", "ecr:GetImageCopyStatus"]);
@@ -1843,6 +1841,72 @@ mod tests {
                 .await;
         }
 
+        /// The source repository's policy as an earlier release wrote it: the deployment accounts'
+        /// statement also listed the repository policy actions.
+        pub(super) async fn source_policy_with_policy_actions(server: &MockServer) {
+            let policy = json!({
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Sid": "CrossAccountRolePermission",
+                    "Effect": "Allow",
+                    "Principal": { "AWS": ["arn:aws:iam::222222222222:root"] },
+                    "Action": [
+                        "ecr:BatchCheckLayerAvailability",
+                        "ecr:GetDownloadUrlForLayer",
+                        "ecr:BatchGetImage",
+                        "ecr:GetRepositoryPolicy",
+                        "ecr:SetRepositoryPolicy"
+                    ]
+                }]
+            })
+            .to_string();
+            server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .matches(signed_for("us-east-1"))
+                        .header("x-amz-target", target("GetRepositoryPolicy"));
+                    then.status(200)
+                        .header("content-type", "application/x-amz-json-1.1")
+                        .json_body(json!({
+                            "registryId": ACCOUNT,
+                            "repositoryName": REPOSITORY,
+                            "policyText": policy,
+                        }));
+                })
+                .await;
+        }
+
+        /// A `SetRepositoryPolicy` whose document keeps the existing account and a new one but
+        /// lists no repository policy action.
+        pub(super) async fn set_policy_without_policy_actions<'a>(
+            server: &'a MockServer,
+        ) -> httpmock::Mock<'a> {
+            server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .matches(|request| {
+                            let body = String::from_utf8_lossy(
+                                request.body.as_deref().unwrap_or_default(),
+                            )
+                            .into_owned();
+                            body.contains("222222222222")
+                                && body.contains("333333333333")
+                                && body.contains("ecr:BatchGetImage")
+                                && !body.contains("ecr:SetRepositoryPolicy")
+                                && !body.contains("ecr:GetRepositoryPolicy")
+                        })
+                        .header("x-amz-target", target("SetRepositoryPolicy"));
+                    then.status(200)
+                        .header("content-type", "application/x-amz-json-1.1")
+                        .json_body(json!({
+                            "registryId": ACCOUNT,
+                            "repositoryName": REPOSITORY,
+                            "policyText": "{}",
+                        }));
+                })
+                .await
+        }
+
         pub(super) async fn set_policy<'a>(
             server: &'a MockServer,
             region: &str,
@@ -1936,6 +2000,30 @@ mod tests {
         assert_eq!(replica_set.hits_async().await, 1);
         assert_eq!(missing.hits_async().await, 0);
         assert_eq!(missing_set.hits_async().await, 0);
+    }
+
+    /// A repository whose policy was written with the repository policy actions in the deployment
+    /// accounts' statement gets a policy without them on the next grant: the document is built
+    /// anew from the accounts and roles it names, never from the old actions.
+    #[tokio::test]
+    async fn a_grant_replaces_a_policy_that_listed_repository_policy_actions() {
+        let server = httpmock::MockServer::start_async().await;
+        fake_ecr::source_policy_with_policy_actions(&server).await;
+        let source_set = fake_ecr::set_policy_without_policy_actions(&server).await;
+        let registry = fake_ecr::registry(&server).await;
+
+        let grant = CrossAccountAccess::Aws(AwsCrossAccountAccess {
+            account_ids: vec!["333333333333".to_string()],
+            regions: Vec::new(),
+            allowed_service_types: vec![ComputeServiceType::Worker],
+            role_arns: Vec::new(),
+        });
+        registry
+            .add_cross_account_access(fake_ecr::REPOSITORY, grant)
+            .await
+            .expect("the grant succeeds");
+
+        assert_eq!(source_set.hits_async().await, 1);
     }
 
     /// A replica ECR has not created yet ends the grant with a retryable timeout well inside a
