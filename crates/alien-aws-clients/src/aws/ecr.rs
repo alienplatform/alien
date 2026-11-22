@@ -55,6 +55,10 @@ pub trait EcrApi: Send + Sync + Debug {
         &self,
         request: PutReplicationConfigurationRequest,
     ) -> Result<PutReplicationConfigurationResponse>;
+    async fn put_image_scanning_configuration(
+        &self,
+        request: PutImageScanningConfigurationRequest,
+    ) -> Result<PutImageScanningConfigurationResponse>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -496,6 +500,29 @@ impl EcrApi for EcrClient {
         )
         .await
     }
+
+    async fn put_image_scanning_configuration(
+        &self,
+        request: PutImageScanningConfigurationRequest,
+    ) -> Result<PutImageScanningConfigurationResponse> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize PutImageScanningConfigurationRequest for repository '{}'",
+                    request.repository_name
+                ),
+            },
+        )?;
+
+        // One attempt: the caller treats this as best effort and bounds it with a timeout.
+        self.post_json_with(
+            Attempts::Once,
+            "PutImageScanningConfiguration",
+            body,
+            &request.repository_name,
+        )
+        .await
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -663,6 +690,22 @@ pub struct Repository {
     pub image_scanning_configuration: Option<ImageScanningConfiguration>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encryption_configuration: Option<EncryptionConfiguration>,
+}
+
+#[derive(Serialize, Debug, Clone, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct PutImageScanningConfigurationRequest {
+    pub repository_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_id: Option<String>,
+    pub image_scanning_configuration: ImageScanningConfiguration,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PutImageScanningConfigurationResponse {
+    #[serde(default)]
+    pub repository_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
