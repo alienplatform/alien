@@ -2857,6 +2857,13 @@
           "description": "Create the resource only when this boolean `[input.<id>]` is true.",
           "type": "string"
         },
+        "gateway-links": {
+          "description": "Services of this deployment that every sandbox of this resource reaches through the\negress gateway, on their declared ports. A declared ceiling: a runtime policy can narrow\nit with `link:<resource-id>` entries but never add to it. Not a lifecycle dependency, so\na linked service may itself link this sandbox.",
+          "items": {
+            "$ref": "#/definitions/ResourceRef"
+          },
+          "type": "array"
+        },
         "image": {
           "description": "A prebuilt image to run, instead of `build`.",
           "type": "string"
