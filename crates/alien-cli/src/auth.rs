@@ -403,8 +403,10 @@ mod oauth_flow {
             return Ok(build_auth_http(client, base_url, Some(api_key)));
         }
 
-        // The old session stays until the new tokens exist, so a login that fails or is
-        // interrupted while waiting does not leave the user signed out.
+        // The old session stays while waiting for the browser, so a login that fails or is
+        // interrupted during the wait leaves the user signed in. It is cleared before the new
+        // tokens are stored because `save_response` keeps the refresh token already on disk
+        // when a response carries none, and that would be the previous account's.
         let tokens = login_with_ui(&base_url, opts.no_browser).await?;
         logout()?;
         store_tokens(&tokens)?;

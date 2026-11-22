@@ -2,8 +2,7 @@ use crate::auth::{force_login, load_workspace, save_workspace};
 use crate::commands::platform::workspace::{
     choose_workspace, list_workspace_names, validate_workspace_name,
 };
-use crate::error::ErrorData;
-use crate::error::Result;
+use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::interaction::InteractionMode;
 use crate::ui::{command, contextual_heading, dim_label, success_line};
