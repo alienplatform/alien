@@ -973,7 +973,51 @@ async fn probe_private_ingress(
             .and_then(|header| serde_json::from_slice::<serde_json::Value>(&header).ok())
             .and_then(|header| header["kid"].as_str().map(str::to_string))
             .unwrap_or_default();
-        variants.push((format!("jwt aud=aiplatform #{attempt} kid={kid}"), signed));
+        let iat = chrono::Utc::now().timestamp();
+        variants.push((
+            format!("jwt aud=aiplatform #{attempt} kid={kid} signed_at={iat}"),
+            signed,
+        ));
+    }
+    // The signer's Google-managed keys and their start times: a refusal that follows a key
+    // created minutes ago points at a key the private edge has not learned yet.
+    if let Ok(token) = std::env::var("GOOGLE_TARGET_ACCESS_TOKEN") {
+        let keys = http
+            .get(format!(
+                "https://iam.googleapis.com/v1/projects/-/serviceAccounts/{signer}/keys?keyTypes=SYSTEM_MANAGED"
+            ))
+            .bearer_auth(token)
+            .send()
+            .await;
+        let observed = match keys {
+            Err(error) => format!("no answer: {error}"),
+            Ok(response) => {
+                let status = response.status();
+                let body: serde_json::Value = response.json().await.unwrap_or_default();
+                let keys: Vec<String> = body["keys"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|key| {
+                        format!(
+                            "{} valid_after={}",
+                            key["name"]
+                                .as_str()
+                                .unwrap_or("")
+                                .rsplit('/')
+                                .next()
+                                .unwrap_or(""),
+                            key["validAfterTime"].as_str().unwrap_or("")
+                        )
+                    })
+                    .collect();
+                format!("{status} {}", keys.join(", "))
+            }
+        };
+        proof.note(format!(
+            "[probe] signer keys at {}: {observed}",
+            chrono::Utc::now()
+        ));
     }
     variants.push(("jwt aud=endpoint url".to_string(), jwt(endpoint_url).await));
     variants.push((
@@ -1031,9 +1075,21 @@ async fn probe_private_ingress(
                 Err(error) => format!("no answer: {error}"),
                 Ok(response) => {
                     let status = response.status();
+                    let date = response
+                        .headers()
+                        .get("date")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    let skew = chrono::DateTime::parse_from_rfc2822(&date)
+                        .map(|edge| (chrono::Utc::now().timestamp() - edge.timestamp()).to_string())
+                        .unwrap_or_else(|_| "?".to_string());
                     let text = response.text().await.unwrap_or_default();
                     let text: String = text.chars().take(240).collect();
-                    format!("{status} {}", text.replace('\n', " "))
+                    format!(
+                        "{status} edge_date={date:?} box_minus_edge_s={skew} {}",
+                        text.replace('\n', " ")
+                    )
                 }
             },
         };
