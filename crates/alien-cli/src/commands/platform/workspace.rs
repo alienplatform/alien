@@ -205,6 +205,17 @@ pub async fn validate_workspace_name(
 }
 
 pub async fn prompt_workspace(http: &crate::auth::AuthHttp, json_mode: bool) -> Result<String> {
+    choose_workspace(http, None, InteractionMode::current(json_mode)).await
+}
+
+/// Picks the workspace after a sign-in. Without a terminal there is nobody to ask, so the
+/// workspace saved before the sign-in (`previous`) is kept while the user is still a member.
+pub async fn choose_workspace(
+    http: &crate::auth::AuthHttp,
+    previous: Option<&str>,
+    mode: InteractionMode,
+) -> Result<String> {
+    let _ = previous;
     let workspaces = list_workspace_names(http).await?;
     if workspaces.is_empty() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -217,7 +228,7 @@ pub async fn prompt_workspace(http: &crate::auth::AuthHttp, json_mode: bool) -> 
         return Ok(workspaces[0].clone());
     }
 
-    if InteractionMode::current(json_mode).is_machine() {
+    if mode.is_machine() {
         return Err(AlienError::new(ErrorData::WorkspaceSelectionRequired {
             workspaces,
         }));
@@ -228,8 +239,12 @@ pub async fn prompt_workspace(http: &crate::auth::AuthHttp, json_mode: bool) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkspaceArgs, WorkspaceCmd};
+    use super::{choose_workspace, WorkspaceArgs, WorkspaceCmd};
+    use crate::auth::{build_auth_http, client_with_header};
+    use crate::interaction::InteractionMode;
+    use axum::{routing::get, Json, Router};
     use clap::Parser;
+    use tokio::net::TcpListener;
 
     #[test]
     fn parses_workspace_create_name() {
@@ -240,5 +255,56 @@ mod tests {
             args.cmd,
             WorkspaceCmd::Create { name } if name == "acme-prod"
         ));
+    }
+
+    /// Serves `names` as the signed-in user's memberships and returns a client for it.
+    async fn memberships_server(
+        names: &[&str],
+    ) -> (crate::auth::AuthHttp, tokio::task::JoinHandle<()>) {
+        let items: Vec<_> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                serde_json::json!({
+                    "id": format!("ws_{i:024}"),
+                    "name": name,
+                    "role": "workspace.admin",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                })
+            })
+            .collect();
+        let app = Router::new().route(
+            "/v1/user/memberships",
+            get(move || {
+                let items = items.clone();
+                async move { Json(serde_json::json!({ "items": items })) }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let http = build_auth_http(
+            client_with_header("Bearer test-key").unwrap(),
+            base_url,
+            None,
+        );
+        (http, server)
+    }
+
+    #[tokio::test]
+    async fn without_a_terminal_the_previous_workspace_is_kept_while_still_a_member() {
+        let (http, server) = memberships_server(&["alpha", "beta"]).await;
+        let no_terminal = InteractionMode::new(false, false);
+
+        let kept = choose_workspace(&http, Some("beta"), no_terminal).await;
+        assert_eq!(kept.expect("previous workspace is kept"), "beta");
+
+        for previous in [None, Some("gone")] {
+            let error = choose_workspace(&http, previous, no_terminal)
+                .await
+                .expect_err("several workspaces and no usable previous one");
+            assert_eq!(error.code, "WORKSPACE_SELECTION_REQUIRED");
+        }
+        server.abort();
     }
 }
