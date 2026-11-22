@@ -396,15 +396,17 @@ mod oauth_flow {
             .clone()
             .unwrap_or_else(|| DEFAULT_BASE.to_string());
 
-        logout()?;
-
         if let Some(api_key) = opts.api_key.clone() {
+            logout()?;
             let auth_value = format!("Bearer {}", api_key);
             let client = client_with_header(&auth_value)?;
             return Ok(build_auth_http(client, base_url, Some(api_key)));
         }
 
+        // The old session stays until the new tokens exist, so a login that fails or is
+        // interrupted while waiting does not leave the user signed out.
         let tokens = login_with_ui(&base_url, opts.no_browser).await?;
+        logout()?;
         store_tokens(&tokens)?;
         let auth_value = format!("Bearer {}", tokens.access_token);
         let client = client_with_header(&auth_value)?;
