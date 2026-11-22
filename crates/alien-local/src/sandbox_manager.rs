@@ -219,7 +219,12 @@ impl LocalSandboxManager {
         // so its policy and credential rules apply as on the cloud platforms. A session's
         // preview ports are published by a relay container beside it (see
         // `start_preview_relays`), because Docker publishes nothing from an internal network.
-        let linked = config.egress == SandboxEgressMode::Allow;
+        // A gateway image that predates admin protocol 2 keeps the earlier behavior: only
+        // sessions with links run behind it, and it publishes no preview relays.
+        let gateway_current =
+            alien_core::sandbox_egress::gateway_image_serves_credentials(&self.gateway_image);
+        let linked = config.egress == SandboxEgressMode::Allow
+            && (gateway_current || !config.links.is_empty());
         let created = async {
             let session_egress = if linked {
                 let gateway = self.gateway(sandbox, &config.links).await?;
@@ -448,7 +453,12 @@ impl LocalSandboxManager {
                 operation: "start".to_string(),
             })?;
 
-        if let Some(egress) = &session_egress {
+        if let Some(egress) = session_egress
+            .as_ref()
+            .filter(|_| {
+                alien_core::sandbox_egress::gateway_image_serves_credentials(&self.gateway_image)
+            })
+        {
             if let Err(error) = crate::sandbox_gateway::start_preview_relays(
                 &self.docker,
                 &self.gateway_image,
@@ -544,6 +554,15 @@ impl LocalSandboxManager {
         session_id: &str,
         rules: &[alien_core::SandboxCredentialRule],
     ) -> Result<()> {
+        if !alien_core::sandbox_egress::gateway_image_serves_credentials(&self.gateway_image) {
+            return Err(AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: session_id.to_string(),
+                operation: format!(
+                    "update credentials: {}",
+                    alien_core::sandbox_egress::CREDENTIALS_UNAVAILABLE
+                ),
+            }));
+        }
         let gateway = self
             .gateways
             .lock()
@@ -1382,6 +1401,30 @@ mod tests {
         ] {
             assert!(exec_user(refused).is_err(), "{refused:?}");
         }
+    }
+
+    /// Against a gateway image that predates admin protocol 2, the credentials call is refused
+    /// with a clear message before any gateway is looked up.
+    #[tokio::test]
+    async fn credentials_are_refused_with_a_gateway_that_predates_them() {
+        let server = MockServer::start_async().await;
+        let manager = LocalSandboxManager {
+            docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
+                .unwrap(),
+            state_dir: PathBuf::new(),
+            gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
+            gateways: Default::default(),
+            gateway_image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.to_string(),
+            gateway_secret: new_gateway_secret(),
+        };
+        let manager = manager.with_gateway_image(
+            "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037",
+        );
+        let error = manager.update_credentials("box", "s1", &[]).await.unwrap_err();
+        assert!(
+            format!("{error:?}").contains("per-sandbox credentials are not available"),
+            "{error:?}"
+        );
     }
 
     /// A declaration that names the manager's own variables is refused before Docker is asked

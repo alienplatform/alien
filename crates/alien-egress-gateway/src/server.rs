@@ -18,7 +18,7 @@ use tokio::{
 
 use crate::{
     config::Config,
-    config::{CredentialRule, GatewayLink},
+    config::GatewayLink,
     connections::{Connections, IdentityPermit, SourcePermit},
     error::{denied, invalid, unavailable, Result},
     io::{Counters, Metered, Prefixed},
@@ -1046,9 +1046,10 @@ mod link_relay_tests {
         net::{TcpListener, TcpStream},
     };
 
-    use super::{raw_link_relay, relay_websocket, tunnel, CredentialRule, GatewayLink};
+    use super::{raw_link_relay, relay_websocket, tunnel, GatewayLink};
     use crate::{
-        credentials::Credentials,
+        credentials::{Credentials, Injection},
+        sandbox_credentials::{CredentialRecord, CredentialStore, Rule, RuleTarget},
         io::{Counters, Metered, Prefixed},
         policy::Target,
     };
@@ -1063,10 +1064,35 @@ mod link_relay_tests {
         }
     }
 
-    fn rule() -> CredentialRule {
-        serde_json::from_value(serde_json::json!({"aud":"p/r","host":"api.svc","port":6379,
-            "method":"GET","path":"/","header":"Authorization","vaultBinding":"test-vault","secret":"key"}))
-        .unwrap()
+    fn rule() -> Rule {
+        Rule {
+            target: RuleTarget::Link("api".into()),
+            port: Some(6379),
+            method: None,
+            path: "/".into(),
+            header: http::HeaderName::from_static("authorization"),
+            value: http::HeaderValue::from_static("Bearer real"),
+        }
+    }
+
+    fn injection(rules: &[Rule]) -> Injection {
+        let store = Arc::new(CredentialStore::new(1 << 20));
+        store
+            .apply(CredentialRecord {
+                signed: String::new(),
+                aud: "p/r".into(),
+                sub: "s".into(),
+                ver: (1, String::new()),
+                rules: Arc::new(rules.to_vec()),
+            })
+            .unwrap();
+        Injection {
+            store,
+            aud: "p/r".into(),
+            sub: "s".into(),
+            target: RuleTarget::Link("api".into()),
+            port: 6379,
+        }
     }
 
     async fn pair() -> (TcpStream, TcpStream) {
@@ -1082,17 +1108,11 @@ mod link_relay_tests {
     async fn run(
         host: &str,
         raw: bool,
-        rules: &[CredentialRule],
+        rules: &[Rule],
         payload: &[u8],
     ) -> (bool, Vec<u8>) {
-        let bindings = Arc::new(
-            alien_bindings::Bindings::from_env_map(HashMap::from([(
-                "ALIEN_DEPLOYMENT_TYPE".into(),
-                "local".into(),
-            )]))
-            .unwrap(),
-        );
-        let credentials = Credentials::new(bindings, &[], rules, Some([7; 32])).unwrap();
+        let injection = injection(rules);
+        let credentials = Credentials::new(&[], Some([7; 32])).unwrap();
         let (mut sandbox, guest) = pair().await;
         let (upstream, mut service) = pair().await;
         let mut guest = Metered {
@@ -1106,9 +1126,9 @@ mod link_relay_tests {
             upstream,
             target,
             raw,
-            rules,
+            true,
+            &injection,
             &credentials,
-            ("p/r", "s"),
         );
         let receive = async {
             let mut received = Vec::new();
@@ -1135,7 +1155,7 @@ mod link_relay_tests {
 
     #[tokio::test]
     async fn a_link_without_credential_rules_relays_any_protocol() {
-        assert!(raw_link_relay(Some(&link()), &[]));
+        assert!(raw_link_relay(Some(&link()), true));
         let (_, received) = run("api.svc", true, &[], PING).await;
         assert_eq!(received, PING);
     }
@@ -1146,8 +1166,8 @@ mod link_relay_tests {
     #[tokio::test]
     async fn a_link_with_credential_rules_stays_off_the_raw_relay() {
         let rules = [rule()];
-        assert!(!raw_link_relay(Some(&link()), &rules));
-        assert!(!raw_link_relay(None, &[]));
+        assert!(!raw_link_relay(Some(&link()), rules.is_empty()));
+        assert!(!raw_link_relay(None, true));
         for payload in [PING, WEBSOCKET] {
             let (failed, received) = run("api.svc", false, &rules, payload).await;
             assert!(failed);

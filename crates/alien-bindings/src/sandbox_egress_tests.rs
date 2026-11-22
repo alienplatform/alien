@@ -892,7 +892,7 @@ async fn a_gateway_older_than_the_binding_needs_is_refused_with_a_rerun_setup_me
     assert!(
         error
             .to_string()
-            .contains("re-run setup to update the egress gateway"),
+            .contains("installs a newer egress gateway and re-run setup"),
         "{error}"
     );
     // Retrying cannot fix an old gateway.

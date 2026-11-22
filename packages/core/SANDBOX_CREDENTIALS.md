@@ -5,6 +5,11 @@ token your app refreshes, a short-lived JWT your app mints for calls back to its
 sandbox should never hold those values. With credential rules it holds a placeholder, and the
 deployment's egress gateway puts the real value on the request on the way out.
 
+Credential rules need an egress gateway that serves admin protocol 2. A release whose gateway
+image predates it refuses the call with a clear message (never a silent drop), and `alien dev`
+keeps its earlier behavior: only sessions with links run behind the gateway. The release that
+installs the newer gateway enables the feature.
+
 ```ts
 import { sandbox } from "@alienplatform/bindings"
 

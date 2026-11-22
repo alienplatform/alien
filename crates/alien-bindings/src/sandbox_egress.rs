@@ -774,7 +774,7 @@ impl SandboxEgressManager {
         let backoff = |attempt: u64| std::time::Duration::from_millis(100 * (attempt + 1));
         let old = || {
             unavailable(
-                "the egress gateway is older than this release needs for sandbox credentials; re-run setup to update the egress gateway",
+                "the egress gateway does not serve per-sandbox credentials yet; deploy a release that installs a newer egress gateway and re-run setup",
             )
         };
         // The exact record on every attempt: a partial fan-out may already have applied it.
