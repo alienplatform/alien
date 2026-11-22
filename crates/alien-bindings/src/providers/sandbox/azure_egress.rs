@@ -103,6 +103,12 @@ impl AzureSandbox {
         // Azure chooses its vendor id after create; the label persists the pre-created identity.
         let identity = uuid::Uuid::new_v4().to_string();
         let token = manager.mint_identity(&identity, expires / 1000).await?;
+        // The agent installs the sandbox's CA at start, so every process it runs trusts it.
+        if self.agent {
+            if let Some(ca) = manager.sandbox_ca(&identity).await? {
+                environment.insert("ALIEN_SANDBOX_EGRESS_CA".into(), ca);
+            }
+        }
         // An agent image can run the loopback forwarder, so with several replicas its proxy
         // address is the loopback and the agent fails over between the replicas per connection.
         // Without the agent there is no forwarder: the one gateway address stays.

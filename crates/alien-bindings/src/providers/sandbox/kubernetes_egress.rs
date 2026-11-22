@@ -38,10 +38,14 @@ impl KubernetesSandbox {
         id: &str,
         token: Option<&str>,
         policy: &str,
+        ca: Option<&str>,
     ) -> Result<()> {
         let mut body = serde_json::json!({"policy":policy});
         if let Some(token) = token {
             body["token"] = token.into();
+        }
+        if let Some(ca) = ca {
+            body["caCert"] = ca.into();
         }
         let response = self
             .request(id, reqwest::Method::PUT, "/v1/egress")

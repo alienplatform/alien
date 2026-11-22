@@ -123,6 +123,14 @@ const apiUrl = await tools.linkUrl("api", 8080) // string | null
 See [sandbox links](../core/SANDBOX_LINKS.md) for what a link reaches and the platforms that
 support it.
 
+## Credentials in sandboxes
+
+`await sandbox("agents").updateCredentials(sandboxId, rules)` replaces the credential rules of
+one sandbox: the egress gateway puts each rule's header on that sandbox's matching requests,
+so the sandbox only holds a placeholder. It resolves once every gateway replica holds the new
+set. See [sandbox credentials](../core/SANDBOX_CREDENTIALS.md) for the rules, the guarantees
+and how the sandbox trusts its CA.
+
 ## Postgres
 
 Postgres is connection-only: every backend speaks the same wire protocol, so the

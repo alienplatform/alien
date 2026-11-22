@@ -38,6 +38,9 @@ const CREDENTIALS_PROTOCOL: u32 = 2;
 pub struct EgressDelivery {
     pub(crate) token: String,
     pub(crate) policy: String,
+    /// The sandbox's CA, installed with the first delivery so every process the sandbox starts
+    /// trusts it. `None` from a gateway that predates per-sandbox credentials.
+    pub(crate) ca: Option<String>,
 }
 impl fmt::Debug for EgressDelivery {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -175,7 +178,8 @@ impl SandboxEgressManager {
     ) -> Result<EgressDelivery> {
         let token = self.mint_identity(id, expires_at).await?;
         let policy = self.write_grant(id, policy).await?;
-        Ok(EgressDelivery { token, policy })
+        let ca = self.sandbox_ca(id).await?;
+        Ok(EgressDelivery { token, policy, ca })
     }
     /// Publish the policy of a sandbox whose identity was minted earlier (Azure learns its
     /// sandbox id only after the platform create). It is a first write, so it follows the
@@ -201,7 +205,8 @@ impl SandboxEgressManager {
     pub async fn renew(&self, id: &str, expires_at: i64) -> Result<EgressDelivery> {
         let token = self.mint_identity(id, expires_at).await?;
         let policy = self.policy_record(id).await?;
-        Ok(EgressDelivery { token, policy })
+        let ca = self.sandbox_ca(id).await?;
+        Ok(EgressDelivery { token, policy, ca })
     }
     /// Azure needs identity before create; this never reads or publishes policy.
     pub async fn mint_identity(&self, id: &str, expires_at: i64) -> Result<String> {

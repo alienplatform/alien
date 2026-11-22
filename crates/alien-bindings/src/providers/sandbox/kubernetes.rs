@@ -591,8 +591,13 @@ impl KubernetesSandbox {
                     None => crate::sandbox_egress::now_unix()? + GATEWAY_IDENTITY_FALLBACK_SECONDS,
                 };
                 let delivery = manager.create(identity, &policy, session_ends_at).await?;
-                self.deliver_egress(&claim.session_id, Some(&delivery.token), &delivery.policy)
-                    .await
+                self.deliver_egress(
+                    &claim.session_id,
+                    Some(&delivery.token),
+                    &delivery.policy,
+                    delivery.ca.as_deref(),
+                )
+                .await
             }
             .await;
             if let Err(error) = installation {
@@ -796,7 +801,7 @@ impl Sandbox for KubernetesSandbox {
         let identity = Self::egress_identity(&claim)?;
         manager.update(identity, &policy).await?;
         let record = manager.policy_record(identity).await?;
-        self.deliver_egress(sandbox_id, None, &record).await
+        self.deliver_egress(sandbox_id, None, &record, None).await
     }
 
     async fn update_credentials(
