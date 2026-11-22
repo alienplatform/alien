@@ -143,9 +143,7 @@ resource "aws_instance" "internal_api" {
     set -euo pipefail
     dnf install -y nodejs
     mkdir -p /opt/internal-api
-    cat > /opt/internal-api/server.mjs <<'SERVER'
-    ${indent(4, file("${path.module}/../internal-api/server.mjs"))}
-    SERVER
+    echo '${base64encode(file("${path.module}/../internal-api/server.mjs"))}' | base64 -d > /opt/internal-api/server.mjs
     cat > /etc/systemd/system/internal-api.service <<'UNIT'
     [Unit]
     Description=internal API
