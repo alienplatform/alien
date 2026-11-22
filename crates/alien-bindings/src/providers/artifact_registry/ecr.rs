@@ -9,7 +9,9 @@ use crate::{
 use alien_aws_clients::{
     ecr::{
         CreateRepositoryRequest, DeleteRepositoryPolicyRequest, DescribeRepositoriesRequest,
-        EcrApi, EcrClient, GetRepositoryPolicyRequest, SetRepositoryPolicyRequest,
+        EcrApi, EcrClient, EncryptionConfiguration, GetRepositoryPolicyRequest,
+        ImageScanningConfiguration, PutImageScanningConfigurationRequest,
+        SetRepositoryPolicyRequest,
     },
     AwsClientConfigExt as _, AwsCredentialProvider,
 };
@@ -44,6 +46,24 @@ pub struct EcrArtifactRegistry {
     legacy_sandbox_repository_prefixes: Vec<String>,
     pull_role_arn: Option<String>,
     push_role_arn: Option<String>,
+    /// Repositories this process already set to scan on push, so a repository that existed
+    /// before scanning was turned on is updated once and not on every later push.
+    scan_on_push_set: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+/// A new repository scans every pushed image and encrypts at rest with AES-256, as the
+/// CloudFormation and Terraform templates create it.
+fn new_repository_request(repository_name: String) -> CreateRepositoryRequest {
+    CreateRepositoryRequest::builder()
+        .repository_name(repository_name)
+        .image_scanning_configuration(ImageScanningConfiguration {
+            scan_on_push: Some(true),
+        })
+        .encryption_configuration(EncryptionConfiguration {
+            encryption_type: "AES256".to_string(),
+            kms_key: None,
+        })
+        .build()
 }
 
 /// Builds the ECR repository policy document granting a customer account cross-account pull.
@@ -354,7 +374,46 @@ impl EcrArtifactRegistry {
             legacy_sandbox_repository_prefixes,
             pull_role_arn,
             push_role_arn,
+            scan_on_push_set: Default::default(),
         })
+    }
+
+    /// Turns scan on push on for a repository created before it was the default. Runs once per
+    /// repository per process. A refusal (the push role of an older install does not yet allow
+    /// `ecr:PutImageScanningConfiguration` until its setup is updated) is logged and does not
+    /// fail the push; the next request tries again.
+    async fn ensure_scan_on_push(&self, ecr_client: &dyn EcrApi, full_repo_name: &str) {
+        if self
+            .scan_on_push_set
+            .lock()
+            .expect("scan-on-push set lock")
+            .contains(full_repo_name)
+        {
+            return;
+        }
+        let result = ecr_client
+            .put_image_scanning_configuration(
+                PutImageScanningConfigurationRequest::builder()
+                    .repository_name(full_repo_name.to_string())
+                    .image_scanning_configuration(ImageScanningConfiguration {
+                        scan_on_push: Some(true),
+                    })
+                    .build(),
+            )
+            .await;
+        match result {
+            Ok(_) => {
+                self.scan_on_push_set
+                    .lock()
+                    .expect("scan-on-push set lock")
+                    .insert(full_repo_name.to_string());
+            }
+            Err(error) => warn!(
+                repo_name = %full_repo_name,
+                error = %error,
+                "Could not turn on scan on push for an existing ECR repository"
+            ),
+        }
     }
 
     /// Constructs the full repository name for ECR using the repository prefix.
@@ -400,9 +459,7 @@ impl EcrArtifactRegistry {
                 })?,
         );
 
-        let request = CreateRepositoryRequest::builder()
-            .repository_name(full_repo_name.clone())
-            .build();
+        let request = new_repository_request(full_repo_name.clone());
 
         let response = match ecr_client.create_repository(request).await {
             Ok(response) => response,
@@ -420,6 +477,8 @@ impl EcrArtifactRegistry {
                         "ECR repository already exists"
                     );
 
+                    self.ensure_scan_on_push(&ecr_client, &full_repo_name).await;
+
                     return Ok(RepositoryResponse {
                         name: full_repo_name.clone(),
                         uri: Some(self.repository_uri(&full_repo_name)),
@@ -436,6 +495,11 @@ impl EcrArtifactRegistry {
             full_repo_name = %full_repo_name,
             "ECR repository created successfully"
         );
+
+        self.scan_on_push_set
+            .lock()
+            .expect("scan-on-push set lock")
+            .insert(full_repo_name.clone());
 
         // ECR repositories are ready immediately after creation
         let repository = &response.repository;
@@ -952,11 +1016,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
 
             if self.is_cached_repository(&full_repo_name) {
                 match target_ecr
-                    .create_repository(
-                        CreateRepositoryRequest::builder()
-                            .repository_name(full_repo_name.clone())
-                            .build(),
-                    )
+                    .create_repository(new_repository_request(full_repo_name.clone()))
                     .await
                 {
                     Ok(_) => {}
@@ -1788,6 +1848,41 @@ mod tests {
             format!("AmazonEC2ContainerRegistry_V20150921.{operation}")
         }
 
+        pub(super) async fn already_exists(server: &MockServer) {
+            server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .header("x-amz-target", target("CreateRepository"));
+                    then.status(400)
+                        .header("content-type", "application/x-amz-json-1.1")
+                        .json_body(json!({
+                            "__type": "RepositoryAlreadyExistsException",
+                            "message": "already exists"
+                        }));
+                })
+                .await;
+        }
+
+        pub(super) async fn put_scan<'a>(
+            server: &'a MockServer,
+            status: u16,
+        ) -> httpmock::Mock<'a> {
+            server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .header("x-amz-target", target("PutImageScanningConfiguration"))
+                        .body_contains("\"scanOnPush\":true");
+                    then.status(status)
+                        .header("content-type", "application/x-amz-json-1.1")
+                        .json_body(if status == 200 {
+                            json!({"repositoryName": "artifacts-prj_1"})
+                        } else {
+                            json!({"__type": "AccessDeniedException", "message": "denied"})
+                        });
+                })
+                .await
+        }
+
         pub(super) async fn registry(server: &MockServer) -> EcrArtifactRegistry {
             let config = AwsClientConfig {
                 account_id: ACCOUNT.to_string(),
@@ -1936,6 +2031,67 @@ mod tests {
         assert_eq!(replica_set.hits_async().await, 1);
         assert_eq!(missing.hits_async().await, 0);
         assert_eq!(missing_set.hits_async().await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_new_repository_scans_on_push_and_encrypts_with_aes256() {
+        let server = httpmock::MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .header(
+                        "x-amz-target",
+                        "AmazonEC2ContainerRegistry_V20150921.CreateRepository",
+                    )
+                    .body_contains("\"imageScanningConfiguration\":{\"scanOnPush\":true}")
+                    .body_contains("\"encryptionType\":\"AES256\"");
+                then.status(200)
+                    .header("content-type", "application/x-amz-json-1.1")
+                    .json_body(json!({"repository": {
+                        "repositoryName": "artifacts-prj_1",
+                        "repositoryUri": "1.dkr.ecr.us-east-1.amazonaws.com/artifacts-prj_1",
+                        "repositoryArn": "arn:aws:ecr:us-east-1:1:repository/artifacts-prj_1",
+                        "registryId": "1",
+                        "createdAt": 1.0
+                    }}));
+            })
+            .await;
+        let put = fake_ecr::put_scan(&server, 200).await;
+        let registry = fake_ecr::registry(&server).await;
+
+        registry.create_repository("prj_1").await.unwrap();
+        // A repository this process created already scans: no second call.
+        registry.create_repository("prj_1").await.ok();
+
+        assert!(create.hits_async().await >= 1);
+        assert_eq!(put.hits_async().await, 0);
+    }
+
+    #[tokio::test]
+    async fn an_existing_repository_is_set_to_scan_on_push_once() {
+        let server = httpmock::MockServer::start_async().await;
+        fake_ecr::already_exists(&server).await;
+        let put = fake_ecr::put_scan(&server, 200).await;
+        let registry = fake_ecr::registry(&server).await;
+
+        registry.create_repository("prj_1").await.unwrap();
+        registry.create_repository("prj_1").await.unwrap();
+
+        assert_eq!(put.hits_async().await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_refused_scan_setting_does_not_fail_the_push_and_is_tried_again() {
+        let server = httpmock::MockServer::start_async().await;
+        fake_ecr::already_exists(&server).await;
+        let put = fake_ecr::put_scan(&server, 400).await;
+        let registry = fake_ecr::registry(&server).await;
+
+        registry.create_repository("prj_1").await.unwrap();
+        registry.create_repository("prj_1").await.unwrap();
+
+        // The client retries a refused call itself; each push still tries at least once.
+        assert!(put.hits_async().await >= 2);
     }
 
     /// A replica ECR has not created yet ends the grant with a retryable timeout well inside a

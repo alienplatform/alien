@@ -1404,6 +1404,7 @@ impl AwsArtifactRegistryController {
                         "ecr:DescribeImages",
                         "ecr:ListImages",
                         "ecr:CreateRepository",
+                        "ecr:PutImageScanningConfiguration",
                         "ecr:DeleteRepository"
                     ],
                     "Resource": format!("arn:aws:ecr:{}:{}:repository/{}-{}-*", aws_cfg.region, aws_cfg.account_id, ctx.resource_prefix, registry_id)
