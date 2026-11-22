@@ -2440,6 +2440,62 @@ mod tests {
     }
 
     #[test]
+    fn nested_pool_runs_on_a_chosen_bare_metal_machine() {
+        let mut stack = stack_with_container();
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("c8id.metal-48xl".to_string()),
+                profile: Some(MachineProfile {
+                    cpu: "4".to_string(),
+                    memory_bytes: 16 * 1024 * 1024 * 1024,
+                    ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    architecture: None,
+                    gpu: None,
+                    data_disk: None,
+                }),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: Some(true),
+                data_disk_gib_range: None,
+            })
+            .build();
+        stack.resources.insert(
+            "compute".to_string(),
+            ResourceEntry {
+                config: Resource::new(cluster),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
+
+        let pool = plan.pools.first().expect("general pool should exist");
+        assert!(pool.errors.is_empty(), "{:?}", pool.errors);
+        assert_eq!(pool.selected.machine(), Some("c8id.metal-48xl"));
+        let option = pool
+            .machines
+            .iter()
+            .find(|option| option.machine == "c8id.metal-48xl")
+            .expect("bare metal is listed");
+        assert!(option.available, "{:?}", option.unavailable_reasons);
+        assert!(option.nested_virtualization);
+        let recommended = pool.recommended.machine().expect("a machine is recommended");
+        assert!(
+            !instance_catalog::find_instance_type(Platform::Aws, recommended)
+                .expect("recommended machine is in the catalog")
+                .bare_metal,
+            "{recommended} is bare metal"
+        );
+    }
+
+    #[test]
     fn nested_pool_without_architecture_plans_an_aws_machine() {
         let mut stack = stack_with_container();
         let cluster = ComputeCluster::new("compute".to_string())
