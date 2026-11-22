@@ -31,17 +31,9 @@ impl AsyncTestContext for GcsTestContext {
         dotenvy::from_path(root.join(".env.test")).expect("Failed to load .env.test");
         tracing_subscriber::fmt::try_init().ok();
 
-        let gcp_credentials_json = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
-            .unwrap_or_else(|_| panic!("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY must be set"));
+        let base_gcp_config = alien_gcp_clients::live_test::live_test_config("MANAGEMENT").await;
 
-        // Parse project_id from service account
-        let service_account_value: serde_json::Value =
-            serde_json::from_str(&gcp_credentials_json).unwrap();
-        let project_id = service_account_value
-            .get("project_id")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .expect("'project_id' must be present in the service account JSON");
+        let project_id = base_gcp_config.project_id.clone();
 
         let test_bucket_name = env::var(TEST_GCS_BUCKET_ENV_VAR)
             .expect(&format!("{} must be set", TEST_GCS_BUCKET_ENV_VAR));
@@ -49,9 +41,7 @@ impl AsyncTestContext for GcsTestContext {
         let config = GcpClientConfig {
             project_id: project_id.clone(),
             region: "us-central1".to_string(), // GCS is global for buckets but some ops might need a default region context
-            credentials: GcpCredentials::ServiceAccountKey {
-                json: gcp_credentials_json,
-            },
+            credentials: base_gcp_config.credentials.clone(),
             service_overrides: None,
             project_number: None,
         };
@@ -337,9 +327,7 @@ async fn test_bucket_iam_policy(ctx: &mut GcsTestContext) {
 
     // Try to get the current service account email from the environment or use a fallback
     let current_sa_email = {
-        let gcp_credentials_json = std::env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY").unwrap();
-        let service_account_value: serde_json::Value =
-            serde_json::from_str(&gcp_credentials_json).unwrap();
+        let base_gcp_config = alien_gcp_clients::live_test::live_test_config("MANAGEMENT").await;
         service_account_value
             .get("client_email")
             .and_then(|v| v.as_str())
@@ -1240,22 +1228,13 @@ async fn test_bucket_with_complex_configuration(ctx: &mut GcsTestContext) {
 
 /// Helper to create a PubSub client from the same credentials used by the GCS test context.
 fn create_pubsub_client() -> (alien_gcp_clients::pubsub::PubSubClient, String) {
-    let gcp_credentials_json = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
-        .expect("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY must be set");
-    let service_account_value: serde_json::Value =
-        serde_json::from_str(&gcp_credentials_json).unwrap();
-    let project_id = service_account_value
-        .get("project_id")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .expect("'project_id' must be present in the service account JSON");
+    let base_gcp_config = alien_gcp_clients::live_test::live_test_config("MANAGEMENT").await;
+    let project_id = base_gcp_config.project_id.clone();
 
     let config = GcpClientConfig {
         project_id: project_id.clone(),
         region: "us-central1".to_string(),
-        credentials: GcpCredentials::ServiceAccountKey {
-            json: gcp_credentials_json,
-        },
+        credentials: base_gcp_config.credentials.clone(),
         service_overrides: None,
         project_number: None,
     };

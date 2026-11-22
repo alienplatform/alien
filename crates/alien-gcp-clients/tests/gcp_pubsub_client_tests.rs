@@ -2,7 +2,7 @@
 
 use alien_client_core::{Error, ErrorData};
 use alien_gcp_clients::iam::{Binding, IamPolicy};
-use alien_gcp_clients::platform::{GcpClientConfig, GcpCredentials};
+use alien_gcp_clients::platform::GcpClientConfig;
 use alien_gcp_clients::pubsub::{
     ExpirationPolicy, MessageStoragePolicy, PubSubApi, PubSubClient, PublishRequest, PubsubMessage,
     PushConfig, Subscription, SubscriptionPatch, Topic, TopicPatch,
@@ -30,24 +30,14 @@ impl AsyncTestContext for PubSubTestContext {
         dotenvy::from_path(root.join(".env.test")).expect("Failed to load .env.test");
         tracing_subscriber::fmt::try_init().ok();
 
-        let gcp_credentials_json = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
-            .unwrap_or_else(|_| panic!("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY must be set"));
+        let base_gcp_config = alien_gcp_clients::live_test::live_test_config("MANAGEMENT").await;
 
-        // Parse project_id from service account
-        let service_account_value: serde_json::Value =
-            serde_json::from_str(&gcp_credentials_json).unwrap();
-        let project_id = service_account_value
-            .get("project_id")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .expect("'project_id' must be present in the service account JSON");
+        let project_id = base_gcp_config.project_id.clone();
 
         let config = GcpClientConfig {
             project_id: project_id.clone(),
             region: "us-central1".to_string(),
-            credentials: GcpCredentials::ServiceAccountKey {
-                json: gcp_credentials_json,
-            },
+            credentials: base_gcp_config.credentials.clone(),
             service_overrides: None,
             project_number: None,
         };
@@ -555,13 +545,8 @@ async fn test_iam_policy_operations(ctx: &PubSubTestContext) {
 
     // Use the service account email (org policy blocks allUsers)
     let test_member = {
-        let gcp_credentials_json = std::env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY").unwrap();
-        let sa_value: serde_json::Value = serde_json::from_str(&gcp_credentials_json).unwrap();
-        let email = sa_value
-            .get("client_email")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .expect("client_email must be in service account JSON");
+        let email = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_EMAIL")
+            .expect("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_EMAIL must be set");
         format!("serviceAccount:{}", email)
     };
 

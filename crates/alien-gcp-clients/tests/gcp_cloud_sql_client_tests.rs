@@ -11,7 +11,7 @@ would change identity and lose it.
 can administer Cloud SQL:
 
 ```bash
-export GCP_CLOUD_SQL_TEST_SA_KEY='{"type":"service_account",...}'   # target SA key JSON
+# GOOGLE_TARGET_PROJECT_ID and GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL, plus GOOGLE_TARGET_CREDENTIALS_FILE (CI) or gcloud ADC (laptop)
 cargo test -p alien-gcp-clients --test gcp_cloud_sql_client_tests -- --ignored --nocapture
 ```
 
@@ -24,9 +24,8 @@ use alien_gcp_clients::cloud_sql::{
     InstancePatch, InstanceSettings, InstanceSettingsPatch, IpConfiguration, PscConfig,
     SqlOperation,
 };
-use alien_gcp_clients::gcp::{GcpClientConfig, GcpCredentials};
+use alien_gcp_clients::gcp::GcpClientConfig;
 use reqwest::Client;
-use std::env;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -34,24 +33,13 @@ const SMALL_TIER: &str = "db-custom-2-7680";
 const LARGE_TIER: &str = "db-custom-4-15360";
 const REGION: &str = "us-east4";
 
-/// Builds the client from the target service account key and returns it with the project id
-/// parsed out of the key.
-fn build_client() -> (CloudSqlClient, String) {
-    let sa_json = env::var("GCP_CLOUD_SQL_TEST_SA_KEY")
-        .expect("GCP_CLOUD_SQL_TEST_SA_KEY (target service account JSON) must be set");
-    let sa: serde_json::Value =
-        serde_json::from_str(&sa_json).expect("service account key must be valid JSON");
-    let project_id = sa
-        .get("project_id")
-        .and_then(|v| v.as_str())
-        .expect("project_id must be present in the service account JSON")
-        .to_string();
+/// Builds the client for the target service account and returns it with its project id.
+async fn build_client() -> (CloudSqlClient, String) {
+    let base = alien_gcp_clients::live_test::live_test_config("TARGET").await;
+    let project_id = base.project_id.clone();
     let config = GcpClientConfig {
-        project_id: project_id.clone(),
         region: REGION.to_string(),
-        credentials: GcpCredentials::ServiceAccountKey { json: sa_json },
-        service_overrides: None,
-        project_number: None,
+        ..base
     };
     (CloudSqlClient::new(Client::new(), config), project_id)
 }
@@ -103,7 +91,7 @@ async fn wait_runnable(client: &CloudSqlClient, name: &str, timeout: Duration) -
 #[tokio::test]
 #[ignore = "live GCP: provisions, resizes, and deletes a real Cloud SQL instance"]
 async fn cloud_sql_tier_resize_is_in_place_not_recreate() {
-    let (client, project_id) = build_client();
+    let (client, project_id) = build_client().await;
     let name = format!("resize-it-{}", &Uuid::new_v4().simple().to_string()[..10]);
 
     let instance = DatabaseInstance {

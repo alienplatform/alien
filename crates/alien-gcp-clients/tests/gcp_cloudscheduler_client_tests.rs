@@ -28,16 +28,9 @@ impl AsyncTestContext for CloudSchedulerTestContext {
         dotenvy::from_path(root.join(".env.test")).expect("Failed to load .env.test");
         tracing_subscriber::fmt::try_init().ok();
 
-        let gcp_credentials_json = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
-            .unwrap_or_else(|_| panic!("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY must be set"));
+        let base_gcp_config = alien_gcp_clients::live_test::live_test_config("MANAGEMENT").await;
 
-        let service_account_value: serde_json::Value =
-            serde_json::from_str(&gcp_credentials_json).unwrap();
-        let project_id = service_account_value
-            .get("project_id")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .expect("'project_id' must be present in the service account JSON");
+        let project_id = base_gcp_config.project_id.clone();
 
         let service_account_email = service_account_value
             .get("client_email")
@@ -50,9 +43,7 @@ impl AsyncTestContext for CloudSchedulerTestContext {
         let config = GcpClientConfig {
             project_id: project_id.clone(),
             region: location.clone(),
-            credentials: GcpCredentials::ServiceAccountKey {
-                json: gcp_credentials_json,
-            },
+            credentials: base_gcp_config.credentials.clone(),
             service_overrides: None,
             project_number: None,
         };
