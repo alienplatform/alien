@@ -47,6 +47,7 @@ pub fn setup_drift(
         return Ok(denials);
     }
     let mut reasons = management_permissions_drift(installed_stack, state, platform)?;
+    reasons.extend(missing_permissions_boundary(state, platform));
     reasons.extend(missing_flow_logs(installed_stack, state, platform));
     if !reasons.is_empty() {
         reasons.extend(denials);
@@ -106,6 +107,39 @@ fn management_permissions_drift(
         resource: Some(resource_id.clone()),
         detail: "The management permissions differ from what this version installs".to_string(),
     }])
+}
+
+/// An AWS install whose management identity records no permissions boundary. The management
+/// revision can match while the boundary is absent (the boundary is not part of it), so this is
+/// checked on its own: a matching revision must not read as "setup is current".
+///
+/// Only the presence is judged from state. The boundary's content depends on the account,
+/// region and management role of the install, which state alone does not carry; a setup run
+/// rewrites it whenever it differs.
+fn missing_permissions_boundary(state: &StackState, platform: Platform) -> Vec<SetupDriftReason> {
+    if platform != Platform::Aws {
+        return vec![];
+    }
+    state
+        .resources
+        .iter()
+        .filter(|(_, resource)| {
+            resource.resource_type == RemoteStackManagement::RESOURCE_TYPE.to_string()
+        })
+        .filter(|(_, resource)| {
+            resource
+                .get_internal_controller_typed::<crate::AwsRemoteStackManagementController>()
+                .is_ok_and(|controller| {
+                    controller.permissions_boundary_arn.is_none()
+                        || controller.permissions_boundary_document.is_none()
+                })
+        })
+        .map(|(id, _)| SetupDriftReason {
+            code: SetupDriftCode::PermissionsBoundaryMissing,
+            resource: Some(id.clone()),
+            detail: "The permissions boundary is not installed; setup installs it".to_string(),
+        })
+        .collect()
 }
 
 /// What an install recorded about the management permissions it applied.

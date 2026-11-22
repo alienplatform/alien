@@ -14,6 +14,9 @@ async fn install(
     let mut controller = AwsRemoteStackManagementController::mock_ready("test");
     controller.management_permissions_revision = revision;
     controller.management_permission_set_digests = digests;
+    // A setup run installed the permissions boundary.
+    controller.permissions_boundary_arn = Some("arn:aws:iam::1:policy/test-boundary".to_string());
+    controller.permissions_boundary_document = Some(serde_json::json!({ "Version": "2012-10-17" }));
     SingleControllerExecutor::builder()
         .resource(RemoteStackManagement::new("management".to_string()).build())
         .controller(controller)
@@ -213,4 +216,43 @@ async fn a_delivering_flow_log_is_current() {
 #[tokio::test]
 async fn a_vpc_the_customer_brought_never_needs_a_flow_log() {
     assert_eq!(flow_log_drift(&network(None, true).await), vec![]);
+}
+
+/// The management revision can match while the permissions boundary was never installed: the
+/// install is not current.
+#[tokio::test]
+async fn matching_management_permissions_do_not_hide_a_missing_boundary() {
+    let probe = install(None, BTreeMap::new()).await;
+    let (revision, digests) = current(&probe);
+    let mut controller = AwsRemoteStackManagementController::mock_ready("test");
+    controller.management_permissions_revision = Some(revision);
+    controller.management_permission_set_digests = digests;
+    controller.permissions_boundary_arn = None;
+    controller.permissions_boundary_document = None;
+    let executor = SingleControllerExecutor::builder()
+        .resource(RemoteStackManagement::new("management".to_string()).build())
+        .controller(controller)
+        .platform(Platform::Aws)
+        .initial_setup_authority(DIRECT)
+        .build()
+        .await
+        .expect("executor builds");
+    assert_eq!(
+        drift(&executor, DIRECT),
+        vec![SetupDriftReason {
+            code: SetupDriftCode::PermissionsBoundaryMissing,
+            resource: Some("management".to_string()),
+            detail: "The permissions boundary is not installed; setup installs it".to_string(),
+        }]
+    );
+}
+
+/// A template install's boundary is the template's: not judged here.
+#[tokio::test]
+async fn a_template_install_is_not_judged_on_its_boundary() {
+    let executor = install(None, BTreeMap::new()).await;
+    assert_eq!(
+        drift(&executor, InitialSetupAuthority::ImportedHandoff),
+        vec![]
+    );
 }

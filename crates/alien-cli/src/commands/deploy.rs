@@ -2592,9 +2592,21 @@ async fn deploy_task_with_environment(
             "{}",
             success_line("Deployment is running with no pending update. Nothing to do.")
         );
-        println!("{}", dim_label(&setup_current_note(direct_setup)));
-        for line in earlier_denials_note(installed_stack_state.as_ref()) {
-            println!("{}", dim_label(&line));
+        if !direct_setup && !setup_drift.is_empty() {
+            println!(
+                "{}\n{}",
+                dim_label("Setup is behind, and this deployment's setup is owned by its CloudFormation or Terraform template:"),
+                describe_setup_drift(&setup_drift)
+            );
+            println!(
+                "{}",
+                dim_label("Re-run your template to bring it up to date. `alien deploy` does not change resources the template owns.")
+            );
+        } else {
+            println!("{}", dim_label(&setup_current_note(direct_setup)));
+            for line in earlier_denials_note(installed_stack_state.as_ref()) {
+                println!("{}", dim_label(&line));
+            }
         }
         println!(
             "{} {}",
@@ -2615,10 +2627,14 @@ async fn deploy_task_with_environment(
         && platform == Platform::Aws
         && matches!(plan, ExistingDeploymentPlan::SetupUpdate { .. })
     {
-        if let (Some(aws), Some(state)) =
-            (client_config.aws_config(), installed_stack_state.as_ref())
-        {
-            boundary_note = hand_added_policy_note(aws, state).await;
+        if let (Some(aws), Some(state), Some(stack)) = (
+            client_config.aws_config(),
+            installed_stack_state.as_ref(),
+            typed_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.prepared_stack.as_ref()),
+        ) {
+            boundary_note = hand_added_policy_note(aws, stack, state).await;
         }
     }
     if drift_offered {
@@ -3731,7 +3747,9 @@ fn existing_deployment_plan(
     if *status == DeploymentStatus::Running && active_update.is_none() {
         // Setup is behind what a setup run would install. A standalone manager drives the
         // hand-off to `provisioning` itself; the platform opens an operation first.
-        if setup_drift && has_installed_release {
+        // Only a direct setup may be updated by this CLI. An install whose template engine owns
+        // the resources keeps its setup authority: the reasons are reported, never acted on.
+        if setup_drift && has_installed_release && direct_setup {
             return ExistingDeploymentPlan::SetupUpdate { retry: false };
         }
         return ExistingDeploymentPlan::NothingToDo;
@@ -3769,6 +3787,7 @@ fn installed_setup_drift(
 /// A denied read is said in one line and never blocks the update.
 async fn hand_added_policy_note(
     aws: &alien_aws_clients::AwsClientConfig,
+    stack: &alien_core::Stack,
     state: &alien_core::StackState,
 ) -> Option<String> {
     let credentials = match alien_aws_clients::AwsCredentialProvider::from_config(aws.clone()).await
@@ -3781,7 +3800,7 @@ async fn hand_added_policy_note(
         }
     };
     let iam = alien_aws_clients::iam::IamClient::new(reqwest::Client::new(), credentials);
-    match alien_infra::hand_added_policies_under_new_boundary(&iam, state).await {
+    match alien_infra::hand_added_policies_under_new_boundary(&iam, stack, state).await {
         Err(reason) => Some(format!(
             "Could not check the service-account roles for hand-added policies ({reason}); continuing."
         )),
@@ -5095,6 +5114,27 @@ mod tests {
             existing_deployment_plan(&DeploymentStatus::Running, None, false, true, true, false),
             ExistingDeploymentPlan::NothingToDo
         );
+    }
+
+    /// An install whose template engine owns the resources keeps its setup authority: drift on it
+    /// is reported, and the plan never becomes a setup update (which would hand the resources
+    /// to a direct setup).
+    #[test]
+    fn imported_deployment_with_setup_drift_is_never_offered_a_setup_update() {
+        for platform_mode in [false, true] {
+            assert_eq!(
+                existing_deployment_plan(
+                    &DeploymentStatus::Running,
+                    None,
+                    platform_mode,
+                    true,
+                    false,
+                    true
+                ),
+                ExistingDeploymentPlan::NothingToDo,
+                "platform_mode={platform_mode}"
+            );
+        }
     }
 
     /// A running deployment whose setup is behind is offered the setup update, on the platform

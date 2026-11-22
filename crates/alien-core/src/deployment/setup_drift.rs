@@ -19,6 +19,9 @@ pub enum SetupDriftCode {
     ManagementPermissionsUnrecorded,
     /// The Alien-created VPC has no complete flow log. `resource` is the network id.
     FlowLogMissing,
+    /// The management identity has no recorded permissions boundary (an install from before
+    /// the boundary existed). Setup installs it. `resource` is the management resource id.
+    PermissionsBoundaryMissing,
     /// A grant was denied while creating something setup's grant covers (CloudWatch alarms,
     /// point-in-time recovery). `resource` is the resource id; `detail` names what was denied.
     GrantDenied,

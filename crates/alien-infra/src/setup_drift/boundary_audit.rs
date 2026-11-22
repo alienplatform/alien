@@ -8,7 +8,7 @@
 //! operator confirms.
 
 use alien_aws_clients::iam::IamApi;
-use alien_core::StackState;
+use alien_core::{Stack, StackState};
 
 use crate::service_account::AwsServiceAccountController;
 
@@ -19,10 +19,35 @@ pub struct HandAddedPolicy {
     pub policy: String,
 }
 
-/// Whether Alien writes an inline policy with this name: the profile policy, per-resource grants
-/// and remote-access policies all start with `deployment-` (`alien-` before the rename).
-fn is_alien_named_policy(name: &str) -> bool {
-    name.starts_with("deployment-") || name.starts_with("alien-")
+/// Whether Alien writes an inline policy with this exact name for one of these roles' grants:
+/// the profile policy, or a per-resource grant (`deployment-<resource>-<permission set>`, also
+/// under the previous `alien-` prefix) of a permission set the stack or the catalog defines.
+/// A prefix alone is not enough: a policy someone named `deployment-custom-access` is theirs.
+fn is_alien_named_policy(name: &str, permission_set_ids: &[String]) -> bool {
+    name == "deployment-permissions"
+        || name == "alien-permissions"
+        || alien_permissions::aws_resource_policies::names_aws_resource_grant(
+            name,
+            permission_set_ids.iter().map(String::as_str),
+        )
+}
+
+/// The permission set ids a grant policy can be named for: the catalog's and the stack's own.
+fn known_permission_set_ids(stack: &alien_core::Stack) -> Vec<String> {
+    let mut ids: Vec<String> = alien_permissions::list_permission_set_ids()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    ids.extend(
+        stack
+            .permissions
+            .profiles
+            .values()
+            .flat_map(|profile| profile.0.values())
+            .flatten()
+            .map(|reference| reference.id().to_string()),
+    );
+    ids
 }
 
 /// The IAM role names of the stack's AWS service accounts, from the recorded controller state.
@@ -46,9 +71,11 @@ fn service_account_role_names(state: &StackState) -> Vec<String> {
 /// An error means a read was denied or failed; the caller says so in one line and proceeds.
 pub async fn hand_added_policies_under_new_boundary(
     iam: &dyn IamApi,
+    stack: &Stack,
     state: &StackState,
 ) -> Result<Vec<HandAddedPolicy>, String> {
     let mut found = Vec::new();
+    let permission_set_ids = known_permission_set_ids(stack);
     for role_name in service_account_role_names(state) {
         let role = iam
             .get_role(&role_name)
@@ -83,7 +110,7 @@ pub async fn hand_added_policies_under_new_boundary(
             .map(|policy| policy.policy_name);
         for policy in inline
             .into_iter()
-            .filter(|name| !is_alien_named_policy(name))
+            .filter(|name| !is_alien_named_policy(name, &permission_set_ids))
             .chain(customer_managed)
         {
             found.push(HandAddedPolicy {
@@ -99,17 +126,36 @@ pub async fn hand_added_policies_under_new_boundary(
 mod tests {
     use super::*;
 
+    fn ids() -> Vec<String> {
+        vec![
+            "vault/protect-unmapped-deployer-secrets".to_string(),
+            "data-storage/data-read".to_string(),
+        ]
+    }
+
     #[test]
     fn alien_written_policy_names_are_not_hand_added() {
         for name in [
             "deployment-permissions",
             "deployment-appvault-vault-protect-unmapped-deployer-secrets",
-            "alien-data-storage-data-read",
+            "alien-data-data-storage-data-read",
         ] {
-            assert!(is_alien_named_policy(name), "{name}");
+            assert!(is_alien_named_policy(name, &ids()), "{name}");
         }
-        for name in ["custom-hand-added", "AllowEverything", "deploymentless"] {
-            assert!(!is_alien_named_policy(name), "{name}");
+    }
+
+    /// A prefix is not ownership: a hand-added policy that merely starts with `deployment-` or
+    /// `alien-` is still the customer's and is warned about.
+    #[test]
+    fn a_hand_added_policy_with_an_alien_looking_prefix_is_still_hand_added() {
+        for name in [
+            "deployment-custom-access",
+            "alien-extra",
+            "custom-hand-added",
+            "AllowEverything",
+            "deploymentless",
+        ] {
+            assert!(!is_alien_named_policy(name, &ids()), "{name}");
         }
     }
 }
