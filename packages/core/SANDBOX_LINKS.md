@@ -32,7 +32,10 @@ Rust declares the same with `Sandbox::new("tools".into())…link(&api)`.
   internet.
 - A link carries any TCP protocol on the service's declared ports: HTTP, WebSocket, and
   database or cache protocols. Through the proxy, use a `CONNECT` tunnel (most clients do for
-  WebSocket and other protocols) or a plain-proxy WebSocket request. On AWS, a connection made
+  WebSocket and other protocols) or a plain-proxy WebSocket request. A plain-proxy WebSocket
+  request becomes a WebSocket only when the service answers `101 Switching Protocols` with
+  `Upgrade: websocket`; any other answer is passed back with `Connection: close` and the
+  connection ends. On AWS, a connection made
   with the proxy turned off for the service's hostname (`NO_PROXY`) still goes through the
   gateway, because the sandbox's agent forwards it. On Kubernetes and locally, use the proxy.
   Other destinations keep the gateway's checks: HTTP must name the destination it goes to, and

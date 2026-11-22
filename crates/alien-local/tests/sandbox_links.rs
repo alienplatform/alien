@@ -307,7 +307,7 @@ fn tunnel_command(authority: &str, payload: &str) -> String {
 }
 
 const WEBSOCKET_UPGRADE: &str = concat!(
-    "GET /ws HTTP/1.1\\r\\nHost: api.svc:9000\\r\\nConnection: Upgrade\\r\\n",
+    "GET /ws HTTP/1.1\\r\\nHost: relay-api.svc:9000\\r\\nConnection: Upgrade\\r\\n",
     "Upgrade: websocket\\r\\nSec-WebSocket-Version: 13\\r\\n",
     "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\\r\\n\\r\\n",
 );
@@ -326,14 +326,16 @@ async fn a_linked_tunnel_carries_websocket_and_other_protocols_to_the_link_only(
     if !docker_ok(&["network", "inspect", NETWORK]) {
         docker(&["network", "create", NETWORK]);
     }
-    service("api");
-    service("other");
+    // Own service names and aliases, so this test runs beside the one above on the same
+    // network.
+    service("relay-api");
+    service("relay-other");
     let session = manager
         .create_session(
             sandbox,
             "s1",
             &config(vec![SandboxLink {
-                id: "api".into(),
+                id: "relay-api".into(),
                 ports: vec![8080, 9000],
             }]),
         )
@@ -347,8 +349,8 @@ async fn a_linked_tunnel_carries_websocket_and_other_protocols_to_the_link_only(
         ("websocket", WEBSOCKET_UPGRADE, "Upgrade: websocket"),
         ("redis", "*1\\r\\n$4\\r\\nPING\\r\\n", "PING"),
     ] {
-        let (_, body) = fetch(&manager, id, &tunnel_command("api.svc:9000", payload)).await;
-        eprintln!("{name} via CONNECT api.svc:9000 ->\n{body}");
+        let (_, body) = fetch(&manager, id, &tunnel_command("relay-api.svc:9000", payload)).await;
+        eprintln!("{name} via CONNECT relay-api.svc:9000 ->\n{body}");
         assert!(
             body.starts_with("HTTP/1.1 200 Connection Established"),
             "{name}: {body}"
@@ -360,24 +362,24 @@ async fn a_linked_tunnel_carries_websocket_and_other_protocols_to_the_link_only(
     }
     // Anything that is not the link keeps the gateway's checks: an unlinked service and an
     // undeclared port are refused before any byte is sent.
-    for authority in ["other.svc:9000", "api.svc:8081"] {
+    for authority in ["relay-other.svc:9000", "relay-api.svc:8081"] {
         let (_, body) = fetch(&manager, id, &tunnel_command(authority, WEBSOCKET_UPGRADE)).await;
         eprintln!("CONNECT {authority} -> {body}");
         assert!(body.starts_with("HTTP/1.1 403"), "{authority}: {body}");
         assert!(!body.contains("Upgrade: websocket"), "{authority}: {body}");
     }
     // Plain HTTP to the link still works through the proxy.
-    let (code, body) = fetch(&manager, id, "wget -q -T 10 -O- http://api.svc:8080/").await;
-    assert_eq!((code, body.trim()), (0, "api-ok"), "{body}");
+    let (code, body) = fetch(&manager, id, "wget -q -T 10 -O- http://relay-api.svc:8080/").await;
+    assert_eq!((code, body.trim()), (0, "relay-api-ok"), "{body}");
 
     let logs = docker(&["logs", "alien-sbx-gw-links-b"]);
     eprintln!("gateway log:\n{logs}");
     assert!(
-        logs.contains(r#""host":"api.svc","port":9000,"link":"api","decision":"allow""#),
+        logs.contains(r#""host":"relay-api.svc","port":9000,"link":"relay-api","decision":"allow""#),
         "the gateway logs the linked tunnel: {logs}"
     );
     manager.reap(sandbox).await.expect("reap");
-    for name in ["api", "other"] {
+    for name in ["relay-api", "relay-other"] {
         docker(&["rm", "-f", &format!("links-test-{name}")]);
     }
 }

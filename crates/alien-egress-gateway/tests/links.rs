@@ -310,9 +310,12 @@ async fn the_sweep_closes_a_linked_tunnel_after_an_unlink_or_a_range_change() {
 /// interface: `sudo ip addr add 10.244.7.9/32 dev lo`.
 const LINKED_ADDRESS: &str = "10.244.7.9";
 
-/// A linked service on `LINKED_ADDRESS:port`: answers a WebSocket handshake with
-/// `101 Switching Protocols` and echoes every byte after it; echoes any other protocol from
-/// the first byte. Records each connection's first bytes.
+/// A linked service on `LINKED_ADDRESS:port`. It reads a connection's first bytes until they
+/// form a complete request head or can no longer be one (anything not starting `GET `), then:
+/// answers `GET /refuse` with `400 Bad Request`, keeps the connection open and records each
+/// later read; answers any other `GET` with `101 Switching Protocols` and echoes every byte after
+/// the head; echoes any other protocol from the first byte. Records each connection's first
+/// bytes.
 async fn echo_service(port: u16) -> Arc<std::sync::Mutex<Vec<String>>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind((LINKED_ADDRESS, port))
@@ -328,18 +331,49 @@ async fn echo_service(port: u16) -> Arc<std::sync::Mutex<Vec<String>>> {
             let record = record.clone();
             tokio::spawn(async move {
                 let mut buffer = vec![0u8; 4096];
-                let n = socket.read(&mut buffer).await.unwrap_or(0);
-                let first = String::from_utf8_lossy(&buffer[..n]).to_string();
-                record.lock().unwrap().push(first.clone());
-                if first.starts_with("GET ") && first.contains("\r\n\r\n") {
-                    let rest = first.split_once("\r\n\r\n").unwrap().1.as_bytes().to_vec();
-                    socket
-                        .write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
-                        .await
-                        .unwrap();
-                    socket.write_all(&rest).await.unwrap();
-                } else {
-                    socket.write_all(&buffer[..n]).await.unwrap();
+                let mut first = Vec::new();
+                let head_end = loop {
+                    let n = socket.read(&mut buffer).await.unwrap_or(0);
+                    if n == 0 {
+                        break None;
+                    }
+                    first.extend_from_slice(&buffer[..n]);
+                    if !(first.starts_with(b"GET ") || b"GET ".starts_with(&first)) {
+                        break None;
+                    }
+                    if let Some(at) = first.windows(4).position(|v| v == b"\r\n\r\n") {
+                        break Some(at + 4);
+                    }
+                };
+                record
+                    .lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&first).to_string());
+                match head_end {
+                    Some(_) if first.starts_with(b"GET /refuse") => {
+                        socket
+                            .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+                            .await
+                            .unwrap();
+                        while let Ok(n) = socket.read(&mut buffer).await {
+                            if n == 0 {
+                                break;
+                            }
+                            record
+                                .lock()
+                                .unwrap()
+                                .push(String::from_utf8_lossy(&buffer[..n]).to_string());
+                        }
+                        return;
+                    }
+                    Some(end) => {
+                        socket
+                            .write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+                            .await
+                            .unwrap();
+                        socket.write_all(&first[end..]).await.unwrap();
+                    }
+                    None => socket.write_all(&first).await.unwrap(),
                 }
                 let (mut reader, mut writer) = socket.split();
                 let _ = tokio::io::copy(&mut reader, &mut writer).await;
@@ -534,6 +568,44 @@ async fn a_link_carries_websocket_and_other_protocols_and_nothing_else_does() {
             String::from_utf8_lossy(&received)
         );
     }
+
+    // A service that answers the WebSocket handshake with an ordinary error and keeps the
+    // connection open: the sandbox gets that answer with `Connection: close`, the connection
+    // ends, and a request pipelined after the handshake never reaches the service.
+    let refusing = format!(
+        "GET http://api.svc:9000/refuse HTTP/1.1\r\nHost: api.svc:9000\r\nConnection: Upgrade\r\n\
+         Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Proxy-Authorization: Bearer {token}\r\n\r\n\
+         GET http://api.svc:9000/pipelined HTTP/1.1\r\nHost: api.svc:9000\r\n\
+         Proxy-Authorization: Bearer {token}\r\n\r\n"
+    );
+    let answered = exchange(
+        address,
+        &refusing,
+        b"GET /after HTTP/1.1\r\nHost: api.svc:9000\r\n\r\n",
+    )
+    .await;
+    assert!(
+        answered.starts_with("HTTP/1.1 400 Bad Request"),
+        "{answered}"
+    );
+    assert!(
+        answered.to_ascii_lowercase().contains("connection: close"),
+        "{answered}"
+    );
+    assert!(!answered.contains("101"), "{answered}");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let received = seen.lock().unwrap().clone();
+    let refuse_at = received
+        .iter()
+        .position(|first| first.starts_with("GET /refuse HTTP/1.1\r\n"))
+        .unwrap_or_else(|| panic!("{received:?}"));
+    assert!(
+        !received[refuse_at..]
+            .iter()
+            .any(|bytes| bytes.contains("/pipelined") || bytes.contains("/after")),
+        "{received:?}"
+    );
 
     // A malformed WebSocket handshake to the link gets a refusal, not a closed connection.
     let malformed = format!(
