@@ -12,7 +12,10 @@ use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use clap::Parser;
 use std::{future::Future, path::PathBuf, str::FromStr};
 
-use super::up::{create_manager_client, push_deletion, read_token_file};
+use super::up::{
+    create_manager_client, push_deletion_with, read_token_file,
+    refuse_operator_removed_outside_kubernetes,
+};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -66,7 +69,8 @@ pub struct DownArgs {
     #[arg(long, conflicts_with = "force_delete_record")]
     pub erase_data: bool,
 
-    /// Skip confirmation prompt
+    /// Skip confirmation prompts. With --operator-removed this also confirms a cluster that only
+    /// the Operator's Secret vouches for.
     #[arg(long, short = 'y')]
     pub yes: bool,
 
@@ -79,12 +83,23 @@ pub struct DownArgs {
     pub helm_release: Option<String>,
 
     /// Kubeconfig path for Kubernetes installs. Defaults to KUBECONFIG or kubectl defaults.
+    /// A Kubernetes destroy that uses cluster credentials from the kubeconfig (the runtime
+    /// cleanup of a removed Operator, an erase) reads this path; credentials that come from the
+    /// server URL or from inside the cluster do not use it, and `--operator-removed` refuses it.
     #[arg(long, env = "KUBECONFIG")]
     pub kubeconfig: Option<String>,
 
-    /// Kubernetes context for Kubernetes installs.
+    /// Kubernetes context for Kubernetes installs: names the context of the kubeconfig the cluster
+    /// calls use (the runtime cleanup of a removed Operator, an erase). Credentials from the server
+    /// URL or from inside the cluster do not use it, and `--operator-removed` refuses it there.
     #[arg(long, env = "ALIEN_KUBE_CONTEXT")]
     pub kube_context: Option<String>,
+
+    /// The deployment's Operator is gone (for example the Helm release was already uninstalled):
+    /// run its runtime cleanup from here with your cluster credentials instead of waiting for
+    /// it. Kubernetes installs only.
+    #[arg(long)]
+    pub operator_removed: bool,
 }
 
 pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
@@ -239,6 +254,8 @@ async fn down_command_with(
             })
         })?;
     let platform = validate_remote_platform(tracked_platform.as_deref(), remote_platform)?;
+    // Before any request or local stop: a refusal later would leave the delete already sent.
+    refuse_operator_removed_outside_kubernetes(platform, args.operator_removed)?;
     let site_bound = site_bound_resource_ids(&deployment_json)?;
     // Keys the direct setup created stay: read before teardown removes their state.
     let kept_keys = alien_cli_common::kept_keys::kept_keys(
@@ -374,6 +391,16 @@ async fn down_command_with(
             );
 
             let client_config = destroy_client_config(platform, tracked_local.as_ref()).await?;
+            let (client_config, unsteerable_kube_flags) = if platform == Platform::Kubernetes {
+                with_kubernetes_access(
+                    client_config,
+                    args.kubeconfig.as_deref(),
+                    args.kube_context.as_deref(),
+                    args.operator_removed,
+                )
+            } else {
+                (client_config, None)
+            };
 
             if let Some(local) = tracked_local.as_ref().filter(|local| local.service_managed) {
                 output::info("Stopping local operator service before cleanup...");
@@ -387,16 +414,21 @@ async fn down_command_with(
                 )?;
             }
 
-            push_deletion(
-                &client,
-                &deployment_id,
-                platform,
-                client_config,
-                args.erase_data,
-                &manager_url,
-                &token,
-            )
-            .await
+            push_deletion_with()
+                .client(&client)
+                .manager_url(&manager_url)
+                .token(&token)
+                .deployment_id(&deployment_id)
+                .platform(platform)
+                .client_config(client_config)
+                .operator_removed(args.operator_removed)
+                .erase_data(args.erase_data)
+                .assume_yes(args.yes)
+                .delete_requested(true)
+                .maybe_unsteerable_kube_flags(unsteerable_kube_flags)
+                .maybe_label_domain(embedded_config.and_then(|c| c.label_domain.clone()))
+                .call()
+                .await
         },
     )
     .await?;
@@ -538,6 +570,48 @@ async fn destroy_client_config(
         })
 }
 
+/// A Kubernetes install is deleted on the cluster the person named with `--kubeconfig` and
+/// `--kube-context`, not on whatever their shell currently points at. Whenever the command is
+/// about to delete on that cluster with `--operator-removed` (the runtime cleanup of a removed
+/// Operator, or an erase in the setup teardown of that command), the cluster is checked against
+/// the deployment's record (`cluster_check`) first. An erase without the flag is not checked.
+/// Credentials that are not a kubeconfig (an API server URL or the in-cluster environment) cannot be steered by these flags: when the flags were given, the
+/// second value is the refusal to raise if (and only if) a cluster call follows, so a retain
+/// that touches no cluster is not stopped by an exported `KUBECONFIG`.
+fn with_kubernetes_access(
+    config: ClientConfig,
+    kubeconfig: Option<&str>,
+    kube_context: Option<&str>,
+    operator_removed: bool,
+) -> (ClientConfig, Option<String>) {
+    let ClientConfig::Kubernetes(mut kubernetes) = config else {
+        return (config, None);
+    };
+    let mut refusal = None;
+    match kubernetes.as_mut() {
+        alien_core::KubernetesClientConfig::Kubeconfig {
+            kubeconfig_path,
+            context,
+            ..
+        } => {
+            if let Some(path) = kubeconfig {
+                *kubeconfig_path = Some(path.to_string());
+            }
+            if let Some(name) = kube_context {
+                *context = Some(name.to_string());
+            }
+        }
+        // Only `--operator-removed` makes this command act on the cluster the person named; a
+        // destroy without it ignores kubeconfig settings these credentials cannot use (an
+        // exported KUBECONFIG, say), as it always did.
+        _ if operator_removed && (kubeconfig.is_some() || kube_context.is_some()) => {
+            refusal = Some("--kubeconfig, KUBECONFIG and --kube-context do not apply: the Kubernetes credentials come from KUBERNETES_SERVER_URL or the in-cluster environment, not from a kubeconfig. Unset those or drop the flags. Nothing was deleted.".to_string());
+        }
+        _ => {}
+    }
+    (ClientConfig::Kubernetes(kubernetes), refusal)
+}
+
 fn requires_client_side_deletion(platform: Platform) -> bool {
     platform != Platform::Machines
 }
@@ -641,6 +715,68 @@ fn resolve_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn kubeconfig_credentials() -> ClientConfig {
+        ClientConfig::Kubernetes(Box::new(alien_core::KubernetesClientConfig::Kubeconfig {
+            kubeconfig_path: None,
+            context: Some("ambient".to_string()),
+            cluster: None,
+            user: None,
+            namespace: None,
+            additional_headers: None,
+        }))
+    }
+
+    /// The named kubeconfig and context win over the ambient ones on every Kubernetes destroy.
+    #[test]
+    fn kube_flags_steer_a_kubeconfig_destroy() {
+        let (ClientConfig::Kubernetes(config), refusal) = with_kubernetes_access(
+            kubeconfig_credentials(),
+            Some("/tmp/kc"),
+            Some("install"),
+            false,
+        ) else {
+            panic!("kubernetes")
+        };
+        assert!(refusal.is_none());
+        let alien_core::KubernetesClientConfig::Kubeconfig {
+            kubeconfig_path,
+            context,
+            ..
+        } = *config
+        else {
+            panic!("kubeconfig")
+        };
+        assert_eq!(kubeconfig_path.as_deref(), Some("/tmp/kc"));
+        assert_eq!(context.as_deref(), Some("install"));
+    }
+
+    /// With `--operator-removed`, credentials the flags cannot steer carry a refusal when a flag
+    /// is given (raised only if a cluster call follows). Without it, nothing is refused: the
+    /// flags (an exported `KUBECONFIG`, say) are ignored for those credentials, as before.
+    #[test]
+    fn kube_flags_are_refused_only_with_the_flag_for_credentials_they_cannot_steer() {
+        let in_cluster =
+            ClientConfig::Kubernetes(Box::new(alien_core::KubernetesClientConfig::InCluster {
+                namespace: None,
+                additional_headers: None,
+            }));
+        for (kubeconfig, context) in [(Some("/tmp/kc"), None), (None, Some("install"))] {
+            assert!(
+                with_kubernetes_access(in_cluster.clone(), kubeconfig, context, true)
+                    .1
+                    .is_some()
+            );
+            assert!(
+                with_kubernetes_access(in_cluster.clone(), kubeconfig, context, false)
+                    .1
+                    .is_none()
+            );
+        }
+        assert!(with_kubernetes_access(in_cluster, None, None, true)
+            .1
+            .is_none());
+    }
 
     #[tokio::test]
     async fn retained_local_deployment_can_reload_original_authority_for_later_erase() {
@@ -1039,6 +1175,146 @@ mod tests {
             request.assert_hits_async(0).await;
             acquire.assert_hits_async(0).await;
         }
+    }
+
+    fn record_for(platform: &str) -> serde_json::Value {
+        let mut record = deployment_json("running", None);
+        record["platform"] = serde_json::json!(platform);
+        record
+    }
+
+    /// Mounts the deployment read and counts every request that could change it.
+    async fn manager_that_counts_deletes<'a>(
+        server: &'a httpmock::MockServer,
+        platform: &str,
+    ) -> (httpmock::Mock<'a>, httpmock::Mock<'a>) {
+        use httpmock::prelude::*;
+        let record = record_for(platform);
+        let read = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/dep_1");
+                then.status(200).json_body(record);
+            })
+            .await;
+        let delete = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/deployments/dep_1/delete");
+                then.status(200)
+                    .json_body(serde_json::json!({"cleanupRequired": true}));
+            })
+            .await;
+        (read, delete)
+    }
+
+    fn assert_refused_as_kubernetes_only(error: &alien_error::AlienError<ErrorData>) {
+        assert!(
+            error.message.contains("Kubernetes installs only"),
+            "{}",
+            error.message
+        );
+    }
+
+    /// Through the command itself: `--operator-removed` on a platform other than Kubernetes is
+    /// refused before the delete request, so a refused run leaves the deployment record as it
+    /// was (a rerun is not held to the refused run's `--erase-data`).
+    #[tokio::test]
+    async fn operator_removed_outside_kubernetes_sends_no_delete_request() {
+        for (platform, erase) in [
+            ("aws", false),
+            ("aws", true),
+            ("gcp", true),
+            ("azure", true),
+            ("machines", false),
+            ("machines", true),
+            ("local", false),
+        ] {
+            let server = httpmock::MockServer::start_async().await;
+            let (read, delete) = manager_that_counts_deletes(&server, platform).await;
+            let mut argv = vec![
+                "destroy".to_string(),
+                "--deployment-id".into(),
+                "dep_1".into(),
+                "--token".into(),
+                "ax_test".into(),
+                "--manager-url".into(),
+                server.base_url(),
+                "--yes".into(),
+                "--operator-removed".into(),
+            ];
+            if erase {
+                argv.push("--erase-data".into());
+            }
+            let args = DownArgs::try_parse_from(argv).expect("arguments");
+            let error = down_command_with(args, None, &InClusterUse::default())
+                .await
+                .expect_err("refused");
+            assert_eq!(
+                delete.hits_async().await,
+                0,
+                "{platform} erase={erase}: a delete request was sent before the refusal"
+            );
+            assert_refused_as_kubernetes_only(&error);
+            read.assert_hits_async(1).await;
+        }
+    }
+
+    /// A tracked, service-managed local install: the refusal comes before the local Operator
+    /// service is stopped (which comes after the delete request), and before any request.
+    #[tokio::test]
+    async fn operator_removed_on_a_tracked_local_install_stops_nothing_and_sends_nothing() {
+        static CONFIG_HOME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = CONFIG_HOME.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("alien");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let server = httpmock::MockServer::start_async().await;
+        let (read, delete) = manager_that_counts_deletes(&server, "local").await;
+        let mut tracker =
+            DeploymentTracker::with_path(config_dir.join("deployments.json")).unwrap();
+        tracker
+            .track(
+                "uploads".into(),
+                "dep_1".into(),
+                Some("ax_test".into()),
+                server.base_url(),
+                "local".into(),
+                None,
+                Some(TrackedLocalDeployment {
+                    data_dir: dir.path().join("data").display().to_string(),
+                    service_managed: true,
+                }),
+            )
+            .unwrap();
+        drop(tracker);
+        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", dir.path());
+        let args = DownArgs::try_parse_from([
+            "destroy",
+            "--name",
+            "uploads",
+            "--yes",
+            "--operator-removed",
+        ])
+        .expect("arguments");
+        let result = down_command_with(args, None, &InClusterUse::default()).await;
+        match previous {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        assert_eq!(
+            delete.hits_async().await,
+            0,
+            "a delete request was sent before the refusal"
+        );
+        assert_refused_as_kubernetes_only(&result.expect_err("refused"));
+        read.assert_hits_async(1).await;
+        // The tracked entry is untouched: nothing was started, stopped or forgotten.
+        assert!(
+            DeploymentTracker::with_path(config_dir.join("deployments.json"))
+                .unwrap()
+                .get("uploads")
+                .is_some()
+        );
     }
 
     /// The Machines path asks the same question as the setup-owned path (one rule, no copy).

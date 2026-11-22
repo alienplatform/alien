@@ -1,31 +1,58 @@
 use crate::error::{ErrorData, Result};
 use crate::traits::SecretPresence;
-use alien_error::{Context, ContextError};
+use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::secret_manager::{
     AddSecretVersionRequest, AutomaticReplication, Replication, ReplicationPolicy, Secret,
     SecretManagerApi, SecretManagerClient, SecretPayload, SecretVersionState,
 };
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as base64_standard, Engine as _};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
 /// GCP Secret Manager vault binding implementation
 #[derive(Debug)]
 pub struct GcpSecretManagerVault {
-    client: Arc<SecretManagerClient>,
+    client: Arc<dyn SecretManagerApi>,
     vault_prefix: String,
     project_id: String,
+    vault_id: String,
 }
 
 impl GcpSecretManagerVault {
     /// Create a new GCP Secret Manager vault binding
-    pub fn new(client: Arc<SecretManagerClient>, vault_prefix: String, project_id: String) -> Self {
+    ///
+    /// `vault_id` is the id of the vault resource; it marks the secrets this binding creates.
+    pub fn new(
+        client: Arc<dyn SecretManagerApi>,
+        vault_prefix: String,
+        project_id: String,
+        vault_id: String,
+    ) -> Self {
         Self {
             client,
             vault_prefix,
             project_id,
+            vault_id,
         }
+    }
+
+    /// Labels that mark a secret as created by this vault.
+    fn marker_labels(&self) -> HashMap<String, String> {
+        use alien_core::vault_naming::{
+            vault_marker_value, VAULT_ID_MARKER_KEY, VAULT_PREFIX_MARKER_KEY,
+        };
+        HashMap::from([
+            (
+                VAULT_PREFIX_MARKER_KEY.to_string(),
+                vault_marker_value(&self.vault_prefix),
+            ),
+            (
+                VAULT_ID_MARKER_KEY.to_string(),
+                vault_marker_value(&self.vault_id),
+            ),
+        ])
     }
 
     /// Generate the full secret name with vault prefix
@@ -192,7 +219,11 @@ impl crate::traits::Vault for GcpSecretManagerVault {
                     ))
                     .build();
 
-                let secret = Secret::builder().replication(replication).build();
+                // Labels are set here, on create only. A later version add never touches them.
+                let secret = Secret::builder()
+                    .replication(replication)
+                    .labels(self.marker_labels())
+                    .build();
 
                 // Create the secret
                 self.client
@@ -267,6 +298,75 @@ impl crate::traits::Vault for GcpSecretManagerVault {
         }
     }
 
+    /// Creates the secret resource, which fails when one by this name exists, then writes its
+    /// first version. An existing secret is left unchanged.
+    async fn create_secret(&self, secret_name: &str, value: &str) -> Result<()> {
+        let secret_resource = self.secret_resource_name(secret_name);
+        let full_secret_name = self.full_secret_name(secret_name);
+        let replication = Replication::builder()
+            .replication_policy(ReplicationPolicy::Automatic(
+                AutomaticReplication::builder().build(),
+            ))
+            .build();
+        match self
+            .client
+            .create_secret(
+                full_secret_name.clone(),
+                Secret::builder().replication(replication).build(),
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                return Err(AlienError::new(ErrorData::VaultSecretAlreadyExists {
+                    vault: self.vault_prefix.clone(),
+                    secret_name: secret_name.to_string(),
+                }));
+            }
+            Err(e) => {
+                return Err(e.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create secret '{}'", secret_resource),
+                    resource_id: None,
+                }))
+            }
+        }
+        let request = AddSecretVersionRequest::builder()
+            .payload(
+                SecretPayload::builder()
+                    .data(base64_standard.encode(value))
+                    .build(),
+            )
+            .build();
+        let mut last_error = None;
+        for attempt in 0..3u64 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(100 * attempt)).await;
+            }
+            match self
+                .client
+                .add_secret_version(full_secret_name.clone(), request.clone())
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) => last_error = Some(e),
+            }
+        }
+        Err(last_error
+            .expect("the loop ran")
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to add the first version to secret '{}'",
+                    secret_resource
+                ),
+                resource_id: None,
+            }))
+    }
+
     /// Delete a secret
     async fn delete_secret(&self, secret_name: &str) -> Result<()> {
         let secret_resource = self.secret_resource_name(secret_name);
@@ -313,5 +413,99 @@ impl crate::traits::Vault for GcpSecretManagerVault {
                     .to_string(),
             },
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::traits::Vault as _;
+    use alien_client_core::ErrorData as ClientErrorData;
+    use alien_gcp_clients::secret_manager::{MockSecretManagerApi, SecretVersion};
+
+    fn vault_with(client: MockSecretManagerApi, prefix: &str, id: &str) -> GcpSecretManagerVault {
+        GcpSecretManagerVault::new(
+            Arc::new(client),
+            prefix.to_string(),
+            "test-project".to_string(),
+            id.to_string(),
+        )
+    }
+
+    fn version() -> SecretVersion {
+        SecretVersion::builder().build()
+    }
+
+    /// A secret created through the vault carries both markers as labels.
+    #[tokio::test]
+    async fn a_created_secret_is_labeled_with_its_vault_prefix_and_id() {
+        let mut client = MockSecretManagerApi::new();
+        let mut adds = 0;
+        client.expect_add_secret_version().returning(move |_, _| {
+            adds += 1;
+            if adds == 1 {
+                Err(alien_error::AlienError::new(
+                    ClientErrorData::RemoteResourceNotFound {
+                        resource_type: "Secret".to_string(),
+                        resource_name: "x".to_string(),
+                    },
+                ))
+            } else {
+                Ok(version())
+            }
+        });
+        client
+            .expect_create_secret()
+            .times(1)
+            .withf(|secret_id, secret| {
+                secret_id == "acme-1a2b-secrets-api-key"
+                    && secret.labels
+                        == Some(HashMap::from([
+                            (
+                                "alien-vault-prefix".to_string(),
+                                "acme-1a2b-secrets".to_string(),
+                            ),
+                            ("alien-vault".to_string(), "secrets".to_string()),
+                        ]))
+            })
+            .returning(|_, _| Ok(Secret::default()));
+
+        vault_with(client, "acme-1a2b-secrets", "secrets")
+            .set_secret("api-key", "v")
+            .await
+            .unwrap();
+    }
+
+    /// Adding a version to an existing secret creates nothing and changes no label.
+    #[tokio::test]
+    async fn updating_an_existing_secret_does_not_touch_its_labels() {
+        let mut client = MockSecretManagerApi::new();
+        client
+            .expect_add_secret_version()
+            .times(1)
+            .returning(|_, _| Ok(version()));
+        client.expect_create_secret().never();
+
+        vault_with(client, "acme-1a2b-secrets", "secrets")
+            .set_secret("api-key", "v2")
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn marker_labels_meet_the_label_rules_even_for_long_prefixes() {
+        let labels = vault_with(
+            MockSecretManagerApi::new(),
+            &format!("{}-secrets", "a".repeat(60)),
+            "secrets",
+        )
+        .marker_labels();
+        assert_eq!(labels.len(), 2);
+        for value in labels.values() {
+            assert!((1..=63).contains(&value.len()), "{value}");
+            assert!(value
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-'));
+        }
     }
 }

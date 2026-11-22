@@ -5,7 +5,9 @@
 //! `#[ignore]` because it needs a cluster. The Kind workflow runs it with a RuntimeClass named
 //! `alien-kind-runc` (handler `runc`, which is fine here because the broker functions are driven
 //! directly and the controller's sandboxed-handler check is not part of this path) and the
-//! `alpine:3.20` image loaded into the node:
+//! `alpine:3.20` image loaded into the nodes. The cluster needs a worker node besides the control
+//! plane: a sandbox agent starts only once its NetworkPolicy drops the cluster API, and Kind's
+//! policy does not reach a pod's traffic to the API server on its own node.
 //!
 //! ```text
 //! ALIEN_BROKER_KIND_CONTEXT=kind-<name> ALIEN_BROKER_KIND_NAMESPACE=<existing namespace> \
@@ -79,6 +81,13 @@ fn template(namespace: &str) -> k8s_openapi::api::core::v1::Pod {
     );
     let spec = pod.spec.as_mut().expect("a spec");
     spec.containers[0].command = Some(vec!["sleep".to_string(), "3600".to_string()]);
+    // The controller stamps every template it publishes, and every idle pod it builds, with the
+    // template's digest, and the broker claims only idle pods built from the published template.
+    let hash = super::kubernetes::template_hash(&pod);
+    pod.metadata
+        .annotations
+        .get_or_insert_default()
+        .insert(ANNOTATION_TEMPLATE_HASH.to_string(), hash);
     pod
 }
 
@@ -266,14 +275,18 @@ async fn kubernetes_broker_kind_sessions_live_on_the_pod() {
     idle.metadata.name = Some("alien-kind-idle".to_string());
     idle.metadata.generate_name = None;
     pods.create_pod(&namespace, &idle).await.expect("idle pod");
+    // The broker claims only a Ready pod, and a pod has its address before it is Ready.
     for _ in 0..60 {
         let idle_now = pods.get_pod(&namespace, "alien-kind-idle").await.unwrap();
-        if idle_now
-            .status
-            .as_ref()
-            .and_then(|s| s.pod_ip.clone())
-            .is_some()
-        {
+        let status = idle_now.status.as_ref();
+        let ready = status
+            .and_then(|s| s.conditions.as_ref())
+            .is_some_and(|conditions| {
+                conditions
+                    .iter()
+                    .any(|condition| condition.type_ == "Ready" && condition.status == "True")
+            });
+        if ready && status.and_then(|s| s.pod_ip.clone()).is_some() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -400,30 +413,38 @@ async fn kubernetes_broker_kind_sessions_live_on_the_pod() {
             .expect("list idle");
         stale_idle_pods(idle.items, "new", &mut 0)
     };
-    let wait_ip = |name: &'static str| {
+    // Ready and addressed: the broker claims only a Ready pod.
+    let wait_ready = |name: &'static str| {
         let (pods, namespace) = (pods.clone(), namespace.clone());
         async move {
             for _ in 0..60 {
-                if pods
-                    .get_pod(&namespace, name)
-                    .await
-                    .unwrap()
-                    .status
-                    .as_ref()
-                    .and_then(|s| s.pod_ip.clone())
-                    .is_some()
-                {
+                let pod = pods.get_pod(&namespace, name).await.unwrap();
+                let status = pod.status.as_ref();
+                let ready = status
+                    .and_then(|s| s.conditions.as_ref())
+                    .is_some_and(|conditions| {
+                        conditions.iter().any(|condition| {
+                            condition.type_ == "Ready" && condition.status == "True"
+                        })
+                    });
+                if ready && status.and_then(|s| s.pod_ip.clone()).is_some() {
                     return;
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
-            panic!("{name} never got an address");
+            panic!("{name} never became Ready with an address");
         }
     };
-    pods.create_pod(&namespace, &stale_idle("alien-kind-raced"))
+    // The race: the controller has moved on to a newer template ("new") and lists this pod as
+    // stale, while a claim that read the template still published takes it. A claim only takes a
+    // pod built from the template it read, so the pod carries that template's digest.
+    let mut raced_pod = template(&namespace);
+    raced_pod.metadata.name = Some("alien-kind-raced".to_string());
+    raced_pod.metadata.generate_name = None;
+    pods.create_pod(&namespace, &raced_pod)
         .await
         .expect("idle pod");
-    wait_ip("alien-kind-raced").await;
+    wait_ready("alien-kind-raced").await;
     let listed_before_claim = list_stale().await;
     assert_eq!(listed_before_claim.len(), 1);
     let racer = ask("racer", None, None).await.ok().expect("claim");
@@ -445,7 +466,7 @@ async fn kubernetes_broker_kind_sessions_live_on_the_pod() {
     pods.create_pod(&namespace, &stale_idle("alien-kind-stale"))
         .await
         .expect("idle pod");
-    wait_ip("alien-kind-stale").await;
+    wait_ready("alien-kind-stale").await;
     let to_retire = list_stale().await;
     assert_eq!(
         to_retire.len(),
@@ -1213,10 +1234,23 @@ spec:
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
-    assert!(
-        became_ready,
-        "Ready once the deny-all egress policy is enforced"
-    );
+    if !became_ready {
+        // The agent refuses to start when its egress check fails, and says why only in its log.
+        let log = std::process::Command::new("kubectl")
+            .args([
+                "--namespace",
+                &namespace,
+                "exec",
+                "gate-agent",
+                "--",
+                "cat",
+                "/tmp/agent.log",
+            ])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
+            .unwrap_or_default();
+        panic!("Ready once the deny-all egress policy is enforced; agent log:\n{log}");
+    }
 
     kubectl_ns(&[
         "delete",

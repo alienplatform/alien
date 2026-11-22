@@ -2967,7 +2967,7 @@
   {
     "Sid": "VaultProvision",
     "Effect": "Allow",
-    "Action": ["ssm:PutParameter", "ssm:DeleteParameter"],
+    "Action": ["ssm:PutParameter", "ssm:AddTagsToResource", "ssm:DeleteParameter"],
     "Resource": [
       "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.resource_prefix}-*"
     ]

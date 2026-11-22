@@ -10,8 +10,11 @@ on:
     paths:
       - '.github/workflows/tpm-device-key.yml'
   workflow_call:
-  schedule:
-    - cron: "17 3 * * *"
+    inputs:
+      ref:
+        description: Commit to test (default the triggering commit)
+        type: string
+        default: ""
   workflow_dispatch:
 
 permissions:
@@ -43,7 +46,7 @@ jobs:
     name: TPM device key
     needs: gate
     if: needs.gate.outputs.changed == 'true'
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: "0"
@@ -52,6 +55,8 @@ jobs:
       TPM2TOOLS_TCTI: swtpm:port=2321
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Install Rust toolchain
         uses: jdx/mise-action@v5

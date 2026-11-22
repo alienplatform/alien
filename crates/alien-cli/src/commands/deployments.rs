@@ -133,6 +133,7 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::RestoreVolume { json: true, .. }
                 | DeploymentsCmd::CancelVolumeRestore { json: true, .. }
                 | DeploymentsCmd::Retry { json: true, .. }
+                | DeploymentsCmd::EnrollmentCode { json: true, .. }
                 | DeploymentsCmd::Redeploy { json: true, .. }
                 | DeploymentsCmd::Move { json: true, .. }
                 | DeploymentsCmd::Pin { json: true, .. }
@@ -142,6 +143,7 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::CancelMachineDrain { json: true, .. }
                 | DeploymentsCmd::RemoveMachine { json: true, .. }
                 | DeploymentsCmd::SetCompute { json: true, .. }
+                | DeploymentsCmd::SetEndpointSourceRanges { json: true, .. }
                 | DeploymentsCmd::SetEnv { json: true, .. }
                 | DeploymentsCmd::Inputs { json: true, .. }
                 | DeploymentsCmd::SetInputs { json: true, .. }
@@ -170,6 +172,28 @@ pub enum DeploymentsCmd {
         /// Restore generated domains for this resource
         #[arg(long)]
         clear: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Limit the deployment's public endpoints to a list of source address ranges
+    ///
+    /// Pass --range for each IPv4 or IPv6 CIDR (at most 25), for example the ranges of
+    /// a proxy in front of the deployment, or --any to let anyone connect again.
+    /// Replaces the saved list. Applied as a configuration update on AWS; deployments
+    /// that cannot enforce the list refuse it. Changes need no setup update.
+    SetEndpointSourceRanges {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+        /// Allowed source range in CIDR form (repeat for each range)
+        #[arg(
+            long = "range",
+            required_unless_present = "any",
+            conflicts_with = "any"
+        )]
+        ranges: Vec<String>,
+        /// Allow anyone to connect: remove the saved list
+        #[arg(long)]
+        any: bool,
         #[arg(long)]
         json: bool,
     },
@@ -447,6 +471,20 @@ pub enum DeploymentsCmd {
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
+    },
+    /// Issue a new Operator enrollment code for a deployment
+    #[command(
+        long_about = "Issue a new one-hour, one-use enrollment code for a deployment's Operator.\n\nUse it to reinstall the chart of a Kubernetes deployment whose Operator is gone, for example to let a delete finish. The code replaces the deployment's current Operator identity when it is used, so a running Operator stops working. The code is shown once, in this command's output only."
+    )]
+    EnrollmentCode {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+        /// Skip the confirmation asked when the deployment is not being deleted
+        #[arg(long)]
+        yes: bool,
+        /// Print the code as machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Retry a deployment
     Retry {
@@ -1085,6 +1123,24 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             let manager = resolve_manager_client(&ctx, None, true).await?;
             delete_deployment_task(&manager, &id, request).await
         }
+        DeploymentsCmd::EnrollmentCode { id, yes, json } => {
+            #[cfg(feature = "platform")]
+            if ctx.is_platform() {
+                let resolved = crate::platform_deployment_resolver::resolve_with_manager(
+                    &ctx, &id, None, !json,
+                )
+                .await?;
+                return enrollment_code_task(
+                    &resolved.manager.client,
+                    &String::from(resolved.detail.id),
+                    yes,
+                    json,
+                )
+                .await;
+            }
+            let manager = resolve_manager_client(&ctx, None, !json).await?;
+            enrollment_code_task(&manager, &id, yes, json).await
+        }
         DeploymentsCmd::Retry { id, json } => {
             #[cfg(feature = "platform")]
             if ctx.is_platform() {
@@ -1354,6 +1410,23 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                     quota_warning_overrides,
                 },
                 confirmation,
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::SetEndpointSourceRanges {
+            id,
+            ranges,
+            any: _,
+            json,
+        } => {
+            let target =
+                resolve_platform_target(&ctx, &id, json, "Endpoint source ranges changes").await?;
+            deployment_actions::set_endpoint_source_ranges_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                ranges,
                 json,
             )
             .await
@@ -3112,6 +3185,132 @@ fn retry_next_steps(deployment_id: &str, setup_rerun: Option<&SetupRerunHint>) -
     ]
 }
 
+/// Statuses in which a new enrollment code is the normal recovery, so no confirmation is asked.
+const ENROLLMENT_CODE_NO_CONFIRMATION_STATUSES: [&str; 3] =
+    ["delete-pending", "deleting", "delete-failed"];
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EnrollmentCodeOutput<'a> {
+    deployment_id: &'a str,
+    code: &'a str,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    manager_audience: &'a str,
+}
+
+/// "expires in 60 minutes", or "expired" once the time has passed.
+fn relative_expiry(
+    expires_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    let minutes = (expires_at - now).num_minutes();
+    match minutes {
+        m if m <= 0 && expires_at <= now => "expired".to_string(),
+        0 => "expires in less than a minute".to_string(),
+        1 => "expires in 1 minute".to_string(),
+        m => format!("expires in {m} minutes"),
+    }
+}
+
+/// The one-line Helm flags that carry the code and the manager audience.
+fn enrollment_code_helm_flags(code: &str, audience: &str) -> String {
+    format!("--set management.enrollmentCode={code} --set management.audience={audience}")
+}
+
+/// The server decides who may issue a code; the CLI only words its refusals plainly.
+fn enrollment_code_refusal(error: AlienError<alien_error::GenericError>) -> AlienError<ErrorData> {
+    let message = if error.code == "ENROLLMENT_KEY_EXISTS" {
+        "This deployment's Operator still holds a key; an administrator credential is needed to issue a new code."
+    } else if error.http_status_code == Some(403) {
+        "This credential can't issue enrollment codes."
+    } else {
+        "issuing an enrollment code"
+    };
+    Err::<(), _>(error)
+        .context(ErrorData::ApiRequestFailed {
+            message: message.to_string(),
+            url: None,
+        })
+        .unwrap_err()
+}
+
+async fn enrollment_code_task(
+    client: &alien_manager_api::Client,
+    reference: &str,
+    yes: bool,
+    json: bool,
+) -> Result<()> {
+    let deployment = resolve_deployment_reference(client, reference).await?;
+
+    if !ENROLLMENT_CODE_NO_CONFIRMATION_STATUSES.contains(&deployment.status.as_str()) {
+        let mode = InteractionMode::current(json).confirmation_mode(
+            yes,
+            "Issuing a new enrollment code for a deployment that is not being deleted needs confirmation, and there is no terminal to ask on. Re-run with `--yes`.",
+        )?;
+        if matches!(mode, ConfirmationMode::Prompt)
+            && !prompt_confirm(
+                "Issuing a new code replaces this deployment's Operator identity when it is used. Continue?",
+                false,
+            )?
+        {
+            println!("{}", dim_label("Cancelled. No code was issued."));
+            return Ok(());
+        }
+    }
+
+    // One request, never retried: a refusal is the answer.
+    let issued = client
+        .issue_enrollment_code()
+        .id(&deployment.id)
+        .send()
+        .await
+        .into_sdk_error()
+        .await
+        .map_err(enrollment_code_refusal)?
+        .into_inner();
+
+    if json {
+        return print_json(&EnrollmentCodeOutput {
+            deployment_id: &issued.deployment_id,
+            code: &issued.code,
+            expires_at: issued.expires_at,
+            manager_audience: &issued.manager_audience,
+        });
+    }
+
+    let local = issued.expires_at.with_timezone(&chrono::Local);
+    println!(
+        "{}",
+        contextual_heading("Enrollment code", &deployment.name, &[])
+    );
+    println!("{} {}", dim_label("ID"), issued.deployment_id);
+    println!("{} {}", dim_label("Code"), issued.code);
+    println!(
+        "{} {} ({})",
+        dim_label("Expires"),
+        local.format("%Y-%m-%d %H:%M:%S %Z"),
+        relative_expiry(issued.expires_at, chrono::Utc::now())
+    );
+    println!(
+        "{} {}",
+        dim_label("Manager audience"),
+        issued.manager_audience
+    );
+    println!();
+    println!(
+        "{}",
+        enrollment_code_helm_flags(&issued.code, &issued.manager_audience)
+    );
+    println!();
+    println!(
+        "{}",
+        dim_label(
+            "The code works once. Using it replaces the deployment's current Operator identity, so a running Operator stops working."
+        )
+    );
+    Ok(())
+}
+
 async fn retry_deployment_task(
     client: &alien_manager_api::Client,
     reference: &str,
@@ -4250,6 +4449,7 @@ async fn create_deployment_task(
         // Setup reports signing settings; a deployment created here has none.
         signing: None,
         quota_warning_overrides: Vec::new(),
+        endpoint_source_ranges: Vec::new(),
         endpoint_access: network_args
             .endpoint_access
             .map(|access| serde_json::from_value(serde_json::json!(access)))

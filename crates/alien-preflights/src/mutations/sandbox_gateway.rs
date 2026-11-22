@@ -31,7 +31,7 @@ impl StackMutation for SandboxGatewayMutation {
     fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
         matches!(
             state.platform,
-            Platform::Aws | Platform::Kubernetes | Platform::Azure
+            Platform::Aws | Platform::Kubernetes | Platform::Azure | Platform::Gcp
         ) && stack.resources().any(|(_, entry)| {
             entry
                 .config
@@ -82,7 +82,7 @@ impl StackMutation for SandboxGatewayMutation {
         }
         let gateway = Container::new(SANDBOX_EGRESS_GATEWAY_ID.into())
             .code(ContainerCode::Image {
-                image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.into(),
+                image: alien_core::sandbox_egress::installed_gateway_image().into(),
             })
             .cpu(ResourceSpec {
                 min: "0.25".into(),

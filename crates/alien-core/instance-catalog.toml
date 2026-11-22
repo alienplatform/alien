@@ -11,7 +11,8 @@
 #                  `{size}` for an AWS size (`medium`, `large`, `2xlarge`, ...). Defaults to
 #                  `{series}.{size}` on AWS and `{series}-{n}` on GCP; Azure always sets it.
 #   from, to       The smallest and the largest machine to include, by vCPU then memory.
-#                  `to` defaults to the largest one. Bare-metal machines never match.
+#                  `to` defaults to the largest one. Bare-metal machines never match; list
+#                  them in `sizes`.
 #   sizes          Explicit machine names, in place of `pattern`, `from` and `to`.
 #   machine        The provider machine type the `sizes` run on, when the catalog name adds an
 #                  accelerator to it (`n1-standard-4-t4` runs on `n1-standard-4`).
@@ -21,6 +22,7 @@
 #                  series without it. Automatic selection picks from a fixed set of machines, so
 #                  adding a series or a size never changes what an existing stack gets.
 #   nested_virt    Whether the series exposes nested virtualization, with the provider's page.
+#                  On a bare-metal series it means guests get KVM from the hardware.
 #   overrides      Per machine name, values that replace the API's: `memory_gib`,
 #                  `ephemeral_storage_gib` and `nested_virt`. Only machines automatic selection
 #                  may pick can have them: they keep the values existing pools are sized and
@@ -88,6 +90,23 @@ from = "m8i-flex.large"
 to = "m8i-flex.16xlarge"
 nested_virt = true
 
+# The "d" series list their local NVMe, but hosts do not mount it: workload storage is the
+# configurable EBS disk, as on m8i and c8i.
+[[aws.series]]
+series = "m8id"
+category = "GeneralPurpose"
+label = "General purpose · Intel · 8th gen · Local NVMe"
+from = "m8id.large"
+to = "m8id.96xlarge"
+nested_virt = true
+
+[[aws.series]]
+series = "m8id-metal"
+category = "GeneralPurpose"
+label = "General purpose · Intel · 8th gen · Local NVMe · Bare metal"
+sizes = ["m8id.metal-48xl", "m8id.metal-96xl"]
+nested_virt = true
+
 [[aws.series]]
 series = "m8a"
 category = "GeneralPurpose"
@@ -123,6 +142,29 @@ category = "ComputeOptimized"
 label = "Compute optimized · Intel · 8th gen · Flex"
 from = "c8i-flex.large"
 to = "c8i-flex.16xlarge"
+nested_virt = true
+
+# Local NVMe not mounted, as for m8id.
+[[aws.series]]
+series = "c8id"
+category = "ComputeOptimized"
+label = "Compute optimized · Intel · 8th gen · Local NVMe"
+from = "c8id.large"
+to = "c8id.96xlarge"
+nested_virt = true
+
+[[aws.series]]
+series = "c8id-metal"
+category = "ComputeOptimized"
+label = "Compute optimized · Intel · 8th gen · Local NVMe · Bare metal"
+sizes = ["c8id.metal-48xl", "c8id.metal-96xl"]
+nested_virt = true
+
+[[aws.series]]
+series = "c5-metal"
+category = "ComputeOptimized"
+label = "Compute optimized · Intel · 5th gen · Bare metal"
+sizes = ["c5.metal"]
 nested_virt = true
 
 [[aws.series]]

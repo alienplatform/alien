@@ -25,13 +25,13 @@ env:
   SANDBOX_BASE_IMAGE: public.ecr.aws/amazonlinux/amazonlinux:2023
   AGENT_TARGET: aarch64-unknown-linux-musl
   # Fall back to local compilation when the shared sccache backend returns a
-  # transient error (e.g. webdav 403) instead of failing the whole build.
+  # transient error (e.g. an HTTP 403) instead of failing the whole build.
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
 
 jobs:
   egress-deny:
     name: egressDeny is enforced
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     # Makes the OIDC `sub` `repo:OWNER/REPO:environment:egress-deny-guard` whatever branch a
     # manual run starts from, so one trust policy covers the schedule and a deliberate break.
@@ -59,10 +59,8 @@ jobs:
           read -r -a targets <<< "${RUST_TARGETS//$'\n'/ }"
           rustup target add "${targets[@]}"
 
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        continue-on-error: true
-        with:
-          version: v0.16.0
+      - name: Install sccache
+        uses: ./.github/actions/setup-sccache
 
       - uses: taiki-e/install-action@43cb5d9d3c33252b8482ffa34f4e609859a530d8 # cargo-nextest
         with:
@@ -307,7 +305,7 @@ jobs:
   cleanup:
     needs: [egress-deny]
     if: always()
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     environment: egress-deny-guard
     steps:

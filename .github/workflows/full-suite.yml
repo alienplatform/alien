@@ -1,0 +1,114 @@
+name: Full suite
+
+# The whole test suite in one place: every crate's tests, Worker integration, the TypeScript
+# suite, the Node addon builds, the Python bindings (all OS and wheels), the TPM device key
+# and the Kind lifecycle tests. Pull requests run only the fast tier (ci-fast.yml).
+#
+# - Nightly, when main changed since the last green nightly run.
+# - Release qualification calls it (`workflow_call`).
+# - On demand: run it from the Actions tab or with `gh workflow run full-suite.yml -f ref=<sha>`.
+#   `Full suite passed` is reported as a check run on that commit.
+on:
+  schedule:
+    - cron: "11 1 * * *"
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to test (default the triggering commit)
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA to test (default the commit the workflow runs on)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-suite-${{ github.event_name }}-${{ inputs.ref || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  # Skips the scheduled run when main has not changed since this workflow last passed on it.
+  gate:
+    name: Main changed since the last green run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      changed: ${{ steps.gate.outputs.changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: gate
+        uses: ./.github/actions/changed-since-last-success
+
+  tests:
+    name: Tests
+    needs: gate
+    if: needs.gate.outputs.changed == 'true'
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    uses: ./.github/workflows/ci-fast.yml
+    secrets: inherit
+    with:
+      full: true
+      ref: ${{ inputs.ref }}
+
+  kind-lifecycle:
+    name: Kind lifecycle
+    needs: gate
+    if: needs.gate.outputs.changed == 'true'
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    uses: ./.github/workflows/kind-lifecycle.yml
+    secrets: inherit
+    with:
+      ref: ${{ inputs.ref }}
+
+  full-suite-passed:
+    name: Full suite passed
+    if: always()
+    needs: [gate, tests, kind-lifecycle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - name: Verify every part passed
+        env:
+          GATE: ${{ needs.gate.outputs.changed }}
+          RESULTS: ${{ needs.gate.result }} ${{ needs.tests.result }} ${{ needs.kind-lifecycle.result }}
+        run: |
+          if [[ "$GATE" != "true" ]]; then
+            [[ "$RESULTS" == "success skipped skipped" ]] || exit 1
+            echo "main has not changed since the last green nightly run; nothing to check"
+            exit 0
+          fi
+          [[ "$RESULTS" == "success success success" ]] || { echo "::error::A part of the full suite did not pass: $RESULTS"; exit 1; }
+
+      # A run started for another commit (`ref`) reports on that commit, not on the one the
+      # workflow file was read from, so a gate that looks for the check on that commit finds it.
+      - name: Report the result on the tested commit
+        if: always() && inputs.ref != '' && inputs.ref != github.sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref }}
+          RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          conclusion=failure
+          [[ "$RESULT" == "success" ]] && conclusion=success
+          gh api "repos/$GITHUB_REPOSITORY/check-runs" -X POST \
+            -f name="Full suite passed" -f head_sha="$REF" -f status=completed \
+            -f conclusion="$conclusion" -f details_url="$RUN_URL"

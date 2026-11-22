@@ -426,6 +426,9 @@ rules:
             "--kube-as-user=product-installer",
             "--wait",
             "--timeout=2m",
+            // An installer limited to its namespace cannot list StorageClasses, so it turns
+            // off the chart's StorageClass check, as the chart README tells such installers.
+            "--set=runtime.data.persistence.storageClassCheck=false",
             "--set=heartbeat.collection.nodes.enabled=false",
             &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
             &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
@@ -445,6 +448,9 @@ rules:
             "--kube-as-user=product-installer",
             "--wait",
             "--timeout=2m",
+            // An installer limited to its namespace cannot list StorageClasses, so it turns
+            // off the chart's StorageClass check, as the chart README tells such installers.
+            "--set=runtime.data.persistence.storageClassCheck=false",
             "--set=heartbeat.collection.nodes.enabled=false",
             &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
             &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
@@ -1524,6 +1530,9 @@ spec:
             "--kube-as-user=product-installer",
             "--wait",
             "--timeout=2m",
+            // An installer limited to its namespace cannot list StorageClasses, so it turns
+            // off the chart's StorageClass check, as the chart README tells such installers.
+            "--set=runtime.data.persistence.storageClassCheck=false",
             "--set=heartbeat.collection.nodes.enabled=false",
             &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
             &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
@@ -1696,6 +1705,9 @@ spec:
             "--kube-as-user=product-installer",
             "--wait",
             "--timeout=2m",
+            // An installer limited to its namespace cannot list StorageClasses, so it turns
+            // off the chart's StorageClass check, as the chart README tells such installers.
+            "--set=runtime.data.persistence.storageClassCheck=false",
             "--set=heartbeat.collection.nodes.enabled=false",
             &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
             &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
@@ -2721,6 +2733,24 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
         args.push("--set=remoteOperator.enabled=false".to_string());
         args.push("--set=heartbeat.collection.nodes.enabled=false".to_string());
         run_ok("helm", &args, None);
+        if !remote_enabled {
+            // In nodeAgent mode the collector reads its token from the Secret the Operator owns,
+            // and the Operator adds the key when the upgraded pod starts. The runtime fixture is
+            // not an Operator, so the test writes the key the way the Operator would.
+            run_ok(
+                "kubectl",
+                [
+                    "create",
+                    "secret",
+                    "generic",
+                    &format!("{release}-operator"),
+                    "--namespace",
+                    namespace,
+                    "--from-literal=collector-token=collector-upgrade",
+                ],
+                None,
+            );
+        }
         args[0] = "upgrade".to_string();
         args.push(format!("--set=remoteOperator.enabled={remote_enabled}"));
         args.push("--set=logCollector.mode=nodeAgent".to_string());

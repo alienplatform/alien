@@ -94,6 +94,7 @@ function fakeRemoteAddon() {
     preview: async () => {
       throw new Error("unused")
     },
+    linkUrl: () => null,
     pause: async () => {},
     resume: async () => {},
     terminate,

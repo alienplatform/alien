@@ -25,6 +25,7 @@ pub mod model_garden;
 pub mod monitoring;
 pub mod pubsub;
 pub mod resource_manager;
+pub mod sandbox_placement;
 pub mod secret_manager;
 pub mod service_usage;
 pub mod service_usage_quotas;

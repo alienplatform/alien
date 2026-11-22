@@ -29,6 +29,8 @@ pub trait IamApi: Send + Sync + Debug {
         role_name: &str,
         permissions_boundary: &str,
     ) -> Result<()>;
+    async fn delete_role_permissions_boundary(&self, role_name: &str) -> Result<()>;
+    async fn tag_role(&self, role_name: &str, tags: Vec<CreateRoleTag>) -> Result<()>;
     async fn delete_role(&self, role_name: &str) -> Result<()>;
     async fn put_role_policy(
         &self,
@@ -529,6 +531,26 @@ impl IamApi for IamClient {
         let body = Self::build_form_body("PutRolePermissionsBoundary", "2010-05-08", params);
         self.post_no_response(body, "PutRolePermissionsBoundary", role_name)
             .await
+    }
+
+    async fn delete_role_permissions_boundary(&self, role_name: &str) -> Result<()> {
+        let params = vec![("RoleName".to_string(), role_name.to_string())];
+        let body = Self::build_form_body("DeleteRolePermissionsBoundary", "2010-05-08", params);
+        self.post_no_response(body, "DeleteRolePermissionsBoundary", role_name)
+            .await
+    }
+
+    async fn tag_role(&self, role_name: &str, tags: Vec<CreateRoleTag>) -> Result<()> {
+        let mut params = vec![("RoleName".to_string(), role_name.to_string())];
+        for (index, tag) in tags.iter().enumerate() {
+            params.push((format!("Tags.member.{}.Key", index + 1), tag.key.clone()));
+            params.push((
+                format!("Tags.member.{}.Value", index + 1),
+                tag.value.clone(),
+            ));
+        }
+        let body = Self::build_form_body("TagRole", "2010-05-08", params);
+        self.post_no_response(body, "TagRole", role_name).await
     }
 
     async fn delete_role(&self, role_name: &str) -> Result<()> {

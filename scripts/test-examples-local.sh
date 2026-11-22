@@ -32,12 +32,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Use depot cargo when available (CI with Depot Cache); fall back to plain cargo locally
-if command -v depot &>/dev/null; then
-  depot cargo build -p alien-cli --bin alien
-else
-  cargo build -p alien-cli --bin alien
-fi
+cargo build -p alien-cli --bin alien
 
 build_filters=()
 if [[ "${ALIEN_EXAMPLES_REUSE_BUILT_PACKAGES:-}" != "true" ]]; then

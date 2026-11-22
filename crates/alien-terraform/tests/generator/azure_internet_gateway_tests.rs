@@ -1,7 +1,7 @@
 //! The Azure `internet` sandbox's gateway VMs, checked on the rendered module (parsed HCL, not the
 //! emitter's source): the order a setup re-run updates them in, and the VM image pin.
 
-use super::helpers::{prepare_for_target_unchecked, render};
+use super::helpers::{prepare_for_target_unchecked, render, render_with_registry};
 use alien_core::{
     ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
     StackSettings,
@@ -162,4 +162,98 @@ async fn the_gateway_vms_use_a_pinned_ubuntu_image() {
         assert!(!version.contains("latest"), "{version}");
         assert!(version.contains("24.04."), "{version}");
     }
+}
+
+/// Compute clusters are rendered by a platform extension; their own resources are not what the
+/// link test is about, so this stands in for it with nothing.
+struct NoComputeCluster;
+
+impl alien_terraform::TfEmitter for NoComputeCluster {
+    fn emit(
+        &self,
+        _ctx: &alien_core::import::EmitContext<'_>,
+    ) -> alien_core::Result<alien_terraform::TfFragment> {
+        Ok(alien_terraform::TfFragment::default())
+    }
+
+    fn emit_import_ref(
+        &self,
+        _ctx: &alien_core::import::EmitContext<'_>,
+    ) -> alien_core::Result<hcl::expr::Expression> {
+        Ok(hcl::expr::Expression::Null)
+    }
+}
+
+/// Links change no setup module on Azure: no network rule or permission is added for them, so a
+/// sandbox that links a container renders exactly the module it renders without the link.
+#[tokio::test]
+async fn a_linked_sandbox_renders_the_same_module() {
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "registry.example/agents:1".to_string(),
+            bundled_from: None,
+        })
+        .egress(SandboxEgress::Internet)
+        .lifecycle(SandboxLifecyclePolicy::default())
+        .build();
+    let api = alien_core::Container::new("api".to_string())
+        .code(alien_core::ContainerCode::Image {
+            image: "registry.example/api:1".to_string(),
+        })
+        .cpu(alien_core::ResourceSpec {
+            min: "0.25".to_string(),
+            desired: "0.25".to_string(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "512Mi".to_string(),
+            desired: "512Mi".to_string(),
+        })
+        .replicas(1)
+        .permissions("execution".to_string())
+        .port(8080)
+        .build();
+    let stack = Stack::new("azint".to_string())
+        .permission("execution", alien_core::PermissionProfile::new())
+        .add(sandbox, ResourceLifecycle::Frozen)
+        .add(api, ResourceLifecycle::Live)
+        .build();
+    let prepared = prepare_for_target_unchecked(stack, TerraformTarget::Azure).await;
+    let mut linked = prepared.clone();
+    linked
+        .resources
+        .get_mut("agents")
+        .expect("sandbox")
+        .config
+        .downcast_mut::<Sandbox>()
+        .expect("sandbox config")
+        .gateway_links = vec![alien_core::ResourceRef::new(
+        alien_core::Container::RESOURCE_TYPE,
+        "api",
+    )];
+    let mut registry = alien_terraform::TfRegistry::built_in();
+    registry.register(
+        alien_core::ComputeCluster::RESOURCE_TYPE,
+        alien_core::Platform::Azure,
+        NoComputeCluster,
+    );
+    let files = |stack: &Stack| -> Vec<(String, String)> {
+        render_with_registry(
+            stack,
+            TerraformTarget::Azure,
+            StackSettings::default(),
+            &registry,
+        )
+        .expect("module renders")
+        .iter()
+        .map(|(path, contents)| (path.to_string(), contents.to_string()))
+        .collect()
+    };
+    let plain = files(&prepared);
+    assert!(
+        plain
+            .iter()
+            .any(|(_, contents)| contents.contains("azurerm_network_security_group")),
+        "the module renders the deployment network"
+    );
+    assert_eq!(plain, files(&linked));
 }

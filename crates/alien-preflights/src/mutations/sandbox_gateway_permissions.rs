@@ -173,6 +173,64 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
     Ok(())
 }
 
+/// On Google Cloud the gateway VMs get their vault reads from setup, outside any profile. A
+/// workload that creates or updates internet sandboxes signs their gateway policy with the
+/// deployment's signing key, so a profile holding the built-in `sandbox/management` on such a
+/// sandbox gets an exact read of that one Secret Manager secret, and nothing else in the vault.
+pub(crate) fn configure_gcp_gateway_permissions(stack: &mut Stack) -> Result<()> {
+    let sandboxes: std::collections::HashSet<_> = stack
+        .resources()
+        .filter_map(|(id, entry)| {
+            entry
+                .config
+                .downcast_ref::<alien_core::Sandbox>()
+                .filter(|sandbox| matches!(sandbox.egress, alien_core::SandboxEgress::Internet))
+                .map(|_| id.clone())
+        })
+        .collect();
+    if sandboxes.is_empty() {
+        return Ok(());
+    }
+    let set = gcp_exact_read(SIGNING_KEY)?;
+    for profile in stack.permissions.profiles.values_mut() {
+        if profile.0.iter().any(|(target, sets)| {
+            (target == "*" || sandboxes.contains(target))
+                && sets.iter().any(grants_sandbox_management)
+        }) {
+            let grants = profile.0.entry(SECRETS_VAULT_ID.into()).or_default();
+            if !grants.iter().any(|existing| existing.id() == set.id) {
+                grants.push(PermissionSetReference::from_inline(set.clone()));
+            }
+        }
+    }
+    Ok(())
+}
+
+const SIGNING_KEY: &str = "sandbox-egress-signing-key";
+
+/// Read access to the versions of one Secret Manager secret of the vault, by its exact name.
+fn gcp_exact_read(key: &str) -> Result<PermissionSet> {
+    let secret = alien_core::vault_naming::secret_manager_secret_id("${resourceName}", key);
+    serde_json::from_value(serde_json::json!({
+        "id": format!("vault/{key}-read"),
+        "description": format!("Read only the {key} vault entry"),
+        "platforms": {"gcp": [{
+            "grant": {"predefinedRoles": ["roles/secretmanager.secretAccessor"]},
+            "binding": {"resource": {
+                "scope": "projects/${projectName}",
+                "condition": {
+                    "title": "SandboxEgressSigningKeyRead",
+                    "expression": format!(
+                        "resource.name.startsWith(\"projects/${{projectNumber}}/secrets/{secret}/\")"
+                    )
+                }
+            }}
+        }]}
+    }))
+    .into_alien_error()
+    .context(invalid("Failed to construct exact sandbox vault-entry permissions"))
+}
+
 /// The managing identity's only read in the AWS secrets vault: the gateway configuration. The
 /// shared-key owner reads it back only when the configuration it publishes changed, to carry the
 /// gateway's replica secret into the new value. Everything else in the vault, the signing key

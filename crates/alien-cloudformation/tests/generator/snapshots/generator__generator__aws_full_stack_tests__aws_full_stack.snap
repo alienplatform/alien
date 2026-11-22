@@ -1321,6 +1321,7 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
           Sid: CheckSqsQueueHealth
         - Action:
+          - ssm:AddTagsToResource
           - ssm:DeleteParameter
           - ssm:PutParameter
           Effect: Allow
@@ -2024,6 +2025,7 @@ Resources:
             Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-secrets-*
           Sid: WriteSsmParameters
           Action:
+          - ssm:AddTagsToResource
           - ssm:DeleteParameter
           - ssm:PutParameter
       Roles:

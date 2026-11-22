@@ -142,8 +142,11 @@ pub struct InstanceTypeSpec {
     pub machine_type: &'static str,
     /// GPU specification (for GPU instances)
     pub gpu: Option<CatalogGpu>,
-    /// Whether the machine exposes nested virtualization (VT-x/EPT) to guest VMs.
+    /// Whether the machine exposes nested virtualization (VT-x/EPT) to guest VMs. On bare
+    /// metal, guests get KVM from the hardware instead.
     pub nested_virt: bool,
+    /// Whether the machine is a bare-metal host rather than a virtual machine.
+    pub bare_metal: bool,
     /// Whether automatic selection may pick the machine. The set is fixed so that adding a
     /// machine to the catalog never changes what an existing stack gets; any other machine is
     /// used only when someone chooses it.
@@ -1894,9 +1897,23 @@ mod tests {
     }
 
     #[test]
-    fn catalog_lists_no_bare_metal_machine() {
+    fn bare_metal_rows_run_vms_and_are_never_picked_automatically() {
+        let metal: Vec<_> = CATALOG.iter().filter(|spec| spec.bare_metal).collect();
+        assert_eq!(
+            metal.iter().map(|spec| spec.name).collect::<Vec<_>>(),
+            [
+                "m8id.metal-48xl",
+                "m8id.metal-96xl",
+                "c8id.metal-48xl",
+                "c8id.metal-96xl",
+                "c5.metal",
+            ]
+        );
         for spec in CATALOG {
-            assert!(!spec.name.contains("metal"), "{}", spec.name);
+            assert_eq!(spec.bare_metal, spec.name.contains(".metal"), "{}", spec.name);
+        }
+        for spec in metal {
+            assert!(spec.nested_virt && !spec.auto_select, "{}", spec.name);
         }
     }
 

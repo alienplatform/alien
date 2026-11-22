@@ -242,6 +242,14 @@ fn gke_overlay_emits_workload_identity_binding() {
         .build();
     let module = render(&stack, TerraformTarget::Gke, StackSettings::default());
     snapshot_module("gke_overlay_workload_identity", &module);
+    // This module has no `helm_install_enabled` variable, so its README must not name it.
+    let readme = module.get("README.md").expect("README.md");
+    assert!(!module
+        .get("variables.tf")
+        .is_some_and(|v| v.contains("helm_install_enabled")));
+    assert!(!readme.contains("helm_install_enabled"));
+    assert!(readme.contains("Follow these steps in order:"));
+    assert!(readme.contains("the same values you used for the original install"));
     assert_terraform_valid(&module, "gke_overlay_workload_identity");
 }
 
@@ -1151,7 +1159,7 @@ fn destroy_guard_is_the_only_change_between_old_and_new_registered_modules() {
         assert!(old
             .iter()
             .all(|(_, contents)| !contents.contains("destroy_guard")
-                && !contents.contains("teardown-required")));
+                && !contents.contains("`terraform destroy` stops first")));
     }
 }
 
@@ -1198,6 +1206,14 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
         false,
     )
     .expect("module should render");
+
+    // The module has the `helm_values` output, so the README's recovery step reads it.
+    let readme = module.get("README.md").expect("README.md");
+    assert!(readme.contains(
+        "Install the chart again with the values from `terraform output -raw helm_values`"
+    ));
+    assert!(!readme.contains("the same values you used for the original install"));
+    snapshot_module("eks_registered_helm_values_output", &module);
 
     let locals = module
         .get("locals.tf")
@@ -3443,5 +3459,98 @@ fn the_modules_that_install_the_chart_are_formatted_and_valid() {
             super::helpers::test_utils::terraform_validate(&files)
                 .assert_ok(format!("{context} terraform validate"));
         }
+    }
+}
+
+/// A Kubernetes module that sets up vaults carries the erase helper for exactly those vaults,
+/// and the README puts it between the delete and `terraform destroy`. Cloud modules and
+/// modules without a vault carry none.
+#[test]
+fn kubernetes_modules_with_vaults_carry_the_erase_helper_for_their_own_vaults() {
+    let stack = |with_vaults: bool| {
+        let mut builder = Stack::new("erase-helper".to_string()).add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        );
+        if with_vaults {
+            for id in ["secrets", "secrets-x", "deployer-secrets"] {
+                builder = builder.add(
+                    Vault::new(id.to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                );
+            }
+        }
+        builder.build()
+    };
+    for (target, cloud, store) in [
+        (TerraformTarget::Gke, "gcp", "GCP Secret Manager"),
+        (TerraformTarget::Eks, "aws", "AWS SSM Parameter Store"),
+        (TerraformTarget::Aks, "azure", "Key Vault Secrets Officer"),
+    ] {
+        let module = render(&stack(true), target, StackSettings::default());
+        let config: serde_json::Value =
+            serde_json::from_str(module.get("erase-vault-data.json").expect("config")).unwrap();
+        let mut expected = serde_json::json!({
+            "version": 1,
+            "cloud": cloud,
+            "vault_ids": ["secrets", "secrets-x"],
+            "deployer_secrets_vault_id": "deployer-secrets",
+        });
+        if target == TerraformTarget::Aks {
+            // The exact Terraform address of each Key Vault, as the module declares it.
+            for (id, label) in [
+                ("secrets", "secrets"),
+                ("secrets-x", "secrets_x"),
+                ("deployer-secrets", "deployer_secrets"),
+            ] {
+                let address = format!("azurerm_key_vault.{label}");
+                let declaration = format!("resource \"azurerm_key_vault\" \"{label}\"");
+                assert!(
+                    module
+                        .iter()
+                        .any(|(_, contents)| contents.contains(&declaration)),
+                    "{declaration} is not declared by the module"
+                );
+                expected["azure_key_vaults"][id] = address.into();
+            }
+        }
+        assert_eq!(config, expected, "{target:?}");
+        assert_eq!(
+            module.get("erase-vault-data.py").unwrap(),
+            include_str!("../../src/templates/erase-vault-data.py")
+        );
+        let readme = module.get("README.md").unwrap();
+        assert!(readme.contains(store), "{target:?}\n{readme}");
+        assert!(
+            readme.contains("run `erase-vault-data.py` after the delete finishes and before `terraform destroy`"),
+            "{target:?}"
+        );
+        assert!(readme.contains("--confirm"));
+        if target != TerraformTarget::Aks {
+            // A child module's root may not forward the prefix output.
+            assert!(
+                readme.contains("--module-address 'module.<name>' --resource-prefix <prefix>"),
+                "{target:?}"
+            );
+        }
+        if target == TerraformTarget::Aks {
+            assert!(readme.contains("--include-deployer-secrets"));
+            assert!(readme.contains("purge_blocked_until"));
+            assert!(!readme.contains("never deletes any"));
+        } else {
+            assert!(readme.contains("--include-unmarked"));
+            assert!(readme.contains("Values written before this module version carry no marker"));
+        }
+
+        let without = render(&stack(false), target, StackSettings::default());
+        assert!(without.get("erase-vault-data.py").is_none(), "{target:?}");
+        assert!(!without
+            .get("README.md")
+            .unwrap()
+            .contains("erase-vault-data.py"));
+    }
+    for target in [TerraformTarget::Gcp, TerraformTarget::Aws] {
+        let module = render(&stack(true), target, StackSettings::default());
+        assert!(module.get("erase-vault-data.py").is_none(), "{target:?}");
     }
 }

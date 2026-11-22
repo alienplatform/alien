@@ -19,6 +19,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "t4g.micro",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -35,6 +36,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "t4g.small",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -51,6 +53,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "t4g.medium",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -67,6 +70,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "t4g.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -83,6 +87,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "t4g.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -99,6 +104,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "t4g.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -115,6 +121,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "t3.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -131,6 +138,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "t3.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -147,6 +155,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7g.medium",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -163,6 +172,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7g.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -179,6 +189,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7g.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -195,6 +206,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7g.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -211,6 +223,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7g.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -227,6 +240,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7g.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -243,6 +257,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7g.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -259,6 +274,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7g.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -275,6 +291,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8g.medium",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -291,6 +308,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8g.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -307,6 +325,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8g.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -323,6 +342,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8g.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -339,6 +359,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8g.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -355,6 +376,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8g.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -371,6 +393,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8g.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -387,6 +410,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8g.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -403,6 +427,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8g.24xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -419,6 +444,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8g.48xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -435,6 +461,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7i.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -451,6 +478,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7i.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -467,6 +495,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7i.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -483,6 +512,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7i.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -499,6 +529,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7i.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -515,6 +546,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7i.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -531,6 +563,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7i.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -547,6 +580,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7i.24xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -563,6 +597,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m7i.48xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -579,6 +614,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i.large",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -595,6 +631,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i.xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -611,6 +648,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i.2xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -627,6 +665,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i.4xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -643,6 +682,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i.8xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -659,6 +699,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i.12xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -675,6 +716,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i.16xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -691,6 +733,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i.24xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -707,6 +750,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i.32xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -723,6 +767,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i.48xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -739,6 +784,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i.96xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -755,6 +801,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i-flex.large",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -771,6 +818,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i-flex.xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -787,6 +835,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i-flex.2xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -803,6 +852,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i-flex.4xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -819,6 +869,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i-flex.8xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -835,6 +886,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i-flex.12xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -851,6 +903,228 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8i-flex.16xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.large",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id",
+        label: "General purpose · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 2,
+        memory_bytes: 8 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 112533 * MI,
+        machine_type: "m8id.large",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id",
+        label: "General purpose · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 4,
+        memory_bytes: 16 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 226020 * MI,
+        machine_type: "m8id.xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.2xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id",
+        label: "General purpose · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 8,
+        memory_bytes: 32 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 452041 * MI,
+        machine_type: "m8id.2xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.4xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id",
+        label: "General purpose · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 16,
+        memory_bytes: 64 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 905990 * MI,
+        machine_type: "m8id.4xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.8xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id",
+        label: "General purpose · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 32,
+        memory_bytes: 128 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 1811981 * MI,
+        machine_type: "m8id.8xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.12xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id",
+        label: "General purpose · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 48,
+        memory_bytes: 192 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 2717971 * MI,
+        machine_type: "m8id.12xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.16xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id",
+        label: "General purpose · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 64,
+        memory_bytes: 256 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 3623962 * MI,
+        machine_type: "m8id.16xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.24xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id",
+        label: "General purpose · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 96,
+        memory_bytes: 384 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 5435943 * MI,
+        machine_type: "m8id.24xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.32xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id",
+        label: "General purpose · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 128,
+        memory_bytes: 512 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 7247924 * MI,
+        machine_type: "m8id.32xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.48xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id",
+        label: "General purpose · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 192,
+        memory_bytes: 768 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 10871887 * MI,
+        machine_type: "m8id.48xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.96xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id",
+        label: "General purpose · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 384,
+        memory_bytes: 1536 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 21743774 * MI,
+        machine_type: "m8id.96xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.metal-48xl",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id-metal",
+        label: "General purpose · Intel · 8th gen · Local NVMe · Bare metal",
+        architecture: Architecture::X86_64,
+        vcpu: 192,
+        memory_bytes: 768 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 10871887 * MI,
+        machine_type: "m8id.metal-48xl",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: true,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "m8id.metal-96xl",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        series: "m8id-metal",
+        label: "General purpose · Intel · 8th gen · Local NVMe · Bare metal",
+        architecture: Architecture::X86_64,
+        vcpu: 384,
+        memory_bytes: 1536 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 21743774 * MI,
+        machine_type: "m8id.metal-96xl",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: true,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -867,6 +1141,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8a.medium",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -883,6 +1158,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8a.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -899,6 +1175,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8a.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -915,6 +1192,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8a.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -931,6 +1209,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8a.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -947,6 +1226,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8a.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -963,6 +1243,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8a.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -979,6 +1260,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8a.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -995,6 +1277,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8a.24xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1011,6 +1294,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "m8a.48xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1027,6 +1311,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c7g.medium",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1043,6 +1328,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c7g.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1059,6 +1345,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c7g.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1075,6 +1362,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c7g.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1091,6 +1379,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c7g.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1107,6 +1396,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c7g.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1123,6 +1413,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c7g.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1139,6 +1430,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c7g.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1155,6 +1447,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8g.medium",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1171,6 +1464,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8g.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1187,6 +1481,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8g.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1203,6 +1498,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8g.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1219,6 +1515,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8g.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1235,6 +1532,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8g.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1251,6 +1549,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8g.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1267,6 +1566,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8g.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1283,6 +1583,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8g.24xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1299,6 +1600,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8g.48xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1315,6 +1617,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i.large",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1331,6 +1634,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i.xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1347,6 +1651,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i.2xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1363,6 +1668,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i.4xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1379,6 +1685,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i.8xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1395,6 +1702,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i.12xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1411,6 +1719,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i.16xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1427,6 +1736,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i.24xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1443,6 +1753,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i.32xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1459,6 +1770,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i.48xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1475,6 +1787,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i.96xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1491,6 +1804,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i-flex.large",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1507,6 +1821,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i-flex.xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1523,6 +1838,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i-flex.2xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1539,6 +1855,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i-flex.4xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1555,6 +1872,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i-flex.8xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1571,6 +1889,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i-flex.12xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1587,6 +1906,245 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8i-flex.16xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.large",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 2,
+        memory_bytes: 4 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 112533 * MI,
+        machine_type: "c8id.large",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 4,
+        memory_bytes: 8 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 226020 * MI,
+        machine_type: "c8id.xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.2xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 8,
+        memory_bytes: 16 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 452041 * MI,
+        machine_type: "c8id.2xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.4xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 16,
+        memory_bytes: 32 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 905990 * MI,
+        machine_type: "c8id.4xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.8xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 32,
+        memory_bytes: 64 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 1811981 * MI,
+        machine_type: "c8id.8xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.12xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 48,
+        memory_bytes: 96 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 2717971 * MI,
+        machine_type: "c8id.12xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.16xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 64,
+        memory_bytes: 128 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 3623962 * MI,
+        machine_type: "c8id.16xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.24xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 96,
+        memory_bytes: 192 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 5435943 * MI,
+        machine_type: "c8id.24xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.32xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 128,
+        memory_bytes: 256 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 7247924 * MI,
+        machine_type: "c8id.32xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.48xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 192,
+        memory_bytes: 384 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 10871887 * MI,
+        machine_type: "c8id.48xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.96xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe",
+        architecture: Architecture::X86_64,
+        vcpu: 384,
+        memory_bytes: 768 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 21743774 * MI,
+        machine_type: "c8id.96xlarge",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: false,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.metal-48xl",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id-metal",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe · Bare metal",
+        architecture: Architecture::X86_64,
+        vcpu: 192,
+        memory_bytes: 384 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 10871887 * MI,
+        machine_type: "c8id.metal-48xl",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: true,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c8id.metal-96xl",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c8id-metal",
+        label: "Compute optimized · Intel · 8th gen · Local NVMe · Bare metal",
+        architecture: Architecture::X86_64,
+        vcpu: 384,
+        memory_bytes: 768 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 21743774 * MI,
+        machine_type: "c8id.metal-96xl",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: true,
+        auto_select: false,
+    },
+    InstanceTypeSpec {
+        name: "c5.metal",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        series: "c5-metal",
+        label: "Compute optimized · Intel · 5th gen · Bare metal",
+        architecture: Architecture::X86_64,
+        vcpu: 96,
+        memory_bytes: 192 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        local_disk_bytes: 0,
+        machine_type: "c5.metal",
+        gpu: None,
+        nested_virt: true,
+        bare_metal: true,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1603,6 +2161,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8a.medium",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1619,6 +2178,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8a.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1635,6 +2195,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8a.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1651,6 +2212,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8a.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1667,6 +2229,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8a.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1683,6 +2246,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8a.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1699,6 +2263,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8a.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1715,6 +2280,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8a.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1731,6 +2297,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8a.24xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1747,6 +2314,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c8a.48xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1763,6 +2331,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7g.medium",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1779,6 +2348,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7g.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1795,6 +2365,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7g.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1811,6 +2382,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7g.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1827,6 +2399,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7g.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -1843,6 +2416,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7g.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1859,6 +2433,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7g.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1875,6 +2450,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7g.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1891,6 +2467,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8g.medium",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1907,6 +2484,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8g.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1923,6 +2501,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8g.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1939,6 +2518,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8g.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1955,6 +2535,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8g.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1971,6 +2552,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8g.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -1987,6 +2569,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8g.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2003,6 +2586,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8g.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2019,6 +2603,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8g.24xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2035,6 +2620,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8g.48xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2051,6 +2637,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r6a.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -2067,6 +2654,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r6a.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -2083,6 +2671,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r6a.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -2099,6 +2688,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r6a.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -2115,6 +2705,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r6a.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2131,6 +2722,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r6a.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2147,6 +2739,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r6a.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2163,6 +2756,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r6a.24xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2179,6 +2773,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r6a.32xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2195,6 +2790,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r6a.48xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2211,6 +2807,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7i.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -2227,6 +2824,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7i.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -2243,6 +2841,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7i.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -2259,6 +2858,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7i.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -2275,6 +2875,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7i.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2291,6 +2892,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7i.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2307,6 +2909,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7i.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2323,6 +2926,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7i.24xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2339,6 +2943,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r7i.48xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2355,6 +2960,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i.large",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2371,6 +2977,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i.xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2387,6 +2994,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i.2xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2403,6 +3011,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i.4xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2419,6 +3028,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i.8xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2435,6 +3045,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i.12xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2451,6 +3062,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i.16xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2467,6 +3079,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i.24xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2483,6 +3096,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i.32xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2499,6 +3113,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i.48xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2515,6 +3130,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i.96xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2531,6 +3147,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i-flex.large",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2547,6 +3164,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i-flex.xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2563,6 +3181,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i-flex.2xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2579,6 +3198,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i-flex.4xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2595,6 +3215,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i-flex.8xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2611,6 +3232,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i-flex.12xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2627,6 +3249,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8i-flex.16xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2643,6 +3266,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8a.medium",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2659,6 +3283,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8a.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2675,6 +3300,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8a.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2691,6 +3317,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8a.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2707,6 +3334,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8a.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2723,6 +3351,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8a.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2739,6 +3368,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8a.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2755,6 +3385,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8a.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2771,6 +3402,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8a.24xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2787,6 +3419,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "r8a.48xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2803,6 +3436,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i4i.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -2819,6 +3453,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i4i.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -2835,6 +3470,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i4i.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -2851,6 +3487,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i4i.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -2867,6 +3504,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i4i.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2883,6 +3521,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i4i.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2899,6 +3538,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i4i.24xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2915,6 +3555,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i4i.32xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2931,6 +3572,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i7i.large",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2947,6 +3589,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i7i.xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2963,6 +3606,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i7i.2xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2979,6 +3623,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i7i.4xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -2995,6 +3640,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i7i.8xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3011,6 +3657,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i7i.12xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3027,6 +3674,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i7i.16xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3043,6 +3691,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i7i.24xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3059,6 +3708,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i7i.48xlarge",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3075,6 +3725,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i8g.large",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3091,6 +3742,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i8g.xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3107,6 +3759,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i8g.2xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3123,6 +3776,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i8g.4xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3139,6 +3793,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i8g.8xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3155,6 +3810,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i8g.12xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3171,6 +3827,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i8g.16xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3187,6 +3844,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i8g.24xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3203,6 +3861,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "i8g.48xlarge",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3222,6 +3881,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
             count: 1,
         }),
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3241,6 +3901,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
             count: 1,
         }),
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3260,6 +3921,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
             count: 8,
         }),
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3279,6 +3941,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
             count: 8,
         }),
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3295,6 +3958,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "e2-micro",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3311,6 +3975,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "e2-small",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3327,6 +3992,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "e2-medium",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3343,6 +4009,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-standard-2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3359,6 +4026,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-standard-4",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3375,6 +4043,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-standard-8",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3391,6 +4060,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-standard-16",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3407,6 +4077,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-standard-32",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3423,6 +4094,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-standard-48",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3439,6 +4111,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-standard-64",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3455,6 +4128,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-standard-80",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3471,6 +4145,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-standard-96",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3487,6 +4162,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-standard-128",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3503,6 +4179,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-standard-2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3519,6 +4196,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-standard-4",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3535,6 +4213,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-standard-8",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3551,6 +4230,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-standard-16",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3567,6 +4247,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-standard-32",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3583,6 +4264,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-standard-48",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3599,6 +4281,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-standard-64",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3615,6 +4298,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-standard-80",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3631,6 +4315,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c3-standard-4",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3647,6 +4332,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c3-standard-8",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -3663,6 +4349,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c3-standard-22",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3679,6 +4366,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c3-standard-44",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3695,6 +4383,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c3-standard-88",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3711,6 +4400,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c3-standard-176",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3727,6 +4417,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-standard-2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3743,6 +4434,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-standard-4",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3759,6 +4451,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-standard-8",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3775,6 +4468,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-standard-16",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3791,6 +4485,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-standard-24",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3807,6 +4502,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-standard-32",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3823,6 +4519,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-standard-48",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3839,6 +4536,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-standard-96",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3855,6 +4553,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-standard-144",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3871,6 +4570,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-standard-192",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3887,6 +4587,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-standard-288",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3903,6 +4604,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highcpu-2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3919,6 +4621,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highcpu-4",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3935,6 +4638,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highcpu-8",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3951,6 +4655,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highcpu-16",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3967,6 +4672,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highcpu-24",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3983,6 +4689,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highcpu-32",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -3999,6 +4706,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highcpu-48",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4015,6 +4723,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highcpu-96",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4031,6 +4740,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highcpu-144",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4047,6 +4757,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highcpu-192",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4063,6 +4774,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highcpu-288",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4079,6 +4791,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highcpu-2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4095,6 +4808,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highcpu-4",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4111,6 +4825,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highcpu-8",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4127,6 +4842,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highcpu-16",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4143,6 +4859,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highcpu-32",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4159,6 +4876,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highcpu-48",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4175,6 +4893,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highcpu-64",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4191,6 +4910,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highcpu-80",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4207,6 +4927,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-highmem-2",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4223,6 +4944,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-highmem-4",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4239,6 +4961,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-highmem-8",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4255,6 +4978,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-highmem-16",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4271,6 +4995,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-highmem-32",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4287,6 +5012,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-highmem-48",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4303,6 +5029,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-highmem-64",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4319,6 +5046,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-highmem-80",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4335,6 +5063,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-highmem-96",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4351,6 +5080,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n2-highmem-128",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4367,6 +5097,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highmem-2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4383,6 +5114,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highmem-4",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4399,6 +5131,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highmem-8",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4415,6 +5148,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highmem-16",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4431,6 +5165,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highmem-32",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4447,6 +5182,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highmem-48",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4463,6 +5199,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highmem-64",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4479,6 +5216,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "n4-highmem-80",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4495,6 +5233,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highmem-2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4511,6 +5250,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highmem-4",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4527,6 +5267,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highmem-8",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4543,6 +5284,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highmem-16",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4559,6 +5301,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highmem-24",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4575,6 +5318,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highmem-32",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4591,6 +5335,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highmem-48",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4607,6 +5352,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highmem-96",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4623,6 +5369,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highmem-144",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4639,6 +5386,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highmem-192",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4655,6 +5403,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c4-highmem-288",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4671,6 +5420,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c3d-standard-8",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4687,6 +5437,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c3d-standard-16",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4703,6 +5454,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "c3d-standard-30",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4722,6 +5474,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
             count: 1,
         }),
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4741,6 +5494,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
             count: 1,
         }),
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4760,6 +5514,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
             count: 8,
         }),
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4779,6 +5534,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
             count: 8,
         }),
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4795,6 +5551,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_B1s",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4811,6 +5568,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_B2s",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4827,6 +5585,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_B2ms",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4843,6 +5602,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_B4ms",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4859,6 +5619,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D2s_v4",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4875,6 +5636,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D2s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4891,6 +5653,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D4s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4907,6 +5670,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D8s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4923,6 +5687,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D16s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -4939,6 +5704,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D32s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4955,6 +5721,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D48s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4971,6 +5738,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D64s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -4987,6 +5755,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D96s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5003,6 +5772,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D2s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5019,6 +5789,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D4s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5035,6 +5806,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D8s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5051,6 +5823,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D16s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5067,6 +5840,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D32s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5083,6 +5857,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D48s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5099,6 +5874,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D64s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5115,6 +5891,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D96s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5131,6 +5908,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D128s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5147,6 +5925,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D192s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5163,6 +5942,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D2as_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5179,6 +5959,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D4as_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5195,6 +5976,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D8as_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5211,6 +5993,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D16as_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5227,6 +6010,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D32as_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5243,6 +6027,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D48as_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5259,6 +6044,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D64as_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5275,6 +6061,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D96as_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5291,6 +6078,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_F2s_v2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5307,6 +6095,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_F4s_v2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5323,6 +6112,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_F8s_v2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5339,6 +6129,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_F16s_v2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5355,6 +6146,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_F32s_v2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5371,6 +6163,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_F48s_v2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5387,6 +6180,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_F64s_v2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5403,6 +6197,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_F72s_v2",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5419,6 +6214,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E2s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5435,6 +6231,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E4s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5451,6 +6248,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E8s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5467,6 +6265,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E16s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5483,6 +6282,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E20s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5499,6 +6299,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E32s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5515,6 +6316,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E48s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5531,6 +6333,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E64s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5547,6 +6350,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E96s_v5",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5563,6 +6367,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E2s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5579,6 +6384,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E4s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5595,6 +6401,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E8s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5611,6 +6418,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E16s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5627,6 +6435,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E20s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5643,6 +6452,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E32s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5659,6 +6469,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E48s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5675,6 +6486,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E64s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5691,6 +6503,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E96s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5707,6 +6520,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_E128s_v6",
         gpu: None,
         nested_virt: true,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5723,6 +6537,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_L8s_v3",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5739,6 +6554,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_L16s_v3",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5755,6 +6571,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_L32s_v3",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5771,6 +6588,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_L48s_v3",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5787,6 +6605,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_L64s_v3",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5803,6 +6622,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_L80s_v3",
         gpu: None,
         nested_virt: false,
+        bare_metal: false,
         auto_select: false,
     },
     InstanceTypeSpec {
@@ -5822,6 +6642,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
             count: 1,
         }),
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5841,6 +6662,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
             count: 1,
         }),
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5860,6 +6682,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
             count: 4,
         }),
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
     InstanceTypeSpec {
@@ -5879,6 +6702,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
             count: 8,
         }),
         nested_virt: false,
+        bare_metal: false,
         auto_select: true,
     },
 ];

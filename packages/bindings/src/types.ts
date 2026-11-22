@@ -703,6 +703,13 @@ export interface Sandbox {
   /** Mints an authenticated preview of a port the sandbox declares. Requires `preview`. */
   preview(sandboxId: string, port: number): Promise<SandboxPreview>
   /**
+   * Internal URL of linked service `id` on `port`, as this resource's sandboxes reach it through
+   * the egress gateway, or `null` when the resource does not link `id` or the service does not
+   * serve `port`. Every command the sandboxes run receives the same binding as
+   * `ALIEN_<ID>_BINDING`.
+   */
+  linkUrl(id: string, port: number): Promise<string | null>
+  /**
    * Pauses a sandbox, preserving state. Requires `pauseResume`.
    *
    * A command already running is frozen with the guest rather than drained or stopped, and its own

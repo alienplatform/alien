@@ -481,3 +481,109 @@ fn management_boundary_deny_overrides_allows_without_affecting_setup_or_siblings
         }
     }
 }
+
+/// Direct setup writes the sandbox egress gateway's role as the template setups do: unbounded and
+/// tagged `managed-by=setup`. Every call it makes on that role, including retagging and removing
+/// the boundary from a role an earlier direct setup created bounded and tagged
+/// `managed-by=runtime`, must be allowed by the setup policy, and only on this stack's role.
+#[test]
+fn setup_writes_and_migrates_the_unbounded_sandbox_gateway_role() {
+    let setup = generate_aws_initial_setup_policy(
+        &common::create_test_context().with_aws_permissions_boundary_arn(BOUNDARY),
+    )
+    .unwrap()
+    .statement;
+    const ROLE: &str = "arn:aws:iam::123456789012:role/my-stack-sandbox-egress-gateway-sa";
+    let setup_tags: &[(&str, &str)] = &[
+        ("deployment", "my-stack"),
+        ("managed-by", "setup"),
+        ("resource", "sandbox-egress-gateway-sa"),
+        ("resource-type", "service-account"),
+    ];
+    let earlier_tags: &[(&str, &str)] = &[
+        ("deployment", "my-stack"),
+        ("managed-by", "runtime"),
+        ("resource", "sandbox-egress-gateway-sa"),
+    ];
+
+    let mut allowed = vec![
+        // Create, unbounded, with the setup tags.
+        Request::new("iam:CreateRole", ROLE).request_tags(setup_tags),
+        Request::new("iam:TagRole", ROLE).request_tags(setup_tags),
+        // Migration of an earlier direct setup's role: retag, then remove the boundary.
+        Request::new("iam:TagRole", ROLE)
+            .request_tags(setup_tags)
+            .resource_tags(earlier_tags),
+        Request::new("iam:DeleteRolePermissionsBoundary", ROLE)
+            .resource_tags(setup_tags)
+            .with("iam:PermissionsBoundary", BOUNDARY),
+        Request::new("iam:DeleteRolePermissionsBoundary", ROLE)
+            .resource_tags(earlier_tags)
+            .with("iam:PermissionsBoundary", BOUNDARY),
+        Request::new("iam:GetRole", ROLE).resource_tags(setup_tags),
+        Request::new("iam:ListRolePolicies", ROLE).resource_tags(setup_tags),
+        Request::new("iam:ListAttachedRolePolicies", ROLE).resource_tags(setup_tags),
+    ];
+    // Trust, grants (the stack policy and the vault's config read) and delete.
+    for action in [
+        "iam:UpdateAssumeRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:DeleteRole",
+    ] {
+        allowed.push(Request::new(action, ROLE).resource_tags(setup_tags));
+    }
+    let denied: Vec<_> = allowed
+        .iter()
+        .filter(|call| evaluate(&setup, call) != Decision::Allowed)
+        .map(|call| {
+            format!(
+                "{} on {} with {:?}",
+                call.action, call.resource, call.context
+            )
+        })
+        .collect();
+    assert!(
+        denied.is_empty(),
+        "the setup policy refuses a gateway role call: {denied:#?}"
+    );
+
+    let other_stack: &[(&str, &str)] = &[("deployment", "other-stack"), ("managed-by", "setup")];
+    let unbounded_other_role = "arn:aws:iam::123456789012:role/my-stack-execution-sa";
+    for (request, case) in [
+        (
+            Request::new("iam:CreateRole", ROLE)
+                .request_tags(&[("deployment", "my-stack"), ("managed-by", "runtime")]),
+            "an unbounded create tagged managed-by=runtime",
+        ),
+        (
+            Request::new("iam:CreateRole", unbounded_other_role).request_tags(setup_tags),
+            "an unbounded create of another role",
+        ),
+        (
+            Request::new("iam:DeleteRolePermissionsBoundary", unbounded_other_role)
+                .resource_tags(setup_tags),
+            "removing another role's boundary",
+        ),
+        (
+            Request::new("iam:PutRolePolicy", unbounded_other_role).resource_tags(setup_tags),
+            "a policy write on another unbounded role",
+        ),
+        (
+            Request::new("iam:PutRolePolicy", ROLE).resource_tags(other_stack),
+            "a policy write on a role another stack tagged",
+        ),
+        (
+            Request::new("iam:DeleteRolePermissionsBoundary", ROLE).resource_tags(other_stack),
+            "removing the boundary of a role another stack tagged",
+        ),
+        (
+            Request::new("iam:TagRole", ROLE)
+                .request_tags(setup_tags)
+                .resource_tags(other_stack),
+            "retagging a role another stack tagged",
+        ),
+    ] {
+        assert_ne!(evaluate(&setup, &request), Decision::Allowed, "{case}");
+    }
+}

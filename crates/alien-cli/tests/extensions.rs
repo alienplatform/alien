@@ -1415,6 +1415,10 @@ fn release_refuses_a_controller_module_that_is_not_the_one_the_bundle_lists() {
 /// `alien dev` on the docs' DNS zone: alien.ts lists the acme extension and adds a zone. The
 /// extension builds first, its bundle goes to the local manager, and the manager runs the
 /// extension's controller for the local platform as a process, which creates the zone.
+///
+/// The test builds the extension for this machine before `alien dev` starts. A cold release
+/// build of the controller takes up to 15 min on a CI runner, and `alien dev`'s own build then
+/// finds it fresh, so the deadline counts the zone's deployment, not the compiler.
 #[cfg(unix)]
 #[test]
 fn dev_runs_the_zone_with_the_extensions_local_controller_as_a_process() {
@@ -1423,6 +1427,11 @@ fn dev_runs_the_zone_with_the_extensions_local_controller_as_a_process() {
     let project = tempfile::Builder::new().prefix("dev").tempdir().unwrap();
     let acme = example("dns-zone");
     copy_dir(acme.path(), &project.path().join("acme"));
+    let host = alien_core::BinaryTarget::current_os().to_string();
+    succeeds(alien(
+        &project.path().join("acme"),
+        &["extensions", "build", "--target", host.as_str()],
+    ));
     std::fs::write(
         project.path().join("alien.ts"),
         "import * as alien from \"@alienplatform/core\"\nimport acme, { DnsZone } from \"./acme/generated\"\n\nconst zone = new DnsZone(\"zone\").domain(\"internal.acme.dev\").build()\n\nexport default new alien.Stack(\"my-app\").add(zone, \"live\").extensions([acme]).build()\n",

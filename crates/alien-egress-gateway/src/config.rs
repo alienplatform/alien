@@ -52,7 +52,13 @@ pub struct Config {
     /// Opt-in credential rules; no rule means TLS is spliced after SNI validation.
     #[serde(default)]
     pub credentials: Vec<CredentialRule>,
+    /// Services of the deployment each audience reaches by their exact internal hostname,
+    /// declared in the stack. Every other private destination stays refused.
+    #[serde(default)]
+    pub links: HashMap<String, Vec<GatewayLink>>,
 }
+
+pub use alien_core::sandbox_links::GatewayLink;
 
 /// A replica secret stored outside the configuration, readable only by the gateway.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -116,6 +122,15 @@ pub struct CredentialRule {
 }
 
 impl Config {
+    /// The declared link a connection from `aud` to `host:port` names, if any. A literal IP
+    /// never names one: link hosts are DNS names.
+    pub fn link(&self, aud: &str, host: &str, port: u16) -> Option<&GatewayLink> {
+        self.links
+            .get(aud)?
+            .iter()
+            .find(|link| link.matches(host, port))
+    }
+
     /// Decode public keys and reject duplicate key IDs.
     pub fn verification_keys(&self) -> Result<HashMap<String, PublicKey>> {
         if self.max_connections == 0 || self.max_connections > 65536 {
@@ -126,6 +141,23 @@ impl Config {
         }
         for policy in self.default_policies.values() {
             crate::policy::canonical(policy)?;
+        }
+        for (aud, links) in &self.links {
+            if !self.audiences.contains(aud) {
+                return Err(invalid("links name an unknown audience"));
+            }
+            if links.len() > alien_core::sandbox_links::MAX_SANDBOX_LINKS {
+                return Err(invalid("too many links for one audience"));
+            }
+            for (index, link) in links.iter().enumerate() {
+                link.validate().map_err(|reason| invalid(&reason))?;
+                if links[..index]
+                    .iter()
+                    .any(|other| other.id == link.id || other.host == link.host)
+                {
+                    return Err(invalid("duplicate link id or host"));
+                }
+            }
         }
         let mut keys = HashMap::new();
         for key in &self.keys {

@@ -8,6 +8,7 @@ bon = { workspace = true }
 tempfile = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+ipnet = { workspace = true }
 flate2 = { workspace = true }
 libc = "0.2"
 # Alien crates

@@ -35,7 +35,7 @@ use alien_core::{
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
     manager_api_transport::{
-        acquire_runtime_delete_deployment, acquire_setup_delete_deployment,
+        acquire_runtime_delete_deployment, acquire_setup_delete_deployment_naming,
         acquire_setup_run_deployment, finalize_step_loop, release_deployment, ManagerApiTransport,
         SetupDeleteAcquireOutcome,
     },
@@ -365,6 +365,8 @@ mod tests {
         MockServer,
     };
     use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use DeploymentStatus::*;
 
     /// The release check reads what Helm hands its post-renderer: an object of an extension's
     /// subchart that takes the kind and name of one of Alien's is refused, naming
@@ -623,6 +625,1019 @@ mod tests {
                 "{platform}: {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_cli_runs_runtime_cleanup_only_for_local_or_a_removed_kubernetes_operator() {
+        for (platform, flag, status, expected) in [
+            (Platform::Local, false, DeletePending, true),
+            (Platform::Local, false, RetentionRequired, false),
+            (Platform::Kubernetes, false, DeletePending, false),
+            (Platform::Kubernetes, true, DeletePending, true),
+            (Platform::Kubernetes, true, Deleting, true),
+            (Platform::Kubernetes, true, DeleteFailed, true),
+            (Platform::Kubernetes, true, RetentionRequired, false),
+            (Platform::Kubernetes, true, TeardownRequired, false),
+            (Platform::Aws, false, DeletePending, false),
+        ] {
+            assert_eq!(
+                runs_runtime_deletion(platform, status, flag),
+                expected,
+                "{platform} flag={flag} {status:?}"
+            );
+        }
+    }
+
+    /// With the Operator removed, the runtime cleanup is acquired in runtime mode for the
+    /// Helm setup method; without the flag the command still waits for the setup handoff.
+    #[tokio::test]
+    async fn operator_removed_takes_the_runtime_cleanup_instead_of_waiting() {
+        for (operator_removed, mode, statuses) in [
+            (true, "runtime", "delete-pending"),
+            (false, "setup-teardown", "retention-required"),
+        ] {
+            let server = MockServer::start_async().await;
+            // The install's cluster: it has the Operator's own Secret, which is what the check
+            // before a removed Operator's cleanup looks for.
+            let cluster = MockServer::start_async().await;
+            let cluster_check = cluster
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/api/v1/namespaces/apps/secrets/app-operator");
+                    then.status(200).json_body(serde_json::json!({
+                        "apiVersion": "v1", "kind": "Secret",
+                        "metadata": {"name": "app-operator", "namespace": "apps"}
+                    }));
+                })
+                .await;
+            server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/v1/deployments/dep_demo");
+                    let mut record = recorded_deployment(
+                        "delete-pending",
+                        Platform::Kubernetes,
+                        alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        None,
+                    );
+                    record["runtimeMetadata"] = serde_json::json!({
+                        "installedHelmRelease": {"name": "app", "namespace": "apps"}
+                    });
+                    then.status(200).json_body(record);
+                })
+                .await;
+            let acquire = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/sync/acquire")
+                        .body_contains(statuses)
+                        .json_body_partial(
+                            serde_json::json!({"acquireMode": mode, "setupMethod": "helm"})
+                                .to_string(),
+                        );
+                    then.status(409).json_body(serde_json::json!({
+                        "code": "STOP_AFTER_ACQUIRE",
+                        "message": "stop after acquire",
+                        "retryable": false, "internal": false,
+                    }));
+                })
+                .await;
+            let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+            let error = push_deletion_with()
+                .client(&client)
+                .manager_url(&server.base_url())
+                .token("setup-token")
+                .deployment_id("dep_demo")
+                .platform(Platform::Kubernetes)
+                .client_config(ClientConfig::Kubernetes(Box::new(
+                    alien_core::KubernetesClientConfig::Manual {
+                        server_url: cluster.base_url(),
+                        certificate_authority_data: None,
+                        insecure_skip_tls_verify: None,
+                        client_certificate_data: None,
+                        client_key_data: None,
+                        token: Some("token".to_string()),
+                        username: None,
+                        password: None,
+                        namespace: None,
+                        additional_headers: Default::default(),
+                    },
+                )))
+                .operator_removed(operator_removed)
+                .erase_data(false)
+                .assume_yes(true)
+                .maybe_unsteerable_kube_flags(None)
+                .maybe_label_domain(None)
+                .call()
+                .await
+                .expect_err("the mock stops at acquire");
+            acquire.assert_hits_async(1).await;
+            // The cluster check ran exactly when this command goes on to delete on the cluster.
+            cluster_check
+                .assert_hits_async(usize::from(operator_removed))
+                .await;
+            assert!(
+                error.to_string().contains("stop after acquire"),
+                "{error:?}"
+            );
+        }
+    }
+
+    /// When the Operator's Secret is the only proof of the cluster (no recorded workload exists
+    /// on it, as after `helm uninstall`... or on another cluster with a same-named namespace),
+    /// the command does not go on silently: without `--yes` (and here without a terminal) it
+    /// refuses before the acquire; with `--yes` it goes on.
+    #[tokio::test]
+    async fn a_cluster_vouched_for_by_the_operator_secret_alone_needs_yes() {
+        for (assume_yes, reaches_acquire) in [(false, false), (true, true)] {
+            let server = MockServer::start_async().await;
+            let cluster = MockServer::start_async().await;
+            cluster
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/api/v1/namespaces/apps/secrets/app-operator");
+                    then.status(200).json_body(serde_json::json!({
+                        "apiVersion": "v1", "kind": "Secret",
+                        "metadata": {"name": "app-operator", "namespace": "apps"}
+                    }));
+                })
+                .await;
+            server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/v1/deployments/dep_demo");
+                    let mut record = recorded_deployment(
+                        "delete-pending",
+                        Platform::Kubernetes,
+                        alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        None,
+                    );
+                    record["runtimeMetadata"] = serde_json::json!({
+                        "installedHelmRelease": {"name": "app", "namespace": "apps"}
+                    });
+                    then.status(200).json_body(record);
+                })
+                .await;
+            let acquire = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/acquire");
+                    then.status(409).json_body(serde_json::json!({
+                        "code": "STOP_AFTER_ACQUIRE",
+                        "message": "stop after acquire",
+                        "retryable": false, "internal": false,
+                    }));
+                })
+                .await;
+            let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+            let error = push_deletion_with()
+                .client(&client)
+                .manager_url(&server.base_url())
+                .token("setup-token")
+                .deployment_id("dep_demo")
+                .platform(Platform::Kubernetes)
+                .client_config(ClientConfig::Kubernetes(Box::new(
+                    alien_core::KubernetesClientConfig::Manual {
+                        server_url: cluster.base_url(),
+                        certificate_authority_data: None,
+                        insecure_skip_tls_verify: None,
+                        client_certificate_data: None,
+                        client_key_data: None,
+                        token: Some("token".to_string()),
+                        username: None,
+                        password: None,
+                        namespace: None,
+                        additional_headers: Default::default(),
+                    },
+                )))
+                .operator_removed(true)
+                .erase_data(false)
+                .assume_yes(assume_yes)
+                .terminal(false)
+                .call()
+                .await
+                .expect_err("stops at the confirmation or at the acquire");
+            let text = error.to_string();
+            if reaches_acquire {
+                assert!(text.contains("stop after acquire"), "{text}");
+                acquire.assert_hits_async(1).await;
+            } else {
+                assert!(
+                    text.contains("--yes") && text.contains("Nothing was deleted"),
+                    "{text}"
+                );
+                assert!(text.contains(&cluster.base_url()), "{text}");
+                acquire.assert_hits_async(0).await;
+            }
+        }
+    }
+
+    /// Another platform's runtime cleanup cannot be taken over: `push_deletion_with` refuses before
+    /// its own requests. (The command refuses even earlier, before the delete request: see the
+    /// `down` tests.)
+    #[tokio::test]
+    async fn operator_removed_is_refused_outside_kubernetes() {
+        let server = MockServer::start_async().await;
+        let any = server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(500);
+            })
+            .await;
+        let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+        let error = push_deletion_with()
+            .client(&client)
+            .manager_url(&server.base_url())
+            .token("setup-token")
+            .deployment_id("dep_demo")
+            .platform(Platform::Aws)
+            .client_config(kubernetes_client_config())
+            .operator_removed(true)
+            .erase_data(false)
+            .assume_yes(true)
+            .maybe_unsteerable_kube_flags(None)
+            .maybe_label_domain(None)
+            .call()
+            .await
+            .expect_err("refused");
+        assert!(
+            error.to_string().contains("Kubernetes installs only"),
+            "{error:?}"
+        );
+        any.assert_hits_async(0).await;
+    }
+
+    /// With `--operator-removed`, an erase deletes the vault's Secrets in the setup teardown with
+    /// the CLI's own credentials. The teardown erases by the policy the manager RECORDED, so the
+    /// cluster is checked when this run asks for an erase or an earlier run's erase is still
+    /// recorded, and not for a retain. Without the flag no cluster check runs at all.
+    #[tokio::test]
+    async fn the_cluster_is_checked_when_the_teardown_will_erase() {
+        // (erase flag, recorded policy, operator-removed flag, unsteerable kube flags, expectation)
+        let cases = [
+            (true, "erase", true, false, "checked"),
+            (false, "erase", true, false, "checked"),
+            // Without the flag this command runs no cluster check: the Operator does the cluster
+            // work, as before this change.
+            (true, "erase", false, false, "not checked"),
+            (false, "erase", false, false, "not checked"),
+            // A retain after the flag was given makes no cluster delete: no check, no refusal.
+            (false, "retain", true, false, "not checked"),
+            (false, "erase", true, true, "flags refused"),
+        ];
+        for (erase_data, policy, operator_removed, unsteerable, expectation) in cases {
+            let server = MockServer::start_async().await;
+            let cluster = MockServer::start_async().await;
+            let lookups = cluster
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET);
+                    then.status(404).json_body(serde_json::json!({
+                        "kind": "Status", "apiVersion": "v1", "status": "Failure",
+                        "reason": "NotFound", "code": 404, "message": "not found"
+                    }));
+                })
+                .await;
+            server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/v1/deployments/dep_demo");
+                    let mut record = recorded_deployment(
+                        "teardown-required",
+                        Platform::Kubernetes,
+                        alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        None,
+                    );
+                    record["runtimeMetadata"] = serde_json::json!({
+                        "deletionPolicy": policy,
+                        "installedHelmRelease": {"name": "app", "namespace": "apps"}
+                    });
+                    then.status(200).json_body(record);
+                })
+                .await;
+            let acquire = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/acquire");
+                    then.status(409).json_body(serde_json::json!({
+                        "code": "STOP_AFTER_ACQUIRE",
+                        "message": "stop after acquire",
+                        "retryable": false, "internal": false,
+                    }));
+                })
+                .await;
+            let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+            let error = push_deletion_with()
+                .client(&client)
+                .manager_url(&server.base_url())
+                .token("setup-token")
+                .deployment_id("dep_demo")
+                .platform(Platform::Kubernetes)
+                .client_config(ClientConfig::Kubernetes(Box::new(
+                    alien_core::KubernetesClientConfig::Manual {
+                        server_url: cluster.base_url(),
+                        certificate_authority_data: None,
+                        insecure_skip_tls_verify: None,
+                        client_certificate_data: None,
+                        client_key_data: None,
+                        token: Some("token".to_string()),
+                        username: None,
+                        password: None,
+                        namespace: None,
+                        additional_headers: Default::default(),
+                    },
+                )))
+                .operator_removed(operator_removed)
+                .erase_data(erase_data)
+                .assume_yes(true)
+                .maybe_unsteerable_kube_flags(unsteerable.then(|| "flags do not apply".to_string()))
+                .maybe_label_domain(None)
+                .call()
+                .await
+                .expect_err("refused or stopped at acquire");
+            let what = format!("{expectation}: {error:?}");
+            match expectation {
+                "checked" => {
+                    assert!(error.to_string().contains("Nothing was deleted"), "{what}");
+                    acquire.assert_hits_async(0).await;
+                    assert!(lookups.hits_async().await > 0, "{what}");
+                }
+                "flags refused" => {
+                    assert!(error.to_string().contains("flags do not apply"), "{what}");
+                    acquire.assert_hits_async(0).await;
+                    lookups.assert_hits_async(0).await;
+                }
+                _ => {
+                    assert!(error.to_string().contains("stop after acquire"), "{what}");
+                    acquire.assert_hits_async(1).await;
+                    lookups.assert_hits_async(0).await;
+                }
+            }
+        }
+    }
+
+    /// A record that names no Helm release gives the check nothing to verify the cluster by. With
+    /// the flag it is refused; without the flag no check runs and the destroy goes on as before.
+    #[tokio::test]
+    async fn a_record_without_a_release_is_checked_only_with_the_flag() {
+        for operator_removed in [false, true] {
+            let server = MockServer::start_async().await;
+            let cluster = MockServer::start_async().await;
+            let lookups = cluster
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET);
+                    then.status(404).json_body(serde_json::json!({
+                        "kind": "Status", "apiVersion": "v1", "status": "Failure",
+                        "reason": "NotFound", "code": 404, "message": "not found"
+                    }));
+                })
+                .await;
+            server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/v1/deployments/dep_demo");
+                    let mut record = recorded_deployment(
+                        "teardown-required",
+                        Platform::Kubernetes,
+                        alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        None,
+                    );
+                    record["runtimeMetadata"] = serde_json::json!({"deletionPolicy": "erase"});
+                    then.status(200).json_body(record);
+                })
+                .await;
+            let acquire = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/acquire");
+                    then.status(409).json_body(serde_json::json!({
+                        "code": "STOP_AFTER_ACQUIRE",
+                        "message": "stop after acquire",
+                        "retryable": false, "internal": false,
+                    }));
+                })
+                .await;
+            let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+            let error = push_deletion_with()
+                .client(&client)
+                .manager_url(&server.base_url())
+                .token("setup-token")
+                .deployment_id("dep_demo")
+                .platform(Platform::Kubernetes)
+                .client_config(ClientConfig::Kubernetes(Box::new(
+                    alien_core::KubernetesClientConfig::Manual {
+                        server_url: cluster.base_url(),
+                        certificate_authority_data: None,
+                        insecure_skip_tls_verify: None,
+                        client_certificate_data: None,
+                        client_key_data: None,
+                        token: Some("token".to_string()),
+                        username: None,
+                        password: None,
+                        namespace: None,
+                        additional_headers: Default::default(),
+                    },
+                )))
+                .operator_removed(operator_removed)
+                .erase_data(true)
+                .assume_yes(true)
+                .maybe_unsteerable_kube_flags(None)
+                .maybe_label_domain(None)
+                .call()
+                .await
+                .expect_err("refused or stopped at acquire");
+            if operator_removed {
+                assert!(
+                    error.to_string().contains("Nothing was deleted"),
+                    "{error:?}"
+                );
+                acquire.assert_hits_async(0).await;
+            } else {
+                assert!(
+                    error.to_string().contains("stop after acquire"),
+                    "{error:?}"
+                );
+                acquire.assert_hits_async(1).await;
+                lookups.assert_hits_async(0).await;
+            }
+        }
+    }
+
+    /// A flag given while the Operator still runs is harmless: when the Operator reaches the
+    /// handoff first, the runtime acquire is refused and the command goes on to the setup teardown.
+    #[tokio::test]
+    async fn the_operator_finishing_first_is_not_an_error_for_the_flag() {
+        for (status, operator_removed, continues) in [
+            ("retention-required", true, true),
+            ("teardown-required", true, true),
+            ("teardown-failed", true, true),
+            // A delete the Operator fully finished is not an error for the flag either.
+            ("deleted", true, true),
+            ("deleting", true, false),
+            ("delete-pending", true, false),
+            // Without the flag the runtime cleanup's error is always the answer.
+            ("teardown-required", false, false),
+        ] {
+            let server = MockServer::start_async().await;
+            server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/v1/deployments/dep_demo");
+                    then.status(200).json_body(recorded_deployment(
+                        status,
+                        Platform::Kubernetes,
+                        alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        None,
+                    ));
+                })
+                .await;
+            let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+            // The same function the delete runs when its own runtime cleanup fails.
+            let result = continue_after_runtime_error(
+                &client,
+                "dep_demo",
+                operator_removed,
+                AlienError::new(ErrorData::DeploymentFailed {
+                    operation: "acquire runtime deletion lock".to_string(),
+                }),
+            )
+            .await;
+            assert_eq!(result.is_ok(), continues, "{status} {operator_removed}");
+        }
+    }
+
+    /// The command took the runtime lock, then could not read the deployment under it: the lock is
+    /// given back before the error is returned (Kubernetes), so a later run is not kept waiting
+    /// for the session to expire. The manager answers the first reads and then fails them.
+    #[tokio::test]
+    async fn a_failed_read_under_the_runtime_lock_gives_the_lock_back() {
+        static READS: AtomicUsize = AtomicUsize::new(0);
+        let server = MockServer::start_async().await;
+        let cluster = MockServer::start_async().await;
+        // The cluster check passes: the Operator's own Secret is there.
+        cluster
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET);
+                then.status(200).json_body(serde_json::json!({
+                    "apiVersion": "v1", "kind": "Secret",
+                    "metadata": {"name": "app-operator", "namespace": "apps"}
+                }));
+            })
+            .await;
+        // Reads before the acquire (the command's own) succeed; the one under the lock fails.
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo")
+                    .matches(|_| READS.fetch_add(1, Ordering::SeqCst) < 1);
+                let mut record = recorded_deployment(
+                    "delete-pending",
+                    Platform::Kubernetes,
+                    alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    None,
+                );
+                record["runtimeMetadata"] = serde_json::json!({
+                    "installedHelmRelease": {"name": "app", "namespace": "apps"}
+                });
+                then.status(200).json_body(record);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(500).json_body(serde_json::json!({
+                    "code": "BOOM", "message": "read failed",
+                    "retryable": false, "internal": false
+                }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/sync/acquire")
+                    .json_body_partial(r#"{"acquireMode":"runtime"}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"deployments": [{
+                        "deployment": {"id": "dep_demo"}, "executionClaim": null
+                    }]}));
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            push_deletion_with()
+                .client(&client)
+                .manager_url(&server.base_url())
+                .token("setup-token")
+                .deployment_id("dep_demo")
+                .platform(Platform::Kubernetes)
+                .client_config(ClientConfig::Kubernetes(Box::new(
+                    alien_core::KubernetesClientConfig::Manual {
+                        server_url: cluster.base_url(),
+                        certificate_authority_data: None,
+                        insecure_skip_tls_verify: None,
+                        client_certificate_data: None,
+                        client_key_data: None,
+                        token: Some("token".to_string()),
+                        username: None,
+                        password: None,
+                        namespace: None,
+                        additional_headers: Default::default(),
+                    },
+                )))
+                .operator_removed(true)
+                .erase_data(false)
+                .assume_yes(true)
+                .maybe_unsteerable_kube_flags(None)
+                .maybe_label_domain(None)
+                .call(),
+        )
+        .await
+        .expect("finishes");
+        let error = result.expect_err("the read under the lock failed");
+        assert!(
+            format!("{error:?}").contains("Failed to get deployment"),
+            "{error:?}"
+        );
+        release.assert_hits_async(1).await;
+    }
+
+    const TWO_CONTEXT_KUBECONFIG: &str = r#"
+apiVersion: v1
+kind: Config
+current-context: {current}
+clusters:
+- cluster: {server: "{a}"}
+  name: ca
+- cluster: {server: "{b}"}
+  name: cb
+contexts:
+- context: {cluster: ca, user: u}
+  name: ctx-a
+- context: {cluster: cb, user: u}
+  name: ctx-b
+users:
+- name: u
+  user: {token: "{ktoken}"}
+"#;
+
+    /// What a request seen by the manager mock does to the kubeconfig: (request path that
+    /// triggers the rewrite, file, new content). Keyed by the run's manager token.
+    static KUBECONFIG_REWRITES: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, (String, std::path::PathBuf, String)>>,
+    > = std::sync::LazyLock::new(Default::default);
+    /// Runs (by manager token) whose first runtime or setup acquire has been seen: the cluster
+    /// mocks count only what arrives after that.
+    static ACQUIRED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::LazyLock::new(Default::default);
+
+    fn bearer(request: &httpmock::prelude::HttpMockRequest) -> Option<String> {
+        request
+            .headers
+            .as_ref()?
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .map(|(_, value)| value.trim_start_matches("Bearer ").to_string())
+    }
+
+    /// Mock matcher with a side effect: record that the acquire happened, and rewrite the
+    /// kubeconfig registered for the request's token when the configured request arrives.
+    /// Always matches.
+    fn rewrite_kubeconfig_on_request(request: &httpmock::prelude::HttpMockRequest) -> bool {
+        let Some(token) = bearer(request) else {
+            return true;
+        };
+        if request.path == "/v1/sync/acquire" {
+            ACQUIRED.lock().unwrap().insert(token.clone());
+        }
+        let rewrite = KUBECONFIG_REWRITES.lock().unwrap().get(&token).cloned();
+        if let Some((trigger, path, content)) = rewrite {
+            if request.path == trigger {
+                std::fs::write(path, content).unwrap();
+            }
+        }
+        true
+    }
+
+    /// Matches what a cluster mock receives after the run's first acquire (the kubeconfig's user
+    /// token is the run's manager token).
+    fn after_the_acquire(request: &httpmock::prelude::HttpMockRequest) -> bool {
+        bearer(request).is_some_and(|token| ACQUIRED.lock().unwrap().contains(&token))
+    }
+
+    /// Where a flagged destroy over a real kubeconfig is changed, and how.
+    struct KubeconfigChange {
+        /// The record's status when the command reads it.
+        status: &'static str,
+        /// The manager request that triggers the rewrite.
+        on_request: &'static str,
+        current_after: &'static str,
+        /// Rewrite the first context's cluster entry to the second mock server.
+        first_entry_to_second: bool,
+    }
+
+    struct KubeconfigRun {
+        result: Result<()>,
+        /// Requests the first (install) cluster received after the acquire.
+        first_after_acquire: usize,
+        /// Requests the second cluster received at all.
+        second: usize,
+        released: usize,
+    }
+
+    /// A flagged destroy over a real kubeconfig file that is rewritten while the command runs.
+    /// Both clusters answer any request after the acquire (an empty list), so a request that
+    /// goes anywhere is counted.
+    async fn flagged_destroy_with_kubeconfig_change(change: KubeconfigChange) -> KubeconfigRun {
+        let server = MockServer::start_async().await;
+        let first = MockServer::start_async().await;
+        let second = MockServer::start_async().await;
+        // The install's cluster: only the Operator's Secret is left (the usual state after helm
+        // uninstall), so the person's --yes vouches for it.
+        first
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/api/v1/namespaces/apps/secrets/app-operator");
+                then.status(200).json_body(serde_json::json!({
+                    "apiVersion": "v1", "kind": "Secret",
+                    "metadata": {"name": "app-operator", "namespace": "apps"}
+                }));
+            })
+            .await;
+        let empty_list = serde_json::json!({"apiVersion": "v1", "kind": "List", "items": []});
+        let on_first = first
+            .mock_async(|when, then| {
+                when.matches(after_the_acquire);
+                then.status(200).json_body(empty_list.clone());
+            })
+            .await;
+        let on_second = second
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200).json_body(empty_list.clone());
+            })
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        let token = format!(
+            "rewrite-{}",
+            dir.path().file_name().unwrap().to_string_lossy()
+        );
+        let render = |current: &str, a: &str, b: &str| {
+            TWO_CONTEXT_KUBECONFIG
+                .replace("{current}", current)
+                .replace("{a}", a)
+                .replace("{b}", b)
+                .replace("{ktoken}", &token)
+        };
+        std::fs::write(&path, render("ctx-a", &first.base_url(), &second.base_url())).unwrap();
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                let mut record = recorded_deployment(
+                    change.status,
+                    Platform::Kubernetes,
+                    alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    None,
+                );
+                record["runtimeMetadata"] = serde_json::json!({
+                    "installedHelmRelease": {"name": "app", "namespace": "apps"}
+                });
+                then.status(200).json_body(record);
+            })
+            .await;
+        let rewritten = render(
+            change.current_after,
+            if change.first_entry_to_second {
+                second.base_url()
+            } else {
+                first.base_url()
+            }
+            .as_str(),
+            &second.base_url(),
+        );
+        // The matcher is a plain fn: the file to rewrite is looked up by this run's token.
+        KUBECONFIG_REWRITES.lock().unwrap().insert(
+            token.clone(),
+            (change.on_request.to_string(), path.clone(), rewritten),
+        );
+        for mode in ["runtime", "setup-teardown"] {
+            server
+                .mock_async(move |when, then| {
+                    when.method(POST)
+                        .path("/v1/sync/acquire")
+                        .json_body_partial(format!(r#"{{"acquireMode":"{mode}"}}"#))
+                        // The person (or another terminal) edits the kubeconfig while the command waits.
+                        .matches(rewrite_kubeconfig_on_request);
+                    then.status(200)
+                        .json_body(serde_json::json!({"deployments": [{
+                            "deployment": {"id": "dep_demo"}, "executionClaim": null
+                        }]}));
+                })
+                .await;
+        }
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/sync/reconcile")
+                    .matches(rewrite_kubeconfig_on_request);
+                then.status(200)
+                    .json_body(serde_json::json!({"success": true, "current": null}));
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        let client = create_manager_client(&token, &server.base_url()).unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            push_deletion_with()
+                .client(&client)
+                .manager_url(&server.base_url())
+                .token("setup-token")
+                .deployment_id("dep_demo")
+                .platform(Platform::Kubernetes)
+                .client_config(ClientConfig::Kubernetes(Box::new(
+                    alien_core::KubernetesClientConfig::Kubeconfig {
+                        kubeconfig_path: Some(path.display().to_string()),
+                        context: None,
+                        cluster: None,
+                        user: None,
+                        namespace: None,
+                        additional_headers: None,
+                    },
+                )))
+                .operator_removed(true)
+                .erase_data(false)
+                .assume_yes(true)
+                .terminal(false)
+                .delete_requested(true)
+                .maybe_unsteerable_kube_flags(None)
+                .maybe_label_domain(None)
+                .call(),
+        )
+        .await
+        .expect("finishes");
+        KubeconfigRun {
+            result,
+            first_after_acquire: on_first.hits_async().await,
+            second: on_second.hits_async().await,
+            released: release.hits_async().await,
+        }
+    }
+
+    /// The current-context switched while the acquire waited: the pin keeps the command on the
+    /// cluster it checked. The run goes on to a real cluster call after the acquire (the listing
+    /// of what the runtime left behind), and that call goes to the FIRST cluster.
+    #[tokio::test]
+    async fn a_context_switched_during_the_acquire_does_not_reach_the_other_cluster() {
+        let run = flagged_destroy_with_kubeconfig_change(KubeconfigChange {
+            status: "delete-pending",
+            on_request: "/v1/sync/acquire",
+            current_after: "ctx-b",
+            first_entry_to_second: false,
+        })
+        .await;
+        if let Err(error) = &run.result {
+            assert!(
+                !error.to_string().contains("kubeconfig changed"),
+                "the pin should make a context switch harmless: {error}"
+            );
+        }
+        assert!(
+            run.first_after_acquire > 0,
+            "no cluster call was made after the acquire: the test proves nothing ({:?})",
+            run.result
+        );
+        assert_eq!(run.second, 0, "a request reached the switched-to cluster");
+    }
+
+    /// An entry of the same name rewritten to the second cluster while the acquire waited: the
+    /// command refuses before any cleanup, says the delete request stays recorded, and gives the
+    /// lock back. Neither cluster receives a request after the acquire.
+    #[tokio::test]
+    async fn a_cluster_entry_rewritten_during_the_acquire_refuses_before_the_cleanup() {
+        let run = flagged_destroy_with_kubeconfig_change(KubeconfigChange {
+            status: "delete-pending",
+            on_request: "/v1/sync/acquire",
+            current_after: "ctx-a",
+            first_entry_to_second: true,
+        })
+        .await;
+        let text = run.result.expect_err("refused").to_string();
+        assert!(text.contains("kubeconfig changed"), "{text}");
+        assert!(
+            text.contains("the deployment record was not changed further"),
+            "{text}"
+        );
+        assert_eq!(run.second, 0, "a request reached the rewritten-to cluster");
+        assert_eq!(run.first_after_acquire, 0);
+        assert_eq!(run.released, 1, "the lock is given back");
+    }
+
+    /// The rewrite happens after the runtime step loop, before the listing of what the runtime
+    /// left behind: the listing is skipped, so the second cluster is not asked.
+    #[tokio::test]
+    async fn a_cluster_entry_rewritten_before_the_listing_is_not_listed() {
+        let run = flagged_destroy_with_kubeconfig_change(KubeconfigChange {
+            status: "delete-pending",
+            on_request: "/v1/sync/reconcile",
+            current_after: "ctx-a",
+            first_entry_to_second: true,
+        })
+        .await;
+        // The run got through the runtime step loop to the listing guard, and the guard skipped
+        // the listing without failing the destroy; an earlier failure would be an `Err` here.
+        run.result
+            .as_ref()
+            .expect("the run reaches the listing guard");
+        assert_eq!(run.second, 0, "the listing went to the rewritten-to cluster");
+        assert_eq!(run.first_after_acquire, 0);
+    }
+
+    /// The setup teardown acquire (no runtime cleanup left to run) is guarded too: an entry
+    /// rewritten while that acquire waited refuses, and the lock is given back.
+    #[tokio::test]
+    async fn a_cluster_entry_rewritten_during_the_setup_acquire_refuses() {
+        let run = flagged_destroy_with_kubeconfig_change(KubeconfigChange {
+            status: "teardown-required",
+            on_request: "/v1/sync/acquire",
+            current_after: "ctx-a",
+            first_entry_to_second: true,
+        })
+        .await;
+        let text = run.result.expect_err("refused").to_string();
+        assert!(text.contains("kubeconfig changed"), "{text}");
+        assert_eq!(run.second, 0);
+        assert_eq!(run.released, 1, "the lock is given back");
+    }
+
+    /// A kubeconfig that cannot be pinned refuses before anything is checked or deleted.
+    #[tokio::test]
+    async fn a_kubeconfig_that_cannot_be_pinned_refuses_a_flagged_destroy() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(recorded_deployment(
+                    "delete-pending",
+                    Platform::Kubernetes,
+                    alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    None,
+                ));
+            })
+            .await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(500);
+            })
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+        // One file that does not exist, one with no current-context and no --kube-context.
+        let no_context = dir.path().join("empty");
+        std::fs::write(
+            &no_context,
+            "apiVersion: v1\nkind: Config\nclusters: []\ncontexts: []\nusers: []\n",
+        )
+        .unwrap();
+        for path in [dir.path().join("missing"), no_context] {
+            let error = push_deletion_with()
+                .client(&client)
+                .manager_url(&server.base_url())
+                .token("setup-token")
+                .deployment_id("dep_demo")
+                .platform(Platform::Kubernetes)
+                .client_config(ClientConfig::Kubernetes(Box::new(
+                    alien_core::KubernetesClientConfig::Kubeconfig {
+                        kubeconfig_path: Some(path.display().to_string()),
+                        context: None,
+                        cluster: None,
+                        user: None,
+                        namespace: None,
+                        additional_headers: None,
+                    },
+                )))
+                .operator_removed(true)
+                .erase_data(false)
+                .assume_yes(true)
+                .terminal(false)
+                .delete_requested(true)
+                .maybe_unsteerable_kube_flags(None)
+                .maybe_label_domain(None)
+                .call()
+                .await
+                .expect_err("refused");
+            let text = error.to_string();
+            assert!(text.contains("Cannot fix the kubeconfig"), "{text}");
+            assert!(text.contains("record was not changed further"), "{text}");
+        }
+        acquire.assert_hits_async(0).await;
+    }
+
+    /// Without the flag nothing is pinned: a kubeconfig that cannot be read is not this command's
+    /// business (the Operator does the cluster work), so the run goes on to the acquire.
+    #[tokio::test]
+    async fn without_the_flag_the_kubeconfig_is_not_pinned() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(recorded_deployment(
+                    "delete-pending",
+                    Platform::Kubernetes,
+                    alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    None,
+                ));
+            })
+            .await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(409).json_body(serde_json::json!({
+                    "code": "STOP_AFTER_ACQUIRE", "message": "stop after acquire",
+                    "retryable": false, "internal": false,
+                }));
+            })
+            .await;
+        let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+        let error = push_deletion_with()
+            .client(&client)
+            .manager_url(&server.base_url())
+            .token("setup-token")
+            .deployment_id("dep_demo")
+            .platform(Platform::Kubernetes)
+            .client_config(ClientConfig::Kubernetes(Box::new(
+                alien_core::KubernetesClientConfig::Kubeconfig {
+                    kubeconfig_path: Some("/nonexistent/kubeconfig".to_string()),
+                    context: None,
+                    cluster: None,
+                    user: None,
+                    namespace: None,
+                    additional_headers: None,
+                },
+            )))
+            .operator_removed(false)
+            .erase_data(false)
+            .terminal(false)
+            .delete_requested(true)
+            .maybe_unsteerable_kube_flags(None)
+            .maybe_label_domain(None)
+            .call()
+            .await
+            .expect_err("stops at the acquire");
+        assert!(error.to_string().contains("stop after acquire"), "{error}");
+        assert!(acquire.hits_async().await >= 1);
     }
 
     #[test]
@@ -9671,6 +10686,85 @@ pub async fn push_deletion(
     manager_url: &str,
     token: &str,
 ) -> Result<()> {
+    push_deletion_with()
+        .client(client)
+        .deployment_id(deployment_id)
+        .platform(platform)
+        .client_config(client_config)
+        .operator_removed(false)
+        .erase_data(erase_data)
+        .manager_url(manager_url)
+        .token(token)
+        .call()
+        .await
+}
+
+/// Whether this command runs the runtime cleanup itself, before setup teardown. A local
+/// install has no manager-side runtime that could. A Kubernetes install has its Operator for
+/// that; only when the Operator is gone (`operator_removed`, for example after `helm
+/// uninstall`) does the person running the command do it with their own credentials.
+fn runs_runtime_deletion(
+    platform: Platform,
+    status: DeploymentStatus,
+    operator_removed: bool,
+) -> bool {
+    let cli_owns_runtime =
+        platform == Platform::Local || (platform == Platform::Kubernetes && operator_removed);
+    cli_owns_runtime
+        && !matches!(
+            status,
+            DeploymentStatus::TeardownRequired
+                | DeploymentStatus::TeardownFailed
+                | DeploymentStatus::RetentionRequired
+        )
+}
+
+/// `--operator-removed` takes over a Kubernetes Operator's runtime cleanup; no other platform
+/// has one to take over. Shared by the command (which refuses before its first request) and
+/// [`push_deletion_with`], so the two refusals cannot differ.
+pub(crate) fn refuse_operator_removed_outside_kubernetes(
+    platform: Platform,
+    operator_removed: bool,
+) -> Result<()> {
+    if operator_removed && platform != Platform::Kubernetes {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "operator_removed".to_string(),
+            message: format!(
+                "--operator-removed applies to Kubernetes installs only; a {platform} deployment's runtime cleanup cannot be skipped or taken over here."
+            ),
+        }));
+    }
+    Ok(())
+}
+
+/// [`push_deletion`], with the runtime cleanup done here when the deployment's Operator was
+/// removed (Kubernetes only).
+///
+/// A builder: `operator_removed`, `erase_data` and `assume_yes` are adjacent booleans.
+#[bon::builder]
+pub async fn push_deletion_with(
+    client: &ServerClient,
+    deployment_id: &str,
+    platform: Platform,
+    client_config: ClientConfig,
+    operator_removed: bool,
+    erase_data: bool,
+    manager_url: &str,
+    token: &str,
+    /// `--yes`: confirm a cluster the Operator's Secret alone vouches for.
+    #[builder(default)]
+    assume_yes: bool,
+    /// Whether a person can answer a prompt. Injected so a test never reads the real terminal.
+    #[builder(default = can_prompt())]
+    terminal: bool,
+    /// The delete request was already sent (or recorded) before this call: a refusal then says
+    /// the deployment record was not changed further.
+    #[builder(default)]
+    delete_requested: bool,
+    unsteerable_kube_flags: Option<String>,
+    label_domain: Option<String>,
+) -> Result<()> {
+    refuse_operator_removed_outside_kubernetes(platform, operator_removed)?;
     let deployment = client
         .get_deployment()
         .id(deployment_id)
@@ -9773,6 +10867,33 @@ pub async fn push_deletion(
     })?;
 
     apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
+    // A delete acts in the namespace the record holds for the release, not the shell's.
+    let client_config =
+        alien_deployment::delete_client_config::client_config_for_cli_delete(client_config, &state);
+    // With `--operator-removed` the command deletes on the cluster its credentials reach, and the
+    // runtime acquire below can wait minutes. Fix the kubeconfig file, context, cluster and user
+    // once, and record the API server they resolve to: a context switched, or an entry of the
+    // same name rewritten, meanwhile must not move the cleanup to a cluster the check never saw
+    // (`ensure_cluster_unchanged`). A kubeconfig that cannot be fixed refuses. Without the flag
+    // the Operator does the cluster work and nothing here is pinned.
+    let (client_config, pinned_server) = if operator_removed {
+        refusal_note(
+            async {
+                let pinned = super::cluster_check::pin_kubeconfig(client_config)?;
+                let server = super::cluster_check::api_server_url(&pinned, true).await?;
+                Ok((pinned, server))
+            }
+            .await,
+            delete_requested,
+        )?
+    } else {
+        (client_config, None)
+    };
+    // The runtime cleanup this command runs for a removed Operator reads the labels under the
+    // package's own domain, as the Operator would. No other path sets it.
+    if operator_removed {
+        config.label_domain = label_domain.clone();
+    }
     // Every extension the releases list is downloaded and checked before any step runs.
     let service_provider = extension_bundles::provider_for(
         runtime_service_provider(&client_config)?,
@@ -9784,15 +10905,60 @@ pub async fn push_deletion(
     )
     .await?;
 
-    if platform == Platform::Local
-        && !matches!(
-            state.status,
-            DeploymentStatus::TeardownRequired
-                | DeploymentStatus::TeardownFailed
-                | DeploymentStatus::RetentionRequired
-        )
+    // With `--operator-removed` this command deletes on the cluster its credentials reach, the
+    // runtime cleanup or an erase in the setup teardown: make sure it is the install's, or "not
+    // found" for every object would read as deleted. Refused means nothing was deleted. The setup
+    // teardown erases by the policy the manager recorded, which an earlier run's `--erase-data` set.
+    // A destroy without the flag runs no cluster check: the Operator does the cluster work.
+    if platform == Platform::Kubernetes
+        && operator_removed
+        && (runs_runtime_deletion(platform, state.status, operator_removed)
+            || erase_data
+            || recorded_policy_is_erase(&state))
     {
-        run_runtime_deletion(
+        if let Some(message) = unsteerable_kube_flags {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "kube_context".to_string(),
+                message,
+            }));
+        }
+        let provider = alien_infra::DefaultPlatformServiceProvider::default();
+        let release = state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.installed_helm_release.as_ref());
+        let proof = refusal_note(
+            super::cluster_check::verify_install_cluster(
+                &client_config,
+                state.stack_state.as_ref(),
+                release,
+                &provider,
+            )
+            .await,
+            delete_requested,
+        )?;
+        if let super::cluster_check::ClusterProof::OperatorSecretOnly { server_url } = proof {
+            refusal_note(
+                super::cluster_check::confirm_secret_only_cluster(
+                    &server_url,
+                    super::cluster_check::context_name(&client_config).as_deref(),
+                    assume_yes,
+                    terminal,
+                    || {
+                        let mut answer = String::new();
+                        std::io::stdin().read_line(&mut answer).map(|_| answer)
+                    },
+                ),
+                delete_requested,
+            )?;
+        }
+    }
+    let guard = ClusterGuard {
+        pinned_server: pinned_server.as_deref(),
+        delete_requested,
+    };
+    if runs_runtime_deletion(platform, state.status, operator_removed) {
+        if let Err(error) = run_runtime_deletion(
             client,
             deployment_id,
             &mut state,
@@ -9800,8 +10966,28 @@ pub async fn push_deletion(
             &client_config,
             stack_settings.deployment_model,
             service_provider.clone(),
+            &guard,
         )
-        .await?;
+        .await
+        {
+            continue_after_runtime_error(client, deployment_id, operator_removed, error).await?;
+        }
+
+        if platform == Platform::Kubernetes && operator_removed {
+            // The listing is a read, but it too must not go to a rewritten entry.
+            if guard.check(&client_config).await.is_ok() {
+                warn_about_leftover_runtime_objects(
+                    &client_config,
+                    &state,
+                    label_domain.as_deref(),
+                )
+                .await;
+            } else {
+                output::warn(
+                    "The kubeconfig changed while the command ran, so what the runtime left behind was not listed. Check the cluster with kubectl.",
+                );
+            }
+        }
 
         if state.status == DeploymentStatus::Deleted {
             output::success("Deployment deleted successfully.");
@@ -9818,8 +11004,131 @@ pub async fn push_deletion(
         stack_settings.deployment_model,
         service_provider,
         erase_data,
+        &guard,
     )
     .await
+}
+
+/// What the post-acquire check of a flagged destroy needs: the API server recorded when the
+/// kubeconfig was pinned, and whether the delete request was already sent.
+struct ClusterGuard<'a> {
+    pinned_server: Option<&'a str>,
+    delete_requested: bool,
+}
+
+impl ClusterGuard<'_> {
+    /// Refuse when the kubeconfig now resolves elsewhere than at the pin. Run after every
+    /// acquire (which can wait minutes) and before the cleanup or teardown steps.
+    async fn check(&self, client_config: &ClientConfig) -> Result<()> {
+        refusal_note(
+            super::cluster_check::ensure_same_server(client_config, self.pinned_server).await,
+            self.delete_requested,
+        )
+    }
+}
+
+/// A refusal after the delete request was sent says what that means: nothing was deleted on the
+/// cluster, but the record is already delete-pending.
+fn refusal_note<T>(result: Result<T>, delete_requested: bool) -> Result<T> {
+    result.map_err(|mut error| {
+        if delete_requested {
+            error.message = error
+                .message
+                .replace(
+                    "Nothing was deleted",
+                    "Nothing was deleted on the cluster; the deployment record was not changed further",
+                )
+                .replace(
+                    "nothing further was deleted",
+                    "nothing further was deleted on the cluster; the deployment record was not changed further",
+                );
+        }
+        error
+    })
+}
+
+/// After the CLI took over the runtime cleanup: name what labelled `managed-by=runtime` is still
+/// in the release's namespace. Only a warning; the outcome of the delete does not depend on it.
+async fn warn_about_leftover_runtime_objects(
+    client_config: &ClientConfig,
+    state: &DeploymentState,
+    label_domain: Option<&str>,
+) {
+    let Some(namespace) = state
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.installed_helm_release.as_ref())
+        .map(|release| release.namespace.clone())
+    else {
+        output::warn(
+            "Could not list what the runtime left behind: the deployment's record names no release namespace. Check the cluster with kubectl.",
+        );
+        return;
+    };
+    let provider = alien_infra::DefaultPlatformServiceProvider::default();
+    let resource_prefix = state
+        .stack_state
+        .as_ref()
+        .map(|stack| stack.resource_prefix.as_str());
+    let selector = super::cluster_check::runtime_selector(label_domain, resource_prefix);
+    let scoped = resource_prefix.is_some_and(|prefix| !prefix.is_empty());
+    match super::cluster_check::leftover_runtime_objects(
+        client_config,
+        &namespace,
+        &selector,
+        &provider,
+    )
+    .await
+    {
+        Ok(left) => {
+            if let Some(message) =
+                super::cluster_check::leftover_warning(&namespace, &left, scoped)
+            {
+                output::warn(&message);
+            }
+        }
+        Err(error) => output::warn(&format!(
+            "Could not list what the runtime left in namespace '{namespace}' ({error}); check it with kubectl."
+        )),
+    }
+}
+
+/// Whether the setup teardown will erase, by the policy the manager recorded for this deletion.
+fn recorded_policy_is_erase(state: &DeploymentState) -> bool {
+    state
+        .runtime_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.deletion_policy == alien_core::DeletionPolicy::Erase)
+}
+
+/// The command's own runtime cleanup failed. With `--operator-removed` given while the Operator
+/// still ran, the Operator may have finished the runtime cleanup first: then nothing is left for
+/// this command to take over and the setup teardown goes on. Otherwise the error is the answer.
+async fn continue_after_runtime_error(
+    client: &ServerClient,
+    deployment_id: &str,
+    operator_removed: bool,
+    error: AlienError<ErrorData>,
+) -> Result<()> {
+    if !(operator_removed && operator_finished_runtime_cleanup(client, deployment_id).await) {
+        return Err(error);
+    }
+    output::info(
+        "The deployment's Operator finished the runtime cleanup itself; continuing with the setup teardown.",
+    );
+    Ok(())
+}
+
+/// Whether the manager now records the runtime cleanup as finished by someone else: the
+/// handoff to the setup owner has been reached.
+async fn operator_finished_runtime_cleanup(client: &ServerClient, deployment_id: &str) -> bool {
+    let Ok(response) = client.get_deployment().id(deployment_id).send().await else {
+        return false;
+    };
+    matches!(
+        response.status.as_str(),
+        "retention-required" | "teardown-required" | "teardown-failed" | "retained" | "deleted"
+    )
 }
 
 fn runtime_service_provider(
@@ -9850,46 +11159,85 @@ async fn run_runtime_deletion(
     client_config: &ClientConfig,
     deployment_model: alien_core::DeploymentModel,
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    guard: &ClusterGuard<'_>,
 ) -> Result<()> {
     let session = format!("push-runtime-deletion-{}", uuid::Uuid::new_v4());
-    let acquired_deployment =
-        acquire_runtime_delete_deployment(client, deployment_id, &session, deployment_model)
+    if state.platform == Platform::Kubernetes {
+        output::info(
+            "Taking over the runtime cleanup. If the removed Operator still holds the deployment's lock, this waits up to six minutes for it to expire.",
+        );
+    }
+    let acquired_deployment = acquire_runtime_delete_deployment(
+        client,
+        deployment_id,
+        &session,
+        deployment_model,
+        setup_method(state.platform),
+        // After helm uninstall the removed Operator's session lock is not given back: it
+        // expires on its own after five minutes.
+        state.platform == Platform::Kubernetes,
+    )
+    .await
+    .context(ErrorData::DeploymentFailed {
+        operation: "acquire runtime deletion lock".to_string(),
+    })?;
+
+    // Re-fetch deployment under lock. An error here returns before the step loop; on Kubernetes
+    // the lock taken above is given back first (Local keeps its earlier behaviour).
+    let refetched: Result<()> = async {
+        let deployment = client
+            .get_deployment()
+            .id(deployment_id)
+            .send()
             .await
-            .context(ErrorData::DeploymentFailed {
-                operation: "acquire runtime deletion lock".to_string(),
+            .into_sdk_error()
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to get deployment from manager".to_string(),
+            })?
+            .into_inner();
+
+        let status = parse_deployment_status(&deployment.status)?;
+        state.status = status;
+        state.stack_state = deployment
+            .stack_state
+            .map(serde_json::from_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize stack_state from manager".to_string(),
             })?;
-
-    // Re-fetch deployment under lock
-    let deployment = client
-        .get_deployment()
-        .id(deployment_id)
-        .send()
-        .await
-        .into_sdk_error()
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to get deployment from manager".to_string(),
-        })?
-        .into_inner();
-
-    let status = parse_deployment_status(&deployment.status)?;
-    state.status = status;
-    state.stack_state = deployment
-        .stack_state
-        .map(serde_json::from_value)
-        .transpose()
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to deserialize stack_state from manager".to_string(),
-        })?;
-    state.runtime_metadata = deployment
-        .runtime_metadata
-        .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
-        .transpose()
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to deserialize runtime_metadata from manager".to_string(),
-        })?;
+        state.runtime_metadata = deployment
+            .runtime_metadata
+            .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize runtime_metadata from manager".to_string(),
+            })?;
+        // The acquire may have waited minutes: the kubeconfig must still reach the same cluster.
+        guard.check(client_config).await
+    }
+    .await;
+    if let Err(error) = refetched {
+        if state.platform == Platform::Kubernetes {
+            if let Err(release_error) = release_deployment(
+                client,
+                deployment_id,
+                &session,
+                acquired_deployment.execution_claim.as_ref(),
+            )
+            .await
+            {
+                return Err(error.context(ErrorData::GenericError {
+                    message: format!(
+                        "Reading the deployment failed and releasing the runtime deletion lock also failed: {release_error}"
+                    ),
+                }));
+            }
+        }
+        return Err(error);
+    }
 
     let transport = ManagerApiTransport::with_execution_claim(
         client.clone(),
@@ -9967,9 +11315,10 @@ async fn run_setup_deletion(
     deployment_model: alien_core::DeploymentModel,
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     erase_data: bool,
+    guard: &ClusterGuard<'_>,
 ) -> Result<()> {
     let session = format!("push-setup-deletion-{}", uuid::Uuid::new_v4());
-    let acquire_outcome = acquire_setup_delete_deployment(
+    let acquire_outcome = acquire_setup_delete_deployment_naming(
         client,
         client,
         deployment_id,
@@ -9977,6 +11326,7 @@ async fn run_setup_deletion(
         deployment_model,
         setup_method(state.platform),
         erase_data,
+        true,
     )
     .await
     .context(ErrorData::DeploymentFailed {
@@ -10022,6 +11372,21 @@ async fn run_setup_deletion(
         .context(ErrorData::ConfigurationError {
             message: "Failed to deserialize runtime_metadata from manager".to_string(),
         })?;
+
+    // The acquire may have waited minutes: the kubeconfig must still reach the same cluster.
+    // The lock is given back before refusing.
+    if let Err(error) = guard.check(client_config).await {
+        if let Err(release_error) =
+            release_deployment(client, deployment_id, &session, execution_claim.as_ref()).await
+        {
+            return Err(error.context(ErrorData::GenericError {
+                message: format!(
+                    "Releasing the setup teardown lock after the refusal also failed: {release_error}"
+                ),
+            }));
+        }
+        return Err(error);
+    }
 
     let transport = ManagerApiTransport::with_execution_claim(
         client.clone(),

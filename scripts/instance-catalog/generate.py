@@ -192,8 +192,14 @@ def row(platform, series, name, machine_type, machine, auto_select):
         raise RuntimeError(f"{platform} {series['series']}: unknown category {category}")
     override = series.get("overrides", {}).get(name, {})
     nested_virt = override.get("nested_virt", series.get("nested_virt", False))
-    if nested_virt and platform == "aws" and not machine["nested_virt"]:
+    # Bare metal gives guests KVM from the hardware; AWS reports nested virtualization only
+    # for virtual machines.
+    if nested_virt and platform == "aws" and not (machine["nested_virt"] or machine["metal"]):
         raise RuntimeError(f"{name} is flagged nested_virt but AWS does not report it")
+    if nested_virt and machine["metal"] and machine["architecture"] != "X86_64":
+        raise RuntimeError(f"{name}: nested virtualization on AWS means x86_64")
+    if machine["metal"] and auto_select:
+        raise RuntimeError(f"{name} is bare metal, which automatic selection never picks")
     if platform == "azure":
         gpu = (series["gpu_type"], machine["gpu_count"]) if machine["gpu_count"] else None
     elif "attached_gpu" in series:
@@ -227,6 +233,7 @@ def row(platform, series, name, machine_type, machine, auto_select):
         "machine_type": machine_type,
         "gpu": gpu,
         "nested_virt": nested_virt,
+        "bare_metal": machine["metal"],
         "auto_select": auto_select,
     }
 
@@ -278,6 +285,7 @@ def render(rows):
             ]
         lines += [
             f"        nested_virt: {str(spec['nested_virt']).lower()},",
+            f"        bare_metal: {str(spec['bare_metal']).lower()},",
             f"        auto_select: {str(spec['auto_select']).lower()},",
             "    },",
         ]

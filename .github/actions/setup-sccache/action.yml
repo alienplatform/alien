@@ -1,0 +1,29 @@
+name: Set up sccache
+description: >-
+  Install sccache and route rustc through it, with GitHub's own Actions cache as the storage.
+  `mozilla-actions/sccache-action` installs the binary and starts nothing else: without
+  `RUSTC_WRAPPER` cargo never calls it, and its stats show 0 compile requests. A failed install
+  only costs the cache: the build then compiles without it.
+
+runs:
+  using: composite
+  steps:
+    - name: Install sccache
+      id: install
+      continue-on-error: true
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      with:
+        # Avoid the action's latest-release API lookup, which can fail during
+        # transient GitHub API outages.
+        version: v0.16.0
+
+    - name: Use sccache for Rust builds
+      if: steps.install.outcome == 'success'
+      shell: bash
+      run: |
+        {
+          echo "RUSTC_WRAPPER=sccache"
+          echo "SCCACHE_GHA_ENABLED=true"
+          # Fall back to local compilation when the cache service returns a transient error.
+          echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1"
+        } >> "$GITHUB_ENV"

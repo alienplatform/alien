@@ -56,7 +56,7 @@ permissions:
 
 env:
   # Fall back to local compilation when the shared sccache backend returns a
-  # transient error (e.g. webdav 403) instead of failing the whole build.
+  # transient error (e.g. an HTTP 403) instead of failing the whole build.
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
 
 jobs:
@@ -70,7 +70,7 @@ jobs:
     concurrency:
       group: terraform-test-infra
       cancel-in-progress: false
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -154,10 +154,15 @@ jobs:
           docker login "${{ steps.registries.outputs.acr_registry }}" \
             -u "$AZURE_MGMT_CLIENT_ID" -p "$AZURE_MGMT_CLIENT_SECRET"
 
+      # The Dockerfiles copy prebuilt binaries, so emulation only touches the final
+      # stages of the non-native architecture.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
       - name: Build and push Lambda image (AWS ECR, linux/arm64)
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: infra/test/test-images/lambda
           platforms: linux/arm64
           push: true
@@ -165,9 +170,8 @@ jobs:
           provenance: false
 
       - name: Build and push http-server image (GCP AR + Azure ACR, linux/amd64)
-        uses: depot/build-push-action@v1
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: infra/test/test-images/http-server
           platforms: linux/amd64
           push: true
@@ -249,16 +253,16 @@ jobs:
       matrix:
         include:
           - name: aws-clients
-            test_cmd: depot cargo nextest run -p alien-aws-clients
+            test_cmd: cargo nextest run -p alien-aws-clients
           - name: gcp-clients
-            test_cmd: depot cargo nextest run -p alien-gcp-clients --features gcp
+            test_cmd: cargo nextest run -p alien-gcp-clients --features gcp
           - name: azure-clients
-            test_cmd: depot cargo nextest run -p alien-azure-clients
+            test_cmd: cargo nextest run -p alien-azure-clients
           - name: bindings
-            test_cmd: depot cargo nextest run -p alien-bindings --features local-artifact-registry
+            test_cmd: cargo nextest run -p alien-bindings --features local-artifact-registry
           - name: manager-proxy
-            test_cmd: depot cargo nextest run -p alien-manager --test registry_proxy_cloud_test
-    runs-on: depot-ubuntu-24.04-arm-8
+            test_cmd: cargo nextest run -p alien-manager --test registry_proxy_cloud_test
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
@@ -302,12 +306,8 @@ jobs:
           install_args: rust
           cache: false
 
-      - uses: depot/setup-action@v1
-
-      - uses: mozilla-actions/sccache-action@v0.0.11
-        continue-on-error: true
-        with:
-          version: v0.16.0
+      - name: Install sccache
+        uses: ./.github/actions/setup-sccache
 
       - uses: taiki-e/install-action@cargo-nextest
 

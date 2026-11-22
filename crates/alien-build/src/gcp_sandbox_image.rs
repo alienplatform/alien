@@ -4,35 +4,84 @@
 //! shell or no `/etc/passwd` layers the same way.
 
 use crate::error::{ErrorData, Result};
-use crate::registry::{registry_failure, RegistryFailure};
-use crate::sandbox_identity::{image_command, image_layers, unreadable_file, BaseIdentity};
+use crate::registry::{RegistryFailure, registry_failure};
+use crate::sandbox_identity::{BaseIdentity, image_command, image_layers, unreadable_file};
 use crate::{
-    base_image_build_retry_delay, is_retryable_dockdash_image_pull_error,
-    BASE_IMAGE_BUILD_MAX_ATTEMPTS,
+    BASE_IMAGE_BUILD_MAX_ATTEMPTS, base_image_build_retry_delay,
+    is_retryable_dockdash_image_pull_error,
 };
 use alien_core::presigned::redact_url_for_error;
 use alien_core::sandbox_image::{
-    SandboxImage, AGENT_MODE, AGENT_PATH, AZURE_SANDBOX, GCP_AGENT_PLATFORM, IMAGE_COMMAND_PATH,
-    SESSION_ROOT_MODE,
+    AGENT_MODE, AGENT_PATH, AZURE_SANDBOX, GCP_AGENT_PLATFORM, IMAGE_COMMAND_PATH,
+    SESSION_ROOT_MODE, SandboxImage,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use dockdash::{
     Arch, BlobCache, BuildDiagnostics, ClientProtocol, Image, ImageBuilder, Layer, PullPolicy,
     RegistryAuth,
 };
-use oci_client::errors::{OciDistributionError, OciErrorCode};
 use oci_client::Reference;
+use oci_client::errors::{OciDistributionError, OciErrorCode};
 use std::error::Error as StdError;
 use tokio::time::sleep;
 use tracing::warn;
 
 /// The sandbox agent layered onto a GCP sandbox, released with the same version as
 /// `alien-build`, so a build never layers an agent from a different release than the CLI's.
+///
+/// A test build with `test-sandbox-agent-image` takes `ALIEN_TEST_SANDBOX_AGENT_IMAGE` instead
+/// when it is set, so a live test proves the agent of the tree it runs from.
 pub fn sandbox_agent_image() -> String {
+    #[cfg(feature = "test-sandbox-agent-image")]
+    if let Some(image) = test_sandbox_agent_image() {
+        return image;
+    }
     format!(
         "ghcr.io/alienplatform/alien-sandbox-agent:v{}",
         env!("CARGO_PKG_VERSION")
     )
+}
+
+#[cfg(feature = "test-sandbox-agent-image")]
+fn test_sandbox_agent_image() -> Option<String> {
+    std::env::var("ALIEN_TEST_SANDBOX_AGENT_IMAGE")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Test builds only: the agent named by `ALIEN_TEST_SANDBOX_AGENT_IMAGE`, when it is on a
+/// loopback registry (a registry the live test runs beside the build), is pulled over plain HTTP.
+/// Any other agent, also one on a loopback registry, and every other registry keep `protocol`.
+#[cfg(feature = "test-sandbox-agent-image")]
+pub(crate) fn with_test_agent_registry(
+    protocol: ClientProtocol,
+    agent_image: &str,
+) -> ClientProtocol {
+    if test_sandbox_agent_image().as_deref() != Some(agent_image) {
+        return protocol;
+    }
+    with_loopback_agent_registry(protocol, agent_image)
+}
+
+#[cfg(feature = "test-sandbox-agent-image")]
+fn with_loopback_agent_registry(protocol: ClientProtocol, agent_image: &str) -> ClientProtocol {
+    let Ok(reference) = Reference::try_from(agent_image) else {
+        return protocol;
+    };
+    let registry = reference.registry().to_string();
+    let host = registry.split(':').next().unwrap_or_default();
+    if host != "127.0.0.1" && host != "localhost" {
+        return protocol;
+    }
+    match protocol {
+        ClientProtocol::Http => ClientProtocol::Http,
+        ClientProtocol::Https => ClientProtocol::HttpsExcept(vec![registry]),
+        ClientProtocol::HttpsExcept(mut except) => {
+            except.push(registry);
+            ClientProtocol::HttpsExcept(except)
+        }
+    }
 }
 
 /// A layered sandbox image and the agent it was layered from.
@@ -501,11 +550,63 @@ fn merge_identity(base: Option<&str>, root_line: &str, exec_line: &str, exec_id:
     merged
 }
 
+#[cfg(all(test, feature = "test-sandbox-agent-image"))]
+mod loopback_agent_registry_tests {
+    use super::*;
+
+    /// Only a loopback agent registry is pulled over HTTP; a public one keeps HTTPS.
+    #[test]
+    fn only_a_loopback_agent_registry_gets_plain_http() {
+        let local = "127.0.0.1:5000/sandbox-agent-dev:abc";
+        assert!(matches!(
+            with_loopback_agent_registry(ClientProtocol::Https, local),
+            ClientProtocol::HttpsExcept(except) if except == vec!["127.0.0.1:5000".to_string()]
+        ));
+        assert!(matches!(
+            with_loopback_agent_registry(
+                ClientProtocol::HttpsExcept(vec!["127.0.0.1:45099".into()]),
+                "localhost:5000/agent:abc"
+            ),
+            ClientProtocol::HttpsExcept(except)
+                if except == vec!["127.0.0.1:45099".to_string(), "localhost:5000".to_string()]
+        ));
+        assert!(matches!(
+            with_loopback_agent_registry(
+                ClientProtocol::HttpsExcept(vec!["127.0.0.1:45099".into()]),
+                "ghcr.io/alienplatform/alien-sandbox-agent:v1.0.0"
+            ),
+            ClientProtocol::HttpsExcept(except) if except == vec!["127.0.0.1:45099".to_string()]
+        ));
+        // A plain-HTTP registry that is not loopback is never added: its pull stays HTTPS.
+        for remote in [
+            "10.0.0.5:5000/agent:abc",
+            "registry.example.com:5000/agent:abc",
+            "evil127.0.0.1.example.com/agent:abc",
+            "127.0.0.1.example.com:5000/agent:abc",
+        ] {
+            assert!(
+                matches!(
+                    with_loopback_agent_registry(ClientProtocol::Https, remote),
+                    ClientProtocol::Https
+                ),
+                "{remote}"
+            );
+            assert!(
+                matches!(
+                    with_loopback_agent_registry(ClientProtocol::HttpsExcept(vec![]), remote),
+                    ClientProtocol::HttpsExcept(except) if except.is_empty()
+                ),
+                "{remote}"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dockdash::test_utils::setup_local_registry;
     use dockdash::PushOptions;
+    use dockdash::test_utils::setup_local_registry;
     use httpmock::Method::GET;
     use oci_client::client::{Client, ClientConfig};
     use std::io::Read;

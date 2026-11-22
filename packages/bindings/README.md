@@ -107,6 +107,22 @@ const publicUrl = await database.getPublicUrl() // string | null
 Use the internal URL for calls between resources in the same deployment. Use
 the public URL only when the caller is outside that private network.
 
+## Linked services in sandboxes
+
+A sandbox resource declared with `.link(api)` passes each linked service's binding to every
+command it runs, as `ALIEN_<ID>_BINDING`, so code in the sandbox reads it with
+`container("api")`. The parent reads the same internal URL:
+
+```ts
+import { sandbox } from "@alienplatform/bindings"
+
+const tools = sandbox("tools")
+const apiUrl = await tools.linkUrl("api", 8080) // string | null
+```
+
+See [sandbox links](../core/SANDBOX_LINKS.md) for what a link reaches and the platforms that
+support it.
+
 ## Postgres
 
 Postgres is connection-only: every backend speaks the same wire protocol, so the

@@ -26,6 +26,7 @@ fn config(egress: SandboxEgressMode) -> SandboxSessionConfig {
         egress,
         preview_ports: Vec::new(),
         env: HashMap::new(),
+        links: Vec::new(),
     }
 }
 
