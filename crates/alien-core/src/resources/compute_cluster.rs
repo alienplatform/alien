@@ -8,7 +8,7 @@
 //! - Launch templates/instance configurations
 
 use crate::error::{ErrorData, Result};
-use crate::instance_catalog::{is_same_architecture_machine, Architecture};
+use crate::instance_catalog::{find_instance_type, is_same_architecture_machine, Architecture};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef};
 use crate::{PermissionProfile, Platform, ResourceType};
 use alien_error::AlienError;
@@ -215,6 +215,24 @@ impl CapacityGroup {
         }
         (self.nested_virtualization == Some(true))
             .then(|| self.aws_filesystem_size_gib().max(20).min(i32::MAX as u64) as i32)
+    }
+
+    /// The `CpuOptions.NestedVirtualization` value an AWS launch template for this group
+    /// sends when it names `instance_type`, or `None` for no CPU options.
+    ///
+    /// Bare metal gives guests KVM from the hardware and AWS rejects the option there, so it
+    /// gets an explicit `disabled`: a version created with `SourceVersion` inherits every
+    /// field it omits and would otherwise keep `enabled`.
+    pub fn aws_nested_virtualization(&self, instance_type: &str) -> Option<&'static str> {
+        let bare_metal = find_instance_type(Platform::Aws, instance_type)
+            .is_some_and(|spec| spec.bare_metal);
+        if bare_metal {
+            Some("disabled")
+        } else if self.nested_virtualization == Some(true) {
+            Some("enabled")
+        } else {
+            None
+        }
     }
 
     /// Whether `other` asks for different disks than this group: another root
@@ -586,6 +604,34 @@ impl ResourceDefinition for ComputeCluster {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aws_nested_virtualization_follows_the_machine() {
+        let group = |nested: Option<bool>| CapacityGroup {
+            group_id: "general".into(),
+            instance_type: None,
+            profile: None,
+            min_size: 1,
+            max_size: 1,
+            scale_policy: None,
+            nested_virtualization: nested,
+            data_disk_gib_range: None,
+        };
+        for (instance_type, nested, expected) in [
+            ("c8id.4xlarge", Some(true), Some("enabled")),
+            ("c8id.4xlarge", None, None),
+            ("m7g.large", Some(false), None),
+            ("c8id.metal-48xl", Some(true), Some("disabled")),
+            ("m8id.metal-96xl", None, Some("disabled")),
+            ("c5.metal", Some(true), Some("disabled")),
+        ] {
+            assert_eq!(
+                group(nested).aws_nested_virtualization(instance_type),
+                expected,
+                "{instance_type} nested={nested:?}"
+            );
+        }
+    }
 
     #[test]
     fn aws_disk_sizing_preserves_rounding_minimums_and_saturation() {

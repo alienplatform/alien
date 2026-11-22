@@ -609,6 +609,11 @@ pub fn plan_roll(
             ebs: Some(ebs(size)),
         });
     }
+    let cpu_options = group
+        .aws_nested_virtualization(&instance_type)
+        .map(|value| LaunchTemplateCpuOptions {
+            nested_virtualization: Some(value.to_string()),
+        });
     let data = RequestLaunchTemplateData::builder()
         .image_id(request.machine_image.clone())
         .instance_type(instance_type)
@@ -635,11 +640,7 @@ pub fn plan_roll(
             // The machine reads its capacity group from its tags.
             instance_metadata_tags: Some("enabled".to_string()),
         })
-        .maybe_cpu_options((group.nested_virtualization == Some(true)).then(|| {
-            LaunchTemplateCpuOptions {
-                nested_virtualization: Some("enabled".to_string()),
-            }
-        }))
+        .maybe_cpu_options(cpu_options)
         .build();
     Ok(RollPlan {
         template_name: format!("{base}-lt"),
@@ -1548,6 +1549,33 @@ mod tests {
             reason(roll(&unset, &request())),
             "Refused: setup fixed no machine network for this verifier, so it launches no machines"
         );
+    }
+
+    /// The CPU option follows the machine the template launches, which the install picks when
+    /// the signed group leaves it open: bare metal must not get nested virtualization enabled.
+    #[test]
+    fn nested_virtualization_follows_the_launched_machine() {
+        let mut nested = group(None);
+        nested.nested_virtualization = Some(true);
+        let release = signed(nested, &[("machine-agent/linux-x86_64", AGENT)]);
+        let sent = |machine: &str| {
+            let request = RollMachines {
+                release: signed_release(1, &release),
+                instance_type: Some(machine.to_string()),
+                ..request()
+            };
+            let image = ImageFacts {
+                architecture: "x86_64".to_string(),
+                ..arm_image(PUBLISHER)
+            };
+            plan_roll(&place(), &release, &request, &pins(), &image)
+                .unwrap()
+                .data
+                .cpu_options
+                .and_then(|options| options.nested_virtualization)
+        };
+        assert_eq!(sent("c8id.4xlarge").as_deref(), Some("enabled"));
+        assert_eq!(sent("c8id.metal-48xl").as_deref(), Some("disabled"));
     }
 
     #[test]
