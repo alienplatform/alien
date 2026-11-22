@@ -88,6 +88,8 @@ from = "m8i-flex.large"
 to = "m8i-flex.16xlarge"
 nested_virt = true
 
+# The "d" series list their local NVMe, but hosts do not mount it: workload storage is the
+# configurable EBS disk, as on m8i and c8i.
 [[aws.series]]
 series = "m8id"
 category = "GeneralPurpose"
@@ -133,6 +135,7 @@ from = "c8i-flex.large"
 to = "c8i-flex.16xlarge"
 nested_virt = true
 
+# Local NVMe not mounted, as for m8id.
 [[aws.series]]
 series = "c8id"
 category = "ComputeOptimized"
