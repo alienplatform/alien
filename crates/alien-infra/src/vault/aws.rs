@@ -1632,14 +1632,25 @@ mod gateway_grant_tests {
     /// with setup credentials. It writes it to the gateway's role as setup left that role:
     /// tagged `managed-by=setup` and unbounded. It neither refuses that role as not its own nor
     /// attaches the deployment boundary to it.
+    ///
+    /// When the vault step runs before the service-account update on an install an earlier
+    /// direct setup wrote (the gateway role tagged `managed-by=runtime` under the deployment
+    /// boundary), the vault step brings the role to the setup shape first: retag, then remove
+    /// the boundary, then write the grant.
     #[tokio::test]
     async fn direct_setup_grants_the_gateway_config_read_on_its_unbounded_setup_role() {
+        for migrated in [true, false] {
+            direct_setup_grants_the_gateway_config_read(migrated).await;
+        }
+    }
+
+    async fn direct_setup_grants_the_gateway_config_read(migrated: bool) {
         let written = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
         let mut iam = MockIamApi::new();
         // Every other role is a bounded, runtime-tagged one, which needs no boundary call either.
-        iam.expect_get_role().returning(|name| {
+        iam.expect_get_role().returning(move |name| {
             let gateway = name == GATEWAY_ROLE;
-            let tags: Vec<(String, String)> = if gateway {
+            let tags: Vec<(String, String)> = if gateway && migrated {
                 alien_core::setup_resource_tags(
                     "test",
                     "sandbox-egress-gateway-sa",
@@ -1664,7 +1675,7 @@ mod gateway_grant_tests {
                 "Arn": format!("arn:aws:iam::123456789012:role/{name}"), "CreateDate": "2026-01-01",
                 "Tags": {"member": tags}
             });
-            if !gateway {
+            if !gateway || !migrated {
                 role["PermissionsBoundary"] = serde_json::json!({
                     "PermissionsBoundaryType": "Policy",
                     "PermissionsBoundaryArn": BOUNDARY,
@@ -1676,8 +1687,31 @@ mod gateway_grant_tests {
             )
         });
         iam.expect_put_role_permissions_boundary().never();
-        iam.expect_tag_role().never();
-        iam.expect_delete_role_permissions_boundary().never();
+        let recorded = written.clone();
+        iam.expect_tag_role()
+            .times(usize::from(!migrated))
+            .returning(move |role, tags| {
+                assert_eq!(role, GATEWAY_ROLE);
+                assert!(tags
+                    .iter()
+                    .any(|tag| tag.key == "managed-by" && tag.value == "setup"));
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((role.to_string(), "tag:managed-by=setup".to_string()));
+                Ok(())
+            });
+        let recorded = written.clone();
+        iam.expect_delete_role_permissions_boundary()
+            .times(usize::from(!migrated))
+            .returning(move |role| {
+                assert_eq!(role, GATEWAY_ROLE);
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((role.to_string(), "delete-boundary".to_string()));
+                Ok(())
+            });
         iam.expect_list_role_policies().returning(|_| {
             Ok(
                 serde_json::from_value(serde_json::json!({"ListRolePoliciesResult": {
@@ -1762,9 +1796,23 @@ mod gateway_grant_tests {
             .unwrap();
         executor.step().await.unwrap();
         let written = written.lock().unwrap();
-        assert!(
-            written.iter().any(|(role, _)| role == GATEWAY_ROLE),
-            "{written:?}"
-        );
+        let gateway: Vec<_> = written
+            .iter()
+            .filter(|(role, _)| role == GATEWAY_ROLE)
+            .map(|(_, call)| call.as_str())
+            .collect();
+        let grant = gateway
+            .iter()
+            .position(|call| !call.starts_with("tag:") && *call != "delete-boundary")
+            .unwrap_or_else(|| panic!("no grant on the gateway role: {written:?}"));
+        if migrated {
+            assert_eq!(grant, 0, "{written:?}");
+        } else {
+            assert_eq!(
+                &gateway[..grant],
+                ["tag:managed-by=setup", "delete-boundary"],
+                "{written:?}"
+            );
+        }
     }
 }

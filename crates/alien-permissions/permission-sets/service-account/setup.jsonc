@@ -100,12 +100,7 @@
                 "aws:RequestTag/${managedByTag}": "setup"
               },
               "ForAllValues:StringEquals": {
-                "aws:TagKeys": [
-                  "${managedByTag}",
-                  "${stackTag}",
-                  "${resourceTag}",
-                  "resource-type"
-                ]
+                "aws:TagKeys": ["${managedByTag}", "${stackTag}", "${resourceTag}", "resource-type"]
               }
             }
           }
@@ -129,12 +124,7 @@
                 "aws:RequestTag/${managedByTag}": "setup"
               },
               "ForAllValues:StringEquals": {
-                "aws:TagKeys": [
-                  "${managedByTag}",
-                  "${stackTag}",
-                  "${resourceTag}",
-                  "resource-type"
-                ]
+                "aws:TagKeys": ["${managedByTag}", "${stackTag}", "${resourceTag}", "resource-type"]
               },
               "StringEqualsIfExists": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",

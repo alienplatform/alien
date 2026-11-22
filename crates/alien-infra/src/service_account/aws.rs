@@ -2157,16 +2157,25 @@ mod tests {
         }
     }
 
-    /// Deleting the setup-tagged, unbounded gateway role removes its policies and the role,
-    /// without attaching the boundary, also once the stack no longer holds the gateway.
+    /// Deleting the gateway role removes its policies and the role, without attaching the
+    /// boundary, also once the stack no longer holds the gateway. A role an earlier direct setup
+    /// wrote (tagged `managed-by=runtime`, under the deployment boundary) is deleted as it is:
+    /// no retag and no boundary removal, which a setup identity from before this release is
+    /// not granted.
     #[tokio::test]
     async fn delete_removes_the_setup_owned_sandbox_gateway_role() {
-        for internet in [true, false] {
+        for (internet, attached, managed_by) in [
+            (true, None, "setup"),
+            (false, None, "setup"),
+            (true, Some(BOUNDARY), "runtime"),
+            (false, Some(BOUNDARY), "runtime"),
+        ] {
             let mut iam = MockIamApi::new();
             let mut sequence = mockall::Sequence::new();
-            expect_gateway_get_role(&mut iam, &mut sequence, None, "setup");
+            expect_gateway_get_role(&mut iam, &mut sequence, attached, managed_by);
             iam.expect_put_role_permissions_boundary().never();
             iam.expect_tag_role().never();
+            iam.expect_delete_role_permissions_boundary().never();
             iam.expect_list_attached_role_policies()
                 .times(1)
                 .in_sequence(&mut sequence)
@@ -2216,7 +2225,7 @@ mod tests {
                     .unwrap()
                     .state,
                 AwsServiceAccountState::Deleted,
-                "internet={internet}"
+                "internet={internet} {attached:?} {managed_by}"
             );
         }
     }

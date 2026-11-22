@@ -108,7 +108,13 @@ impl<'a> IamRoleWriter<'a> {
     ) -> Result<()> {
         if let Some(resource_type) = self.setup_owned {
             return self
-                .prepare_setup_owned(role_name, deployment_prefix, resource_id, resource_type)
+                .prepare_setup_owned(
+                    role_name,
+                    deployment_prefix,
+                    resource_id,
+                    resource_type,
+                    false,
+                )
                 .await;
         }
         if self.permissions_boundary.is_none() {
@@ -127,8 +133,16 @@ impl<'a> IamRoleWriter<'a> {
         audit_attached_policies: bool,
     ) -> Result<()> {
         if let Some(resource_type) = self.setup_owned {
+            // Only a role that stays is migrated. A role being deleted is only checked, so an
+            // install whose setup identity predates the retag and unbind grants can still delete it.
             return self
-                .prepare_setup_owned(role_name, deployment_prefix, resource_id, resource_type)
+                .prepare_setup_owned(
+                    role_name,
+                    deployment_prefix,
+                    resource_id,
+                    resource_type,
+                    audit_attached_policies,
+                )
                 .await;
         }
         let Some(boundary) = self.permissions_boundary else {
@@ -157,13 +171,15 @@ impl<'a> IamRoleWriter<'a> {
 
     /// A setup-owned role must belong to this deployment's resource, tagged by setup or, from an
     /// earlier direct setup, by the runtime. Such an earlier role is retagged `managed-by=setup`
-    /// and loses the deployment boundary that release attached. Any other boundary is refused.
+    /// and loses the deployment boundary that release attached, when `migrate` is set. Any other
+    /// boundary is refused.
     async fn prepare_setup_owned(
         &self,
         role_name: &str,
         deployment_prefix: &str,
         resource_id: &str,
         resource_type: &str,
+        migrate: bool,
     ) -> Result<()> {
         let role = self.iam.get_role(role_name).await?.get_role_result.role;
         let has = |tags: &[(String, String)]| {
@@ -198,6 +214,9 @@ impl<'a> IamRoleWriter<'a> {
                 message: format!("Role '{role_name}' has a permissions boundary setup did not attach; reconcile it before setup writes this role"),
                 field_name: Some("permissionsBoundary".to_owned()),
             }));
+        }
+        if !migrate {
+            return Ok(());
         }
         if !tagged_for_setup {
             self.iam
