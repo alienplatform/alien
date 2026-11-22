@@ -452,12 +452,12 @@ jobs:
           # from the test run, so the package rots silently until something else builds
           # it. Skip tests with `--filter-expr` instead: the package still compiles, so
           # a break in it fails this job. `alien-test-server` (the default app for the
-          # manually dispatched e2e-cloud workflow, and so not built anywhere else) sat
+          # manually run end-to-end suites, and so not built anywhere else) sat
           # broken behind `--exclude` exactly this way from #169 until ALIEN-335 found it.
           #
           # `alien-test-server` has no Rust unit tests; it is filtered out rather than
           # merely uncovered so that tests added to it later don't start running here by
-          # accident — it is exercised by the e2e-cloud workflow against real clouds.
+          # accident — it is only exercised by manual runs against real clouds.
           #
           # One clause per line, joined with spaces into a single nextest filterset, so
           # that a missing or mistyped clause is visible when reading the diff.
@@ -483,7 +483,7 @@ jobs:
             'and not binary_id(alien-worker-runtime::cloudrun)'
             'and not binary_id(alien-worker-runtime::lambda)'
 
-            # alien-test registry suites: e2e-cloud.yml runs them against real clouds.
+            # alien-test registry suites: they need real clouds and are run manually.
             'and not binary_id(alien-test::distribution)'
             'and not binary_id(alien-test::pull)'
             'and not binary_id(alien-test::push)'

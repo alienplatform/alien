@@ -103,7 +103,7 @@ terraform init
 terraform apply
 ```
 
-In CI, `cloud-tests.yml` and `e2e-cloud.yml` both run `terraform apply` automatically. Variables are injected from GitHub secrets.
+In CI, `cloud-tests.yml` runs `terraform apply` automatically. Variables are injected from GitHub secrets.
 
 ### Rotating the GCP target project
 
@@ -144,12 +144,6 @@ This writes two files at the repo root:
 
 - **`.env.test`** — credentials and resource identifiers for all three clouds. Tests load this file to get their configuration.
 - **`alien-manager.test.toml`** — a manager config using the AWS test resources. This validates that the TOML format matches real infrastructure.
-
-For local development, download the CI-generated `.env.test` from 1Password instead:
-
-```bash
-op document get alien-test-env --vault <your-vault-name> --output .env.test
-```
 
 ### Validating the config chain
 

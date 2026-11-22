@@ -26,7 +26,7 @@ successful receipts must leave the queue empty. The test deletes all resources.
 It requires the same Bun, built SDK and native bindings addon as the other tests
 in that integration binary.
 
-The cloud E2E workflow's `storage-notifications` application runs the same
+The `storage-notifications` application runs the same
 fixture through AWS/GCP/Azure controller provisioning or AWS CloudFormation and
 AWS/GCP/Azure Terraform setup. Its seven test entry points are:
 
