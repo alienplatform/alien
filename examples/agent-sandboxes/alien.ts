@@ -60,7 +60,8 @@ const agent = new alien.Sandbox("agent")
   .defaultPolicy({ allow: ["link:model", "link:connector"] })
   .link(model)
   .link(connector)
-  .lifecycle({ maxLifetimeSeconds: 8 * 3600 })
+  // No lifetime ceiling: local development has none to enforce, and the router pauses idle threads.
+  .lifecycle({})
   .build()
 
 const runner = new alien.Container("runner")
