@@ -198,6 +198,14 @@ async fn a_session_holds_a_placeholder_and_its_gateway_sends_the_current_value()
         "{body}"
     );
 
+    // HTTPS to a host without a rule is spliced, and the bundle still holds the image's roots.
+    let body = fetch(&manager, &id, "https://example.com/", "X-Unrelated").await;
+    note(format!(
+        "no rule, https://example.com/ -> {} bytes",
+        body.len()
+    ));
+    assert!(body.contains("example domain"), "{body}");
+
     // The other session of the same sandbox gets nothing.
     let body = fetch(&manager, &other.container_id, link, "Authorization").await;
     note(format!("other session, link -> {body}"));
