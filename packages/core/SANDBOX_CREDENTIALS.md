@@ -85,6 +85,11 @@ Exactly one of `host` and `link`. At most 32 rules per sandbox. A rule cannot se
   restarts, or a full outage), the rules are gone until your app calls `updateCredentials`
   again; until then requests go out with the sandbox's placeholders. Calling it every turn, as
   above, covers this.
+- **Join window.** A replica that has just started (or been added) serves sandbox traffic
+  with the egress policy as usual, but injects no credentials for the first few seconds (about
+  15) until it has synced once after the other replicas can see it. Requests in that time go
+  out with the sandbox's placeholders and the upstream answers 401. This keeps a rule you
+  just removed from being applied by a replica that missed the removal.
 
 ## HTTPS and the sandbox CA
 

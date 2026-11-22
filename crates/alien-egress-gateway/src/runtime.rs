@@ -271,6 +271,9 @@ pub async fn build_after(
     let policies = Arc::new(PolicyStore::new(!replication.enabled(), budget));
     // Credential rules get a quarter of the policy budget on top of it; a full store refuses.
     let sandbox_credentials = Arc::new(CredentialStore::new((budget / 4).max(1)));
+    // A replica that joins others injects nothing until a sync that started after it became
+    // discoverable has finished (`Replication::complete_join`).
+    sandbox_credentials.set_serving(!replication.enabled());
     Ok(Gateway {
         replication,
         connections: Arc::new(crate::connections::Connections::default()),

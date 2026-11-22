@@ -499,6 +499,22 @@ impl Replication {
         Ok(())
     }
 
+    /// How long a replica that just became ready waits before its last sync: the other
+    /// replicas list only ready replicas, so until discovery has refreshed they may still
+    /// acknowledge writes without it.
+    pub const DISCOVERY_WINDOW: Duration = Duration::from_secs(15);
+
+    /// The last step of joining: a full sync that started after this replica became
+    /// discoverable. Only then does it inject credentials, so a set removed while it was
+    /// joining is never put on a request.
+    pub async fn complete_join(&self, live: &LiveGateway) -> Result<()> {
+        self.catch_up(live).await?;
+        if let Some(gateway) = live.snapshot() {
+            gateway.sandbox_credentials.set_serving(true);
+        }
+        Ok(())
+    }
+
     async fn sync_peers(&self, gateway: &Arc<crate::server::Gateway>) -> Result<()> {
         gateway.policies.expire_tombstones()?;
         for peer in self.peers().await? {
@@ -590,9 +606,21 @@ pub async fn run(live: Arc<LiveGateway>) -> Result<()> {
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_sync = None;
+    // When this replica became ready, while it still injects no credentials.
+    let mut joined: Option<tokio::time::Instant> = None;
     loop {
         tick.tick().await;
         if let Some(gateway) = live.snapshot() {
+            if gateway.policies.ready() && !gateway.sandbox_credentials.serving() {
+                let since = *joined.get_or_insert_with(tokio::time::Instant::now);
+                if since.elapsed() >= Replication::DISCOVERY_WINDOW {
+                    last_sync = Some(tokio::time::Instant::now());
+                    if let Err(error) = gateway.replication.complete_join(&live).await {
+                        tracing::warn!(code=%error.code, "replica synchronization failed");
+                    }
+                }
+                continue;
+            }
             if gateway.policies.ready()
                 && last_sync.is_some_and(|last: tokio::time::Instant| {
                     last.elapsed() < Duration::from_secs(30)
@@ -600,13 +628,9 @@ pub async fn run(live: Arc<LiveGateway>) -> Result<()> {
             {
                 continue;
             }
-            let was_ready = gateway.policies.ready();
             last_sync = Some(tokio::time::Instant::now());
             if let Err(error) = gateway.replication.catch_up(&live).await {
                 tracing::warn!(code=%error.code, "replica synchronization failed");
-            } else if !was_ready {
-                // Now discoverable: pull once more at once for writes that landed in between.
-                last_sync = None;
             }
         }
     }

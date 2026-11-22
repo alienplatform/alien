@@ -17,7 +17,10 @@ use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashMap},
     fmt,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
 };
 
 /// Record type in the JWS header; distinct from policy records and admin grants.
@@ -257,13 +260,25 @@ struct Stored {
 pub struct CredentialStore {
     entries: RwLock<BTreeMap<(String, String), Stored>>,
     max_bytes: usize,
+    /// False while a joining replica may still miss writes acknowledged by the others: it
+    /// holds sets but injects none, so a removed value is never put on a request.
+    serving: AtomicBool,
 }
 impl CredentialStore {
     pub fn new(max_bytes: usize) -> Self {
         Self {
             entries: RwLock::new(BTreeMap::new()),
             max_bytes,
+            serving: AtomicBool::new(true),
         }
+    }
+
+    /// Start (or end) the join window: while it is closed `rules_for` returns nothing.
+    pub fn set_serving(&self, serving: bool) {
+        self.serving.store(serving, Ordering::Release);
+    }
+    pub fn serving(&self) -> bool {
+        self.serving.load(Ordering::Acquire)
     }
 
     fn lock_error() -> AlienError<ErrorData> {
@@ -338,6 +353,9 @@ impl CredentialStore {
 
     /// The rules of one sandbox that apply to `target:port`, read at the moment of the request.
     pub fn rules_for(&self, aud: &str, sub: &str, target: &RuleTarget, port: u16) -> Vec<Rule> {
+        if !self.serving() {
+            return Vec::new();
+        }
         let Ok(entries) = self.entries.read() else {
             return Vec::new();
         };

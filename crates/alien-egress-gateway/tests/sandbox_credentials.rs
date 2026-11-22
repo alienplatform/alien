@@ -975,6 +975,101 @@ async fn a_replica_catching_up_also_gets_writes_acknowledged_while_it_pulled() {
     );
 }
 
+/// A replica that has just become ready may have missed writes the others acknowledged (they
+/// find it only once it is ready). It injects nothing until its last sync after that.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_joining_replica_injects_nothing_until_its_sync_after_becoming_discoverable() {
+    logs();
+    let key = key();
+    let listeners = [
+        TcpListener::bind("127.0.0.1:0").await.unwrap(),
+        TcpListener::bind("127.0.0.1:0").await.unwrap(),
+        TcpListener::bind("127.0.0.1:0").await.unwrap(),
+    ];
+    let admins: Vec<SocketAddr> = listeners.iter().map(|l| l.local_addr().unwrap()).collect();
+    let [la, lb, lc] = listeners;
+    let with_peers = |admin: SocketAddr, peers: &[SocketAddr]| {
+        let mut config = config(&key, json!([]), admin);
+        config["peers"] =
+            json!({"static": peers.iter().map(|p| p.to_string()).collect::<Vec<_>>()});
+        config
+    };
+    // A and B know each other, not C: replicas are found only once ready.
+    let a = start(with_peers(admins[0], &[admins[1]]), la).await;
+    let b = start(with_peers(admins[1], &[admins[0]]), lb).await;
+    for running in [&a, &b] {
+        let gateway = running.live.snapshot().unwrap();
+        gateway.policies.set_ready();
+        apply_policy(&gateway, &key, "box", Some(&Policy::Internet), 1);
+    }
+    let first = json!([{"host":"api.example.com","header":"Authorization","value":FIRST}]);
+    let base = now_ms();
+    assert_eq!(
+        put_credentials(
+            admins[0],
+            &grant(&key, "box", "PUT"),
+            &credential_record(&key, "box", base, first)
+        )
+        .await
+        .0,
+        204
+    );
+
+    // C joins and holds the first set, still not listed by A and B.
+    let c = start(with_peers(admins[2], &[admins[0]]), lc).await;
+    let gateway = c.live.snapshot().unwrap();
+    assert!(
+        !gateway.sandbox_credentials.serving(),
+        "a joining replica starts closed"
+    );
+    gateway.replication.catch_up(&c.live).await.unwrap();
+    assert!(gateway.policies.ready());
+    assert_eq!(version(admins[2], &key, "box").await[0], base);
+
+    // The app removes the rules; A and B acknowledge, C is not asked.
+    let removed = credential_record(&key, "box", base + 5, json!([]));
+    assert_eq!(
+        put_credentials(admins[0], &grant(&key, "box", "PUT"), &removed)
+            .await
+            .0,
+        204
+    );
+    let target = RuleTarget::Host("api.example.com".into());
+    assert!(
+        gateway
+            .sandbox_credentials
+            .rules_for(AUD, "box", &target, 443)
+            .is_empty(),
+        "C is ready and still holds the removed set, yet injects nothing"
+    );
+
+    // A newer set while C is still joining.
+    let second = json!([{"host":"api.example.com","header":"Authorization","value":SECOND}]);
+    assert_eq!(
+        put_credentials(
+            admins[1],
+            &grant(&key, "box", "PUT"),
+            &credential_record(&key, "box", base + 9, second)
+        )
+        .await
+        .0,
+        204
+    );
+    assert!(gateway
+        .sandbox_credentials
+        .rules_for(AUD, "box", &target, 443)
+        .is_empty());
+
+    // The sync after becoming discoverable opens it, with the new set only.
+    gateway.replication.complete_join(&c.live).await.unwrap();
+    assert!(gateway.sandbox_credentials.serving());
+    let rules = gateway
+        .sandbox_credentials
+        .rules_for(AUD, "box", &target, 443);
+    assert_eq!(rules.len(), 1);
+    assert_eq!(version(admins[2], &key, "box").await[0], base + 9);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn catch_up_skips_a_set_naming_a_link_this_replica_no_longer_declares() {
     logs();
