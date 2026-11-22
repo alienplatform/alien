@@ -12,8 +12,8 @@ use std::sync::Arc;
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{
     bindings::ServiceAccountBinding, AwsClientConfig, AwsCredentials, AwsEnvironmentInfo,
-    AzureClientConfig, AzureCredentials, AzureEnvironmentInfo, AzureResourceGroup,
-    AzureResourceGroupOutputs, ClientConfig, EnvironmentInfo, GcpClientConfig, GcpCredentials,
+    AzureEnvironmentInfo, AzureResourceGroup,
+    AzureResourceGroupOutputs, ClientConfig, EnvironmentInfo,
     GcpEnvironmentInfo, ManagementExternalId, Platform, RemoteStackManagement,
     RemoteStackManagementOutputs, Resource, ResourceLifecycle, ResourceOutputs, ResourceStatus,
     StackResourceState, StackState,
@@ -225,16 +225,10 @@ async fn aws_mints_the_extension_role_setup_created() {
     ));
 }
 
-fn gcp_resolver() -> ImpersonationCredentialResolver {
-    let base = ClientConfig::Gcp(Box::new(GcpClientConfig {
-        project_id: env("GOOGLE_MANAGEMENT_PROJECT_ID"),
-        region: env("GOOGLE_MANAGEMENT_REGION"),
-        credentials: GcpCredentials::ServiceAccountKey {
-            json: env("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY"),
-        },
-        service_overrides: None,
-        project_number: None,
-    }));
+async fn gcp_resolver() -> ImpersonationCredentialResolver {
+    let base = ClientConfig::Gcp(Box::new(
+        alien_gcp_clients::live_test::live_test_config("MANAGEMENT").await,
+    ));
     let provider: Arc<dyn BindingsProviderApi> = Arc::new(
         BindingsProvider::new(
             base,
@@ -290,6 +284,7 @@ async fn gcp_mints_the_extension_service_account_setup_created() {
 
     let started = std::time::Instant::now();
     let minted = gcp_resolver()
+        .await
         .resolve_extension_credentials(&deployment, &acme(account("acme-ext")))
         .await
         .unwrap_or_else(|error| panic!("{error:?}"));
@@ -325,6 +320,7 @@ async fn gcp_mints_the_extension_service_account_setup_created() {
         identity: account("billing-ext"),
     };
     let refused = gcp_resolver()
+        .await
         .resolve_extension_credentials(&deployment, &billing)
         .await
         .expect_err("setup created no billing identity");
@@ -403,16 +399,9 @@ async fn azure_reads_the_extension_identity_setup_created_from_arm() {
         ),
     ]);
     let reader = || {
-        ClientConfig::Azure(Box::new(AzureClientConfig {
-            subscription_id: subscription.clone(),
-            tenant_id: tenant.clone(),
-            region: Some(location.clone()),
-            credentials: AzureCredentials::ServicePrincipal {
-                client_id: env("AZURE_TARGET_CLIENT_ID"),
-                client_secret: env("AZURE_TARGET_CLIENT_SECRET"),
-            },
-            service_overrides: None,
-        }))
+        let mut config = alien_azure_clients::live_test::live_test_config("TARGET");
+        config.region = Some(location.clone());
+        ClientConfig::Azure(Box::new(config))
     };
     // The state records each client id read, so `check_identity` lets it through to ARM.
     let read = |client_id: String| {
