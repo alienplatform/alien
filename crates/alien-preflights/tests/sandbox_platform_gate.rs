@@ -149,36 +149,17 @@ async fn source_reaches_azure_and_gcp_frozen_through_the_runner() {
     }
 }
 
+/// `alien dev` runs the egress gateway beside the sandbox, so `internet` plans on Local.
 #[tokio::test]
-async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() {
-    for platform in [Platform::Local] {
+async fn local_hosts_the_gateway_for_internet_sandboxes() {
+    for egress in [SandboxEgress::Internet, SandboxEgress::Allow] {
         let mut declared = sandbox(None);
-        declared.egress = SandboxEgress::Internet;
+        declared.egress = egress;
         let result = PreflightRunner::new()
-            .run_compile_time_checks(&stack_with(declared), platform)
+            .run_compile_time_checks(&stack_with(declared), Platform::Local)
             .await
             .expect("preflight runs");
-        assert!(
-            !result.success,
-            "{platform} cannot host the gateway: {result:?}"
-        );
-        let rendered = format!("{result:?}");
-        assert!(
-            rendered.contains("SANDBOX_EGRESS_GATEWAY_UNAVAILABLE"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("agent"), "{rendered}");
-
-        let mut legacy = sandbox(None);
-        legacy.egress = SandboxEgress::Allow;
-        let result = PreflightRunner::new()
-            .run_compile_time_checks(&stack_with(legacy), platform)
-            .await
-            .expect("legacy preflight runs");
-        assert!(
-            result.success,
-            "released Allow stays available on {platform}: {result:?}"
-        );
+        assert!(result.success, "local plans it: {result:?}");
     }
 }
 
