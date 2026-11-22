@@ -77,6 +77,98 @@
           }
         }
       },
+      // The sandbox egress gateway's role. Setup creates it without the deployment's permissions
+      // boundary, which denies every role under it the gateway configuration, and tags it
+      // `managed-by=setup`, as the CloudFormation and Terraform setups do; management can then
+      // neither adopt nor change it, so only setup writes it. The provision grants on roles all
+      // require the boundary, so these grants name this deployment's gateway role alone. An
+      // earlier direct setup created that role bounded and tagged `managed-by=runtime`; setup
+      // retags it and removes that boundary.
+      {
+        "label": "create-sandbox-gateway-role",
+        "grant": {
+          "actions": ["iam:CreateRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-sandbox-egress-gateway-sa"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "setup"
+              },
+              "ForAllValues:StringEquals": {
+                "aws:TagKeys": [
+                  "${managedByTag}",
+                  "${stackTag}",
+                  "${resourceTag}",
+                  "resource-type"
+                ]
+              }
+            }
+          }
+        }
+      },
+      // CreateRole with tags also authorizes TagRole, with the new role's tags as its resource
+      // tags. IfExists keeps that working; an existing role must already be this stack's.
+      {
+        "label": "tag-sandbox-gateway-role",
+        "grant": {
+          "actions": ["iam:TagRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-sandbox-egress-gateway-sa"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "setup"
+              },
+              "ForAllValues:StringEquals": {
+                "aws:TagKeys": [
+                  "${managedByTag}",
+                  "${stackTag}",
+                  "${resourceTag}",
+                  "resource-type"
+                ]
+              },
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": ["runtime", "setup"]
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "write-sandbox-gateway-role",
+        "grant": {
+          "actions": [
+            "iam:PutRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:UpdateAssumeRolePolicy",
+            "iam:DeleteRolePermissionsBoundary",
+            "iam:DeleteRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-sandbox-egress-gateway-sa"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": ["runtime", "setup"]
+              }
+            }
+          }
+        }
+      },
       {
         // The Terraform AWS provider lists a role's instance profiles before deleting the role.
         "label": "read-setup-role-instance-profiles",

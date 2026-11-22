@@ -3,9 +3,7 @@ use crate::escape_control_characters as escaped;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::permissions::ManagementPermissions;
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
-use alien_core::sandbox_egress::{
-    has_internet_sandbox, is_managed_gateway, SANDBOX_EGRESS_GATEWAY_ID,
-};
+use alien_core::sandbox_egress::{is_managed_gateway, SANDBOX_EGRESS_GATEWAY_ID};
 use alien_core::{
     CustomResource, ExtensionManifest, Platform, ResourceType, SigningVerifier, Stack,
     DEPLOYER_SECRETS_VAULT_ID, SECRETS_VAULT_ID,
@@ -58,11 +56,12 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             "experimental/aws-opensearch",
         ]);
         let mut errors = Vec::new();
-        if has_internet_sandbox(stack)
-            && stack
-                .permissions
-                .profiles
-                .contains_key(SANDBOX_EGRESS_GATEWAY_ID)
+        // Reserved in every stack: a role written for this profile is the gateway's, which setup
+        // leaves without the deployment's permissions boundary.
+        if stack
+            .permissions
+            .profiles
+            .contains_key(SANDBOX_EGRESS_GATEWAY_ID)
         {
             errors.push(
                 "The sandbox gateway permission profile is reserved for preflight".to_string(),
@@ -139,7 +138,11 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             // (`environment_variable_applies`) treat the id as the gateway whether or not
             // the stack has an internet sandbox yet, so an application resource must
             // never hold it.
-            if resource_id == SANDBOX_EGRESS_GATEWAY_ID {
+            // The gateway's service account is named after its profile, and the same reason
+            // holds for it.
+            if resource_id == SANDBOX_EGRESS_GATEWAY_ID
+                || resource_id.strip_suffix("-sa") == Some(SANDBOX_EGRESS_GATEWAY_ID)
+            {
                 errors.push(format!(
                     "Resource ID '{resource_id}' is reserved for the sandbox gateway"
                 ));
@@ -487,6 +490,49 @@ mod tests {
             .add(container, ResourceLifecycle::Live)
             .build();
 
+        let result = AllowedUserResourcesCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("reserved for the sandbox gateway")));
+    }
+
+    /// The gateway's profile and service account names are reserved whether or not the stack
+    /// has an internet sandbox: a role written for them is left without the deployment boundary.
+    #[tokio::test]
+    async fn the_gateway_profile_and_service_account_are_reserved_without_an_internet_sandbox() {
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "app:latest".to_string(),
+            })
+            .permissions(SANDBOX_EGRESS_GATEWAY_ID.to_string())
+            .build();
+        let mut stack = Stack::new("test-stack".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        stack.permissions.profiles.insert(
+            SANDBOX_EGRESS_GATEWAY_ID.to_string(),
+            alien_core::permissions::PermissionProfile::new(),
+        );
+        let result = AllowedUserResourcesCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("The sandbox gateway permission profile is reserved")));
+
+        let account =
+            alien_core::ServiceAccount::new(format!("{SANDBOX_EGRESS_GATEWAY_ID}-sa")).build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(account, ResourceLifecycle::Frozen)
+            .build();
         let result = AllowedUserResourcesCheck
             .check(&stack, Platform::Aws)
             .await

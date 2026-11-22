@@ -2,11 +2,11 @@ use std::collections::HashSet;
 use std::time::Duration;
 use tracing::{info, warn};
 
-use crate::core::ResourceControllerContext;
+use crate::core::{aws_role_owner::AwsServiceAccountRoleWrite, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{
-    CreateRoleRequest, CreateRoleTag, IamApi, IamRoleWriter, TrustPolicyDocument,
-    TrustPolicyPrincipal, TrustPolicyPrincipalValue, TrustPolicyStatement,
+    CreateRoleRequest, IamApi, TrustPolicyDocument, TrustPolicyPrincipal,
+    TrustPolicyPrincipalValue, TrustPolicyStatement,
 };
 use alien_core::{
     standard_resource_tags, AwsIamRoleServiceAccountHeartbeatData, Build, ComputeCluster,
@@ -52,6 +52,10 @@ pub struct AwsServiceAccountController {
     /// value's SHA-256 (see [`redacted_trust`]); absent in older checkpoints.
     #[serde(default)]
     pub(crate) assume_role_policy: Option<String>,
+    /// Whether this role is written as a setup-owned role (see [`AwsServiceAccountRoleWrite`]),
+    /// recorded so its deletion is decided the same way after the stack drops the gateway.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) setup_owned_role: bool,
 }
 
 #[controller]
@@ -74,6 +78,8 @@ impl AwsServiceAccountController {
         self.generate_stack_policy_document(config, ctx)?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
+        let role_write = self.role_write(ctx, config)?;
+        self.setup_owned_role = role_write.setup_owned();
 
         let role_name = match &config.extension {
             Some(_) => {
@@ -112,35 +118,17 @@ impl AwsServiceAccountController {
                     ),
                 },
             )
-            .tags(if is_sandbox_gateway_service_account(&config.id) {
-                // Tagged as the template setups tag it: management adopts only roles tagged
-                // `managed-by=runtime`, so it can never attach the deployment boundary here.
-                alien_core::setup_resource_tags(
-                    ctx.resource_prefix,
-                    &config.id,
-                    ServiceAccount::RESOURCE_TYPE.as_ref(),
-                )
-                .into_iter()
-                .map(|(key, value)| CreateRoleTag { key, value })
-                .collect()
-            } else {
-                standard_resource_tags(ctx.resource_prefix, &config.id)
-                    .into_iter()
-                    .map(|(key, value)| CreateRoleTag { key, value })
-                    .collect()
-            })
+            .tags(role_write.writer(client.as_ref()).creation_tags(ctx.resource_prefix, &config.id))
             .build();
 
-        let created_role = IamRoleWriter::new(
-            client.as_ref(),
-            Self::role_permissions_boundary(ctx, config)?.as_deref(),
-        )
-        .create(role_request)
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to create IAM role '{}'", role_name),
-            resource_id: Some(config.id.clone()),
-        })?;
+        let created_role = role_write
+            .writer(client.as_ref())
+            .create(role_request)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create IAM role '{}'", role_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         let role_id = created_role.create_role_result.role.role_id;
         let role_arn = created_role.create_role_result.role.arn;
@@ -394,17 +382,16 @@ impl AwsServiceAccountController {
             ctx,
             live_trust.as_deref(),
         )?;
-        Self::release_gateway_role_boundary(ctx, client.as_ref(), role_name, config).await?;
-        IamRoleWriter::new(
-            client.as_ref(),
-            Self::role_permissions_boundary(ctx, config)?.as_deref(),
-        )
-        .prepare_existing(role_name, ctx.resource_prefix, &config.id)
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to prepare service account IAM role '{role_name}'"),
-            resource_id: Some(config.id.clone()),
-        })?;
+        let role_write = self.role_write(ctx, config)?;
+        self.setup_owned_role = role_write.setup_owned();
+        role_write
+            .writer(client.as_ref())
+            .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to prepare service account IAM role '{role_name}'"),
+                resource_id: Some(config.id.clone()),
+            })?;
         client
             .update_assume_role_policy(role_name, &policy)
             .await
@@ -485,12 +472,11 @@ impl AwsServiceAccountController {
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
 
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
-        match IamRoleWriter::new(
-            client.as_ref(),
-            ctx.aws_permissions_boundary_arn()?.as_deref(),
-        )
-        .prepare_for_removal(role_name, ctx.resource_prefix, &config.id)
-        .await
+        match self
+            .role_write(ctx, config)?
+            .writer(client.as_ref())
+            .prepare_for_removal(role_name, ctx.resource_prefix, &config.id)
+            .await
         {
             Ok(()) => {}
             Err(error)
@@ -818,96 +804,16 @@ impl AwsServiceAccountController {
     }
 }
 
-/// Whether `id` is the service account of the sandbox egress gateway Alien manages.
-fn is_sandbox_gateway_service_account(id: &str) -> bool {
-    id.strip_suffix("-sa") == Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
-}
-
 // Separate impl block for helper methods
 impl AwsServiceAccountController {
-    /// The permissions boundary of this service account's role: the deployment's, except for the
-    /// sandbox egress gateway's role, which stays unbounded as the CloudFormation and Terraform
-    /// setups create it. The deployment boundary denies every role under it access to the
-    /// gateway configuration, which the gateway itself reads. Management cannot write an
-    /// unbounded role, so the gateway role stays exactly as setup wrote it.
-    fn role_permissions_boundary(
+    /// How this service account's role is written: the stack's decision, kept setup-owned once
+    /// this controller wrote it so.
+    fn role_write(
+        &self,
         ctx: &ResourceControllerContext<'_>,
         config: &ServiceAccount,
-    ) -> Result<Option<String>> {
-        if is_sandbox_gateway_service_account(&config.id) {
-            return Ok(None);
-        }
-        ctx.aws_permissions_boundary_arn()
-    }
-
-    /// Brings a gateway role an earlier direct setup created to the template setups' shape: the
-    /// deployment boundary removed and the role tagged `managed-by=setup`, which management
-    /// cannot adopt. Runs only with setup credentials: management may not change this role.
-    async fn release_gateway_role_boundary(
-        ctx: &ResourceControllerContext<'_>,
-        client: &dyn IamApi,
-        role_name: &str,
-        config: &ServiceAccount,
-    ) -> Result<()> {
-        if !is_sandbox_gateway_service_account(&config.id) {
-            return Ok(());
-        }
-        let Some(deployment_boundary) = ctx.aws_permissions_boundary_arn()? else {
-            return Ok(());
-        };
-        let role = client
-            .get_role(role_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to read IAM role '{role_name}'"),
-                resource_id: Some(config.id.clone()),
-            })?
-            .get_role_result
-            .role;
-        let setup_tags = alien_core::setup_resource_tags(
-            ctx.resource_prefix,
-            &config.id,
-            ServiceAccount::RESOURCE_TYPE.as_ref(),
-        );
-        let tagged_for_setup = role.tags.as_ref().is_some_and(|tags| {
-            setup_tags.iter().all(|(key, value)| {
-                tags.member
-                    .iter()
-                    .any(|tag| &tag.key == key && &tag.value == value)
-            })
-        });
-        if !tagged_for_setup {
-            info!(role_name = %role_name, "Tagging the sandbox gateway role as setup-managed");
-            client
-                .tag_role(
-                    role_name,
-                    setup_tags
-                        .into_iter()
-                        .map(|(key, value)| CreateRoleTag { key, value })
-                        .collect(),
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to tag IAM role '{role_name}'"),
-                    resource_id: Some(config.id.clone()),
-                })?;
-        }
-        let attached = role
-            .permissions_boundary
-            .and_then(|boundary| boundary.permissions_boundary_arn);
-        if attached.as_deref() != Some(deployment_boundary.as_str()) {
-            return Ok(());
-        }
-        info!(role_name = %role_name, "Removing the deployment boundary from the sandbox gateway role");
-        client
-            .delete_role_permissions_boundary(role_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to remove the deployment boundary from IAM role '{role_name}'"
-                ),
-                resource_id: Some(config.id.clone()),
-            })
+    ) -> Result<AwsServiceAccountRoleWrite> {
+        AwsServiceAccountRoleWrite::for_own_role(ctx, &config.id, self.setup_owned_role)
     }
 
     async fn can_delete_role(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
@@ -990,16 +896,14 @@ impl AwsServiceAccountController {
                 .get(&config.id)
                 .is_some_and(|state| state.previous_config.is_some())
         {
-            IamRoleWriter::new(
-                client.as_ref(),
-                Self::role_permissions_boundary(ctx, config)?.as_deref(),
-            )
-            .prepare_existing(role_name, ctx.resource_prefix, &config.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to prepare service account IAM role '{role_name}'"),
-                resource_id: Some(config.id.clone()),
-            })?;
+            self.role_write(ctx, config)?
+                .writer(client.as_ref())
+                .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to prepare service account IAM role '{role_name}'"),
+                    resource_id: Some(config.id.clone()),
+                })?;
         }
 
         if !policy_document.is_empty() {
@@ -1140,16 +1044,14 @@ impl AwsServiceAccountController {
         if dropped.peek().is_none() {
             return Ok(());
         }
-        IamRoleWriter::new(
-            client.as_ref(),
-            Self::role_permissions_boundary(ctx, config)?.as_deref(),
-        )
-        .prepare_existing(role_name, ctx.resource_prefix, &config.id)
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to prepare service account IAM role '{role_name}'"),
-            resource_id: Some(config.id.clone()),
-        })?;
+        self.role_write(ctx, config)?
+            .writer(client.as_ref())
+            .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to prepare service account IAM role '{role_name}'"),
+                resource_id: Some(config.id.clone()),
+            })?;
         for policy_name in dropped {
             match client.delete_role_policy(role_name, &policy_name).await {
                 Ok(()) => info!(
@@ -1573,6 +1475,7 @@ impl AwsServiceAccountController {
             stack_permissions_applied: true,
             assume_role_policy: None,
             runtime_created: false,
+            setup_owned_role: false,
             _internal_stay_count: None,
         }
     }
@@ -1975,11 +1878,37 @@ mod tests {
         ServiceAccount::new("sandbox-egress-gateway-sa".into()).build()
     }
 
-    fn gateway_role(boundary: Option<&str>) -> serde_json::Value {
+    fn internet_sandbox() -> alien_core::Sandbox {
+        alien_core::Sandbox::new("agents".into())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://test/bundle.zip".into(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::Internet)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+                ..Default::default()
+            })
+            .build()
+    }
+
+    /// The gateway role as `tags` describe it: `"setup"` as setup writes it now, `"runtime"` as
+    /// an earlier direct setup wrote it.
+    fn gateway_role(boundary: Option<&str>, managed_by: &str) -> serde_json::Value {
+        let tags: Vec<(String, String)> = if managed_by == "setup" {
+            alien_core::setup_resource_tags("test", "sandbox-egress-gateway-sa", "service-account")
+                .into_iter()
+                .collect()
+        } else {
+            standard_resource_tags("test", "sandbox-egress-gateway-sa")
+                .into_iter()
+                .collect()
+        };
         let mut role = serde_json::json!({
             "Path": "/", "RoleName": "test-sandbox-egress-gateway-sa", "RoleId": "id",
             "Arn": "arn:aws:iam::123456789012:role/test-sandbox-egress-gateway-sa", "CreateDate": "2026-01-01",
-            "Tags": {"member": standard_resource_tags("test", "sandbox-egress-gateway-sa").into_iter()
+            "Tags": {"member": tags.into_iter()
                 .map(|(key, value)| serde_json::json!({"Key": key, "Value": value}))
                 .collect::<Vec<_>>()}
         });
@@ -2003,8 +1932,70 @@ mod tests {
         }
     }
 
+    /// A bounded deployment whose stack has the gateway's service account, with the managed
+    /// gateway (an internet sandbox) or, with `internet` false, without it.
+    async fn gateway_executor(
+        iam: MockIamApi,
+        controller: AwsServiceAccountController,
+        internet: bool,
+    ) -> SingleControllerExecutor {
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut management =
+            crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready(
+                "test-management",
+            );
+        management.permissions_boundary_arn = Some(BOUNDARY.to_string());
+        let mut builder = SingleControllerExecutor::builder()
+            .resource(gateway_account())
+            .previous_resource(gateway_account())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .with_dependency(
+                alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                management,
+            )
+            .service_provider(Arc::new(provider));
+        if internet {
+            builder = builder
+                .with_stack_resource(internet_sandbox(), alien_core::ResourceLifecycle::Live);
+        }
+        let executor = builder.build().await.unwrap();
+        executor.with_context(|ctx| {
+            assert_eq!(
+                crate::core::aws_role_owner::is_managed_gateway_service_account(
+                    ctx.desired_stack,
+                    "sandbox-egress-gateway-sa"
+                ),
+                internet
+            );
+        });
+        executor
+    }
+
+    fn expect_gateway_get_role(
+        iam: &mut MockIamApi,
+        sequence: &mut mockall::Sequence,
+        boundary: Option<&'static str>,
+        managed_by: &'static str,
+    ) {
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(move |name| {
+                assert_eq!(name, "test-sandbox-egress-gateway-sa");
+                Ok(serde_json::from_value(serde_json::json!({
+                    "GetRoleResult": {"Role": gateway_role(boundary, managed_by)}
+                }))
+                .unwrap())
+            });
+    }
+
     /// The deployment boundary denies every role under it the gateway configuration, so the
-    /// gateway's own role is created without it, as the CloudFormation and Terraform setups do.
+    /// gateway's own role is created without it and tagged as the template setups tag it.
     #[tokio::test]
     async fn create_leaves_the_sandbox_gateway_role_without_the_deployment_boundary() {
         let mut iam = MockIamApi::new();
@@ -2018,47 +2009,73 @@ mod tests {
                 .map(|tag| (tag.key, tag.value))
                 .collect();
             assert_eq!(tags.get("managed-by").map(String::as_str), Some("setup"));
+            assert_eq!(
+                tags.get("resource-type").map(String::as_str),
+                Some("service-account")
+            );
             Ok(serde_json::from_value(
-                serde_json::json!({"CreateRoleResult": {"Role": gateway_role(None)}}),
+                serde_json::json!({"CreateRoleResult": {"Role": gateway_role(None, "setup")}}),
             )
             .unwrap())
         });
-        let mut executor = executor_with_controller(
-            iam,
-            AwsServiceAccountController::default(),
-            true,
-            gateway_account(),
-        )
-        .await;
+        let mut executor =
+            gateway_executor(iam, AwsServiceAccountController::default(), true).await;
         executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AwsServiceAccountController>()
+            .unwrap();
         assert_eq!(
-            executor
+            controller.state,
+            AwsServiceAccountState::ApplyingStackPermissions
+        );
+        assert!(controller.setup_owned_role);
+    }
+
+    /// Without an internet sandbox the stack has no managed gateway, and a service account of
+    /// that name is written like any other: bounded and tagged `managed-by=runtime`.
+    /// (Preparation refuses such a profile or account name; the controller does not rely on it.)
+    #[tokio::test]
+    async fn without_an_internet_sandbox_the_gateway_account_name_stays_bounded() {
+        let mut iam = MockIamApi::new();
+        iam.expect_create_role().times(1).returning(|request| {
+            assert_eq!(request.permissions_boundary.as_deref(), Some(BOUNDARY));
+            assert!(request
+                .tags
+                .unwrap()
+                .iter()
+                .any(|tag| tag.key == "managed-by" && tag.value == "runtime"));
+            Ok(serde_json::from_value(
+                serde_json::json!({"CreateRoleResult": {"Role": gateway_role(Some(BOUNDARY), "runtime")}}),
+            )
+            .unwrap())
+        });
+        let mut executor =
+            gateway_executor(iam, AwsServiceAccountController::default(), false).await;
+        executor.step().await.unwrap();
+        assert!(
+            !executor
                 .internal_state::<AwsServiceAccountController>()
                 .unwrap()
-                .state,
-            AwsServiceAccountState::ApplyingStackPermissions
+                .setup_owned_role
         );
     }
 
-    /// An earlier direct setup attached the deployment boundary to the gateway role. The next
-    /// setup run removes it and does not adopt the role again.
+    /// An earlier direct setup created the gateway role bounded and tagged `managed-by=runtime`.
+    /// The next setup run retags it and removes that boundary, then writes its trust. A role
+    /// already as setup writes it gets neither call.
     #[tokio::test]
-    async fn update_removes_the_deployment_boundary_from_the_sandbox_gateway_role() {
-        for attached in [Some(BOUNDARY), None] {
+    async fn update_brings_the_sandbox_gateway_role_to_the_setup_shape() {
+        for (attached, managed_by) in [
+            (Some(BOUNDARY), "runtime"),
+            (None, "runtime"),
+            (Some(BOUNDARY), "setup"),
+            (None, "setup"),
+        ] {
             let mut iam = MockIamApi::new();
             let mut sequence = mockall::Sequence::new();
-            iam.expect_get_role()
-                .times(1)
-                .in_sequence(&mut sequence)
-                .returning(move |name| {
-                    assert_eq!(name, "test-sandbox-egress-gateway-sa");
-                    Ok(serde_json::from_value(
-                        serde_json::json!({"GetRoleResult": {"Role": gateway_role(attached)}}),
-                    )
-                    .unwrap())
-                });
+            expect_gateway_get_role(&mut iam, &mut sequence, attached, managed_by);
             iam.expect_tag_role()
-                .times(1)
+                .times(usize::from(managed_by == "runtime"))
                 .in_sequence(&mut sequence)
                 .returning(|name, tags| {
                     assert_eq!(name, "test-sandbox-egress-gateway-sa");
@@ -2082,30 +2099,125 @@ mod tests {
                     assert_eq!(name, "test-sandbox-egress-gateway-sa");
                     Ok(())
                 });
-            let mut executor = executor_with_controller(
+            let mut executor = gateway_executor(
                 iam,
                 gateway_controller(AwsServiceAccountState::UpdateStart),
                 true,
-                gateway_account(),
             )
             .await;
             executor.step().await.unwrap();
+            assert!(
+                executor
+                    .internal_state::<AwsServiceAccountController>()
+                    .unwrap()
+                    .setup_owned_role,
+                "{attached:?} {managed_by}"
+            );
         }
     }
 
-    /// Other service accounts keep the deployment boundary.
-    #[test]
-    fn only_the_sandbox_gateway_service_account_is_left_unbounded() {
-        assert!(is_sandbox_gateway_service_account(
-            "sandbox-egress-gateway-sa"
-        ));
-        for id in [
-            "execution-sa",
-            "sandbox-egress-gateway",
-            "tools-sa",
-            "sandbox-egress-gateway-sa-sa",
+    /// A role tagged for another deployment, or carrying a boundary setup did not attach, is
+    /// not written.
+    #[tokio::test]
+    async fn update_refuses_a_gateway_role_setup_did_not_write() {
+        for (role, case) in [
+            (
+                {
+                    let mut role = gateway_role(None, "setup");
+                    role["Tags"]["member"] = serde_json::json!([
+                        {"Key": "deployment", "Value": "other"},
+                        {"Key": "managed-by", "Value": "setup"},
+                    ]);
+                    role
+                },
+                "another deployment's role",
+            ),
+            (
+                gateway_role(Some("arn:aws:iam::123456789012:policy/other"), "setup"),
+                "another boundary",
+            ),
         ] {
-            assert!(!is_sandbox_gateway_service_account(id), "{id}");
+            let mut iam = MockIamApi::new();
+            iam.expect_get_role().times(1).returning(move |_| {
+                Ok(serde_json::from_value(
+                    serde_json::json!({"GetRoleResult": {"Role": role.clone()}}),
+                )
+                .unwrap())
+            });
+            iam.expect_tag_role().never();
+            iam.expect_delete_role_permissions_boundary().never();
+            iam.expect_update_assume_role_policy().never();
+            let mut executor = gateway_executor(
+                iam,
+                gateway_controller(AwsServiceAccountState::UpdateStart),
+                true,
+            )
+            .await;
+            assert!(executor.step().await.is_err(), "{case}");
+        }
+    }
+
+    /// Deleting the setup-tagged, unbounded gateway role removes its policies and the role,
+    /// without attaching the boundary, also once the stack no longer holds the gateway.
+    #[tokio::test]
+    async fn delete_removes_the_setup_owned_sandbox_gateway_role() {
+        for internet in [true, false] {
+            let mut iam = MockIamApi::new();
+            let mut sequence = mockall::Sequence::new();
+            expect_gateway_get_role(&mut iam, &mut sequence, None, "setup");
+            iam.expect_put_role_permissions_boundary().never();
+            iam.expect_tag_role().never();
+            iam.expect_list_attached_role_policies()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_| {
+                    Ok(serde_json::from_value(serde_json::json!({
+                        "ListAttachedRolePoliciesResult": {"IsTruncated": false}
+                    }))
+                    .unwrap())
+                });
+            iam.expect_list_role_policies()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|name| {
+                    assert_eq!(name, "test-sandbox-egress-gateway-sa");
+                    Ok(
+                        serde_json::from_value(serde_json::json!({"ListRolePoliciesResult": {
+                            "PolicyNames": {"member": ["config-read"]}, "IsTruncated": false
+                        }}))
+                        .unwrap(),
+                    )
+                });
+            iam.expect_delete_role_policy()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|name, policy| {
+                    assert_eq!(
+                        (name, policy),
+                        ("test-sandbox-egress-gateway-sa", "config-read")
+                    );
+                    Ok(())
+                });
+            iam.expect_delete_role()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|name| {
+                    assert_eq!(name, "test-sandbox-egress-gateway-sa");
+                    Ok(())
+                });
+            let mut controller = gateway_controller(AwsServiceAccountState::DeleteStart);
+            controller.setup_owned_role = true;
+            let mut executor = gateway_executor(iam, controller, internet).await;
+            executor.step().await.unwrap();
+            executor.step().await.unwrap();
+            assert_eq!(
+                executor
+                    .internal_state::<AwsServiceAccountController>()
+                    .unwrap()
+                    .state,
+                AwsServiceAccountState::Deleted,
+                "internet={internet}"
+            );
         }
     }
 

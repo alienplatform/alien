@@ -1615,3 +1615,156 @@ mod binding_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod gateway_grant_tests {
+    use super::*;
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use alien_aws_clients::iam::MockIamApi;
+    use alien_core::{InitialSetupAuthority, Platform, ResourceLifecycle};
+    use std::sync::{Arc, Mutex};
+
+    const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/test-deployment-management-boundary";
+    /// The role name the test executor records for the gateway's service account.
+    const GATEWAY_ROLE: &str = "sandbox-egress-gateway-sa";
+
+    /// The secrets vault is setup-owned, so a direct setup writes the gateway's config-read grant
+    /// with setup credentials. It writes it to the gateway's role as setup left that role:
+    /// tagged `managed-by=setup` and unbounded. It neither refuses that role as not its own nor
+    /// attaches the deployment boundary to it.
+    #[tokio::test]
+    async fn direct_setup_grants_the_gateway_config_read_on_its_unbounded_setup_role() {
+        let written = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        let mut iam = MockIamApi::new();
+        // Every other role is a bounded, runtime-tagged one, which needs no boundary call either.
+        iam.expect_get_role().returning(|name| {
+            let gateway = name == GATEWAY_ROLE;
+            let tags: Vec<(String, String)> = if gateway {
+                alien_core::setup_resource_tags(
+                    "test",
+                    "sandbox-egress-gateway-sa",
+                    "service-account",
+                )
+                .into_iter()
+                .collect()
+            } else {
+                alien_core::standard_resource_tags(
+                    "test",
+                    name.strip_prefix("test-").unwrap_or(name),
+                )
+                .into_iter()
+                .collect()
+            };
+            let tags: Vec<_> = tags
+                .into_iter()
+                .map(|(key, value)| serde_json::json!({"Key": key, "Value": value}))
+                .collect();
+            let mut role = serde_json::json!({
+                "Path": "/", "RoleName": name, "RoleId": "id",
+                "Arn": format!("arn:aws:iam::123456789012:role/{name}"), "CreateDate": "2026-01-01",
+                "Tags": {"member": tags}
+            });
+            if !gateway {
+                role["PermissionsBoundary"] = serde_json::json!({
+                    "PermissionsBoundaryType": "Policy",
+                    "PermissionsBoundaryArn": BOUNDARY,
+                });
+            }
+            Ok(
+                serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": role}}))
+                    .unwrap(),
+            )
+        });
+        iam.expect_put_role_permissions_boundary().never();
+        iam.expect_tag_role().never();
+        iam.expect_delete_role_permissions_boundary().never();
+        iam.expect_list_role_policies().returning(|_| {
+            Ok(
+                serde_json::from_value(serde_json::json!({"ListRolePoliciesResult": {
+                    "PolicyNames": {"member": []}, "IsTruncated": false
+                }}))
+                .unwrap(),
+            )
+        });
+        // The management role's own vault grants are read back before they are written.
+        iam.expect_get_role_policy().returning(|role, name| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "IAM role policy".to_string(),
+                    resource_name: format!("{role}/{name}"),
+                },
+            ))
+        });
+        let recorded = written.clone();
+        iam.expect_put_role_policy()
+            .returning(move |role, name, document| {
+                assert!(
+                    role != GATEWAY_ROLE || document.contains("sandbox-egress-gateway-config"),
+                    "{name}: {document}"
+                );
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((role.to_string(), name.to_string()));
+                Ok(())
+            });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut management =
+            crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready(
+                "test-management",
+            );
+        management.permissions_boundary_arn = Some(BOUNDARY.to_string());
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(Vault::new("secrets".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .controller(AwsVaultController {
+                state: AwsVaultState::ApplyingResourcePermissions,
+                account_id: Some("123456789012".to_string()),
+                region: Some("us-east-1".to_string()),
+                vault_prefix: Some("test-secrets".to_string()),
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .with_dependency(
+                alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                management,
+            )
+            .with_stack_resource(
+                alien_core::Sandbox::new("agents".into())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "s3://test/bundle.zip".into(),
+                        bundled_from: None,
+                    })
+                    .egress(alien_core::SandboxEgress::Internet)
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                        ..Default::default()
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .with_stack_resource_state(
+                "sandbox-egress-gateway-sa",
+                serde_json::to_value(
+                    crate::service_account::AwsServiceAccountController::mock_ready(GATEWAY_ROLE),
+                )
+                .unwrap(),
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+        let written = written.lock().unwrap();
+        assert!(
+            written.iter().any(|(role, _)| role == GATEWAY_ROLE),
+            "{written:?}"
+        );
+    }
+}

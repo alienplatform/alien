@@ -432,9 +432,10 @@ fn bounded_setups_detach_obsolete_aws_managed_policies_from_unbounded_roles() {
 }
 
 /// The sandbox egress gateway's role carries no permissions boundary (setup creates it, and
-/// the deployment boundary would deny the gateway its own configuration). Management, which
-/// writes only bounded roles, can therefore neither change nor adopt it: no catalog set it
-/// holds allows a policy, trust or boundary write on that role, whatever tags the role has.
+/// the deployment boundary would deny the gateway its own configuration) and is tagged
+/// `managed-by=setup`. Management, which writes only bounded roles it tagged
+/// `managed-by=runtime`, can neither change nor adopt that role: no catalog set it holds allows
+/// a policy, trust or boundary write on it.
 #[test]
 fn management_cannot_write_or_adopt_the_unbounded_sandbox_gateway_role() {
     const GATEWAY_ROLE: &str = "arn:aws:iam::123456789012:role/my-stack-sandbox-egress-gateway-sa";
