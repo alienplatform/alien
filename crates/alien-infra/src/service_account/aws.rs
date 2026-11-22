@@ -5,8 +5,8 @@ use tracing::{info, warn};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{
-    CreateRoleRequest, CreateRoleTag, IamRoleWriter, TrustPolicyDocument, TrustPolicyPrincipal,
-    TrustPolicyPrincipalValue, TrustPolicyStatement,
+    CreateRoleRequest, CreateRoleTag, IamApi, IamRoleWriter, TrustPolicyDocument,
+    TrustPolicyPrincipal, TrustPolicyPrincipalValue, TrustPolicyStatement,
 };
 use alien_core::{
     standard_resource_tags, AwsIamRoleServiceAccountHeartbeatData, Build, ComputeCluster,
@@ -122,7 +122,7 @@ impl AwsServiceAccountController {
 
         let created_role = IamRoleWriter::new(
             client.as_ref(),
-            ctx.aws_permissions_boundary_arn()?.as_deref(),
+            Self::role_permissions_boundary(ctx, config)?.as_deref(),
         )
         .create(role_request)
         .await
@@ -383,9 +383,10 @@ impl AwsServiceAccountController {
             ctx,
             live_trust.as_deref(),
         )?;
+        Self::release_gateway_role_boundary(ctx, client.as_ref(), role_name, config).await?;
         IamRoleWriter::new(
             client.as_ref(),
-            ctx.aws_permissions_boundary_arn()?.as_deref(),
+            Self::role_permissions_boundary(ctx, config)?.as_deref(),
         )
         .prepare_existing(role_name, ctx.resource_prefix, &config.id)
         .await
@@ -806,8 +807,68 @@ impl AwsServiceAccountController {
     }
 }
 
+/// Whether `id` is the service account of the sandbox egress gateway Alien manages.
+fn is_sandbox_gateway_service_account(id: &str) -> bool {
+    id.strip_suffix("-sa") == Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
+}
+
 // Separate impl block for helper methods
 impl AwsServiceAccountController {
+    /// The permissions boundary of this service account's role: the deployment's, except for the
+    /// sandbox egress gateway's role, which stays unbounded as the CloudFormation and Terraform
+    /// setups create it. The deployment boundary denies every role under it access to the
+    /// gateway configuration, which the gateway itself reads. Management cannot write an
+    /// unbounded role, so the gateway role stays exactly as setup wrote it.
+    fn role_permissions_boundary(
+        ctx: &ResourceControllerContext<'_>,
+        config: &ServiceAccount,
+    ) -> Result<Option<String>> {
+        if is_sandbox_gateway_service_account(&config.id) {
+            return Ok(None);
+        }
+        ctx.aws_permissions_boundary_arn()
+    }
+
+    /// Removes the deployment boundary that earlier direct setups attached to the gateway role.
+    /// Runs only with setup credentials: management may not change an unbounded role.
+    async fn release_gateway_role_boundary(
+        ctx: &ResourceControllerContext<'_>,
+        client: &dyn IamApi,
+        role_name: &str,
+        config: &ServiceAccount,
+    ) -> Result<()> {
+        if !is_sandbox_gateway_service_account(&config.id) {
+            return Ok(());
+        }
+        let Some(deployment_boundary) = ctx.aws_permissions_boundary_arn()? else {
+            return Ok(());
+        };
+        let attached = client
+            .get_role(role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read IAM role '{role_name}'"),
+                resource_id: Some(config.id.clone()),
+            })?
+            .get_role_result
+            .role
+            .permissions_boundary
+            .and_then(|boundary| boundary.permissions_boundary_arn);
+        if attached.as_deref() != Some(deployment_boundary.as_str()) {
+            return Ok(());
+        }
+        info!(role_name = %role_name, "Removing the deployment boundary from the sandbox gateway role");
+        client
+            .delete_role_permissions_boundary(role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to remove the deployment boundary from IAM role '{role_name}'"
+                ),
+                resource_id: Some(config.id.clone()),
+            })
+    }
+
     async fn can_delete_role(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         if ctx.deployment_config.stack_settings.setup_management
             != alien_core::SetupManagement::Automatic
@@ -890,7 +951,7 @@ impl AwsServiceAccountController {
         {
             IamRoleWriter::new(
                 client.as_ref(),
-                ctx.aws_permissions_boundary_arn()?.as_deref(),
+                Self::role_permissions_boundary(ctx, config)?.as_deref(),
             )
             .prepare_existing(role_name, ctx.resource_prefix, &config.id)
             .await
@@ -1040,7 +1101,7 @@ impl AwsServiceAccountController {
         }
         IamRoleWriter::new(
             client.as_ref(),
-            ctx.aws_permissions_boundary_arn()?.as_deref(),
+            Self::role_permissions_boundary(ctx, config)?.as_deref(),
         )
         .prepare_existing(role_name, ctx.resource_prefix, &config.id)
         .await
@@ -1866,6 +1927,127 @@ mod tests {
                 controller.role_arn.as_deref(),
                 Some("arn:aws:iam::123456789012:role/test-execution-sa")
             );
+        }
+    }
+
+    fn gateway_account() -> ServiceAccount {
+        ServiceAccount::new("sandbox-egress-gateway-sa".into()).build()
+    }
+
+    fn gateway_role(boundary: Option<&str>) -> serde_json::Value {
+        let mut role = serde_json::json!({
+            "Path": "/", "RoleName": "test-sandbox-egress-gateway-sa", "RoleId": "id",
+            "Arn": "arn:aws:iam::123456789012:role/test-sandbox-egress-gateway-sa", "CreateDate": "2026-01-01",
+            "Tags": {"member": standard_resource_tags("test", "sandbox-egress-gateway-sa").into_iter()
+                .map(|(key, value)| serde_json::json!({"Key": key, "Value": value}))
+                .collect::<Vec<_>>()}
+        });
+        if let Some(boundary) = boundary {
+            role["PermissionsBoundary"] = serde_json::json!({
+                "PermissionsBoundaryType": "Policy",
+                "PermissionsBoundaryArn": boundary,
+            });
+        }
+        role
+    }
+
+    fn gateway_controller(state: AwsServiceAccountState) -> AwsServiceAccountController {
+        AwsServiceAccountController {
+            state,
+            role_name: Some("test-sandbox-egress-gateway-sa".to_string()),
+            role_arn: Some(
+                "arn:aws:iam::123456789012:role/test-sandbox-egress-gateway-sa".to_string(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    /// The deployment boundary denies every role under it the gateway configuration, so the
+    /// gateway's own role is created without it, as the CloudFormation and Terraform setups do.
+    #[tokio::test]
+    async fn create_leaves_the_sandbox_gateway_role_without_the_deployment_boundary() {
+        let mut iam = MockIamApi::new();
+        iam.expect_create_role().times(1).returning(|request| {
+            assert_eq!(request.role_name, "test-sandbox-egress-gateway-sa");
+            assert_eq!(request.permissions_boundary, None);
+            Ok(serde_json::from_value(
+                serde_json::json!({"CreateRoleResult": {"Role": gateway_role(None)}}),
+            )
+            .unwrap())
+        });
+        let mut executor = executor_with_controller(
+            iam,
+            AwsServiceAccountController::default(),
+            true,
+            gateway_account(),
+        )
+        .await;
+        executor.step().await.unwrap();
+        assert_eq!(
+            executor
+                .internal_state::<AwsServiceAccountController>()
+                .unwrap()
+                .state,
+            AwsServiceAccountState::ApplyingStackPermissions
+        );
+    }
+
+    /// An earlier direct setup attached the deployment boundary to the gateway role. The next
+    /// setup run removes it and does not adopt the role again.
+    #[tokio::test]
+    async fn update_removes_the_deployment_boundary_from_the_sandbox_gateway_role() {
+        for attached in [Some(BOUNDARY), None] {
+            let mut iam = MockIamApi::new();
+            let mut sequence = mockall::Sequence::new();
+            iam.expect_get_role()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(move |name| {
+                    assert_eq!(name, "test-sandbox-egress-gateway-sa");
+                    Ok(serde_json::from_value(
+                        serde_json::json!({"GetRoleResult": {"Role": gateway_role(attached)}}),
+                    )
+                    .unwrap())
+                });
+            iam.expect_delete_role_permissions_boundary()
+                .times(usize::from(attached.is_some()))
+                .in_sequence(&mut sequence)
+                .returning(|name| {
+                    assert_eq!(name, "test-sandbox-egress-gateway-sa");
+                    Ok(())
+                });
+            iam.expect_put_role_permissions_boundary().never();
+            iam.expect_update_assume_role_policy()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|name, _| {
+                    assert_eq!(name, "test-sandbox-egress-gateway-sa");
+                    Ok(())
+                });
+            let mut executor = executor_with_controller(
+                iam,
+                gateway_controller(AwsServiceAccountState::UpdateStart),
+                true,
+                gateway_account(),
+            )
+            .await;
+            executor.step().await.unwrap();
+        }
+    }
+
+    /// Other service accounts keep the deployment boundary.
+    #[test]
+    fn only_the_sandbox_gateway_service_account_is_left_unbounded() {
+        assert!(is_sandbox_gateway_service_account(
+            "sandbox-egress-gateway-sa"
+        ));
+        for id in [
+            "execution-sa",
+            "sandbox-egress-gateway",
+            "tools-sa",
+            "sandbox-egress-gateway-sa-sa",
+        ] {
+            assert!(!is_sandbox_gateway_service_account(id), "{id}");
         }
     }
 
