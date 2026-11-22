@@ -101,7 +101,7 @@ async fn make_fixture_with_group_inputs(
             .unwrap(),
     );
     let deployment_store: Arc<dyn DeploymentStore> =
-        Arc::new(SqliteDeploymentStore::new(db.clone()));
+        Arc::new(SqliteDeploymentStore::new(db.clone()).with_endpoint_source_ranges_enforced());
     let release_store: Arc<dyn ReleaseStore> = Arc::new(SqliteReleaseStore::new(db.clone()));
     let token_store: Arc<dyn TokenStore> = Arc::new(SqliteTokenStore::new(db.clone()));
 
@@ -5347,4 +5347,18 @@ async fn import_refuses_invalid_endpoint_source_ranges() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{ranges:?}: {json:#}");
         assert!(json.to_string().contains(expected), "{ranges:?}: {json:#}");
     }
+}
+
+#[tokio::test]
+async fn import_refuses_endpoint_source_ranges_the_manager_cannot_enforce() {
+    let mut fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    // A store that does not declare enforcement, as in an embedder without the controllers.
+    fixture.state.deployment_store = Arc::new(SqliteDeploymentStore::new(fixture.db.clone()));
+    let body = with_ranges(
+        aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports"),
+        &["203.0.113.0/24"],
+    );
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert!(json.to_string().contains("does not enforce"), "{json:#}");
 }

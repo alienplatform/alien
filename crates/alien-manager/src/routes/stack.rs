@@ -175,6 +175,12 @@ async fn stack_import_as(
     if let Err(message) = req.stack_settings.validate_endpoint_source_ranges() {
         return ErrorData::bad_request(message).into_response();
     }
+    if let Err(e) = super::deployments::refuse_unenforced_source_ranges(
+        &req.stack_settings,
+        state.deployment_store.enforces_endpoint_source_ranges(),
+    ) {
+        return e.into_response();
+    }
     let automatic = req.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
     let mut approved_automatic_installation = None;
     if automatic {
