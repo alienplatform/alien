@@ -430,3 +430,71 @@ fn bounded_setups_detach_obsolete_aws_managed_policies_from_unbounded_roles() {
         Decision::Allowed
     );
 }
+
+/// The sandbox egress gateway's role carries no permissions boundary (setup creates it, and
+/// the deployment boundary would deny the gateway its own configuration). Management, which
+/// writes only bounded roles, can therefore neither change nor adopt it: no catalog set it
+/// holds allows a policy, trust or boundary write on that role, whatever tags the role has.
+#[test]
+fn management_cannot_write_or_adopt_the_unbounded_sandbox_gateway_role() {
+    const GATEWAY_ROLE: &str = "arn:aws:iam::123456789012:role/my-stack-sandbox-egress-gateway-sa";
+    let context = common::create_test_context().with_aws_permissions_boundary_arn(BOUNDARY);
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let mut management = Vec::new();
+    for id in list_permission_set_ids() {
+        if SETUP_ONLY_SETS.contains(&id) {
+            continue;
+        }
+        let set = get_permission_set(id).unwrap();
+        let Some(entries) = &set.platforms.aws else {
+            continue;
+        };
+        for (target, stack_binding) in [
+            (BindingTarget::Stack, true),
+            (BindingTarget::Resource, false),
+        ] {
+            let mut set = set.clone();
+            set.platforms.aws = Some(
+                entries
+                    .iter()
+                    .filter(|entry| {
+                        if stack_binding {
+                            entry.binding.stack.is_some()
+                        } else {
+                            entry.binding.resource.is_some()
+                        }
+                    })
+                    .cloned()
+                    .collect(),
+            );
+            management.extend(
+                generator
+                    .generate_policy(&set, target, &context)
+                    .unwrap()
+                    .statement,
+            );
+        }
+    }
+    for action in [
+        "iam:PutRolePolicy",
+        "iam:AttachRolePolicy",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:DeleteRolePermissionsBoundary",
+        "iam:PutRolePermissionsBoundary",
+    ] {
+        // Setup tags the gateway role `managed-by=setup` (the templates, and direct setup since
+        // it stopped bounding the role), so management cannot adopt it.
+        let tags = [("deployment", "my-stack"), ("managed-by", "setup")];
+        // An unbounded role: the request carries no iam:PermissionsBoundary, except for
+        // PutRolePermissionsBoundary, which names the boundary it would attach.
+        let mut request = Request::new(action, GATEWAY_ROLE).resource_tags(&tags);
+        if action == "iam:PutRolePermissionsBoundary" {
+            request = request.with("iam:PermissionsBoundary", BOUNDARY);
+        }
+        assert_ne!(
+            evaluate(&management, &request),
+            Decision::Allowed,
+            "management may {action} the gateway role"
+        );
+    }
+}

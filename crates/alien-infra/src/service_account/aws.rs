@@ -112,12 +112,23 @@ impl AwsServiceAccountController {
                     ),
                 },
             )
-            .tags(
+            .tags(if is_sandbox_gateway_service_account(&config.id) {
+                // Tagged as the template setups tag it: management adopts only roles tagged
+                // `managed-by=runtime`, so it can never attach the deployment boundary here.
+                alien_core::setup_resource_tags(
+                    ctx.resource_prefix,
+                    &config.id,
+                    ServiceAccount::RESOURCE_TYPE.as_ref(),
+                )
+                .into_iter()
+                .map(|(key, value)| CreateRoleTag { key, value })
+                .collect()
+            } else {
                 standard_resource_tags(ctx.resource_prefix, &config.id)
                     .into_iter()
                     .map(|(key, value)| CreateRoleTag { key, value })
-                    .collect(),
-            )
+                    .collect()
+            })
             .build();
 
         let created_role = IamRoleWriter::new(
@@ -1970,6 +1981,13 @@ mod tests {
         iam.expect_create_role().times(1).returning(|request| {
             assert_eq!(request.role_name, "test-sandbox-egress-gateway-sa");
             assert_eq!(request.permissions_boundary, None);
+            let tags: std::collections::HashMap<_, _> = request
+                .tags
+                .unwrap()
+                .into_iter()
+                .map(|tag| (tag.key, tag.value))
+                .collect();
+            assert_eq!(tags.get("managed-by").map(String::as_str), Some("setup"));
             Ok(serde_json::from_value(
                 serde_json::json!({"CreateRoleResult": {"Role": gateway_role(None)}}),
             )
