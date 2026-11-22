@@ -131,6 +131,7 @@ pub struct SandboxExecResult {
 #[derive(Debug)]
 pub struct LocalSandboxManager {
     docker: Docker,
+    docker_host: String,
     state_dir: PathBuf,
     /// Signs this process's gateway tokens and policy writes. Generated per process: a restart
     /// reaps every gateway and session.
@@ -148,10 +149,11 @@ pub struct LocalSandboxManager {
 impl LocalSandboxManager {
     /// Connects to the local Docker daemon.
     pub fn new(state_dir: PathBuf) -> Result<Self> {
-        let docker = crate::connect_docker()?;
+        let (docker, docker_host) = crate::docker_connection::connect_docker_with_host()?;
 
         Ok(Self {
             docker,
+            docker_host,
             state_dir,
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
@@ -218,8 +220,9 @@ impl LocalSandboxManager {
             }));
         }
 
-        self.ensure_image(&config.image).await?;
-        let image = crate::sandbox_identity::inspect(&self.docker, &config.image, sandbox).await?;
+        let image_reference = self.ensure_image(&config.image, sandbox).await?;
+        let image =
+            crate::sandbox_identity::inspect(&self.docker, &image_reference, sandbox).await?;
 
         // Every session that reaches anything goes through the sandbox's gateway, links or not,
         // so its policy and credential rules apply as on the cloud platforms. A session's
@@ -646,13 +649,23 @@ impl LocalSandboxManager {
         None
     }
 
-    /// Pulls the sandbox image if the daemon does not already have it.
+    /// Makes the sandbox image available to the daemon and returns the reference to create from.
     ///
     /// A sandbox cannot start without its root filesystem, and Docker's create call does not
-    /// pull. Inspecting first keeps the common case off the network.
-    async fn ensure_image(&self, image: &str) -> Result<()> {
+    /// pull. A build directory or archive is loaded the way a local Container's is; any other
+    /// reference is inspected first, which keeps the common case off the network.
+    async fn ensure_image(&self, image: &str, sandbox: &str) -> Result<String> {
+        if std::path::Path::new(image).exists() {
+            return crate::container_manager::load_built_image(
+                &self.docker,
+                &self.docker_host,
+                std::path::Path::new(image),
+                sandbox,
+            )
+            .await;
+        }
         if self.docker.inspect_image(image).await.is_ok() {
-            return Ok(());
+            return Ok(image.to_string());
         }
 
         let mut pull = self.docker.create_image(
@@ -673,7 +686,7 @@ impl LocalSandboxManager {
                 })?;
         }
 
-        Ok(())
+        Ok(image.to_string())
     }
 
     async fn ensure_egress_network(&self, name: &str) -> Result<()> {
@@ -1470,6 +1483,7 @@ mod tests {
             docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
                 .unwrap(),
             state_dir: PathBuf::new(),
+            docker_host: String::new(),
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: String::new(),
@@ -1549,6 +1563,7 @@ mod tests {
             docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
                 .unwrap(),
             state_dir: PathBuf::new(),
+            docker_host: String::new(),
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: String::new(),
@@ -1629,6 +1644,7 @@ mod tests {
                 )
                 .unwrap(),
                 state_dir: PathBuf::new(),
+                docker_host: String::new(),
                 gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
                 gateways: Default::default(),
                 gateway_image: String::new(),

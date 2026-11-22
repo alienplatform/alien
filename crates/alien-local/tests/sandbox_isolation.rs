@@ -162,18 +162,6 @@ async fn ubuntu_without_user_keeps_released_exec_identity() {
     let SandboxCode::Image { image, .. } = &sandbox.code else {
         panic!("built image")
     };
-    let docker = bollard::Docker::connect_with_local_defaults().unwrap();
-    let inspected = docker.inspect_image(image).await.unwrap();
-    assert_eq!(
-        inspected
-            .config
-            .unwrap()
-            .user
-            .as_deref()
-            .unwrap_or_default(),
-        ""
-    );
-
     let (manager, _dir) = manager();
     let mut config = config(SandboxEgressMode::Deny);
     config.image = image.clone();
@@ -190,6 +178,87 @@ async fn ubuntu_without_user_keeps_released_exec_identity() {
     let result = result.expect("exec runs");
     assert_eq!(result.exit_code, 0);
     assert_eq!(stdout(&result).trim(), "65534");
+}
+
+/// A sandbox image that exists only as a tag in this daemon: after a fresh build the session
+/// starts from the build output, with no pull and no image the daemon already holds.
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_built_local_sandbox_image_starts_a_session_without_a_pull() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let tag = format!("alien-local-only-sandbox:{}", std::process::id());
+    let mut build = Command::new("docker")
+        .args(["build", "-q", "-t", &tag, "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("docker build starts");
+    build
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("FROM {IMAGE}\nLABEL local-only={tag}\n").as_bytes())
+        .unwrap();
+    assert!(build.wait().unwrap().success(), "tag builds");
+
+    let output = TempDir::new().unwrap();
+    let sandbox = Sandbox::new("local-only-image".into())
+        .code(SandboxCode::Image {
+            image: tag.clone(),
+            bundled_from: None,
+        })
+        .egress(SandboxEgress::None)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+            ..Default::default()
+        })
+        .build();
+    let settings = BuildSettings {
+        platform: PlatformBuildSettings::Local {},
+        output_directory: output.path().to_string_lossy().into_owned(),
+        targets: None,
+        cache_url: None,
+        override_base_image: None,
+        debug_mode: false,
+        rebuild: false,
+        pull_base_images: false,
+        require_pinned_base_images: false,
+    };
+    let built = alien_build::build_stack(
+        Stack::new("local-only-image".into())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .build(),
+        &settings,
+    )
+    .await
+    .expect("build");
+    // Only the archive remains: the daemon no longer has the image or its tag.
+    let removed = Command::new("docker").args(["rmi", &tag]).output().unwrap();
+    assert!(removed.status.success(), "tag removed");
+
+    let sandbox = built
+        .resources()
+        .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+        .unwrap();
+    let SandboxCode::Image { image, .. } = &sandbox.code else {
+        panic!("built image")
+    };
+    let (manager, _dir) = manager();
+    let mut config = config(SandboxEgressMode::Deny);
+    config.image = image.clone();
+    let session = manager
+        .create_session(&sandbox.id, "s1", &config)
+        .await
+        .expect("session creates from the build output");
+    let result = manager.exec(&session.container_id, &sh("echo up")).await;
+    manager
+        .terminate(&sandbox.id, "s1")
+        .await
+        .expect("terminates");
+    assert_eq!(stdout(&result.expect("exec runs")).trim(), "up");
 }
 
 #[tokio::test]

@@ -2769,23 +2769,10 @@ async fn prepare_prebuilt_sandbox(
         aws_connector,
     )
     .await?;
-    let image = if platform == Platform::Local {
-        // The local sandbox manager consumes Docker references, not archive directories.
-        // Export used this daemon; its configuration digest pins the already-pulled image.
-        let target = targets.first().ok_or_else(|| {
-            AlienError::new(ErrorData::BuildConfigInvalid {
-                message: "A local sandbox requires an image target".into(),
-            })
-        })?;
-        let archive =
-            Path::new(&directory).join(format!("{}.oci.tar", target.runtime_platform_id()));
-        DockDashImage::from_tarball(archive)
-            .map_dockdash_err()?
-            .config_digest()
-            .to_string()
-    } else {
-        directory
-    };
+    // A local sandbox keeps its build directory: the local sandbox manager loads the archive
+    // into the daemon the way it does for a local Container, and creates sessions from the id
+    // the daemon reports, so no id has to be predicted here.
+    let image = directory;
     sandbox.code = SandboxCode::Image {
         image,
         bundled_from: None,
@@ -7496,6 +7483,28 @@ mod sandbox_build_tests {
         preview_ports: Vec<u16>,
     }
 
+    fn built_archive_exists(directory: &str) -> bool {
+        std::fs::read_dir(directory).is_ok_and(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.path().to_string_lossy().ends_with(".oci.tar"))
+        })
+    }
+
+    /// The config digest of the archive in a local sandbox's build directory.
+    fn built_archive_config_digest(directory: &str) -> String {
+        let archive = std::fs::read_dir(directory)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| path.to_string_lossy().ends_with(".oci.tar"))
+            .expect("a local sandbox build holds an OCI archive");
+        DockDashImage::from_tarball(archive)
+            .unwrap()
+            .config_digest()
+            .to_string()
+    }
+
     #[tokio::test]
     async fn prebuilt_oci_user_is_inspected_and_local_images_are_pinned() {
         let (_registry, host) = dockdash::test_utils::setup_local_registry().await.unwrap();
@@ -7595,16 +7604,11 @@ mod sandbox_build_tests {
                     let SandboxCode::Image { image: pinned, .. } = &sandbox.code else {
                         panic!("built image")
                     };
-                    assert_eq!(pinned, image.config_digest());
-                    let status = Command::new("docker")
-                        .args(["image", "inspect", pinned])
-                        .stdout(std::process::Stdio::null())
-                        .status()
-                        .await
-                        .unwrap();
-                    assert!(
-                        status.success(),
-                        "pinned local image must exist in the daemon"
+                    // The build directory is what a session loads; its archive is this image.
+                    assert_eq!(
+                        built_archive_config_digest(pinned),
+                        image.config_digest(),
+                        "the local build output must hold the declared image"
                     );
                 } else {
                     let SandboxCode::Image {
@@ -7856,12 +7860,12 @@ mod sandbox_build_tests {
             .resources()
             .find_map(|(_, e)| e.config.downcast_ref::<Sandbox>())
             .unwrap();
-        assert_eq!(
-            sandbox.code,
-            SandboxCode::Image {
-                image: image_id,
-                bundled_from: None
-            }
+        let SandboxCode::Image { image, .. } = &sandbox.code else {
+            panic!("built image")
+        };
+        assert!(
+            built_archive_exists(image),
+            "the build output holds the image archive the daemon loads"
         );
         assert_eq!(sandbox.image_user, None);
         sandbox.validate_for_platform(Platform::Local).unwrap();
@@ -7976,13 +7980,10 @@ mod sandbox_build_tests {
             .resources()
             .find_map(|(_, e)| e.config.downcast_ref::<Sandbox>())
             .unwrap();
-        assert_eq!(
-            sandbox.code,
-            SandboxCode::Image {
-                image: ids[0].clone(),
-                bundled_from: None,
-            }
-        );
+        let SandboxCode::Image { image, .. } = &sandbox.code else {
+            panic!("built image")
+        };
+        assert!(built_archive_exists(image));
         assert_eq!(sandbox.image_user, None);
     }
 
