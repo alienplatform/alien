@@ -53,7 +53,7 @@ pnpm install
 docker build -t agent-sandboxes-sandbox:dev sandbox/
 
 # The data plane.
-SANDBOX_IMAGE=agent-sandboxes-sandbox:dev OPENAI_API_KEY=... \
+SANDBOX_IMAGE=agent-sandboxes-sandbox:dev ALIEN_AI_LOCAL_BEDROCK_REGION=us-east-1 \
   alien dev --input internalApiUrl=http://internal-api:8080
 
 # The internal API, on the local deployment network, outside the stack.
@@ -65,6 +65,8 @@ ALIEN_MANAGER_URL=<commands url> ALIEN_DEPLOYMENT_ID=<deployment id> ALIEN_TOKEN
 ```
 
 Open http://localhost:3000, start a thread and send a message.
+
+`ALIEN_AI_LOCAL_BEDROCK_REGION` makes the local `llm` resource Bedrock in that region, called with your own AWS credentials: `alien dev` resolves your default chain (`AWS_PROFILE`, environment variables or SSO) when the `model` container starts and passes the temporary keys to it. They are visible inside that container and are not refreshed, so after an SSO session expires, run `aws sso login` and restart `alien dev`.
 
 ## Deploy to AWS
 
