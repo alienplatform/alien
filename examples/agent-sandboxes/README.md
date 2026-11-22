@@ -107,6 +107,38 @@ Start a thread as `alice`. The **Run in sandbox** box runs a shell command in th
 5. **Idle threads pause and resume.** Ask the agent to *keep an orders watch running in the background*. It starts `orders watch` detached and reports its pid. Leave the thread idle until it shows *paused*, then send another message: it resumes, `pgrep -f "orders watch"` shows the same pid, and the agent remembers the earlier turns. Local sandboxes do not pause, so this one shows on AWS.
 6. **Another account.** Apply `infra/` and deploy the same release into a second AWS account. Everything above works the same.
 
+### What you should see
+
+Captured from a local run (demos 1-4; the sandbox's commands, not the agent's wording):
+
+```
+$ env | grep -E "KEY|TOKEN"
+CONNECTOR_TOKEN=placeholder
+ANTHROPIC_API_KEY=placeholder
+
+$ curl -sS -m 8 https://example.com
+curl: (56) CONNECT tunnel failed, response 403
+$ curl -sS http://<internal API>:8080/orders          # refused by the gateway: [403]
+
+$ orders list                                         # before the first bind
+401: {"error":"no turn credentials on this request"}
+$ orders list                                         # after the turn is bound to alice: the four orders
+$ orders update 1001 --status shipped                 # held, listed for Approve / Deny
+waiting for approval...                               # then: approvedBy "alice"
+$ orders update 1004 --status cancelled               # after switching to bob
+403: {"error":"bob may not change orders"}
+```
+
+### Run the walkthrough as a script
+
+[`demo.sh`](./demo.sh) makes the same calls the UI makes against the control plane's HTTP API and prints what comes back:
+
+```bash
+CONTROL_PLANE=http://localhost:3000 INTERNAL_API_IP=<internal API private IP> ./demo.sh
+```
+
+Moments 1 and 2 need no model. Set `WITH_MODEL=0` to run only those; the rest go through the agent, approve the held write as `alice`, switch to `bob`, and wait `IDLE_WAIT` seconds (default 180) for the pause before resuming.
+
 ## Make it yours
 
 - **Your internal systems:** replace `internal-api/` and the routes in [`services/connector/src/index.ts`](./services/connector/src/index.ts), and give the agent its own tool in place of [`sandbox/orders`](./sandbox/orders).
