@@ -18,7 +18,7 @@
 //!
 //! ```text
 //! export ALIEN_AWS_POLICY_QUOTA_LIVE_TEST=1 AWS_TARGET_ACCOUNT_ID=... AWS_TARGET_REGION=... \
-//!        AWS_TARGET_ACCESS_KEY_ID=... AWS_TARGET_SECRET_ACCESS_KEY=... AWS_MANAGEMENT_ROLE_ARN=...
+//!        AWS_TARGET_ACCESS_KEY_ID=... AWS_TARGET_SECRET_ACCESS_KEY=... AWS_TARGET_SESSION_TOKEN=... AWS_MANAGEMENT_ROLE_ARN=...
 //! cargo test -p alien-infra --all-features --test aws_management_policy_quota_live \
 //!     -- --ignored --nocapture --test-threads=1
 //! ```

@@ -1,7 +1,7 @@
 //! Opt-in Azure test: the AI controller caps a model deployment to the subscription's free quota.
 //!
 //! Set `ALIEN_AZURE_AI_CAPACITY_LIVE_TEST=1`, the usual `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID`,
-//! `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_REGION`, and
+//! `AZURE_CLIENT_ID`, `AZURE_FEDERATED_TOKEN_FILE`, `AZURE_REGION`, and
 //! `ALIEN_AZURE_AI_CAPACITY_LIVE_GROUP` (an existing, disposable resource group). Run with
 //! `cargo test -p alien-infra --features all-platforms,test-utils --test azure_ai_capacity_live -- --ignored --nocapture`.
 //!

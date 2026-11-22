@@ -9,8 +9,8 @@
 //! executor accepting the prepared stack (its gateway `Container` declaration included) is part
 //! of what this proves.
 //!
-//! Env: `AZURE_TARGET_SUBSCRIPTION_ID`, `AZURE_TARGET_TENANT_ID`, `AZURE_TARGET_CLIENT_ID`,
-//! `AZURE_TARGET_CLIENT_SECRET` (a principal with the setup's management roles),
+//! Env: `AZURE_TARGET_SUBSCRIPTION_ID`, `AZURE_TARGET_TENANT_ID`, `AZURE_TARGET_CLIENT_ID`
+//! (a principal with the setup's management roles; its federated token file in CI, `az login` locally),
 //! `AZURE_INTERNET_STACK` (the render test's `stack.json`), `AZURE_INTERNET_REGISTRATION` (the
 //! `deployment_registration` input, as JSON), `AZURE_INTERNET_GATEWAY_BINDING_OUT` (the gateway Container binding), `AZURE_INTERNET_BINDING_OUT` (where the sandbox
 //! binding is written).
@@ -99,16 +99,11 @@ async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
         state.resources.insert(id.to_string(), resource);
     }
 
-    let client_config = ClientConfig::Azure(Box::new(AzureClientConfig {
-        subscription_id: env("AZURE_TARGET_SUBSCRIPTION_ID"),
-        tenant_id: env("AZURE_TARGET_TENANT_ID"),
-        region: Some(region),
-        credentials: AzureCredentials::ServicePrincipal {
-            client_id: env("AZURE_TARGET_CLIENT_ID"),
-            client_secret: env("AZURE_TARGET_CLIENT_SECRET"),
-        },
-        service_overrides: None,
-    }));
+    let client_config = ClientConfig::Azure(Box::new({
+    let mut config = alien_azure_clients::live_test::live_test_config("TARGET");
+    config.region = Some(region);
+    config
+}));
     let config = DeploymentConfig::builder()
         .stack_settings(settings)
         .environment_variables(EnvironmentVariablesSnapshot {
