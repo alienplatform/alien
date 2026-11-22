@@ -108,6 +108,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "refreshDomain",
     "deleteDomain",
     "updateDeploymentDomains",
+    "updateDeploymentEndpointSourceRanges",
     "listEvents",
     "listDeploymentMachines",
     "listDeploymentVolumeRestores",
