@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
 # Generate .env.test from Terraform outputs.
 # Usage: ./scripts/gen-env-test.sh
-# Requires: terraform (init'd, authenticated to TF Cloud), jq
+# Requires: terraform (init'd, authenticated to TF Cloud, read-only use), jq
 #
-# Environment variables required:
-#   AXIOM_TOKEN         - Axiom API token
-#   NGROK_AUTHTOKEN     - Ngrok auth token (for push-mode E2E tests)
-#   OPENAI_TEST_API_KEY - OpenAI credential for ignored live gateway tests
-#   ANTHROPIC_TEST_API_KEY - Anthropic credential for ignored live gateway tests
-#   DATABRICKS_TEST_WORKSPACE_URL - Databricks workspace base URL
-#   DATABRICKS_TEST_CLIENT_ID - Databricks OAuth service-principal client ID
-#   DATABRICKS_TEST_CLIENT_SECRET - Databricks OAuth service-principal secret
-# Environment variables optional:
-#   AXIOM_OTLP_ENDPOINT - (default: https://api.axiom.co/v1/logs)
-#   AXIOM_DATASET       - (default: dev)
+# .env.test holds configuration only: account ids, role ARNs, project ids,
+# service account emails, tenant/subscription/client ids and resource names.
+# It never holds a credential. Tests get credentials from the environment of the
+# process: AWS profiles or session credentials, Google application default
+# credentials with impersonation, an Azure federated token file. See
+# docs/testing.md ("Run cloud tests locally"). Third-party test keys (OpenAI,
+# Anthropic, Databricks, Axiom, ngrok) are passed to the steps that need them
+# and are not written here.
 set -euo pipefail
 
 TF=$(cd infra/test && terraform output -json)
@@ -61,15 +58,16 @@ quote_env() {
 # single-quote them in the output (single-quoted values are literal in
 # both shell `source` and dotenvy -- no escape processing).
 aws_management_region=$(jq_val management_aws_region)
-aws_management_access_key_id=$(jq_val management_aws_access_key_id)
-aws_management_secret_access_key=$(jq_val management_aws_secret_access_key)
+aws_management_ci_role_arn=$(jq_val ci_aws_management_role_arn)
+aws_target_ci_role_arn=$(jq_val ci_aws_target_role_arn)
+gcp_workload_identity_provider=$(jq_val ci_gcp_workload_identity_provider)
+gcp_management_sa_email=$(jq_val management_gcp_service_account_email)
+gcp_target_sa_email=$(jq_val target_gcp_service_account_email)
 aws_management_account_id=$(jq_val management_aws_account_id)
 aws_management_role_arn=$(jq_val management_aws_role_arn)
 aws_management_role_name=$(jq_val management_aws_role_name)
 
 aws_target_region=$(jq_val target_aws_region)
-aws_target_access_key_id=$(jq_val target_aws_access_key_id)
-aws_target_secret_access_key=$(jq_val target_aws_secret_access_key)
 aws_target_account_id=$(jq_val target_aws_account_id)
 e2e_aws_vpc_id=$(jq_val e2e_aws_vpc_id)
 e2e_aws_public_subnet_ids=$(jq_val_csv e2e_aws_public_subnet_ids)
@@ -91,11 +89,9 @@ e2e_eks_cluster_name=$(jq_val e2e_eks_cluster_name)
 e2e_eks_kube_context=$(jq_val e2e_eks_kube_context)
 e2e_eks_public_host_suffix=$(jq_val e2e_eks_public_host_suffix)
 
-gcp_management_sa_key=$(jq_val_json management_gcp_service_account_key)
 gcp_management_project_id=$(jq_val management_gcp_project_id)
 gcp_management_region=$(jq_val management_gcp_region)
 
-gcp_target_sa_key=$(jq_val_json target_gcp_service_account_key)
 gcp_target_project_id=$(jq_val target_gcp_project_id)
 gcp_target_region=$(jq_val target_gcp_region)
 e2e_gcp_network_name=$(jq_val e2e_gcp_network_name)
@@ -129,14 +125,12 @@ azure_management_subscription_id=$(jq_val management_azure_subscription_id)
 azure_management_tenant_id=$(jq_val management_azure_tenant_id)
 azure_management_client_id=$(jq_val management_azure_client_id)
 azure_management_principal_id=$(jq_val management_azure_principal_id)
-azure_management_client_secret=$(jq_val management_azure_client_secret)
 azure_management_region=$(jq_val management_azure_region)
 
 azure_target_subscription_id=$(jq_val target_azure_subscription_id)
 azure_target_tenant_id=$(jq_val target_azure_tenant_id)
 azure_target_client_id=$(jq_val target_azure_client_id)
 azure_target_principal_id=$(jq_val target_azure_principal_id)
-azure_target_client_secret=$(jq_val target_azure_client_secret)
 
 azure_resource_group=$(jq_val azure_resource_group)
 azure_storage_account=$(jq_val azure_storage_account)
@@ -169,41 +163,17 @@ gcp_target_aliases=$(jq_val_target_aliases gcp_target_options)
 azure_target_aliases=$(jq_val_target_aliases azure_target_options)
 e2e_k8s_ingress_class=$(jq_val e2e_k8s_ingress_class)
 
-kubeconfig_dir="$(pwd)/.alien-kubeconfigs"
-mkdir -p "$kubeconfig_dir"
-e2e_eks_kubeconfig_path="$kubeconfig_dir/eks.yaml"
-e2e_gke_kubeconfig_path="$kubeconfig_dir/gke.yaml"
-e2e_gke_target_1_kubeconfig_path="$kubeconfig_dir/gke-target-1.yaml"
-e2e_gke_target_2_kubeconfig_path="$kubeconfig_dir/gke-target-2.yaml"
-e2e_gke_target_3_kubeconfig_path="$kubeconfig_dir/gke-target-3.yaml"
-e2e_aks_kubeconfig_path="$kubeconfig_dir/aks.yaml"
-jq_val e2e_eks_kubeconfig > "$e2e_eks_kubeconfig_path"
-jq_val e2e_gke_kubeconfig > "$e2e_gke_kubeconfig_path"
-jq_val e2e_gke_target_1_kubeconfig > "$e2e_gke_target_1_kubeconfig_path"
-jq_val e2e_gke_target_2_kubeconfig > "$e2e_gke_target_2_kubeconfig_path"
-jq_val e2e_gke_target_3_kubeconfig > "$e2e_gke_target_3_kubeconfig_path"
-jq_val e2e_aks_kubeconfig > "$e2e_aks_kubeconfig_path"
-chmod 600 \
-  "$e2e_eks_kubeconfig_path" \
-  "$e2e_gke_kubeconfig_path" \
-  "$e2e_gke_target_1_kubeconfig_path" \
-  "$e2e_gke_target_2_kubeconfig_path" \
-  "$e2e_gke_target_3_kubeconfig_path" \
-  "$e2e_aks_kubeconfig_path"
-
 cat > .env.test <<EOF
 # AWS - Management
 AWS_MANAGEMENT_REGION='${aws_management_region}'
-AWS_MANAGEMENT_ACCESS_KEY_ID='${aws_management_access_key_id}'
-AWS_MANAGEMENT_SECRET_ACCESS_KEY='${aws_management_secret_access_key}'
+AWS_MANAGEMENT_CI_ROLE_ARN='${aws_management_ci_role_arn}'
 AWS_MANAGEMENT_ACCOUNT_ID='${aws_management_account_id}'
 AWS_MANAGEMENT_ROLE_ARN='${aws_management_role_arn}'
 AWS_MANAGEMENT_ROLE_NAME='${aws_management_role_name}'
 
 # AWS - Target
 AWS_TARGET_REGION='${aws_target_region}'
-AWS_TARGET_ACCESS_KEY_ID='${aws_target_access_key_id}'
-AWS_TARGET_SECRET_ACCESS_KEY='${aws_target_secret_access_key}'
+AWS_TARGET_CI_ROLE_ARN='${aws_target_ci_role_arn}'
 AWS_TARGET_ACCOUNT_ID='${aws_target_account_id}'
 
 # AWS - reusable E2E network
@@ -225,8 +195,7 @@ ALIEN_TEST_AWS_ECR_REPOSITORY='${aws_ecr_repository}'
 E2E_AWS_AR_PUSH_ROLE_ARN='${e2e_aws_ar_push_role_arn}'
 E2E_AWS_AR_PULL_ROLE_ARN='${e2e_aws_ar_pull_role_arn}'
 
-# Kubernetes E2E kubeconfigs generated from infra/test outputs
-ALIEN_TEST_EKS_KUBECONFIG='${e2e_eks_kubeconfig_path}'
+# Shared Kubernetes cluster settings
 ALIEN_TEST_EKS_CLUSTER_NAME='${e2e_eks_cluster_name}'
 ALIEN_TEST_EKS_KUBE_CONTEXT='${e2e_eks_kube_context}'
 ALIEN_TEST_EKS_INGRESS_CLASS='${e2e_k8s_ingress_class:-alb}'
@@ -234,13 +203,14 @@ ALIEN_TEST_EKS_INGRESS_ANNOTATIONS='{}'
 ALIEN_TEST_EKS_PUBLIC_HOST_SUFFIX='${e2e_eks_public_host_suffix}'
 
 # GCP - Management
-GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY='${gcp_management_sa_key}'
 GOOGLE_MANAGEMENT_PROJECT_ID='${gcp_management_project_id}'
+GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_EMAIL='${gcp_management_sa_email}'
+GOOGLE_WORKLOAD_IDENTITY_PROVIDER='${gcp_workload_identity_provider}'
 GOOGLE_MANAGEMENT_REGION='${gcp_management_region}'
 
 # GCP - Target
-GOOGLE_TARGET_SERVICE_ACCOUNT_KEY='${gcp_target_sa_key}'
 GOOGLE_TARGET_PROJECT_ID='${gcp_target_project_id}'
+GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL='${gcp_target_sa_email}'
 GOOGLE_TARGET_REGION='${gcp_target_region}'
 
 # GCP - reusable E2E network
@@ -262,8 +232,7 @@ E2E_GCP_GAR_REPOSITORY='${e2e_gcp_gar_repository}'
 E2E_GCP_AR_PULL_SA_EMAIL='${e2e_gcp_ar_pull_sa_email}'
 E2E_GCP_AR_PUSH_SA_EMAIL='${e2e_gcp_ar_push_sa_email}'
 
-# Kubernetes E2E kubeconfigs generated from infra/test outputs
-ALIEN_TEST_GKE_KUBECONFIG='${e2e_gke_kubeconfig_path}'
+# Shared Kubernetes cluster settings
 ALIEN_TEST_GKE_CLUSTER_NAME='${e2e_gke_cluster_name}'
 ALIEN_TEST_GKE_CLUSTER_LOCATION='${e2e_gke_cluster_location}'
 ALIEN_TEST_GKE_KUBE_CONTEXT='${e2e_gke_kube_context}'
@@ -276,7 +245,6 @@ AZURE_MANAGEMENT_SUBSCRIPTION_ID='${azure_management_subscription_id}'
 AZURE_MANAGEMENT_TENANT_ID='${azure_management_tenant_id}'
 AZURE_MANAGEMENT_CLIENT_ID='${azure_management_client_id}'
 AZURE_MANAGEMENT_PRINCIPAL_ID='${azure_management_principal_id}'
-AZURE_MANAGEMENT_CLIENT_SECRET='${azure_management_client_secret}'
 AZURE_MANAGEMENT_REGION='${azure_management_region}'
 
 # Azure OIDC (set dynamically by the runtime environment)
@@ -288,7 +256,6 @@ AZURE_TARGET_SUBSCRIPTION_ID='${azure_target_subscription_id}'
 AZURE_TARGET_TENANT_ID='${azure_target_tenant_id}'
 AZURE_TARGET_CLIENT_ID='${azure_target_client_id}'
 AZURE_TARGET_PRINCIPAL_ID='${azure_target_principal_id}'
-AZURE_TARGET_CLIENT_SECRET='${azure_target_client_secret}'
 AZURE_TARGET_REGION='${azure_management_region}'
 AZURE_TARGET_RESOURCE_GROUP='${azure_shared_container_env_resource_group}'
 
@@ -319,8 +286,7 @@ ALIEN_E2E_AZURE_VNET_RESOURCE_ID='${e2e_azure_vnet_resource_id}'
 ALIEN_E2E_AZURE_PUBLIC_SUBNET_NAME='${e2e_azure_public_subnet_name}'
 ALIEN_E2E_AZURE_PRIVATE_SUBNET_NAME='${e2e_azure_private_subnet_name}'
 
-# Kubernetes E2E kubeconfigs generated from infra/test outputs
-ALIEN_TEST_AKS_KUBECONFIG='${e2e_aks_kubeconfig_path}'
+# Shared Kubernetes cluster settings
 ALIEN_TEST_AKS_CLUSTER_NAME='${e2e_aks_cluster_name}'
 ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP='${e2e_aks_cluster_resource_group}'
 ALIEN_TEST_AKS_KUBE_CONTEXT='${e2e_aks_kube_context}'
@@ -328,20 +294,6 @@ ALIEN_TEST_AKS_INGRESS_CLASS='${e2e_k8s_ingress_class:-webapprouting.kubernetes.
 ALIEN_TEST_AKS_INGRESS_ANNOTATIONS='{}'
 ALIEN_TEST_AKS_PUBLIC_HOST_SUFFIX='${e2e_aks_public_host_suffix}'
 
-# Ngrok (for push-mode E2E tests — cloud functions submit responses via tunnel)
-NGROK_AUTHTOKEN='${NGROK_AUTHTOKEN:-}'
-
-# Telemetry
-AXIOM_OTLP_ENDPOINT='${AXIOM_OTLP_ENDPOINT:-https://api.axiom.co/v1/logs}'
-AXIOM_TOKEN='${AXIOM_TOKEN:?AXIOM_TOKEN environment variable must be set}'
-AXIOM_DATASET='${AXIOM_DATASET:-dev}'
-
-# Live AI provider tests
-OPENAI_TEST_API_KEY='${OPENAI_TEST_API_KEY:-}'
-ANTHROPIC_TEST_API_KEY='${ANTHROPIC_TEST_API_KEY:-}'
-DATABRICKS_TEST_WORKSPACE_URL='${DATABRICKS_TEST_WORKSPACE_URL:-}'
-DATABRICKS_TEST_CLIENT_ID='${DATABRICKS_TEST_CLIENT_ID:-}'
-DATABRICKS_TEST_CLIENT_SECRET='${DATABRICKS_TEST_CLIENT_SECRET:-}'
 EOF
 
 {
@@ -362,14 +314,25 @@ EOF
     printf "%s=%s\n" "$key" "$(quote_env "$value")"
   done < <(jq_val_target_options_env gcp_target_options GCP)
 
-  echo "ALIEN_TARGET_GCP_GCP_TARGET_1_ALIEN_TEST_GKE_KUBECONFIG=$(quote_env "$e2e_gke_target_1_kubeconfig_path")"
-  echo "ALIEN_TARGET_GCP_GCP_TARGET_2_ALIEN_TEST_GKE_KUBECONFIG=$(quote_env "$e2e_gke_target_2_kubeconfig_path")"
-  echo "ALIEN_TARGET_GCP_GCP_TARGET_3_ALIEN_TEST_GKE_KUBECONFIG=$(quote_env "$e2e_gke_target_3_kubeconfig_path")"
-
   while IFS='=' read -r key value; do
-    printf "%s=%s\n" "$key" "$(quote_env "$value")"
+    printf "%s=%s
+" "$key" "$(quote_env "$value")"
   done < <(jq_val_target_options_env azure_target_options AZURE)
 } >> .env.test
+
+# ── Refuse to leave credentials in .env.test ────────────────────────────────
+# .env.test is config only. Fail the run if anything in it looks like a secret.
+bad_keys=$(grep -oEi '^[A-Z0-9_]*(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|SERVICE_ACCOUNT_KEY|CLIENT_SECRET|_TOKEN|_API_KEY|PASSWORD)[A-Z0-9_]*=' .env.test | grep -v '^$' || true)
+if [ -n "$bad_keys" ]; then
+  echo "ERROR: .env.test has credential-like keys (names only):" >&2
+  echo "$bad_keys" >&2
+  exit 1
+fi
+if grep -qE 'AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY|"private_key"|ya29\.|eyJ[A-Za-z0-9_-]{20,}\.' .env.test; then
+  echo "ERROR: .env.test has a value that matches a credential pattern." >&2
+  exit 1
+fi
+echo ".env.test secret-pattern check passed."
 
 # ── Generate alien-manager.toml for test validation ─────────────────────────
 # This config must match the ManagerTomlConfig schema (kebab-case field names,

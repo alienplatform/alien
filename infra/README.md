@@ -80,16 +80,16 @@ The modules (`aws/`, `gcp/`, `azure/`) provision supporting resources. The test 
 
 | Cloud | Resources |
 |-------|-----------|
-| AWS   | IAM users (management + target), S3 bucket, DynamoDB table, ECR repository, Lambda execution role, ECR push/pull roles, Lambda test image (linux/arm64) |
-| GCP   | Service accounts (management + target), GCS bucket, Artifact Registry, Cloud Run test image (linux/amd64) |
-| Azure | Resource group, Storage account + blob container, ACR, Container Apps environment, RBAC assignments, http-server image (linux/amd64) |
+| AWS   | OIDC provider and one CI role per account (management + target), S3 bucket, DynamoDB table, ECR repository, Lambda execution role, ECR push/pull roles, Lambda test image (linux/arm64) |
+| GCP   | Service accounts (management + target), workload identity pool and GitHub provider, GCS bucket, Artifact Registry, Cloud Run test image (linux/amd64) |
+| Azure | Resource group, Storage account + blob container, ACR, Container Apps environment, RBAC assignments, federated credentials on the two test app registrations, http-server image (linux/amd64) |
 
 ### Two-account model
 
 Every cloud provider uses two separate accounts:
 
 - **Management account** — where alien-manager runs. Owns the test infrastructure: artifact registries, object storage buckets, IAM roles, and service accounts.
-- **Target account** — where workloads are deployed (simulates the customer's cloud). Has its own IAM user or service principal with admin access.
+- **Target account** — where workloads are deployed (simulates the customer's cloud). Has its own CI role, service account or app registration with admin access in that account only.
 
 These can be the same account for simplicity, or separate for more realistic testing.
 
@@ -97,40 +97,45 @@ These can be the same account for simplicity, or separate for more realistic tes
 
 Terraform state is stored in Terraform Cloud (`alienplatform/alien-test-infra` workspace, execution mode: Local).
 
+`infra/test` is applied by a person, never by CI. It holds the trust that lets
+GitHub Actions sign in to the test accounts (an OIDC provider and role per AWS
+account, a workload identity pool, federated credentials on the Azure app
+registrations), so the identities CI signs in with cannot change it; a deny
+policy and an IAM deny statement enforce that. Sign in with SSO first, then apply:
+
 ```bash
+aws sso login --profile alien-test-mgmt
+aws sso login --profile alien-test-target
+gcloud auth application-default login
+az login
 cd infra/test
 terraform init
 terraform apply
 ```
 
-In CI, `cloud-tests.yml` runs `terraform apply` automatically. Variables are injected from GitHub secrets.
+No provider takes a static credential: AWS uses the `alien-test-mgmt` and
+`alien-test-target` profiles, Google and Azure use your own sign-in. The person
+applying needs admin rights in the management and target accounts and projects.
+Set the project, subscription and tenant variables (see `variables.tf`) in your
+shell or a local `*.auto.tfvars` file.
 
-### Rotating the GCP target project
-
-`infra/test` does not create GCP projects. To move tests to a fresh target
-project, first create the project manually and link billing. Then bootstrap the
-service account Terraform will use for the target provider:
+Terraform keeps no long-lived keys: there are no IAM users, access keys, service
+account keys or client secrets in the state. After an apply, check that the Azure
+test app registrations list no password or certificate credentials:
 
 ```bash
-PROJECT=<new-gcp-target-project-id>
-SA=alien-terraform-bootstrap@$PROJECT.iam.gserviceaccount.com
-
-gcloud services enable serviceusage.googleapis.com cloudresourcemanager.googleapis.com iam.googleapis.com --project "$PROJECT"
-gcloud iam service-accounts create alien-terraform-bootstrap --project "$PROJECT"
-
-for role in roles/serviceusage.serviceUsageAdmin roles/iam.serviceAccountAdmin roles/iam.serviceAccountKeyAdmin roles/iam.serviceAccountUser roles/iam.roleAdmin roles/resourcemanager.projectIamAdmin roles/artifactregistry.admin roles/run.admin roles/cloudfunctions.admin roles/pubsub.admin roles/storage.admin roles/secretmanager.admin roles/cloudbuild.builds.editor roles/datastore.owner roles/compute.admin roles/cloudscheduler.admin; do
-  gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role "$role" --condition=None
-done
-
-gcloud iam service-accounts keys create target-bootstrap.json --iam-account "$SA" --project "$PROJECT"
-gh secret set TEST_GCP_TARGET_SA_KEY --repo alienplatform/alien < target-bootstrap.json
-gh variable set TEST_GCP_TARGET_PROJECT_ID --repo alienplatform/alien --body "$PROJECT"
+for app in "$AZURE_MANAGEMENT_CLIENT_ID" "$AZURE_TARGET_CLIENT_ID"; do
+  az ad app credential list --id "$app" --query '[].keyId' -o tsv
+done   # expect no output
 ```
 
-When replacing the target project in the same Terraform Cloud workspace, remove
-the old target-project GCP resources from state before the next apply. The next
-CI setup run will recreate them in the new project and regenerate `.env.test`
-from Terraform outputs.
+### Moving to a new GCP target project
+
+`infra/test` does not create GCP projects. To move tests to a fresh target
+project, create the project manually and link billing, then set
+`google_target_project_id` (or the matching `_1` / `_3` variable) and apply with
+your own sign-in. Remove the old target-project resources from state first. Run
+`./scripts/gen-env-test.sh` afterwards to regenerate `.env.test`.
 
 ### Generating .env.test and alien-manager.test.toml
 
@@ -142,8 +147,20 @@ After applying, generate the test configuration files from live Terraform output
 
 This writes two files at the repo root:
 
-- **`.env.test`** — credentials and resource identifiers for all three clouds. Tests load this file to get their configuration.
+- **`.env.test`** — configuration only (account ids, role ARNs, project ids, service account emails, resource names) for all three clouds. It holds no credentials; the script fails if anything credential-like ends up in it. Tests get credentials from the process environment (see "Run cloud tests locally" below).
 - **`alien-manager.test.toml`** — a manager config using the AWS test resources. This validates that the TOML format matches real infrastructure.
+
+### Run cloud tests locally
+
+1. Sign in: `aws sso login --profile alien-test-mgmt`, `aws sso login --profile alien-test-target`,
+   `gcloud auth application-default login`, `az login`.
+2. `./scripts/gen-env-test.sh` writes `.env.test` (config only).
+3. Point the tests at your sign-ins. Nothing secret goes in `.env.test`; export these in your shell:
+   `AWS_MANAGEMENT_PROFILE=alien-test-mgmt`, `AWS_TARGET_PROFILE=alien-test-target`, and for Google
+   `GOOGLE_MANAGEMENT_IMPERSONATE=1` / `GOOGLE_TARGET_IMPERSONATE=1` to run as the test service accounts named in `.env.test`.
+4. Run a crate's tests, for example `cargo test -p alien-aws-clients --test aws_s3_client_tests`.
+
+In CI, `cloud-tests.yml` exports short-lived credentials for the same names from GitHub OIDC.
 
 ### Validating the config chain
 
