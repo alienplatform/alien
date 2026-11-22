@@ -57,9 +57,10 @@ mod test_switch {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::OnceLock;
 
-    /// The released public gateway image the flip pins (v3.3.71, by digest). It serves the admin
-    /// protocol the sandbox binding requires, and it is what the live test runs.
-    pub const FLIPPED_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:69d97f5aceb41f5bc8eee09e497cd967f04ef19b649150a472607153446ef7d8";
+    /// The released public gateway image the flip pins (v3.3.72, by digest). It serves the admin
+    /// protocol the sandbox binding requires and reads sandbox links, and it is what the live
+    /// test runs.
+    pub const FLIPPED_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037";
 
     thread_local! {
         static FORCED: Cell<bool> = const { Cell::new(false) };
@@ -473,6 +474,9 @@ mod tests {
         {
             let _on = enable_internet_egress_for_test();
             assert!(crate::sandbox_egress::gateway_image_serves_admin_protocol(
+                FLIPPED_GATEWAY_IMAGE
+            ));
+            assert!(crate::sandbox_egress::gateway_image_serves_links(
                 FLIPPED_GATEWAY_IMAGE
             ));
             assert_eq!(

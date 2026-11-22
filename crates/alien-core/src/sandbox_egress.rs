@@ -56,6 +56,8 @@ pub const NO_LINKS_GATEWAY_DIGESTS: &[&str] = &[
     "sha256:b252a1b423b95385e5df0c57a37daae6937daa274e3c7783c71704584b18483d",
     "sha256:8538880f99141888e54bedc7d290194dfee5bfe11910266b309dde53de2601b0",
     "sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1",
+    // The published v3.3.71 image, released before gateways read `links`.
+    "sha256:69d97f5aceb41f5bc8eee09e497cd967f04ef19b649150a472607153446ef7d8",
 ];
 
 /// Whether a gateway running `image` enforces sandbox links.
@@ -88,7 +90,7 @@ pub fn gateway_image_serves_admin_protocol(image: &str) -> bool {
 }
 
 /// The gateway image this release installs for an internet sandbox.
-pub const SANDBOX_EGRESS_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1";
+pub const SANDBOX_EGRESS_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037";
 
 /// The refusal for an Azure internet sandbox while the installed gateway image predates the
 /// admin protocol. Build, template and deployment checks all give this text.
@@ -440,6 +442,19 @@ mod tests {
         assert!(gateway_image_serves_admin_protocol(
             "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000000"
         ));
+    }
+
+    #[test]
+    fn the_v3_3_71_gateway_image_does_not_serve_links() {
+        assert!(!gateway_image_serves_links(
+            "ghcr.io/alienplatform/alien-egress-gateway@sha256:69d97f5aceb41f5bc8eee09e497cd967f04ef19b649150a472607153446ef7d8"
+        ));
+    }
+
+    /// The gateway this release installs reads `links`, so planning accepts sandbox links.
+    #[test]
+    fn the_pinned_gateway_image_serves_links() {
+        assert!(gateway_image_serves_links(SANDBOX_EGRESS_GATEWAY_IMAGE));
     }
 
     use crate::{ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};

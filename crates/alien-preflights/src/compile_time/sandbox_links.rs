@@ -53,6 +53,9 @@ mod tests {
     /// A gateway image newer than every pin that predates links.
     const LINKS_GATEWAY: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000001";
 
+    /// A released gateway image that predates links.
+    const PRE_LINKS_GATEWAY: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1";
+
     fn container(id: &str, ports: &[u16], image: &str) -> Container {
         let mut builder = Container::new(id.into())
             .code(ContainerCode::Image {
@@ -164,18 +167,33 @@ mod tests {
             Some(LINKS_GATEWAY),
         );
         assert!(errors(&linked, Platform::Azure).await.is_empty());
-        // The released gateway image refuses Azure links as it does everywhere.
-        let released = stack(sandbox(SandboxEgress::Internet, &[&api]), None);
-        let refused = errors(&released, Platform::Azure).await;
+        // A gateway image that predates links refuses Azure links as it does everywhere.
+        let older = stack(
+            sandbox(SandboxEgress::Internet, &[&api]),
+            Some(PRE_LINKS_GATEWAY),
+        );
+        let refused = errors(&older, Platform::Azure).await;
         assert!(refused[0].contains("cannot enforce links"), "{refused:?}");
     }
 
     #[tokio::test]
-    async fn the_released_gateway_image_refuses_links() {
-        // No gateway Container yet: planning reads the pinned image, which predates links.
-        let stack = stack(sandbox(SandboxEgress::Internet, &[&api]), None);
+    async fn a_gateway_image_that_predates_links_refuses_them() {
+        let stack = stack(
+            sandbox(SandboxEgress::Internet, &[&api]),
+            Some(PRE_LINKS_GATEWAY),
+        );
         let refused = errors(&stack, Platform::Kubernetes).await;
         assert!(refused[0].contains("cannot enforce links"), "{refused:?}");
+    }
+
+    #[tokio::test]
+    async fn the_released_gateway_image_plans_links() {
+        // No gateway Container yet: planning reads the pinned image, which reads links.
+        let stack = stack(sandbox(SandboxEgress::Internet, &[&api]), None);
+        for platform in [Platform::Aws, Platform::Kubernetes, Platform::Azure] {
+            let errors = errors(&stack, platform).await;
+            assert!(errors.is_empty(), "{platform}: {errors:?}");
+        }
     }
 
     #[tokio::test]
