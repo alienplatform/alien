@@ -128,11 +128,14 @@ runs:
     # Both app registrations trust the same subject, so one token file serves both.
     - name: Azure federated token
       shell: bash
+      env:
+        MANAGEMENT: ${{ inputs.management }}
+        TARGET: ${{ inputs.target }}
       run: |
         file="$RUNNER_TEMP/azure-federated-token"
         "$GITHUB_ACTION_PATH/../../../scripts/ci-azure-federated-token.sh" "$file"
         {
-          [ "${{ inputs.management }}" = true ] && echo "AZURE_MANAGEMENT_FEDERATED_TOKEN_FILE=$file"
-          [ "${{ inputs.target }}" = true ] && echo "AZURE_TARGET_FEDERATED_TOKEN_FILE=$file"
+          [ "$MANAGEMENT" = true ] && echo "AZURE_MANAGEMENT_FEDERATED_TOKEN_FILE=$file"
+          [ "$TARGET" = true ] && echo "AZURE_TARGET_FEDERATED_TOKEN_FILE=$file"
         } >> "$GITHUB_ENV"
         exit 0
