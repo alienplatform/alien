@@ -1,8 +1,8 @@
 # Live AWS vault permission update
 
 Run from the repository root with `AWS_TARGET_ACCOUNT_ID`, `AWS_TARGET_REGION`,
-`AWS_TARGET_ACCESS_KEY_ID`, and `AWS_TARGET_SECRET_ACCESS_KEY` set for an authorized
-test account. Install boto3, make Cargo available, then run:
+`AWS_TARGET_ACCESS_KEY_ID`, `AWS_TARGET_SECRET_ACCESS_KEY` and `AWS_TARGET_SESSION_TOKEN` set
+(short-lived; `eval "$(./scripts/cloud-test-credentials.sh)"`) for an authorized test account. Install boto3, make Cargo available, then run:
 
 ```sh
 python3 crates/alien-infra/tests/live/aws_vault_permission_update.py

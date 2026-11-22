@@ -155,10 +155,13 @@ This writes two files at the repo root:
 1. Sign in: `aws sso login --profile alien-test-mgmt`, `aws sso login --profile alien-test-target`,
    `gcloud auth application-default login`, `az login`.
 2. `./scripts/gen-env-test.sh` writes `.env.test` (config only).
-3. Point the tests at your sign-ins. Nothing secret goes in `.env.test`; export these in your shell:
-   `AWS_MANAGEMENT_PROFILE=alien-test-mgmt`, `AWS_TARGET_PROFILE=alien-test-target`, and for Google
-   `GOOGLE_MANAGEMENT_IMPERSONATE=1` / `GOOGLE_TARGET_IMPERSONATE=1` to run as the test service accounts named in `.env.test`.
+3. `eval "$(./scripts/cloud-test-credentials.sh)"` puts short-lived AWS credentials for the two
+   accounts into your shell (`AWS_MANAGEMENT_*`, `AWS_TARGET_*`, with session tokens). Nothing secret
+   goes in `.env.test`. Google tests impersonate the test service accounts named in `.env.test` through
+   your Application Default Credentials; Azure tests use your `az login` tokens.
 4. Run a crate's tests, for example `cargo test -p alien-aws-clients --test aws_s3_client_tests`.
+   Tests that need a third-party key (OpenAI, Anthropic, Databricks, Axiom, ngrok) skip with a message unless you export it.
+   A few Azure tests start providers that need the CI federated token file and only run in CI.
 
 In CI, `cloud-tests.yml` exports short-lived credentials for the same names from GitHub OIDC.
 

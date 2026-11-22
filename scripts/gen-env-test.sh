@@ -8,7 +8,7 @@
 # It never holds a credential. Tests get credentials from the environment of the
 # process: AWS profiles or session credentials, Google application default
 # credentials with impersonation, an Azure federated token file. See
-# docs/testing.md ("Run cloud tests locally"). Third-party test keys (OpenAI,
+# infra/README.md ("Run cloud tests locally"). Third-party test keys (OpenAI,
 # Anthropic, Databricks, Axiom, ngrok) are passed to the steps that need them
 # and are not written here.
 set -euo pipefail
