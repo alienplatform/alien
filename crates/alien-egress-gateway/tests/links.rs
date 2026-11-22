@@ -445,13 +445,30 @@ async fn a_link_carries_websocket_and_other_protocols_and_nothing_else_does() {
         {"id":"api","host":"api.svc","ports":[9000],"ranges":["10.244.0.0/16"],"addresses":[LINKED_ADDRESS]},
         {"id":"vendor","host":"vendor.svc","ports":[9002],"ranges":["10.244.0.0/16"],"addresses":[LINKED_ADDRESS]}
     ]});
-    // A credential rule on the second link keeps it on the inspected TLS path.
-    config["credentials"] = json!([{"aud":AUD,"host":"vendor.svc","port":9002,"method":"GET",
-        "path":"/","header":"Authorization","vaultBinding":"secrets","secret":"vendor-key"}]);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.json");
     std::fs::write(&path, config.to_string()).unwrap();
     let mut gateway = gateway(&config).await.unwrap();
+    // A runtime credential rule on the second link keeps it on the inspected path.
+    gateway
+        .sandbox_credentials
+        .apply(alien_egress_gateway::sandbox_credentials::CredentialRecord {
+            signed: String::new(),
+            aud: AUD.into(),
+            sub: "open".into(),
+            ver: (1, String::new()),
+            rules: Arc::new(vec![alien_egress_gateway::sandbox_credentials::Rule {
+                target: alien_egress_gateway::sandbox_credentials::RuleTarget::Link(
+                    "vendor".into(),
+                ),
+                port: Some(9002),
+                method: None,
+                path: "/".into(),
+                header: http::HeaderName::from_static("authorization"),
+                value: http::HeaderValue::from_static("Bearer real"),
+            }]),
+        })
+        .unwrap();
     // Short limits for connections that are not links, so a quiet link tunnel can be shown to
     // outlive them.
     gateway.connections = Arc::new(
