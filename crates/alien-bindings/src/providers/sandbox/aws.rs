@@ -956,6 +956,36 @@ impl Sandbox for AwsSandbox {
         Ok(())
     }
 
+    async fn update_credentials(
+        &self,
+        sandbox_id: &str,
+        rules: Vec<alien_core::SandboxCredentialRule>,
+    ) -> Result<()> {
+        super::egress::validate_credentials(&rules)?;
+        let manager = self
+            .egress_manager
+            .as_ref()
+            .ok_or_else(|| super::egress::unsupported("update_credentials"))?;
+        let sandbox = self
+            .fetch(sandbox_id, "sandbox.updateCredentials")
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.updateCredentials".into(),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
+                    ),
+                })
+            })?;
+        if sandbox.state == SandboxState::Terminated {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "sandboxTerminated".to_string(),
+                reason: format!("sandbox '{sandbox_id}' has terminated"),
+            }));
+        }
+        manager.update_credentials(sandbox_id, &rules).await
+    }
+
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
         self.fetch(sandbox_id, "sandbox.get").await
     }

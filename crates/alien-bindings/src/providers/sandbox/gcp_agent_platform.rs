@@ -1544,6 +1544,19 @@ impl Sandbox for GcpAgentPlatformSandbox {
         gateway.manager.update(sandbox_id, &egress).await
     }
 
+    async fn update_credentials(
+        &self,
+        sandbox_id: &str,
+        rules: Vec<alien_core::SandboxCredentialRule>,
+    ) -> Result<()> {
+        super::egress::validate_credentials(&rules)?;
+        let gateway = self
+            .gateway
+            .as_ref()
+            .ok_or_else(|| super::egress::unsupported("update_credentials"))?;
+        gateway.manager.update_credentials(sandbox_id, &rules).await
+    }
+
     /// The platform's row, unnarrowed. `sandboxLifetime` stays true even with no declared ttl:
     /// the API always sets `expireTime` on output, so an undeclared sandbox still carries a
     /// deadline the platform enforces.

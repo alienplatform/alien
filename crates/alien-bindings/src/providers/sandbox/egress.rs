@@ -8,6 +8,16 @@ pub(crate) fn unsupported(operation: &str) -> AlienError<ErrorData> {
         reason: format!("{operation} requires gateway enforcement"),
     })
 }
+/// Refuse an invalid rule set before any backend is contacted. Messages never carry a value.
+pub(crate) fn validate_credentials(rules: &[alien_core::SandboxCredentialRule]) -> Result<()> {
+    alien_core::validate_sandbox_credentials(rules).map_err(|reason| {
+        AlienError::new(ErrorData::InvalidInput {
+            operation_context: "sandbox.updateCredentials".into(),
+            details: reason,
+            field_name: Some("rules".into()),
+        })
+    })
+}
 pub(crate) fn policy_error(error: AlienError<alien_core::ErrorData>) -> AlienError<ErrorData> {
     let context = match &error.error {
         Some(alien_core::ErrorData::SandboxEgressPolicyTooLarge { limit }) => {

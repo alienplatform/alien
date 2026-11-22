@@ -200,6 +200,22 @@ impl EgressTokenIssuer {
         operation: EgressAdminOperation,
         now_unix: i64,
     ) -> Result<String> {
+        let method = match operation {
+            EgressAdminOperation::Read => "GET",
+            EgressAdminOperation::Put => "PUT",
+            EgressAdminOperation::Delete => "DELETE",
+        };
+        self.mint_admin_method(audience, sandbox_id, method, now_unix)
+    }
+
+    /// An admin grant for one HTTP method, such as `POST` for the sandbox CA.
+    pub fn mint_admin_method(
+        &self,
+        audience: &str,
+        sandbox_id: &str,
+        method: &str,
+        now_unix: i64,
+    ) -> Result<String> {
         validate_identity(audience, sandbox_id)?;
         if now_unix < 0 {
             return Err(invalid("issue time must be Unix seconds"));
@@ -207,11 +223,6 @@ impl EgressTokenIssuer {
         let exp = now_unix
             .checked_add(60)
             .ok_or_else(|| invalid("issue time is outside the supported range"))?;
-        let method = match operation {
-            EgressAdminOperation::Read => "GET",
-            EgressAdminOperation::Put => "PUT",
-            EgressAdminOperation::Delete => "DELETE",
-        };
         let claims = serde_json::json!({"iss":"alien-sandbox","aud":audience,"sub":sandbox_id,
             "method":method,"iat":now_unix,"exp":exp});
         self.sign("alien-egress-admin", &claims)
@@ -238,6 +249,46 @@ impl EgressTokenIssuer {
             claims["deleted"] = true.into();
         }
         self.sign("alien-egress-record", &claims)
+    }
+
+    /// Sign a sandbox's whole credential rule set. The record carries the values; it travels
+    /// only to the gateway's admin listener and between gateway replicas.
+    pub fn mint_credentials(
+        &self,
+        audience: &str,
+        sandbox_id: &str,
+        version: (u64, &str),
+        rules: &[alien_core::SandboxCredentialRule],
+    ) -> Result<String> {
+        validate_identity(audience, sandbox_id)?;
+        let rules: Vec<serde_json::Value> = rules
+            .iter()
+            .map(|rule| {
+                let mut value = serde_json::json!({
+                    "header": rule.header,
+                    "value": rule.value.expose(),
+                });
+                for (name, field) in [
+                    ("host", rule.host.clone().map(serde_json::Value::from)),
+                    ("link", rule.link.clone().map(serde_json::Value::from)),
+                    ("port", rule.port.map(serde_json::Value::from)),
+                    ("method", rule.method.clone().map(serde_json::Value::from)),
+                    ("path", rule.path.clone().map(serde_json::Value::from)),
+                    (
+                        "valuePrefix",
+                        rule.value_prefix.clone().map(serde_json::Value::from),
+                    ),
+                ] {
+                    if let Some(field) = field {
+                        value[name] = field;
+                    }
+                }
+                value
+            })
+            .collect();
+        let claims =
+            serde_json::json!({"v":1,"aud":audience,"sub":sandbox_id,"ver":version,"rules":rules});
+        self.sign("alien-egress-credentials", &claims)
     }
 
     fn sign(&self, kind: &str, claims: &serde_json::Value) -> Result<String> {

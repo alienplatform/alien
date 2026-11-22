@@ -1605,6 +1605,22 @@ pub trait Sandbox: Binding {
         ))
     }
 
+    /// Replaces a sandbox's credential rules: the egress gateway sets each rule's header on the
+    /// sandbox's matching requests, so the sandbox only ever holds a placeholder. The list is
+    /// the whole set and an empty list removes every rule. Returns once every gateway replica
+    /// holds the new set; the sandbox's next request uses it. Call it from the code that owns
+    /// the sandbox, never from inside it. Backends without a gateway refuse it explicitly.
+    async fn update_credentials(
+        &self,
+        _sandbox_id: &str,
+        rules: Vec<alien_core::SandboxCredentialRule>,
+    ) -> Result<()> {
+        crate::providers::sandbox::egress::validate_credentials(&rules)?;
+        Err(crate::providers::sandbox::egress::unsupported(
+            "update_credentials",
+        ))
+    }
+
     /// What this platform's backend supports.
     fn capabilities(&self) -> alien_core::SandboxCapabilities;
 

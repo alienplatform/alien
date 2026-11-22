@@ -799,6 +799,24 @@ impl Sandbox for KubernetesSandbox {
         self.deliver_egress(sandbox_id, None, &record).await
     }
 
+    async fn update_credentials(
+        &self,
+        sandbox_id: &str,
+        rules: Vec<alien_core::SandboxCredentialRule>,
+    ) -> Result<()> {
+        super::egress::validate_credentials(&rules)?;
+        let manager = self
+            .egress_manager
+            .as_ref()
+            .ok_or_else(|| super::egress::unsupported("update_credentials"))?;
+        let claim = self.claimed(sandbox_id).await?.ok_or_else(|| {
+            self.failed("sandbox.updateCredentials", "the sandbox does not exist")
+        })?;
+        manager
+            .update_credentials(Self::egress_identity(&claim)?, &rules)
+            .await
+    }
+
     async fn list(&self) -> Result<Vec<SandboxInstance>> {
         let response = self
             .client
