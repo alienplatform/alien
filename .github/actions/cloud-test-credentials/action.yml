@@ -113,16 +113,30 @@ runs:
         export_environment_variables: false
         cleanup_credentials: false
 
+    # The file the auth action writes fetches its subject token from the runner by URL, which only
+    # the Google tooling understands. Our clients read the subject token from a file, so write a
+    # token file (kept fresh) per identity and point a copy of the configuration at it.
     - name: Export Google credential files
       shell: bash
       env:
         MGMT_FILE: ${{ steps.gcp_mgmt.outputs.credentials_file_path }}
         TARGET_FILE: ${{ steps.gcp_target.outputs.credentials_file_path }}
       run: |
-        {
-          [ -n "$MGMT_FILE" ] && echo "GOOGLE_MANAGEMENT_CREDENTIALS_FILE=$MGMT_FILE"
-          [ -n "$TARGET_FILE" ] && echo "GOOGLE_TARGET_CREDENTIALS_FILE=$TARGET_FILE"
-        } >> "$GITHUB_ENV"
+        set -euo pipefail
+        link() {
+          local name="$1" src="$2" token="$RUNNER_TEMP/gcp-$1-subject-token" out="$RUNNER_TEMP/gcp-$1-credentials.json"
+          "$GITHUB_ACTION_PATH/../../../scripts/ci-oidc-token-file.sh" "$token" "$(jq -er .audience "$src")"
+          jq --arg f "$token" '.credential_source = {file: $f}' "$src" > "$out"
+          linked="$out"
+        }
+        if [ -n "$MGMT_FILE" ]; then
+          link management "$MGMT_FILE"
+          echo "GOOGLE_MANAGEMENT_CREDENTIALS_FILE=$linked" >> "$GITHUB_ENV"
+        fi
+        if [ -n "$TARGET_FILE" ]; then
+          link target "$TARGET_FILE"
+          echo "GOOGLE_TARGET_CREDENTIALS_FILE=$linked" >> "$GITHUB_ENV"
+        fi
         exit 0
 
     # Both app registrations trust the same subject, so one token file serves both.
@@ -133,7 +147,7 @@ runs:
         TARGET: ${{ inputs.target }}
       run: |
         file="$RUNNER_TEMP/azure-federated-token"
-        "$GITHUB_ACTION_PATH/../../../scripts/ci-azure-federated-token.sh" "$file"
+        "$GITHUB_ACTION_PATH/../../../scripts/ci-oidc-token-file.sh" "$file"
         {
           [ "$MANAGEMENT" = true ] && echo "AZURE_MANAGEMENT_FEDERATED_TOKEN_FILE=$file"
           [ "$TARGET" = true ] && echo "AZURE_TARGET_FEDERATED_TOKEN_FILE=$file"
