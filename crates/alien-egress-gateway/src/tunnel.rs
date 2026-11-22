@@ -24,6 +24,38 @@ pub(crate) async fn relay(
     }
 }
 
+/// Turn on TCP keepalive for a declared link's sockets: a quiet long-lived connection keeps
+/// its path's flow state (load balancers drop idle flows after minutes) and a peer that went
+/// away is noticed in about two minutes. Best effort: a socket that refuses keeps working.
+pub(crate) fn keep_alive(stream: &TcpStream) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        let fd = stream.as_raw_fd();
+        for (level, name, value) in [
+            (libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1),
+            (libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, 60),
+            (libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, 15),
+            (libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 4),
+        ] {
+            let value: libc::c_int = value;
+            // SAFETY: fd is the live socket `stream` owns; the option value is a c_int of the
+            // size passed.
+            unsafe {
+                libc::setsockopt(
+                    fd,
+                    level,
+                    name,
+                    (&value as *const libc::c_int).cast(),
+                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                );
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = stream;
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
     use std::{

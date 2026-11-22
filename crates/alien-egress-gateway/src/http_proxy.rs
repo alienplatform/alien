@@ -172,3 +172,53 @@ fn prepare(request: &mut Request<Incoming>, target: &Target, injection: bool) ->
     *request.uri_mut() = path.parse().map_err(|_| invalid("invalid path"))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
+
+    use super::forward;
+    use crate::policy::Target;
+
+    /// What the guest reads back and what reached the upstream for one guest request.
+    async fn exchange(request: &[u8]) -> (String, usize) {
+        let (mut guest, gateway_side) = duplex(1 << 16);
+        let (upstream, mut service) = duplex(1 << 16);
+        let target = Target::parse("example.com:80", None).unwrap();
+        let task = tokio::spawn(async move { forward(gateway_side, upstream, target, None).await });
+        guest.write_all(request).await.unwrap();
+        let mut answer = vec![0u8; 1024];
+        let n = guest.read(&mut answer).await.unwrap();
+        let _ = task.await.unwrap();
+        let mut reached = vec![0u8; 1024];
+        let upstream_bytes = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            service.read(&mut reached),
+        )
+        .await
+        .map(|read| read.unwrap_or(0))
+        .unwrap_or(0);
+        (
+            String::from_utf8_lossy(&answer[..n]).to_string(),
+            upstream_bytes,
+        )
+    }
+
+    /// The path every host that is not a declared link takes: an upgrade and a protocol other
+    /// than HTTP are refused before any byte reaches the destination.
+    #[tokio::test]
+    async fn an_upgrade_or_another_protocol_is_refused_on_the_http_path() {
+        for request in [
+            b"GET /ws HTTP/1.1\r\nHost: example.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"
+                .as_slice(),
+            b"*1\r\n$4\r\nPING\r\n",
+        ] {
+            let (answer, reached) = exchange(request).await;
+            assert!(
+                answer.starts_with("HTTP/1.1 403") || answer.starts_with("HTTP/1.1 400"),
+                "{answer}"
+            );
+            assert_eq!(reached, 0, "{answer}");
+        }
+    }
+}

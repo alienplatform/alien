@@ -18,7 +18,7 @@ use tokio::{
 
 use crate::{
     config::Config,
-    config::GatewayLink,
+    config::{CredentialRule, GatewayLink},
     connections::{Connections, IdentityPermit, SourcePermit},
     error::{denied, invalid, unavailable, Result},
     io::{Counters, Metered, Prefixed},
@@ -30,8 +30,8 @@ use crate::{
 
 /// Maximum time to receive initial request headers or a TLS ClientHello.
 pub const HEADER_TIMEOUT: Duration = Duration::from_secs(5);
-/// Maximum connection lifetime; limits resource retention by idle peers.
-pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(3600);
+/// Lifetime of a connection that is not a declared link; the sweep enforces it.
+pub use crate::connections::CONNECTION_TIMEOUT;
 
 /// Shared configuration and policy store.
 pub struct Gateway {
@@ -144,6 +144,9 @@ impl Gateway {
             .set_nodelay(true)
             .into_alien_error()
             .context(unavailable("configure destination socket"))?;
+        if link.is_some() {
+            crate::tunnel::keep_alive(&stream);
+        }
         Ok(stream)
     }
 }
@@ -248,14 +251,12 @@ async fn connection(stream: TcpStream, gateway: Arc<Gateway>, source: SourcePerm
     };
     let started = Instant::now();
     let mut audit = Audit::default();
-    let result = timeout(
-        CONNECTION_TIMEOUT,
-        proxy(&mut stream, gateway.clone(), &mut audit, source),
-    )
-    .await;
+    // Idle and lifetime limits are the registry sweep's (see `Connections::expire_idle`): a
+    // declared link's connection has a long idle limit and no lifetime limit.
+    let result = proxy(&mut stream, gateway.clone(), &mut audit, source).await;
     let (reason, category, protocol_denial) = match result {
-        Ok(Ok(())) => ("completed".to_string(), 4, false),
-        Ok(Err(error)) => {
+        Ok(()) => ("completed".to_string(), 4, false),
+        Err(error) => {
             let category = match error.code.as_str() {
                 "EGRESS_CAPACITY" => 0,
                 "EGRESS_INVALID" => 3,
@@ -269,7 +270,6 @@ async fn connection(stream: TcpStream, gateway: Arc<Gateway>, source: SourcePerm
             );
             (error.message, category, protocol_denial)
         }
-        Err(_) => ("connection lifetime exceeded".into(), 4, false),
     };
     let allowed = audit.allowed && !protocol_denial;
     let log = if allowed {
@@ -376,15 +376,41 @@ async fn authorized_proxy(
         }
     };
     audit.link = link.as_ref().map(|link| link.id.clone());
+    let rules = credential_rules(&gateway.config, claims, &target);
+    let raw = raw_link_relay(link.as_ref(), &rules);
+    if raw {
+        crate::tunnel::keep_alive(&stream.inner);
+    }
     if !connect {
+        // A WebSocket handshake to a declared link carries the WebSocket once the service
+        // accepts it; every other plain-proxy request is forwarded as exactly one request.
+        let websocket = if raw {
+            match crate::protocol::websocket_origin_head(&input[..head_len]) {
+                Ok(head) => head,
+                Err(error) => {
+                    refuse(stream, false).await?;
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
         let upstream = gateway.connect(&target, identity, link.as_ref()).await?;
         audit.allowed = true;
         log_open(audit);
-        return crate::http_proxy::forward(Prefixed::new(input, stream), upstream, target, None)
+        let Some(head) = websocket else {
+            return crate::http_proxy::forward(
+                Prefixed::new(input, stream),
+                upstream,
+                target,
+                None,
+            )
             .await;
+        };
+        return relay_websocket(stream, input[head_len..].to_vec(), upstream, &head).await;
     }
     // Resolve before acknowledging, so denied ranges receive an explicit gateway denial.
-    let mut upstream = match gateway.connect(&target, identity, link.as_ref()).await {
+    let upstream = match gateway.connect(&target, identity, link.as_ref()).await {
         Ok(stream) => stream,
         Err(error) => {
             refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
@@ -398,28 +424,230 @@ async fn authorized_proxy(
         .await
         .into_alien_error()
         .context(unavailable("acknowledge CONNECT"))?;
-    let mut guest = Prefixed::new(input[head_len..].to_vec(), stream);
+    let guest = Prefixed::new(input[head_len..].to_vec(), stream);
     drop(input);
-    let rules: Vec<_> = gateway
-        .config
+    tunnel(
+        guest,
+        upstream,
+        target,
+        raw,
+        &rules,
+        &gateway.credentials,
+        (&claims.aud, &claims.sub),
+    )
+    .await
+}
+
+/// Largest body of a refused WebSocket handshake answer the gateway passes on.
+const MAX_REFUSED_HANDSHAKE_BODY: usize = 64 * 1024;
+
+/// Carry a plain-proxy WebSocket to a declared link. The handshake goes to the service as one
+/// HTTP request, and only a `101` that answers `Upgrade: websocket` turns the connection into a
+/// relay. Any other answer is passed on with `Connection: close` and the connection ends, so
+/// bytes the sandbox sent after the handshake (`buffered`, and anything later) never reach the
+/// service unless it accepted the WebSocket.
+async fn relay_websocket(
+    guest: &mut Metered<TcpStream>,
+    buffered: Vec<u8>,
+    upstream: TcpStream,
+    head: &[u8],
+) -> Result<()> {
+    use http_body_util::BodyExt;
+    let request = origin_request(head)?;
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(upstream))
+            .await
+            .into_alien_error()
+            .context(unavailable("initialize upstream WebSocket handshake"))?;
+    let driver = tokio::spawn(connection.with_upgrades());
+    let response = match sender.send_request(request).await {
+        Ok(response) => response,
+        Err(_) => {
+            driver.abort();
+            guest
+                .write_all(
+                    b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+                )
+                .await
+                .into_alien_error()
+                .context(unavailable("send WebSocket handshake failure"))?;
+            return Err(alien_error::AlienError::new(unavailable(
+                "upstream WebSocket handshake",
+            )));
+        }
+    };
+    let upgrades: Vec<_> = response
+        .headers()
+        .get_all(http::header::UPGRADE)
+        .iter()
+        .collect();
+    let accepted = response.status() == http::StatusCode::SWITCHING_PROTOCOLS
+        && upgrades.len() == 1
+        && upgrades[0].as_bytes().eq_ignore_ascii_case(b"websocket");
+    if !accepted {
+        let informational = response.status().is_informational();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = timeout(
+            HEADER_TIMEOUT,
+            http_body_util::Limited::new(response.into_body(), MAX_REFUSED_HANDSHAKE_BODY)
+                .collect(),
+        )
+        .await;
+        driver.abort();
+        let answer = match body {
+            Ok(Ok(body)) if !informational => {
+                let body = body.to_bytes();
+                let mut answer = response_head(status, &headers, Some(body.len()));
+                answer.extend_from_slice(&body);
+                answer
+            }
+            _ => b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                .to_vec(),
+        };
+        guest
+            .write_all(&answer)
+            .await
+            .into_alien_error()
+            .context(unavailable("forward WebSocket handshake answer"))?;
+        return Err(denied("service did not accept the WebSocket"));
+    }
+    let answer = response_head(response.status(), response.headers(), None);
+    let upgraded = hyper::upgrade::on(response)
+        .await
+        .into_alien_error()
+        .context(unavailable("upgrade WebSocket"))?;
+    let _ = driver.await;
+    let parts = upgraded
+        .downcast::<hyper_util::rt::TokioIo<TcpStream>>()
+        .map_err(|_| alien_error::AlienError::new(unavailable("upgraded WebSocket connection")))?;
+    let mut upstream = parts.io.into_inner();
+    guest
+        .write_all(&answer)
+        .await
+        .into_alien_error()
+        .context(unavailable("forward WebSocket acceptance"))?;
+    guest
+        .write_all(&parts.read_buf)
+        .await
+        .into_alien_error()
+        .context(unavailable("forward early WebSocket payload"))?;
+    upstream
+        .write_all(&buffered)
+        .await
+        .into_alien_error()
+        .context(unavailable("forward buffered WebSocket payload"))?;
+    crate::tunnel::relay(guest, &mut upstream)
+        .await
+        .into_alien_error()
+        .context(unavailable("relay WebSocket"))?;
+    Ok(())
+}
+
+/// The handshake request from its origin-form head (see `protocol::websocket_origin_head`).
+fn origin_request(head: &[u8]) -> Result<http::Request<http_body_util::Empty<bytes::Bytes>>> {
+    let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut parsed = httparse::Request::new(&mut headers);
+    parsed
+        .parse(head)
+        .map_err(|_| invalid("malformed WebSocket handshake"))?;
+    let mut request = http::Request::builder().method(http::Method::GET).uri(
+        parsed
+            .path
+            .ok_or_else(|| invalid("missing request target"))?,
+    );
+    for header in parsed.headers.iter() {
+        request = request.header(header.name, header.value);
+    }
+    request
+        .body(http_body_util::Empty::new())
+        .map_err(|_| invalid("malformed WebSocket handshake"))
+}
+
+/// A response head for the sandbox. With `body_len`, the answer is a complete response that
+/// ends the connection: the service's framing and connection fields are replaced.
+fn response_head(
+    status: http::StatusCode,
+    headers: &http::HeaderMap,
+    body_len: Option<usize>,
+) -> Vec<u8> {
+    let mut head = format!(
+        "HTTP/1.1 {} {}\r\n",
+        status.as_u16(),
+        status.canonical_reason().unwrap_or("")
+    )
+    .into_bytes();
+    for (name, value) in headers {
+        if body_len.is_some()
+            && [
+                http::header::CONTENT_LENGTH,
+                http::header::TRANSFER_ENCODING,
+                http::header::CONNECTION,
+                http::header::UPGRADE,
+                http::header::HeaderName::from_static("keep-alive"),
+            ]
+            .contains(name)
+        {
+            continue;
+        }
+        head.extend_from_slice(name.as_str().as_bytes());
+        head.extend_from_slice(b": ");
+        head.extend_from_slice(value.as_bytes());
+        head.extend_from_slice(b"\r\n");
+    }
+    if let Some(len) = body_len {
+        head.extend_from_slice(
+            format!("Content-Length: {len}\r\nConnection: close\r\n").as_bytes(),
+        );
+    }
+    head.extend_from_slice(b"\r\n");
+    head
+}
+
+/// The credential rules for this identity and destination.
+fn credential_rules(config: &Config, claims: &Claims, target: &Target) -> Vec<CredentialRule> {
+    config
         .credentials
         .iter()
         .filter(|rule| {
             rule.aud == claims.aud && rule.host == target.host && rule.port == target.port
         })
         .cloned()
-        .collect();
-    if target.host.parse::<std::net::Ipv4Addr>().is_ok() {
-        // Explicit IP/CIDR rules are the only grants for opaque, including server-first, protocols.
+        .collect()
+}
+
+/// Whether a connection may carry any protocol to a declared link. The link is already pinned
+/// to the linked service: its exact name, a declared port and addresses inside the link's
+/// ranges, rechecked by the sweep. A destination with credential rules stays on the inspected
+/// TLS path, so the credential is only ever added by the gateway to a matching request.
+fn raw_link_relay(link: Option<&GatewayLink>, rules: &[CredentialRule]) -> bool {
+    link.is_some() && rules.is_empty()
+}
+
+/// What may flow through an acknowledged CONNECT tunnel. `raw` (a declared link without
+/// credential rules) and an explicit IP destination relay any protocol; any other destination
+/// must speak TLS or HTTP, and credential destinations TLS only.
+async fn tunnel(
+    mut guest: Prefixed<&mut Metered<TcpStream>>,
+    mut upstream: TcpStream,
+    target: Target,
+    raw: bool,
+    rules: &[CredentialRule],
+    credentials: &crate::credentials::Credentials,
+    identity: (&str, &str),
+) -> Result<()> {
+    if raw || target.host.parse::<std::net::Ipv4Addr>().is_ok() {
+        // Explicit IP/CIDR rules and declared links are the only grants for opaque, including
+        // server-first, protocols.
         let guest = guest
             .flush_prefix(&mut upstream)
             .await
             .into_alien_error()
-            .context(unavailable("forward buffered IP payload"))?;
+            .context(unavailable("forward buffered tunnel payload"))?;
         crate::tunnel::relay(guest, &mut upstream)
             .await
             .into_alien_error()
-            .context(unavailable("relay IP connection"))?;
+            .context(unavailable("relay tunnel"))?;
         return Ok(());
     }
     let first = timeout(HEADER_TIMEOUT, guest.read_u8())
@@ -441,14 +669,13 @@ async fn authorized_proxy(
         .into_alien_error()
         .context(unavailable("ClientHello timeout"))??;
     if !rules.is_empty() {
-        return gateway
-            .credentials
+        return credentials
             .forward(
                 Prefixed::new(hello, guest),
                 upstream,
-                (&claims.aud, &claims.sub),
+                identity,
                 target,
-                &rules,
+                rules,
             )
             .await;
     }
@@ -737,5 +964,214 @@ mod fixed_link_address_tests {
         );
         assert!(fixed_link_addresses(Some(&link(&[])), 8080).is_none());
         assert!(fixed_link_addresses(None, 8080).is_none());
+    }
+}
+
+#[cfg(test)]
+mod link_relay_tests {
+    use std::{collections::HashMap, sync::Arc, time::Duration};
+
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
+
+    use super::{raw_link_relay, relay_websocket, tunnel, CredentialRule, GatewayLink};
+    use crate::{
+        credentials::Credentials,
+        io::{Counters, Metered, Prefixed},
+        policy::Target,
+    };
+
+    fn link() -> GatewayLink {
+        GatewayLink {
+            id: "api".into(),
+            host: "api.svc".into(),
+            ports: vec![6379],
+            ranges: vec!["10.1.0.0/24".parse().unwrap()],
+            addresses: vec![],
+        }
+    }
+
+    fn rule() -> CredentialRule {
+        serde_json::from_value(serde_json::json!({"aud":"p/r","host":"api.svc","port":6379,
+            "method":"GET","path":"/","header":"Authorization","vaultBinding":"test-vault","secret":"key"}))
+        .unwrap()
+    }
+
+    async fn pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        (client, listener.accept().await.unwrap().0)
+    }
+
+    /// Runs an acknowledged tunnel to `host:6379` with `payload` from the sandbox; returns
+    /// whether the tunnel ended in an error and the bytes the service received.
+    async fn run(
+        host: &str,
+        raw: bool,
+        rules: &[CredentialRule],
+        payload: &[u8],
+    ) -> (bool, Vec<u8>) {
+        let bindings = Arc::new(
+            alien_bindings::Bindings::from_env_map(HashMap::from([(
+                "ALIEN_DEPLOYMENT_TYPE".into(),
+                "local".into(),
+            )]))
+            .unwrap(),
+        );
+        let credentials = Credentials::new(bindings, &[], rules, Some([7; 32])).unwrap();
+        let (mut sandbox, guest) = pair().await;
+        let (upstream, mut service) = pair().await;
+        let mut guest = Metered {
+            inner: guest,
+            counters: Arc::new(Counters::default()),
+        };
+        sandbox.write_all(payload).await.unwrap();
+        let target = Target::parse(&format!("{host}:6379"), None).unwrap();
+        let relay = tunnel(
+            Prefixed::new(Vec::new(), &mut guest),
+            upstream,
+            target,
+            raw,
+            rules,
+            &credentials,
+            ("p/r", "s"),
+        );
+        let receive = async {
+            let mut received = Vec::new();
+            let mut buffer = [0u8; 256];
+            while let Ok(Ok(n)) =
+                tokio::time::timeout(Duration::from_millis(500), service.read(&mut buffer)).await
+            {
+                if n == 0 {
+                    break;
+                }
+                received.extend_from_slice(&buffer[..n]);
+            }
+            drop(sandbox);
+            drop(service);
+            received
+        };
+        let (result, received) = tokio::join!(relay, receive);
+        (result.is_err(), received)
+    }
+
+    const PING: &[u8] = b"*1\r\n$4\r\nPING\r\n";
+    const WEBSOCKET: &[u8] = b"GET /ws HTTP/1.1\r\nHost: api.svc:6379\r\nConnection: Upgrade\r\n\
+        Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+
+    #[tokio::test]
+    async fn a_link_without_credential_rules_relays_any_protocol() {
+        assert!(raw_link_relay(Some(&link()), &[]));
+        let (_, received) = run("api.svc", true, &[], PING).await;
+        assert_eq!(received, PING);
+    }
+
+    /// A link with a credential rule stays on the inspected path on both the CONNECT and the
+    /// plain-proxy WebSocket paths (both read `raw_link_relay`): no raw relay, so a plaintext
+    /// WebSocket or other protocol never reaches the service.
+    #[tokio::test]
+    async fn a_link_with_credential_rules_stays_off_the_raw_relay() {
+        let rules = [rule()];
+        assert!(!raw_link_relay(Some(&link()), &rules));
+        assert!(!raw_link_relay(None, &[]));
+        for payload in [PING, WEBSOCKET] {
+            let (failed, received) = run("api.svc", false, &rules, payload).await;
+            assert!(failed);
+            assert!(
+                received.is_empty(),
+                "{}",
+                String::from_utf8_lossy(&received)
+            );
+        }
+    }
+
+    /// The plain-proxy WebSocket path relays only after the service accepts the upgrade. A
+    /// service that answers with an ordinary error and keeps the connection open never sees the
+    /// bytes the sandbox sent after the handshake; the sandbox gets the answer with
+    /// `Connection: close`. A service that accepts gets the buffered bytes, and its early bytes
+    /// after the `101` reach the sandbox.
+    #[tokio::test]
+    async fn a_plain_proxy_websocket_relays_only_after_the_service_accepts() {
+        for (answer, accepted) in [
+            (b"HTTP/1.1 400 Bad Request\r\nContent-Length: 3\r\n\r\nno!".as_slice(), false),
+            (
+                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nearly",
+                true,
+            ),
+        ] {
+            let (mut sandbox, guest) = pair().await;
+            let (upstream, mut service) = pair().await;
+            let mut guest = Metered {
+                inner: guest,
+                counters: Arc::new(Counters::default()),
+            };
+            let pipelined = b"GET /pipelined HTTP/1.1\r\nHost: api.svc:6379\r\n\r\n".to_vec();
+            let serve = async {
+                let mut received = Vec::new();
+                let mut buffer = [0u8; 1024];
+                while !received.windows(4).any(|v| v == b"\r\n\r\n") {
+                    let n = service.read(&mut buffer).await.unwrap();
+                    received.extend_from_slice(&buffer[..n]);
+                }
+                service.write_all(answer).await.unwrap();
+                while let Ok(Ok(n)) =
+                    tokio::time::timeout(Duration::from_millis(500), service.read(&mut buffer)).await
+                {
+                    if n == 0 {
+                        break;
+                    }
+                    received.extend_from_slice(&buffer[..n]);
+                }
+                drop(service);
+                received
+            };
+            let read = async move {
+                let mut answered = Vec::new();
+                let mut buffer = [0u8; 1024];
+                while let Ok(Ok(n)) =
+                    tokio::time::timeout(Duration::from_millis(800), sandbox.read(&mut buffer)).await
+                {
+                    if n == 0 {
+                        break;
+                    }
+                    answered.extend_from_slice(&buffer[..n]);
+                }
+                answered
+            };
+            let (result, received, answered) = tokio::join!(
+                relay_websocket(&mut guest, pipelined, upstream, WEBSOCKET),
+                serve,
+                read
+            );
+            let received = String::from_utf8_lossy(&received).to_string();
+            let answered = String::from_utf8_lossy(&answered).to_string();
+            assert!(received.starts_with("GET /ws HTTP/1.1\r\n"), "{received}");
+            assert_eq!(received.contains("/pipelined"), accepted, "{received}");
+            if accepted {
+                assert!(answered.starts_with("HTTP/1.1 101 Switching Protocols\r\n"), "{answered}");
+                assert!(answered.ends_with("\r\n\r\nearly"), "{answered}");
+            } else {
+                assert!(result.is_err());
+                assert!(answered.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{answered}");
+                assert!(answered.contains("Connection: close\r\n"), "{answered}");
+                assert!(answered.ends_with("\r\n\r\nno!"), "{answered}");
+            }
+        }
+    }
+
+    /// A tunnel to a host that is not a declared link still carries only TLS or HTTP: a
+    /// non-HTTP payload is refused before a byte reaches the destination.
+    #[tokio::test]
+    async fn an_unlinked_host_tunnel_refuses_a_non_http_payload() {
+        let (_, received) = run("api.example.com", false, &[], PING).await;
+        assert!(
+            received.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&received)
+        );
     }
 }

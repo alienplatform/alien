@@ -305,3 +305,382 @@ async fn the_sweep_closes_a_linked_tunnel_after_an_unlink_or_a_range_change() {
     registry.revalidate(&live).await;
     assert_eq!(*unlinked.borrow(), Some("policy revoked or unavailable"));
 }
+
+/// The linked service's fixed address in the socket test below. The test needs it on a local
+/// interface: `sudo ip addr add 10.244.7.9/32 dev lo`.
+const LINKED_ADDRESS: &str = "10.244.7.9";
+
+/// A linked service on `LINKED_ADDRESS:port`. It reads a connection's first bytes until they
+/// form a complete request head or can no longer be one (anything not starting `GET `), then:
+/// answers `GET /refuse` with `400 Bad Request`, keeps the connection open and records each
+/// later read; answers any other `GET` with `101 Switching Protocols` and echoes every byte after
+/// the head; echoes any other protocol from the first byte. Records each connection's first
+/// bytes.
+async fn echo_service(port: u16) -> Arc<std::sync::Mutex<Vec<String>>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind((LINKED_ADDRESS, port))
+        .await
+        .unwrap_or_else(|error| {
+            panic!("bind {LINKED_ADDRESS}:{port} ({error}); run `sudo ip addr add {LINKED_ADDRESS}/32 dev lo`")
+        });
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = seen.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let record = record.clone();
+            tokio::spawn(async move {
+                let mut buffer = vec![0u8; 4096];
+                let mut first = Vec::new();
+                let head_end = loop {
+                    let n = socket.read(&mut buffer).await.unwrap_or(0);
+                    if n == 0 {
+                        break None;
+                    }
+                    first.extend_from_slice(&buffer[..n]);
+                    if !(first.starts_with(b"GET ") || b"GET ".starts_with(&first)) {
+                        break None;
+                    }
+                    if let Some(at) = first.windows(4).position(|v| v == b"\r\n\r\n") {
+                        break Some(at + 4);
+                    }
+                };
+                record
+                    .lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&first).to_string());
+                match head_end {
+                    Some(_) if first.starts_with(b"GET /refuse") => {
+                        socket
+                            .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+                            .await
+                            .unwrap();
+                        while let Ok(n) = socket.read(&mut buffer).await {
+                            if n == 0 {
+                                break;
+                            }
+                            record
+                                .lock()
+                                .unwrap()
+                                .push(String::from_utf8_lossy(&buffer[..n]).to_string());
+                        }
+                        return;
+                    }
+                    Some(end) => {
+                        socket
+                            .write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+                            .await
+                            .unwrap();
+                        socket.write_all(&first[end..]).await.unwrap();
+                    }
+                    None => socket.write_all(&first).await.unwrap(),
+                }
+                let (mut reader, mut writer) = socket.split();
+                let _ = tokio::io::copy(&mut reader, &mut writer).await;
+            });
+        }
+    });
+    seen
+}
+
+fn proxy_token(key: &KeyPair, aud: &str, sub: &str) -> String {
+    let claims = claims(aud, sub);
+    let input =
+        format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA","kid":"test"}"#),
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
+            "iss":claims.iss,"aud":claims.aud,"sub":claims.sub,"iat":claims.iat,"exp":claims.exp
+        })).unwrap())
+    );
+    format!(
+        "{input}.{}",
+        URL_SAFE_NO_PAD.encode(key.sk.sign(input.as_bytes(), None).as_ref())
+    )
+}
+
+/// Waits up to 15 seconds for an answer (a refused name may first time out in DNS), then reads
+/// until the peer closes or stays quiet for half a second.
+async fn read_window(socket: &mut tokio::net::TcpStream, received: &mut Vec<u8>) {
+    use tokio::io::AsyncReadExt;
+    let mut buffer = vec![0u8; 4096];
+    let mut wait = std::time::Duration::from_secs(15);
+    while let Ok(Ok(n)) = tokio::time::timeout(wait, socket.read(&mut buffer)).await {
+        if n == 0 {
+            break;
+        }
+        received.extend_from_slice(&buffer[..n]);
+        wait = std::time::Duration::from_millis(500);
+    }
+}
+
+/// Sends `head` to the gateway, then `payload` once the gateway (or the service) answers,
+/// and returns everything read back within a short window.
+async fn exchange(gateway: std::net::SocketAddr, head: &str, payload: &[u8]) -> String {
+    use tokio::io::AsyncWriteExt;
+    let mut socket = tokio::net::TcpStream::connect(gateway).await.unwrap();
+    socket.write_all(head.as_bytes()).await.unwrap();
+    let mut received = Vec::new();
+    read_window(&mut socket, &mut received).await;
+    if !payload.is_empty() && !String::from_utf8_lossy(&received).contains(" 403 ") {
+        let _ = socket.write_all(payload).await;
+        read_window(&mut socket, &mut received).await;
+    }
+    String::from_utf8_lossy(&received).to_string()
+}
+
+/// A declared link carries any protocol: a WebSocket through a CONNECT tunnel or through a
+/// plain-proxy `Upgrade` request, and a non-HTTP protocol through a CONNECT tunnel. Anything
+/// that is not the link (an unlinked service, an undeclared port) is refused before a byte
+/// reaches a service.
+#[tokio::test]
+#[ignore = "needs 10.244.7.9 on a local interface: sudo ip addr add 10.244.7.9/32 dev lo"]
+async fn a_link_carries_websocket_and_other_protocols_and_nothing_else_does() {
+    let key = KeyPair::from_seed(Seed::new([42; 32]));
+    let seen = echo_service(9000).await;
+    let other = echo_service(9001).await;
+    let credentialed = echo_service(9002).await;
+    let mut config = config(&key);
+    config["links"] = json!({AUD:[
+        {"id":"api","host":"api.svc","ports":[9000],"ranges":["10.244.0.0/16"],"addresses":[LINKED_ADDRESS]},
+        {"id":"vendor","host":"vendor.svc","ports":[9002],"ranges":["10.244.0.0/16"],"addresses":[LINKED_ADDRESS]}
+    ]});
+    // A credential rule on the second link keeps it on the inspected TLS path.
+    config["credentials"] = json!([{"aud":AUD,"host":"vendor.svc","port":9002,"method":"GET",
+        "path":"/","header":"Authorization","vaultBinding":"secrets","secret":"vendor-key"}]);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    std::fs::write(&path, config.to_string()).unwrap();
+    let mut gateway = gateway(&config).await.unwrap();
+    // Short limits for connections that are not links, so a quiet link tunnel can be shown to
+    // outlive them.
+    gateway.connections = Arc::new(
+        alien_egress_gateway::connections::Connections::with_timeouts(
+            alien_egress_gateway::connections::Timeouts {
+                idle: std::time::Duration::from_secs(1),
+                lifetime: std::time::Duration::from_secs(2),
+                link_idle: std::time::Duration::from_secs(1800),
+            },
+        ),
+    );
+    apply(&gateway, &key, AUD, "open", &Policy::Internet);
+    apply(
+        &gateway,
+        &key,
+        AUD,
+        "deny-all",
+        &Policy::Allow { allow: vec![] },
+    );
+    let live = Arc::new(runtime::LiveGateway::refreshing(
+        gateway,
+        runtime::ConfigSource::File(path),
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (_shutdown, receiver) = tokio::sync::watch::channel(false);
+    tokio::spawn(alien_egress_gateway::server::serve(
+        listener, live, receiver,
+    ));
+
+    let token = proxy_token(&key, AUD, "open");
+    let connect = |authority: &str, token: &str| {
+        format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Authorization: Bearer {token}\r\n\r\n")
+    };
+    let websocket = |authority: &str| {
+        format!(
+            "GET /ws?x=1 HTTP/1.1\r\nHost: {authority}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+             Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        )
+    };
+    let frame: &[u8] = b"\x81\x05hello";
+    let redis: &[u8] = b"*1\r\n$4\r\nPING\r\n";
+
+    // WebSocket through a CONNECT tunnel, as the sandbox agent's transparent path sends it.
+    let tunnel = exchange(
+        address,
+        &(connect("api.svc:9000", &token) + &websocket("api.svc:9000")),
+        frame,
+    )
+    .await;
+    assert!(
+        tunnel.starts_with("HTTP/1.1 200 Connection Established"),
+        "{tunnel}"
+    );
+    assert!(tunnel.contains("101 Switching Protocols"), "{tunnel}");
+    assert!(
+        tunnel.ends_with("\u{1}\u{5}hello") || tunnel.contains("hello"),
+        "{tunnel}"
+    );
+
+    // WebSocket as a plain-proxy request: the service receives the origin-form handshake
+    // without the proxy credential.
+    let plain = format!(
+        "GET http://api.svc:9000/ws?x=1 HTTP/1.1\r\nHost: api.svc:9000\r\nConnection: Upgrade\r\n\
+         Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Proxy-Authorization: Bearer {token}\r\n\r\n"
+    );
+    let upgraded = exchange(address, &plain, frame).await;
+    assert!(
+        upgraded.starts_with("HTTP/1.1 101 Switching Protocols"),
+        "{upgraded}"
+    );
+    assert!(upgraded.contains("hello"), "{upgraded}");
+    let handshake = seen.lock().unwrap().last().cloned().unwrap();
+    assert!(
+        handshake.starts_with("GET /ws?x=1 HTTP/1.1\r\n"),
+        "{handshake}"
+    );
+    assert!(
+        !handshake
+            .to_ascii_lowercase()
+            .contains("proxy-authorization"),
+        "{handshake}"
+    );
+
+    // A non-HTTP protocol through a CONNECT tunnel.
+    let ping = exchange(address, &connect("api.svc:9000", &token), redis).await;
+    assert!(
+        ping.starts_with("HTTP/1.1 200 Connection Established"),
+        "{ping}"
+    );
+    assert!(ping.contains("PING"), "{ping}");
+
+    // A link tunnel left quiet past the idle limit and the lifetime of other connections stays
+    // open: the service still answers.
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        socket
+            .write_all(connect("api.svc:9000", &token).as_bytes())
+            .await
+            .unwrap();
+        let mut received = Vec::new();
+        read_window(&mut socket, &mut received).await;
+        assert!(
+            String::from_utf8_lossy(&received).starts_with("HTTP/1.1 200 Connection Established")
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        socket.write_all(redis).await.unwrap();
+        read_window(&mut socket, &mut received).await;
+        assert!(
+            String::from_utf8_lossy(&received).contains("PING"),
+            "{}",
+            String::from_utf8_lossy(&received)
+        );
+    }
+
+    // A service that answers the WebSocket handshake with an ordinary error and keeps the
+    // connection open: the sandbox gets that answer with `Connection: close`, the connection
+    // ends, and a request pipelined after the handshake never reaches the service.
+    let refusing = format!(
+        "GET http://api.svc:9000/refuse HTTP/1.1\r\nHost: api.svc:9000\r\nConnection: Upgrade\r\n\
+         Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Proxy-Authorization: Bearer {token}\r\n\r\n\
+         GET http://api.svc:9000/pipelined HTTP/1.1\r\nHost: api.svc:9000\r\n\
+         Proxy-Authorization: Bearer {token}\r\n\r\n"
+    );
+    let answered = exchange(
+        address,
+        &refusing,
+        b"GET /after HTTP/1.1\r\nHost: api.svc:9000\r\n\r\n",
+    )
+    .await;
+    assert!(
+        answered.starts_with("HTTP/1.1 400 Bad Request"),
+        "{answered}"
+    );
+    assert!(
+        answered.to_ascii_lowercase().contains("connection: close"),
+        "{answered}"
+    );
+    assert!(!answered.contains("101"), "{answered}");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let received = seen.lock().unwrap().clone();
+    let refuse_at = received
+        .iter()
+        .position(|first| first.starts_with("GET /refuse HTTP/1.1\r\n"))
+        .unwrap_or_else(|| panic!("{received:?}"));
+    assert!(
+        !received[refuse_at..]
+            .iter()
+            .any(|bytes| bytes.contains("/pipelined") || bytes.contains("/after")),
+        "{received:?}"
+    );
+
+    // A malformed WebSocket handshake to the link gets a refusal, not a closed connection.
+    let malformed = format!(
+        "GET http://api.svc:9000/ws HTTP/1.1\r\nHost: api.svc:9000\r\nConnection: Upgrade\r\n\
+         Upgrade: websocket\r\nContent-Length: 0\r\nProxy-Authorization: Bearer {token}\r\n\r\n"
+    );
+    let refused = exchange(address, &malformed, b"").await;
+    assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+
+    // A link with a credential rule carries no plaintext WebSocket or other protocol, through
+    // a CONNECT tunnel or a plain-proxy request: the service never receives the bytes.
+    for (head, payload) in [
+        (
+            connect("vendor.svc:9002", &token),
+            websocket("vendor.svc:9002").into_bytes(),
+        ),
+        (connect("vendor.svc:9002", &token), redis.to_vec()),
+        (
+            format!(
+                "GET http://vendor.svc:9002/ws HTTP/1.1\r\nHost: vendor.svc:9002\r\nConnection: Upgrade\r\n\
+                 Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                 Proxy-Authorization: Bearer {token}\r\n\r\n"
+            ),
+            frame.to_vec(),
+        ),
+    ] {
+        let answer = exchange(address, &head, &payload).await;
+        assert!(!answer.contains("101 Switching"), "{answer}");
+        assert!(!answer.contains("hello") && !answer.contains("PING"), "{answer}");
+    }
+    assert!(
+        credentialed
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|first| first.is_empty()),
+        "a credential link received plaintext: {:?}",
+        credentialed.lock().unwrap()
+    );
+
+    // None of the three reaches a service that is not the link, nor the link's address on an
+    // undeclared port, nor the link under a policy that does not keep it.
+    let before = (seen.lock().unwrap().len(), other.lock().unwrap().len());
+    let deny_all = proxy_token(&key, AUD, "deny-all");
+    for (authority, token) in [
+        ("other.svc:9001", token.as_str()),
+        ("api.svc:9001", token.as_str()),
+        ("10.244.7.9:9001", token.as_str()),
+        ("api.svc:9000", deny_all.as_str()),
+    ] {
+        for (head, payload) in [
+            // The handshake follows only once a tunnel is acknowledged.
+            (connect(authority, token), websocket(authority).into_bytes()),
+            (connect(authority, token), redis.to_vec()),
+            (
+                format!(
+                    "GET http://{authority}/ws HTTP/1.1\r\nHost: {authority}\r\nConnection: Upgrade\r\n\
+                     Upgrade: websocket\r\nProxy-Authorization: Bearer {token}\r\n\r\n"
+                ),
+                frame.to_vec(),
+            ),
+        ] {
+            // A refusal is a 403, or a closed connection where a plain-proxy request finds
+            // no destination.
+            let answer = exchange(address, &head, &payload).await;
+            assert!(
+                answer.is_empty() || answer.starts_with("HTTP/1.1 403"),
+                "{authority}: {answer}"
+            );
+            assert!(!answer.contains("hello") && !answer.contains("PING"), "{authority}: {answer}");
+        }
+    }
+    assert_eq!(
+        (seen.lock().unwrap().len(), other.lock().unwrap().len()),
+        before,
+        "a refused request reached a service"
+    );
+}

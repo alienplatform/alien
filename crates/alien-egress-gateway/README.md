@@ -107,7 +107,9 @@ including IPs reached through DNS names. Range changes therefore close existing
 tunnels within 30 seconds after a successful configuration refresh.
 A stalled sweep has a 20-second deadline and closes the affected tunnels. Token
 expiry and 120-second idle limits are swept every second. Activity resets the idle
-clock; a one-hour absolute connection limit also applies. Admission permits at
+clock; a one-hour absolute connection limit also applies. A connection to a declared
+link instead has a 30-minute idle limit and no absolute limit (it still ends with its
+token and on the 30-second recheck), and TCP keepalive on both sockets. Admission permits at
 most 32 unauthenticated connections per source IP, 128 authenticated connections
 per sandbox identity and 2048 total connections by default (`maxConnections`
 overrides the global limit). Per-identity DNS concurrency is

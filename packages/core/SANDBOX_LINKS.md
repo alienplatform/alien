@@ -30,6 +30,23 @@ Rust declares the same with `Sandbox::new("tools".into())…link(&api)`.
   periodic re-checks and its connection log. Only the gateway's last hop differs: it connects
   to the service's internal address inside the deployment's network, never through NAT or the
   internet.
+- A link carries any TCP protocol on the service's declared ports: HTTP, WebSocket, and
+  database or cache protocols. Through the proxy, use a `CONNECT` tunnel (most clients do for
+  WebSocket and other protocols) or a plain-proxy WebSocket request. A plain-proxy WebSocket
+  request becomes a WebSocket only when the service answers `101 Switching Protocols` with
+  `Upgrade: websocket`; any other answer is passed back with `Connection: close` and the
+  connection ends. On AWS, a connection made
+  with the proxy turned off for the service's hostname (`NO_PROXY`) still goes through the
+  gateway, because the sandbox's agent forwards it. On Kubernetes and locally, use the proxy.
+  Other destinations keep the gateway's checks: HTTP must name the destination it goes to, and
+  TLS must name it in its server name indication.
+- A connection to a linked service can stay open as long as the sandbox: WebSockets and pooled
+  database or cache connections can be quiet for minutes. The gateway closes a link connection
+  after 30 minutes with no traffic, when the egress token it was opened with expires (at most
+  24 hours, never after the sandbox's lifetime), or when a change to the links or the policy no longer
+  allows it (within about 30 seconds). It sends TCP keepalives on both sides every minute, so
+  load balancers on the path keep quiet connections. Connections to other destinations keep
+  the shorter limits: 2 minutes idle and 1 hour in total.
 - Only the service's internal hostname reaches it, and only on the service's declared ports.
   Each DNS answer for that name must fall inside the address range the service can have (the
   cluster's Service range, the compute cluster's overlay, or the local deployment network).
