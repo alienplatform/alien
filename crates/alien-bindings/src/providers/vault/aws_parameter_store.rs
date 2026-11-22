@@ -431,11 +431,7 @@ mod tests {
         vault.create_secret("api-key", "v").await.unwrap();
         vault.set_secret("api-key", "v").await.unwrap();
 
-        assert_eq!(
-            denied.hits_async().await,
-            2,
-            "one refused attempt per created value, no retry loop"
-        );
+        assert_eq!(denied.hits_async().await, 2, "one refused attempt per created value, no retry loop");
     }
 
     #[tokio::test]

@@ -59,9 +59,16 @@ pub(crate) struct LocalGateway {
     container: String,
     digest: String,
     egress: SandboxEgressManager,
+    /// The admin protocol the running gateway answered with; 1 when it names none.
+    protocol: u64,
 }
 
 impl LocalGateway {
+    /// Whether this gateway serves per-sandbox credential rules (admin protocol 2).
+    pub(crate) fn serves_credentials(&self) -> bool {
+        self.protocol >= 2
+    }
+
     /// Replaces a session's credential rules on the sandbox's gateway; returns once it holds them.
     pub(crate) async fn update_credentials(
         &self,
@@ -296,12 +303,13 @@ pub(crate) async fn ensure_gateway(
         &format!("http://127.0.0.1:{admin_port}"),
     )
     .context(failed("reach the egress gateway", sandbox))?;
-    wait_until_serving(docker, &name, admin_port, sandbox).await?;
+    let protocol = wait_until_serving(docker, &name, admin_port, sandbox).await?;
 
     let gateway = Arc::new(LocalGateway {
         container: name,
         digest,
         egress,
+        protocol,
     });
     for session_id in session_networks(docker, sandbox).await?.into_values() {
         join_session_network(docker, &gateway, sandbox, &session_id).await?;
@@ -381,7 +389,7 @@ async fn wait_until_serving(
     name: &str,
     admin_port: u16,
     sandbox: &str,
-) -> Result<()> {
+) -> Result<u64> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
@@ -391,7 +399,8 @@ async fn wait_until_serving(
     for _ in 0..100 {
         if let Ok(response) = client.get(&url).send().await {
             if response.status().is_success() {
-                return Ok(());
+                let body: serde_json::Value = response.json().await.unwrap_or_default();
+                return Ok(body["protocol"].as_u64().unwrap_or(1));
             }
         }
         let state = docker
@@ -830,6 +839,25 @@ pub(crate) async fn deployment_network_range(docker: &Docker) -> Result<ipnet::I
 
 #[cfg(test)]
 mod tests {
+    /// A gateway image with no digest is judged by what its running gateway answers.
+    #[tokio::test]
+    async fn the_protocol_a_gateway_answers_is_read_and_an_unnamed_one_is_protocol_1() {
+        for (body, expected) in [(r#"{"protocol":2}"#, 2), (r#"{"status":"ok"}"#, 1)] {
+            let router = axum::Router::new().route(
+                "/v1/protocol",
+                axum::routing::get(move || async move { body }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            let docker = Docker::connect_with_local_defaults().unwrap();
+            let protocol = wait_until_serving(&docker, "none", port, "sandbox")
+                .await
+                .unwrap();
+            assert_eq!(protocol, expected);
+        }
+    }
+
     use super::*;
 
     fn link() -> GatewayLink {

@@ -67,7 +67,11 @@ Exactly one of `host` and `link`. At most 32 rules per sandbox. A rule cannot se
   same guarantee `updateEgress` gives. Every request the sandbox sends after it returns uses
   the new set; a request already being forwarded keeps the set it started with. A connection
   carries one request, so nothing older lingers. If a replica is away the call fails with a
-  retryable error; calling it again is safe, as the newest set wins.
+  retryable error; calling it again is safe, as the newest set wins. A replica that is still
+  starting is brought up to date before it serves any request. Use one writer per sandbox:
+  "newest" is decided by the writers' clocks, so if two app processes send sets for the same
+  sandbox and their clocks differ, the set from the process whose clock is behind is
+  acknowledged but not applied.
 - **Per sandbox.** Rules apply only to the sandbox they were set for, identified by its own
   gateway identity. Another sandbox of the same Sandbox resource gets nothing.
 - **Within the egress policy.** The policy is checked first. A rule for a destination the
@@ -144,6 +148,7 @@ CA); create the sandbox again with the agent image of the current release.
 | The installed gateway is older than this release needs | the egress gateway does not serve per-sandbox credentials yet; deploy a release that installs a newer egress gateway and re-run setup |
 | A replica did not acknowledge | a retryable error; call again (the list replaces, so repeating is safe) |
 | GCP, `host` rule, agent image without the CA install | this sandbox's agent predates trust-bundle delivery |
+| AWS or Kubernetes, `host` rule, sandbox created before the gateway served credentials (no CA) | this sandbox was created without the gateway's CA; create it again (`link` rules work) |
 | The sandbox has no egress policy (egress `none`) | the sandbox has no gateway enforcement |
 
 ## Limits we accepted

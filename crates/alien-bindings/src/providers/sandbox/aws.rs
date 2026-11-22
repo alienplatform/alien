@@ -992,6 +992,11 @@ impl Sandbox for AwsSandbox {
                 reason: format!("sandbox '{sandbox_id}' has terminated"),
             }));
         }
+        super::egress::require_ca_for_host_rules(
+            &rules,
+            self.authorized_request(sandbox_id, reqwest::Method::GET, HEALTH_PATH),
+        )
+        .await?;
         manager.update_credentials(sandbox_id, &rules).await
     }
 

@@ -853,3 +853,196 @@ async fn configured_credential_rules_are_refused_and_an_empty_list_still_loads()
     let error = build(config).await.err().unwrap();
     assert!(error.message.contains("set at runtime"), "{error:?}");
 }
+
+/// Forwards replica requests to `target`; after the first credential summary it has answered,
+/// it writes `late` to a replica the caller cannot see, as a write acknowledged while the
+/// caller was still catching up would be.
+async fn lagging_peer(
+    target: SocketAddr,
+    after_summary: impl Fn() + Send + Sync + 'static,
+) -> SocketAddr {
+    use axum::{
+        body::Bytes,
+        extract::State,
+        http::{HeaderMap, Uri},
+        response::IntoResponse,
+    };
+    struct Shared {
+        hook: Box<dyn Fn() + Send + Sync>,
+        fired: std::sync::atomic::AtomicBool,
+    }
+    let shared = Arc::new(Shared {
+        hook: Box::new(after_summary),
+        fired: false.into(),
+    });
+    let handler = move |State(shared): State<Arc<Shared>>,
+                        uri: Uri,
+                        headers: HeaderMap,
+                        body: Bytes| async move {
+        let mut request = reqwest::Client::new().post(format!("http://{target}{}", uri.path()));
+        for name in [
+            "content-type",
+            "x-alien-replica-time",
+            "x-alien-replica-signature",
+        ] {
+            if let Some(value) = headers.get(name) {
+                request = request.header(name, value);
+            }
+        }
+        let response = request.body(body).send().await.unwrap();
+        let status = response.status();
+        let bytes = response.bytes().await.unwrap();
+        if uri.path() == "/v1/replicas/credentials-summary"
+            && !shared.fired.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            (shared.hook)();
+        }
+        (status, bytes).into_response()
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = axum::Router::new().fallback(handler).with_state(shared);
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    address
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replica_catching_up_also_gets_writes_acknowledged_while_it_pulled() {
+    logs();
+    let key = key();
+    let listeners = [
+        TcpListener::bind("127.0.0.1:0").await.unwrap(),
+        TcpListener::bind("127.0.0.1:0").await.unwrap(),
+        TcpListener::bind("127.0.0.1:0").await.unwrap(),
+    ];
+    let admins: Vec<SocketAddr> = listeners.iter().map(|l| l.local_addr().unwrap()).collect();
+    let [la, lb, lc] = listeners;
+    let with_peers = |admin: SocketAddr, peer: SocketAddr| {
+        let mut config = config(&key, json!([]), admin);
+        config["peers"] = json!({"static":[peer.to_string()]});
+        config
+    };
+    // A and B see each other. C is not in their peer lists: replicas are found only once ready.
+    let a = start(with_peers(admins[0], admins[1]), la).await;
+    let b = start(with_peers(admins[1], admins[0]), lb).await;
+    for running in [&a, &b] {
+        let gateway = running.live.snapshot().unwrap();
+        gateway.policies.set_ready();
+        apply_policy(&gateway, &key, "box", Some(&Policy::Internet), 1);
+    }
+    let rules = json!([{"host":"api.example.com","header":"Authorization","value":FIRST}]);
+    let base = now_ms();
+    assert_eq!(
+        put_credentials(
+            admins[0],
+            &grant(&key, "box", "PUT"),
+            &credential_record(&key, "box", base, rules.clone())
+        )
+        .await
+        .0,
+        204
+    );
+
+    let writer_key = key.clone();
+    let late_rules = rules.clone();
+    let late_admin = admins[0];
+    let stub = lagging_peer(admins[0], move || {
+        // Runs on the proxy's task; a blocking client on its own thread keeps it simple.
+        let (key, rules) = (writer_key.clone(), late_rules.clone());
+        std::thread::spawn(move || {
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let record = credential_record(&key, "box", base + 5, rules);
+                assert_eq!(
+                    put_credentials(late_admin, &grant(&key, "box", "PUT"), &record)
+                        .await
+                        .0,
+                    204
+                );
+            })
+        })
+        .join()
+        .unwrap();
+    })
+    .await;
+    let c = start(with_peers(admins[2], stub), lc).await;
+    let gateway = c.live.snapshot().unwrap();
+    gateway.replication.catch_up(&c.live).await.unwrap();
+    assert!(gateway.policies.ready());
+    assert_eq!(
+        version(admins[2], &key, "box").await[0],
+        base + 5,
+        "the write acknowledged during the catch-up reached the replica before it was ready"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn catch_up_skips_a_set_naming_a_link_this_replica_no_longer_declares() {
+    logs();
+    let Some(ip) = link_ip() else {
+        eprintln!("no link-space address on this host; skipped");
+        return;
+    };
+    let key = key();
+    let links = json!([{"id":"connector","host":"connector.svc","ports":[8080],
+        "ranges":[format!("{ip}/32")],"addresses":[ip.to_string()]}]);
+    let (la, lb) = (
+        TcpListener::bind("127.0.0.1:0").await.unwrap(),
+        TcpListener::bind("127.0.0.1:0").await.unwrap(),
+    );
+    let (admin_a, admin_b) = (la.local_addr().unwrap(), lb.local_addr().unwrap());
+    // The peer still declares the link; this replica's config (after a stack update) does not.
+    let a = start(config(&key, links, admin_a), la).await;
+    let mut updated = config(&key, json!([]), admin_b);
+    updated["peers"] = json!({"static":[admin_a.to_string()]});
+    let b = start(updated, lb).await;
+    let policy = Policy::Allow {
+        allow: vec!["link:connector".into(), "api.example.com".into()],
+    };
+    let gateway = a.live.snapshot().unwrap();
+    gateway.policies.set_ready();
+    apply_policy(&gateway, &key, "gone", Some(&policy), now_ms());
+    apply_policy(&gateway, &key, "kept", Some(&policy), now_ms());
+    let link_rule = json!([{"link":"connector","header":"Authorization","value":FIRST}]);
+    let host_rule = json!([{"host":"api.example.com","header":"Authorization","value":FIRST}]);
+    for (sub, rules) in [("gone", link_rule), ("kept", host_rule)] {
+        let record = credential_record(&key, sub, now_ms(), rules);
+        assert_eq!(
+            put_credentials(admin_a, &grant(&key, sub, "PUT"), &record)
+                .await
+                .0,
+            204
+        );
+    }
+    let restarted = b.live.snapshot().unwrap();
+    restarted.replication.catch_up(&b.live).await.unwrap();
+    assert!(
+        restarted.policies.ready(),
+        "one stale record must not keep the replica unready"
+    );
+    assert!(version(admin_b, &key, "kept").await[0].is_u64());
+    assert!(version(admin_b, &key, "gone").await[0].is_null());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_catch_up_before_a_write_is_unavailable_not_a_bad_request() {
+    logs();
+    let key = key();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let admin = listener.local_addr().unwrap();
+    let dead = {
+        let socket = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        socket.local_addr().unwrap()
+    };
+    let mut config = config(&key, json!([]), admin);
+    config["peers"] = json!({"static":[dead.to_string()]});
+    let running = start(config, listener).await;
+    running.live.snapshot().unwrap().policies.set_ready();
+    let record = credential_record(
+        &key,
+        "fresh",
+        now_ms(),
+        json!([{"host":"api.example.com","header":"Authorization","value":FIRST}]),
+    );
+    let (status, body) = put_credentials(admin, &grant(&key, "fresh", "PUT"), &record).await;
+    assert_eq!(status, 503, "{body}");
+}

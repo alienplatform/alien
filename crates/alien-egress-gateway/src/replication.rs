@@ -367,25 +367,39 @@ impl Replication {
         })
         .into_alien_error()
         .context(unavailable("encode replica credentials"))?;
-        for peer in self.peers().await? {
-            let (status, _) = match self
-                .request(peer, "/v1/replicas/credentials-write", body.clone())
-                .await
-            {
-                Ok(answer) => answer,
-                Err(error) => {
-                    tracing::warn!(%peer, code = %error.code, "credential fan-out to a peer failed");
-                    return Err(error);
+        // A replica that became ready while this write was going out is reached on a later
+        // round: peers are resolved again until a round finds nobody new.
+        let mut reached: Vec<SocketAddr> = Vec::new();
+        loop {
+            let pending: Vec<SocketAddr> = self
+                .peers()
+                .await?
+                .into_iter()
+                .filter(|peer| !reached.contains(peer))
+                .collect();
+            if pending.is_empty() {
+                return Ok(());
+            }
+            for peer in pending {
+                let (status, _) = match self
+                    .request(peer, "/v1/replicas/credentials-write", body.clone())
+                    .await
+                {
+                    Ok(answer) => answer,
+                    Err(error) => {
+                        tracing::warn!(%peer, code = %error.code, "credential fan-out to a peer failed");
+                        return Err(error);
+                    }
+                };
+                if status != 204 {
+                    tracing::warn!(%peer, status, "a peer did not acknowledge fanned-out credentials");
+                    return Err(AlienError::new(unavailable(
+                        "replica did not acknowledge credentials",
+                    )));
                 }
-            };
-            if status != 204 {
-                tracing::warn!(%peer, status, "a peer did not acknowledge fanned-out credentials");
-                return Err(AlienError::new(unavailable(
-                    "replica did not acknowledge credentials",
-                )));
+                reached.push(peer);
             }
         }
-        Ok(())
     }
 
     /// Exchange credential sets with one peer, after policies (a set needs its policy). A peer
@@ -414,7 +428,15 @@ impl Replication {
                 .map_err(|_| AlienError::new(unavailable("decode replica credentials")))?;
             let mut applied = 0;
             for signed in records {
-                let record = gateway.verify_credentials(signed)?;
+                // A set that no longer verifies against this replica's config (a link the
+                // stack update removed) is skipped; requests through it get no injection.
+                let record = match gateway.verify_credentials(signed) {
+                    Ok(record) => record,
+                    Err(error) => {
+                        tracing::warn!(code = %error.code, "skipped a credential set that does not verify");
+                        continue;
+                    }
+                };
                 // A set whose policy this replica does not hold (deleted, or not yet arrived)
                 // is skipped; the policy's own catch-up decides.
                 if gateway
@@ -462,6 +484,22 @@ impl Replication {
         let gateway = live
             .snapshot()
             .ok_or_else(|| denied("config unavailable"))?;
+        self.sync_peers(&gateway).await?;
+        if !gateway.policies.ready() {
+            // A write acknowledged while the first pass ran reached the other replicas but not
+            // this one (replicas are found only once ready). Pull again before becoming ready.
+            self.sync_peers(&gateway).await?;
+        }
+        // Rules of sandboxes whose policy is gone (deleted, expired, or a retired audience).
+        gateway.sandbox_credentials.retain(|aud, sub| {
+            gateway.config.audiences.iter().any(|known| known == aud)
+                && gateway.policies.resolve_now(aud, sub).is_some()
+        })?;
+        gateway.policies.set_ready();
+        Ok(())
+    }
+
+    async fn sync_peers(&self, gateway: &Arc<crate::server::Gateway>) -> Result<()> {
         gateway.policies.expire_tombstones()?;
         for peer in self.peers().await? {
             let mut ignored_expired = Vec::new();
@@ -505,14 +543,8 @@ impl Replication {
                     }
                 }
             }
-            self.catch_up_credentials(peer, &gateway).await?;
+            self.catch_up_credentials(peer, gateway).await?;
         }
-        // Rules of sandboxes whose policy is gone (deleted, expired, or a retired audience).
-        gateway.sandbox_credentials.retain(|aud, sub| {
-            gateway.config.audiences.iter().any(|known| known == aud)
-                && gateway.policies.resolve_now(aud, sub).is_some()
-        })?;
-        gateway.policies.set_ready();
         Ok(())
     }
 }
@@ -568,9 +600,13 @@ pub async fn run(live: Arc<LiveGateway>) -> Result<()> {
             {
                 continue;
             }
+            let was_ready = gateway.policies.ready();
             last_sync = Some(tokio::time::Instant::now());
             if let Err(error) = gateway.replication.catch_up(&live).await {
                 tracing::warn!(code=%error.code, "replica synchronization failed");
+            } else if !was_ready {
+                // Now discoverable: pull once more at once for writes that landed in between.
+                last_sync = None;
             }
         }
     }

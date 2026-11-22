@@ -14,8 +14,21 @@ use std::{
 /// Where the bundle lives. A temp directory every command can read.
 pub const BUNDLE_PATH: &str = "/tmp/alien-egress-ca-bundle.pem";
 
-/// The image's system trust roots.
-pub const SYSTEM_ROOTS: &str = "/etc/ssl/certs/ca-certificates.crt";
+/// Where images keep their system trust roots, most common first.
+pub const SYSTEM_ROOTS: [&str; 3] = [
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/cert.pem",
+];
+
+/// The first readable system bundle among `candidates`; empty when the image has none, so
+/// the sandbox trusts the per-sandbox CA alone rather than failing to start.
+pub fn read_system_roots<P: AsRef<Path>>(candidates: &[P]) -> Vec<u8> {
+    candidates
+        .iter()
+        .find_map(|path| std::fs::read(path).ok())
+        .unwrap_or_default()
+}
 
 static INSTALLED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
@@ -43,12 +56,11 @@ pub fn validate(certificate: &str) -> Result<(), String> {
 /// Writes system roots followed by `certificate` to `destination`, replacing it atomically.
 pub fn install(
     certificate: &str,
-    system_roots: &Path,
+    system_roots: &[&Path],
     destination: &Path,
 ) -> Result<PathBuf, String> {
     validate(certificate)?;
-    let system = std::fs::read(system_roots)
-        .map_err(|error| format!("read system trust roots: {error}"))?;
+    let system = read_system_roots(system_roots);
     let temporary = destination.with_extension(format!("pem.{}.tmp", std::process::id()));
     let result = (|| -> std::io::Result<()> {
         let mut file = std::fs::OpenOptions::new()
@@ -58,7 +70,7 @@ pub fn install(
             .custom_flags(libc::O_NOFOLLOW)
             .open(&temporary)?;
         file.write_all(&system)?;
-        if !system.ends_with(b"\n") {
+        if !system.is_empty() && !system.ends_with(b"\n") {
             file.write_all(b"\n")?;
         }
         file.write_all(certificate.trim().as_bytes())?;
@@ -85,7 +97,10 @@ mod tests {
 
     #[test]
     fn a_private_key_or_a_second_block_is_refused() {
-        let key = format!("-----BEGIN {} KEY-----\nx\n-----END {} KEY-----", "PRIVATE", "PRIVATE");
+        let key = format!(
+            "-----BEGIN {} KEY-----\nx\n-----END {} KEY-----",
+            "PRIVATE", "PRIVATE"
+        );
         assert!(validate(&key).is_err());
         let two = format!("{CERT}{CERT}");
         assert!(validate(&two).is_err());
@@ -100,7 +115,7 @@ mod tests {
         let roots = dir.path().join("roots.pem");
         std::fs::write(&roots, "ROOTS-NO-NEWLINE").unwrap();
         let bundle = dir.path().join("bundle.pem");
-        install(CERT, &roots, &bundle).unwrap();
+        install(CERT, &[roots.as_path()], &bundle).unwrap();
         let text = std::fs::read_to_string(&bundle).unwrap();
         assert!(text.starts_with("ROOTS-NO-NEWLINE\n-----BEGIN CERTIFICATE-----"));
         assert_eq!(text.matches("BEGIN CERTIFICATE").count(), 1);
@@ -109,7 +124,7 @@ mod tests {
             0o644
         );
         // A second install replaces, not appends, and leaves no temporary file.
-        install(CERT, &roots, &bundle).unwrap();
+        install(CERT, &[roots.as_path()], &bundle).unwrap();
         assert_eq!(
             std::fs::read_to_string(&bundle)
                 .unwrap()
@@ -121,13 +136,30 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_system_bundle_or_a_bad_certificate_writes_nothing() {
+    fn a_bad_certificate_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let bundle = dir.path().join("bundle.pem");
-        assert!(install(CERT, &dir.path().join("none"), &bundle).is_err());
         let roots = dir.path().join("roots.pem");
         std::fs::write(&roots, "R").unwrap();
-        assert!(install("junk", &roots, &bundle).is_err());
+        assert!(install("junk", &[roots.as_path()], &bundle).is_err());
         assert!(!bundle.exists());
+    }
+
+    #[test]
+    fn an_image_without_the_first_bundle_uses_the_next_and_none_installs_the_ca_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let second = dir.path().join("rhel-bundle.crt");
+        std::fs::write(&second, "RHEL-ROOTS\n").unwrap();
+        let missing = dir.path().join("none");
+        let bundle = dir.path().join("bundle.pem");
+        install(CERT, &[missing.as_path(), second.as_path()], &bundle).unwrap();
+        assert!(std::fs::read_to_string(&bundle)
+            .unwrap()
+            .starts_with("RHEL-ROOTS\n-----BEGIN"));
+        install(CERT, &[missing.as_path()], &bundle).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&bundle).unwrap(),
+            format!("{}\n", CERT.trim())
+        );
     }
 }

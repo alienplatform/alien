@@ -221,22 +221,28 @@ impl LocalSandboxManager {
         // `start_preview_relays`), because Docker publishes nothing from an internal network.
         // A gateway image that predates admin protocol 2 keeps the earlier behavior: only
         // sessions with links run behind it, and it publishes no preview relays.
-        let gateway_current =
-            alien_core::sandbox_egress::gateway_image_serves_credentials(&self.gateway_image);
+        // An image with no digest (a local build, a `:dev` tag) cannot be judged by name: it is
+        // taken as current until its gateway has started and said which protocol it serves.
+        let gateway_current = self.gateway_serves_credentials(sandbox).await;
         let linked = config.egress == SandboxEgressMode::Allow
             && (gateway_current || !config.links.is_empty());
         let created = async {
             let session_egress = if linked {
                 let gateway = self.gateway(sandbox, &config.links).await?;
-                Some(
-                    crate::sandbox_gateway::attach_session(
-                        &self.docker,
-                        &gateway,
-                        sandbox,
-                        session_id,
+                if gateway.serves_credentials() || !config.links.is_empty() {
+                    Some(
+                        crate::sandbox_gateway::attach_session(
+                            &self.docker,
+                            &gateway,
+                            sandbox,
+                            session_id,
+                        )
+                        .await?,
                     )
-                    .await?,
-                )
+                } else {
+                    // An older gateway behind an undigested tag: only linked sessions use it.
+                    None
+                }
             } else {
                 None
             };
@@ -453,12 +459,8 @@ impl LocalSandboxManager {
                 operation: "start".to_string(),
             })?;
 
-        if let Some(egress) = session_egress
-            .as_ref()
-            .filter(|_| {
-                alien_core::sandbox_egress::gateway_image_serves_credentials(&self.gateway_image)
-            })
-        {
+        let relays = self.gateway_serves_credentials(sandbox).await;
+        if let Some(egress) = session_egress.as_ref().filter(|_| relays) {
             if let Err(error) = crate::sandbox_gateway::start_preview_relays(
                 &self.docker,
                 &self.gateway_image,
@@ -492,6 +494,19 @@ impl LocalSandboxManager {
             container_id: created.id,
             running: true,
         })
+    }
+
+    /// Whether the sandbox's gateway serves admin protocol 2. A pinned image answers by its
+    /// digest; an undigested one by the protocol its running gateway reported (taken as current
+    /// until one has started).
+    async fn gateway_serves_credentials(&self, sandbox: &str) -> bool {
+        if !alien_core::sandbox_egress::gateway_image_serves_credentials(&self.gateway_image) {
+            return false;
+        }
+        match self.gateways.lock().await.get(sandbox) {
+            Some(gateway) => gateway.serves_credentials(),
+            None => true,
+        }
     }
 
     /// The sandbox's gateway, started or replaced for these links.
@@ -554,7 +569,7 @@ impl LocalSandboxManager {
         session_id: &str,
         rules: &[alien_core::SandboxCredentialRule],
     ) -> Result<()> {
-        if !alien_core::sandbox_egress::gateway_image_serves_credentials(&self.gateway_image) {
+        if !self.gateway_serves_credentials(sandbox).await {
             return Err(AlienError::new(ErrorData::SandboxSessionFailed {
                 session_id: session_id.to_string(),
                 operation: format!(
@@ -1420,7 +1435,10 @@ mod tests {
         let manager = manager.with_gateway_image(
             "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037",
         );
-        let error = manager.update_credentials("box", "s1", &[]).await.unwrap_err();
+        let error = manager
+            .update_credentials("box", "s1", &[])
+            .await
+            .unwrap_err();
         assert!(
             format!("{error:?}").contains("per-sandbox credentials are not available"),
             "{error:?}"

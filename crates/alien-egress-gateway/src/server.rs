@@ -112,7 +112,13 @@ impl Gateway {
             Err(error)
                 if error.code == "SANDBOX_EGRESS_POLICY_MISSING" && self.replication.enabled() =>
             {
-                self.replication.catch_up(live).await?;
+                // A failed catch-up is transient: the caller retries on 503, not 400.
+                if let Err(error) = self.replication.catch_up(live).await {
+                    tracing::warn!(code = %error.code, "catch-up before a credential write failed");
+                    return Err(alien_error::AlienError::new(
+                        crate::error::ErrorData::GatewayUnavailable,
+                    ));
+                }
                 self.apply_credentials(record)
             }
             result => result,
@@ -1049,9 +1055,9 @@ mod link_relay_tests {
     use super::{raw_link_relay, relay_websocket, tunnel, GatewayLink};
     use crate::{
         credentials::{Credentials, Injection},
-        sandbox_credentials::{CredentialRecord, CredentialStore, Rule, RuleTarget},
         io::{Counters, Metered, Prefixed},
         policy::Target,
+        sandbox_credentials::{CredentialRecord, CredentialStore, Rule, RuleTarget},
     };
 
     fn link() -> GatewayLink {
@@ -1105,12 +1111,7 @@ mod link_relay_tests {
 
     /// Runs an acknowledged tunnel to `host:6379` with `payload` from the sandbox; returns
     /// whether the tunnel ended in an error and the bytes the service received.
-    async fn run(
-        host: &str,
-        raw: bool,
-        rules: &[Rule],
-        payload: &[u8],
-    ) -> (bool, Vec<u8>) {
+    async fn run(host: &str, raw: bool, rules: &[Rule], payload: &[u8]) -> (bool, Vec<u8>) {
         let injection = injection(rules);
         let credentials = Credentials::new(&[], Some([7; 32])).unwrap();
         let (mut sandbox, guest) = pair().await;

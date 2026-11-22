@@ -817,6 +817,11 @@ impl Sandbox for KubernetesSandbox {
         let claim = self.claimed(sandbox_id).await?.ok_or_else(|| {
             self.failed("sandbox.updateCredentials", "the sandbox does not exist")
         })?;
+        super::egress::require_ca_for_host_rules(
+            &rules,
+            self.request(sandbox_id, reqwest::Method::GET, "/v1/health"),
+        )
+        .await?;
         manager
             .update_credentials(Self::egress_identity(&claim)?, &rules)
             .await

@@ -449,12 +449,20 @@ async fn health(
         Some(egress) => egress.status()?,
         None => status,
     };
+    let egress_ca_path = crate::ca_bundle::installed_path();
+    #[cfg(target_os = "linux")]
+    let egress_ca_path = egress_ca_path.or_else(|| {
+        state
+            .gateway_egress
+            .as_ref()
+            .and_then(|egress| egress.installed_ca_path())
+    });
     Ok(Json(HealthResponse {
         image_command: state.image_process.status()?,
         status: status.into(),
         protocol_version: PROTOCOL_VERSION,
         boot_id,
-        egress_ca_path: crate::ca_bundle::installed_path(),
+        egress_ca_path,
     }))
 }
 
@@ -1685,7 +1693,7 @@ async fn set_egress_proxy(
     };
     crate::ca_bundle::install(
         certificate,
-        std::path::Path::new(crate::ca_bundle::SYSTEM_ROOTS),
+        &crate::ca_bundle::SYSTEM_ROOTS.map(std::path::Path::new),
         std::path::Path::new(crate::ca_bundle::BUNDLE_PATH),
     )
     .map(|_| ())
@@ -1873,8 +1881,12 @@ mod native_environment_tests {
         assert!(source[arm..arm + 900].contains("set_egress_proxy("));
         // A bad certificate is refused before the forwarder starts, and nothing is written
         // before the authorization.
-        let validate = body.find("ca_bundle::validate(").expect("it validates the CA");
-        let install = body.find("ca_bundle::install(").expect("it installs the CA");
+        let validate = body
+            .find("ca_bundle::validate(")
+            .expect("it validates the CA");
+        let install = body
+            .find("ca_bundle::install(")
+            .expect("it installs the CA");
         assert!(authorize < validate && validate < configure && configure < install);
     }
 }
