@@ -949,7 +949,7 @@ impl ResourceRegistry {
 
         #[cfg(feature = "gcp")]
         registry.register_controller_factory(
-            Container::RESOURCE_TYPE,
+            alien_core::Container::RESOURCE_TYPE,
             Platform::Gcp,
             Box::new(DefaultControllerFactory::<
                 crate::container::AzureSandboxGatewayDeclarationController,

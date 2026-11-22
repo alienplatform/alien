@@ -3,6 +3,7 @@
 #[cfg(any(
     feature = "aws",
     feature = "azure",
+    feature = "gcp",
     feature = "local",
     feature = "kubernetes"
 ))]

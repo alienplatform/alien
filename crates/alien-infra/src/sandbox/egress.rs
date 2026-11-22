@@ -933,7 +933,7 @@ pub(crate) async fn publish_azure_config(
 /// address must lie in the private subnet (`private_cidrs`, as Azure reports it) where those
 /// frontends are created. A Container without that output yet is left out, and the next
 /// publish adds it.
-#[cfg(feature = "azure")]
+#[cfg(any(feature = "azure", feature = "gcp"))]
 pub(crate) fn azure_gateway_links(
     ctx: &crate::core::ResourceControllerContext<'_>,
     private_cidrs: &[String],
@@ -1105,7 +1105,7 @@ fn aws_gateway_peers() -> serde_json::Value {
 
 /// The configuration the shared-key owner publishes, without the replica secret. Other
 /// sandboxes publish nothing.
-#[cfg(any(feature = "aws", feature = "azure"))]
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
 fn gateway_config(
     ctx: &crate::core::ResourceControllerContext<'_>,
     key: &GatewayPublicKey,
