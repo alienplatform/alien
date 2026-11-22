@@ -143,6 +143,7 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::CancelMachineDrain { json: true, .. }
                 | DeploymentsCmd::RemoveMachine { json: true, .. }
                 | DeploymentsCmd::SetCompute { json: true, .. }
+                | DeploymentsCmd::SetEndpointSourceRanges { json: true, .. }
                 | DeploymentsCmd::SetEnv { json: true, .. }
                 | DeploymentsCmd::Inputs { json: true, .. }
                 | DeploymentsCmd::SetInputs { json: true, .. }
@@ -171,6 +172,28 @@ pub enum DeploymentsCmd {
         /// Restore generated domains for this resource
         #[arg(long)]
         clear: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Limit the deployment's public endpoints to a list of source address ranges
+    ///
+    /// Pass --range for each IPv4 or IPv6 CIDR (at most 25), for example the ranges of
+    /// a proxy in front of the deployment, or --any to let anyone connect again.
+    /// Replaces the saved list. Applied as a configuration update on AWS; deployments
+    /// that cannot enforce the list refuse it. Changes need no setup update.
+    SetEndpointSourceRanges {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+        /// Allowed source range in CIDR form (repeat for each range)
+        #[arg(
+            long = "range",
+            required_unless_present = "any",
+            conflicts_with = "any"
+        )]
+        ranges: Vec<String>,
+        /// Allow anyone to connect: remove the saved list
+        #[arg(long)]
+        any: bool,
         #[arg(long)]
         json: bool,
     },
@@ -1387,6 +1410,23 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                     quota_warning_overrides,
                 },
                 confirmation,
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::SetEndpointSourceRanges {
+            id,
+            ranges,
+            any: _,
+            json,
+        } => {
+            let target =
+                resolve_platform_target(&ctx, &id, json, "Endpoint source ranges changes").await?;
+            deployment_actions::set_endpoint_source_ranges_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                ranges,
                 json,
             )
             .await
@@ -4437,6 +4477,7 @@ async fn create_deployment_task(
         // Setup reports signing settings; a deployment created here has none.
         signing: None,
         quota_warning_overrides: Vec::new(),
+        endpoint_source_ranges: Vec::new(),
         endpoint_access: network_args
             .endpoint_access
             .map(|access| serde_json::from_value(serde_json::json!(access)))

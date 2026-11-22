@@ -3488,8 +3488,8 @@ fn gcp_federated_management_config(
         .gcp_mgmt
         .as_ref()
         .context("GCP management config is required to probe deployment federation")?;
-    let credentials_json = management.credentials_json.clone().context(
-        "GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY is required to probe deployment federation",
+    let credentials = management.credentials().context(
+        "GOOGLE_MANAGEMENT_ACCESS_TOKEN or GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY is required to probe deployment federation",
     )?;
     let service_account_email = management
         .management_identity_email
@@ -3510,9 +3510,7 @@ fn gcp_federated_management_config(
                 source: Box::new(GcpClientConfig {
                     project_id: management.project_id.clone(),
                     region: management.region.clone(),
-                    credentials: GcpCredentials::ServiceAccountKey {
-                        json: credentials_json,
-                    },
+                    credentials,
                     service_overrides: None,
                     project_number: None,
                 }),
@@ -4146,7 +4144,10 @@ fn gcp_env(config: &GcpConfig) -> anyhow::Result<Vec<(String, String)>> {
     if let Some(path) = gke_auth_plugin_path_env() {
         env.push(("PATH".to_string(), path));
     }
-    if let Some(credentials) = &config.credentials_json {
+    if let Some(token) = &config.access_token {
+        // The Google provider reads this before any credentials file.
+        env.push(("GOOGLE_OAUTH_ACCESS_TOKEN".to_string(), token.clone()));
+    } else if let Some(credentials) = &config.credentials_json {
         let file = tempfile::NamedTempFile::new()
             .context("Failed to create temporary GCP credentials file")?;
         std::fs::write(file.path(), credentials)?;
@@ -4548,6 +4549,7 @@ resource "terraform_data" "gate_keeper" {}
                     project_id: "test-project".to_string(),
                     region: "us-central1".to_string(),
                     credentials_json: Some("{}".to_string()),
+                    access_token: None,
                     management_identity_email: None,
                     management_identity_unique_id: None,
                 };

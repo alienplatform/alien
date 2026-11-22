@@ -26,7 +26,14 @@ async fn executor(
     wrong_source: bool,
     settings: NetworkSettings,
 ) -> SingleControllerExecutor {
-    executor_with(TestVault::Local(directory), None, wrong_source, settings).await
+    executor_with(
+        TestVault::Local(directory),
+        None,
+        wrong_source,
+        settings,
+        None,
+    )
+    .await
 }
 
 async fn executor_with(
@@ -34,6 +41,7 @@ async fn executor_with(
     controller: Option<AzureSandboxController>,
     wrong_source: bool,
     settings: NetworkSettings,
+    linked: Option<Container>,
 ) -> SingleControllerExecutor {
     let (network, vnet, nsg, nat, public) = fixture();
     let subnet = vnet["properties"]["subnets"][0].clone();
@@ -71,7 +79,24 @@ async fn executor_with(
     provider
         .expect_get_azure_sandbox_groups_client()
         .returning(move |_| Ok(arm.clone()));
-    let config = Sandbox::new("sandbox".into())
+    // Ready reaps session lifetimes; there are no sessions.
+    provider
+        .expect_get_azure_sandbox_data_plane_client()
+        .returning(|_, _, _| {
+            let mut client =
+                alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new();
+            client.expect_list_sandboxes().returning(|_| Ok(Vec::new()));
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(Vec::new()));
+            Ok(Arc::new(client))
+        });
+    let sandbox = Sandbox::new("sandbox".into());
+    let sandbox = match &linked {
+        Some(container) => sandbox.link(container),
+        None => sandbox,
+    };
+    let config = sandbox
         .code(SandboxCode::Image {
             image: "ubuntu".into(),
             bundled_from: None,
@@ -105,6 +130,9 @@ async fn executor_with(
             Network::new("network".into()).settings(settings).build(),
             network,
         );
+    if let Some(container) = linked {
+        builder = builder.with_stack_resource(container, ResourceLifecycle::Live);
+    }
     builder = match vault {
         TestVault::Local(directory) => builder.with_dependency(
             Vault::new(SECRETS_VAULT_ID.into()).build(),
@@ -311,6 +339,7 @@ async fn the_owner_never_reads_a_value_from_key_vault() {
         None,
         false,
         created(),
+        None,
     )
     .await;
     run.step().await.expect("the key is created without a read");
@@ -379,6 +408,7 @@ async fn the_owner_never_reads_a_value_from_key_vault() {
         }),
         false,
         created(),
+        None,
     )
     .await;
     changed.step().await.unwrap();
@@ -436,4 +466,114 @@ async fn default_network_settings_publish_like_a_created_network() {
     let controller = run.internal_state::<AzureSandboxController>().unwrap();
     assert_eq!(controller.state, AzureSandboxState::Ready);
     assert!(controller.get_binding_params().unwrap().is_some());
+}
+
+fn linked_api() -> Container {
+    Container::new("api".into())
+        .code(ContainerCode::Image {
+            image: "api".into(),
+        })
+        .cpu(alien_core::ResourceSpec {
+            min: "1".into(),
+            desired: "1".into(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "1Gi".into(),
+            desired: "1Gi".into(),
+        })
+        .permissions("execution".into())
+        .port(8080)
+        .build()
+}
+
+fn api_with_link_address(address: Option<&str>) -> alien_core::StackResourceState {
+    alien_core::StackResourceState::builder()
+        .resource_type(Container::RESOURCE_TYPE.to_string())
+        .status(alien_core::ResourceStatus::Running)
+        .config(alien_core::Resource::new(linked_api()))
+        .lifecycle(ResourceLifecycle::Live)
+        .outputs(alien_core::ResourceOutputs::new(
+            alien_core::ContainerOutputs {
+                name: "api".into(),
+                status: alien_core::ContainerStatus::Running,
+                current_replicas: 1,
+                desired_replicas: 1,
+                internal_dns: String::new(),
+                public_endpoints: Default::default(),
+                internal_urls: Default::default(),
+                link_address: address.map(|a| a.parse().unwrap()),
+                replicas: Vec::new(),
+                volumes: Vec::new(),
+                volume_backups: None,
+            },
+        ))
+        .build()
+}
+
+#[tokio::test]
+async fn a_linked_container_is_published_at_its_load_balancer_address_once_it_has_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = LocalVault::new("secrets".into(), dir.path().into());
+    let stored = || async {
+        serde_json::from_str::<serde_json::Value>(
+            &vault
+                .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let mut run = executor_with(
+        TestVault::Local(dir.path()),
+        None,
+        false,
+        created(),
+        Some(linked_api()),
+    )
+    .await;
+    // The load balancer does not exist yet: the configuration has no links.
+    run.insert_saved_resource("api", api_with_link_address(None));
+    run.step().await.unwrap();
+    run.step().await.unwrap();
+    let controller = run.internal_state::<AzureSandboxController>().unwrap();
+    assert_eq!(controller.state, AzureSandboxState::Ready);
+    assert!(stored().await.get("links").is_none());
+    // The sandbox's commands get the link's binding whatever the load balancer's state.
+    let params = controller.get_binding_params().unwrap().unwrap();
+    assert_eq!(
+        params["egress"]["links"]["api"]["internalUrl"],
+        serde_json::json!("http://api.svc:8080"),
+        "{params}"
+    );
+
+    // An address outside the private subnet (10.0.1.0/24 here) is never published.
+    run.insert_saved_resource("api", api_with_link_address(Some("10.0.2.9")));
+    run.step().await.unwrap();
+    assert!(stored().await.get("links").is_none());
+
+    // The address arrives after the sandbox is Running: the next heartbeat publishes it, bounded
+    // by the private subnet Azure reports.
+    run.insert_saved_resource("api", api_with_link_address(Some("10.0.1.9")));
+    run.step().await.unwrap();
+    assert_eq!(
+        stored().await["links"],
+        serde_json::json!({"test/sandbox": [{
+            "id": "api", "host": "api.svc", "ports": [8080],
+            "ranges": ["10.0.1.0/24"], "addresses": ["10.0.1.9"]
+        }]})
+    );
+    // Removing the link reaches no update of the owner when another sandbox held it; here the
+    // owner's own declaration drops it, and the next heartbeat removes it from the gateway.
+    run.desired_resource_config_mut("sandbox")
+        .unwrap()
+        .downcast_mut::<Sandbox>()
+        .unwrap()
+        .gateway_links
+        .clear();
+    run.step().await.unwrap();
+    assert!(
+        stored().await.get("links").is_none(),
+        "an unlinked container stays reachable: {}",
+        stored().await
+    );
 }

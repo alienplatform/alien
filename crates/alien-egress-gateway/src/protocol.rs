@@ -63,6 +63,72 @@ pub fn request_target(input: &[u8]) -> Result<Option<Target>> {
     Ok(Some(target))
 }
 
+/// The origin-form head of a plain-proxy WebSocket opening handshake (`GET`, one
+/// `Upgrade: websocket`, `Connection` naming `upgrade`), without proxy fields; `None` for any
+/// other request. Host already matches the URI authority (see [`request_target`]). A handshake
+/// carrying body framing is refused.
+pub fn websocket_origin_head(input: &[u8]) -> Result<Option<Vec<u8>>> {
+    let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut request = httparse::Request::new(&mut headers);
+    if request
+        .parse(input)
+        .map_err(|_| invalid("malformed HTTP"))?
+        .is_partial()
+    {
+        return Err(invalid("incomplete request"));
+    }
+    let fields = &*request.headers;
+    let named = |name: &'static str| {
+        fields
+            .iter()
+            .filter(move |header| header.name.eq_ignore_ascii_case(name))
+    };
+    let upgrades: Vec<_> = named("upgrade").collect();
+    let websocket = request.method == Some("GET")
+        && upgrades.len() == 1
+        && upgrades[0].value.eq_ignore_ascii_case(b"websocket")
+        && named("connection").any(|header| {
+            std::str::from_utf8(header.value).is_ok_and(|value| {
+                value
+                    .split(',')
+                    .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+            })
+        });
+    if !websocket {
+        return Ok(None);
+    }
+    if named("content-length").next().is_some() || named("transfer-encoding").next().is_some() {
+        return Err(invalid("a WebSocket handshake cannot carry a body"));
+    }
+    let uri: http::Uri = request
+        .path
+        .ok_or_else(|| invalid("missing request target"))?
+        .parse()
+        .map_err(|_| invalid("invalid request URI"))?;
+    let path = uri.path_and_query().map(|v| v.as_str()).unwrap_or("/");
+    let mut head = format!("GET {path} HTTP/1.1\r\n").into_bytes();
+    for header in fields {
+        if [
+            "proxy-authorization",
+            "proxy-connection",
+            "keep-alive",
+            "te",
+            "trailer",
+        ]
+        .iter()
+        .any(|name| header.name.eq_ignore_ascii_case(name))
+        {
+            continue;
+        }
+        head.extend_from_slice(header.name.as_bytes());
+        head.extend_from_slice(b": ");
+        head.extend_from_slice(header.value);
+        head.extend_from_slice(b"\r\n");
+    }
+    head.extend_from_slice(b"\r\n");
+    Ok(Some(head))
+}
+
 /// Parse a bounded ClientHello using rustls' protocol parser, including fragmented records.
 /// None means the input is incomplete; malformed or missing SNI is an error.
 pub fn client_hello_name(input: &[u8]) -> Result<Option<String>> {
@@ -207,5 +273,39 @@ mod tests {
             b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nHost: example.com:443\r\n\r\n",
             b"GET http://example.com/ HTTP/1.1\r\nHost: other.com\r\n\r\n",
         ] { assert!(request_target(input).is_err()); }
+    }
+
+    #[test]
+    fn a_websocket_handshake_becomes_origin_form_without_proxy_fields() {
+        let head = websocket_origin_head(
+            b"GET http://api.svc:9000/ws?a=1 HTTP/1.1\r\nHost: api.svc:9000\r\n\
+              Connection: keep-alive, Upgrade\r\nUpgrade: WebSocket\r\n\
+              Proxy-Authorization: Bearer secret\r\nProxy-Connection: keep-alive\r\n\
+              Sec-WebSocket-Key: k\r\n\r\n",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(head).unwrap(),
+            "GET /ws?a=1 HTTP/1.1\r\nHost: api.svc:9000\r\nConnection: keep-alive, Upgrade\r\n\
+             Upgrade: WebSocket\r\nSec-WebSocket-Key: k\r\n\r\n"
+        );
+    }
+
+    #[test]
+    fn only_a_websocket_handshake_is_one() {
+        for input in [
+            b"GET http://api.svc/ HTTP/1.1\r\nHost: api.svc\r\n\r\n".as_slice(),
+            b"GET http://api.svc/ HTTP/1.1\r\nHost: api.svc\r\nConnection: Upgrade\r\nUpgrade: h2c\r\n\r\n",
+            b"GET http://api.svc/ HTTP/1.1\r\nHost: api.svc\r\nUpgrade: websocket\r\n\r\n",
+            b"POST http://api.svc/ HTTP/1.1\r\nHost: api.svc\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+            b"GET http://api.svc/ HTTP/1.1\r\nHost: api.svc\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nUpgrade: websocket\r\n\r\n",
+        ] {
+            assert_eq!(websocket_origin_head(input).unwrap(), None);
+        }
+        assert!(websocket_origin_head(
+            b"GET http://api.svc/ HTTP/1.1\r\nHost: api.svc\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nContent-Length: 4\r\n\r\n"
+        )
+        .is_err());
     }
 }

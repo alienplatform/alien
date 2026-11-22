@@ -1,0 +1,108 @@
+{
+  "id": "acme-sandbox-links",
+  "permissions": {
+    "profiles": {
+      "api": {},
+      "tools": {}
+    }
+  },
+  "resources": {
+    "runner": {
+      "config": {
+        "id": "runner",
+        "type": "sandbox",
+        "code": {
+          "image": "s3://acme-bundles/runner/{region}/rootfs.tar",
+          "type": "image"
+        },
+        "defaultPolicy": {
+          "allow": [
+            "link:api"
+          ]
+        },
+        "egress": "internet",
+        "gatewayLinks": [
+          {
+            "id": "api",
+            "type": "container"
+          },
+          {
+            "id": "tools",
+            "type": "container"
+          }
+        ],
+        "lifecycle": {}
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "api": {
+      "config": {
+        "id": "api",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/api:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "api",
+        "ports": [
+          {
+            "port": 8080
+          }
+        ],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "tools": {
+      "config": {
+        "id": "tools",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/tools:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "tools",
+        "ports": [
+          {
+            "port": 9090
+          }
+        ],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "kubernetes"
+  ]
+}

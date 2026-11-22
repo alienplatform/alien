@@ -861,6 +861,16 @@ pub trait DeploymentStore: Send + Sync {
         false
     }
 
+    /// Whether the controllers this manager runs enforce `endpointSourceRanges`
+    /// on the deployment's public endpoints. A manager that does not enforce
+    /// them refuses a non-empty list: a list that is saved while the endpoint
+    /// stays open to everyone would say "restricted" and not be.
+    ///
+    /// Off by default; an embedder whose controllers apply the ranges returns true.
+    fn enforces_endpoint_source_ranges(&self) -> bool {
+        false
+    }
+
     async fn set_retry_requested(
         &self,
         caller: &crate::auth::Subject,

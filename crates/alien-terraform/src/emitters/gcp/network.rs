@@ -186,6 +186,41 @@ impl TfEmitter for GcpNetworkEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let network = downcast::<Network>(ctx, Network::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        let mut fragment = self.emit_network(ctx)?;
+        if super::sandbox_gateway::wiring_enabled(ctx) {
+            super::sandbox_gateway::emit(ctx, label, &network.settings, &mut fragment)?;
+        }
+        Ok(fragment)
+    }
+
+    fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
+        let network = downcast::<Network>(ctx, Network::RESOURCE_TYPE)?;
+        let label = required_label(ctx)?;
+        let reference = self.network_import_ref(ctx)?;
+        if !super::sandbox_gateway::wiring_enabled(ctx) {
+            return Ok(reference);
+        }
+        match reference {
+            Expression::Object(mut object) => {
+                object.insert(
+                    hcl::expr::ObjectKey::Identifier(hcl::Identifier::sanitized("sandboxNetwork")),
+                    super::sandbox_gateway::import_object(
+                        label,
+                        &network.settings,
+                        ctx.targets_kubernetes,
+                    ),
+                );
+                Ok(Expression::Object(object))
+            }
+            other => Ok(other),
+        }
+    }
+}
+
+impl GcpNetworkEmitter {
+    fn emit_network(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
+        let network = downcast::<Network>(ctx, Network::RESOURCE_TYPE)?;
+        let label = required_label(ctx)?;
 
         match &network.settings {
             NetworkSettings::UseDefault => {
@@ -236,7 +271,12 @@ impl TfEmitter for GcpNetworkEmitter {
                 Ok(fragment)
             }
             NetworkSettings::Create { cidr, .. } => {
-                let fragment = dynamic_topology(label, cidr.clone(), ctx.targets_kubernetes);
+                let fragment = dynamic_topology(
+                    label,
+                    cidr.clone(),
+                    ctx.targets_kubernetes,
+                    super::sandbox_gateway::wiring_enabled(ctx),
+                );
                 Ok(if ctx.targets_kubernetes {
                     existing_cluster_network_locals(
                         fragment,
@@ -256,7 +296,7 @@ impl TfEmitter for GcpNetworkEmitter {
         }
     }
 
-    fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
+    fn network_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let network = downcast::<Network>(ctx, Network::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         let mode = network_mode_expr(ctx.targets_kubernetes);
@@ -373,7 +413,12 @@ pub fn function_egress(settings: &NetworkSettings, targets_kubernetes: bool) -> 
     }
 }
 
-fn dynamic_topology(label: &str, cidr: Option<String>, targets_kubernetes: bool) -> TfFragment {
+fn dynamic_topology(
+    label: &str,
+    cidr: Option<String>,
+    targets_kubernetes: bool,
+    sandbox_gateway: bool,
+) -> TfFragment {
     let mode = network_mode_expr(targets_kubernetes);
     // The names and region of the network a lookup reads: the cluster's in an existing cluster.
     let (name, subnet, region_expr) = if targets_kubernetes {
@@ -391,7 +436,7 @@ fn dynamic_topology(label: &str, cidr: Option<String>, targets_kubernetes: bool)
             "var.network_mode == \"use-default\" || var.network_region == \"\" ? var.gcp_region : var.network_region".to_string(),
         )
     };
-    let mut fragment = create_topology(label, cidr, true);
+    let mut fragment = create_topology(label, cidr, true, sandbox_gateway);
     for resource in &mut fragment.resource_blocks {
         let existing = std::mem::take(&mut resource.body);
         resource.body = hcl::structure::Body::from(
@@ -462,7 +507,15 @@ fn dynamic_topology(label: &str, cidr: Option<String>, targets_kubernetes: bool)
     fragment
 }
 
-fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragment {
+/// `sandbox_gateway`: the sandbox egress gateway has its own Cloud NAT on the same network, and
+/// Google refuses an all-subnetworks NAT beside another one, so the workload NAT then names its
+/// own subnet only.
+fn create_topology(
+    label: &str,
+    cidr: Option<String>,
+    counted: bool,
+    sandbox_gateway: bool,
+) -> TfFragment {
     let cidr_str = cidr.unwrap_or_else(|| "10.44.0.0/16".to_string());
     let subnet_label = format!("{label}_workload");
     let router_label = format!("{label}_router");
@@ -520,6 +573,15 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
         ],
     ));
 
+    let workload_self_link = if counted {
+        expr::raw(format!(
+            "google_compute_subnetwork.{subnet_label}[0].self_link"
+        ))
+    } else {
+        expr::raw(format!(
+            "google_compute_subnetwork.{subnet_label}.self_link"
+        ))
+    };
     fragment.resource_blocks.push(resource_block(
         "google_compute_router_nat",
         &nat_label,
@@ -534,7 +596,14 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
             ),
             attr(
                 "source_subnetwork_ip_ranges_to_nat",
-                Expression::String("ALL_SUBNETWORKS_ALL_IP_RANGES".to_string()),
+                Expression::String(
+                    if sandbox_gateway {
+                        "LIST_OF_SUBNETWORKS"
+                    } else {
+                        "ALL_SUBNETWORKS_ALL_IP_RANGES"
+                    }
+                    .to_string(),
+                ),
             ),
             nested(block(
                 "log_config",
@@ -543,7 +612,20 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
                     attr("filter", Expression::String("ERRORS_ONLY".to_string())),
                 ],
             )),
-        ],
+        ]
+        .into_iter()
+        .chain(sandbox_gateway.then(|| {
+            nested(block(
+                "subnetwork",
+                [
+                    attr("name", workload_self_link.clone()),
+                    attr(
+                        "source_ip_ranges_to_nat",
+                        Expression::Array(vec![Expression::String("ALL_IP_RANGES".to_string())]),
+                    ),
+                ],
+            ))
+        })),
     ));
 
     fragment.resource_blocks.push(resource_block(
@@ -573,4 +655,24 @@ fn gcp_network_name(label: &str, suffix: &str) -> Expression {
     expr::raw(format!(
         "trim(substr(\"${{local.resource_prefix}}-{segment}{suffix}\", 0, 63), \"-\")"
     ))
+}
+
+/// The workload subnet's address range, in every network mode.
+pub(crate) fn workload_cidr_expr(
+    label: &str,
+    settings: &NetworkSettings,
+    targets_kubernetes: bool,
+) -> Expression {
+    let mode = network_mode_expr(targets_kubernetes);
+    match settings {
+        NetworkSettings::Create { .. } => expr::raw(format!(
+            "{mode} == \"create-new\" ? google_compute_subnetwork.{label}_workload[0].ip_cidr_range : data.google_compute_subnetwork.{label}_existing_subnet[0].ip_cidr_range"
+        )),
+        _ => expr::traversal([
+            "data",
+            "google_compute_subnetwork",
+            &format!("{label}_subnet"),
+            "ip_cidr_range",
+        ]),
+    }
 }

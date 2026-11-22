@@ -41,7 +41,6 @@ NO_SETUP_CHECK = {
     "crates/alien-helm/tests/runtime_identity_lifecycle.rs": "chart without sandbox or container egress: no setup check",
     "crates/alien-helm/tests/signing_kind.rs": "chart without sandbox or container egress: no setup check",
     "crates/alien-infra/src/service_account/kubernetes.rs": "comment",
-    "crates/alien-infra/tests/kubernetes_sandbox_gateway_kind.rs": "installs no chart",
     "crates/alien-infra/tests/kubernetes_service_account_refresh_kind.rs": "comment",
     "crates/alien-manager/src/routes/charts.rs": "serves the chart",
     "crates/alien-manager/src/routes/installed_setup.rs": "comment",

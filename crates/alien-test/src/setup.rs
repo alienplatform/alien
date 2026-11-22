@@ -552,11 +552,9 @@ fn build_gcp_target_config(config: &TestConfig) -> anyhow::Result<ClientConfig> 
         .gcp_target
         .as_ref()
         .context("Missing GCP target credentials")?;
-    let credentials = if let Some(ref json) = target.credentials_json {
-        alien_core::GcpCredentials::ServiceAccountKey { json: json.clone() }
-    } else {
-        anyhow::bail!("GCP target credentials must include service account key JSON");
-    };
+    let credentials = target.credentials().context(
+        "GCP target credentials need GOOGLE_TARGET_ACCESS_TOKEN or GOOGLE_TARGET_SERVICE_ACCOUNT_KEY",
+    )?;
     Ok(ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
         project_id: target.project_id.clone(),
         region: target.region.clone(),

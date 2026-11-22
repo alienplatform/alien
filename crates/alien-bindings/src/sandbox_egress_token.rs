@@ -54,6 +54,49 @@ pub enum EgressAdminOperation {
     Delete,
 }
 
+/// A new signing key: the document a vault stores, and the public half a gateway trusts.
+/// Debug output never includes the document.
+pub struct GeneratedSigningKey {
+    /// The vault document [`EgressTokenIssuer::from_vault_document`] reads.
+    pub document: String,
+    /// Key id tokens signed with it carry.
+    pub kid: String,
+    /// Standard base64 of the raw Ed25519 public key.
+    pub public_key: String,
+}
+
+impl fmt::Debug for GeneratedSigningKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GeneratedSigningKey")
+            .field("kid", &self.kid)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Generates a signing key with a random key id.
+pub fn generate_signing_key() -> GeneratedSigningKey {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StoredKey<'a> {
+        kid: &'a str,
+        private_key: String,
+    }
+    let key = KeyPair::generate();
+    let kid = uuid::Uuid::new_v4().to_string();
+    let standard = base64::engine::general_purpose::STANDARD;
+    let document = serde_json::to_string(&StoredKey {
+        kid: &kid,
+        private_key: standard.encode(key.sk.to_der()),
+    })
+    .expect("a struct of strings serializes");
+    GeneratedSigningKey {
+        document,
+        kid,
+        public_key: standard.encode(key.pk.as_ref()),
+    }
+}
+
 /// An issuer with a deployment key. Debug output never includes the private key.
 pub struct EgressTokenIssuer {
     kid: String,

@@ -15,7 +15,7 @@ use tokio::sync::{watch, Semaphore};
 use crate::{
     error::{unavailable, ErrorData, Result},
     io::Counters,
-    policy::{check_addresses, PolicyExt, Target},
+    policy::{check_addresses, check_link_addresses, PolicyExt, Target},
     runtime::LiveGateway,
     token::Claims,
 };
@@ -23,12 +23,41 @@ use crate::{
 pub const MAX_CONNECTIONS: usize = 2048;
 pub const MAX_SOURCE_PENDING: usize = 32;
 pub const MAX_IDENTITY_CONNECTIONS: usize = 128;
+/// Idle limit of a connection that is not a declared link.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Lifetime of a connection that is not a declared link; limits resource retention by idle peers.
+pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(3600);
+/// Idle limit of a declared link's connection.
+pub const LINK_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const DNS_CONCURRENCY: usize = 8;
 type Identity = (String, String);
 
+/// Idle and lifetime limits the sweep applies to open connections.
+#[derive(Clone, Copy, Debug)]
+pub struct Timeouts {
+    /// Idle limit of a connection that is not a declared link.
+    pub idle: Duration,
+    /// Lifetime of a connection that is not a declared link.
+    pub lifetime: Duration,
+    /// Idle limit of a declared link's connection. A link carries long-lived connections
+    /// (WebSockets, database and cache pools), so it has no lifetime limit: it stays open while
+    /// the sandbox's token, the configuration and the policy keep it.
+    pub link_idle: Duration,
+}
+
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self {
+            idle: IDLE_TIMEOUT,
+            lifetime: CONNECTION_TIMEOUT,
+            link_idle: LINK_IDLE_TIMEOUT,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Connections {
+    pub timeouts: Timeouts,
     sources: Mutex<HashMap<IpAddr, usize>>,
     identities: Mutex<HashMap<Identity, Group>>,
     next_id: AtomicU64,
@@ -47,7 +76,10 @@ struct Session {
     claims: Claims,
     target: Option<Target>,
     peer: Option<IpAddr>,
+    /// Id of the declared link the session reached, if any.
+    link: Option<String>,
     counters: Arc<Counters>,
+    opened: tokio::time::Instant,
     cancel: watch::Sender<Option<&'static str>>,
 }
 pub struct SourcePermit {
@@ -65,6 +97,14 @@ pub fn capacity() -> AlienError<ErrorData> {
 }
 
 impl Connections {
+    /// A registry with these limits instead of the defaults.
+    pub fn with_timeouts(timeouts: Timeouts) -> Self {
+        Self {
+            timeouts,
+            ..Self::default()
+        }
+    }
+
     pub fn record_denial(&self, category: usize) -> bool {
         self.denials[category].fetch_add(1, Ordering::Relaxed);
         let Ok(mut window) = self.log_window.lock() else {
@@ -121,7 +161,9 @@ impl Connections {
                 claims,
                 target,
                 peer: None,
+                link: None,
                 counters,
+                opened: tokio::time::Instant::now(),
                 cancel,
             },
         );
@@ -137,7 +179,9 @@ impl Connections {
         ))
     }
 
-    /// One sweep for every identity; no task or timer is retained for an expired token.
+    /// One sweep for every identity; no task or timer is retained for an expired token. A
+    /// declared link's connection ends on its own idle limit or with the token, which is bounded
+    /// by the sandbox's lifetime; any other connection also ends after `timeouts.lifetime`.
     pub fn expire_idle(&self) {
         let Ok(identities) = self.identities.lock() else {
             return;
@@ -147,10 +191,15 @@ impl Connections {
             .values()
             .flat_map(|group| group.sessions.values())
         {
+            let limits = self.timeouts;
             let reason = if session.claims.exp <= now {
                 Some("token expired")
-            } else if session.counters.idle_for() >= IDLE_TIMEOUT {
+            } else if session.link.is_some() {
+                (session.counters.idle_for() >= limits.link_idle).then_some("idle timeout")
+            } else if session.counters.idle_for() >= limits.idle {
                 Some("idle timeout")
+            } else if session.opened.elapsed() >= limits.lifetime {
+                Some("connection lifetime exceeded")
             } else {
                 None
             };
@@ -192,16 +241,34 @@ impl Connections {
                         _ => None,
                     };
                     for session in sessions {
-                        let policy_allowed = policy.as_ref().is_some_and(|policy| {
-                            session
-                                .target
-                                .as_ref()
-                                .is_none_or(|target| policy.permits(target))
+                        // A linked session stays open only while the current configuration
+                        // still declares the same link for its target and the policy keeps it.
+                        let link = session.link.as_ref().and_then(|id| {
+                            let gateway = gateway.as_ref()?;
+                            let target = session.target.as_ref()?;
+                            gateway
+                                .config
+                                .link(&identity.0, &target.host, target.port)
+                                .filter(|link| &link.id == id)
                         });
-                        let address_allowed = session.peer.is_none_or(|address| {
-                            gateway.as_ref().is_some_and(|gateway| {
-                                check_addresses(&[address], &gateway.config.denied_ranges).is_ok()
-                            })
+                        let policy_allowed =
+                            policy
+                                .as_ref()
+                                .is_some_and(|policy| match (&session.link, link) {
+                                    (Some(_), Some(link)) => policy.allows_link(&link.id),
+                                    (Some(_), None) => false,
+                                    (None, _) => session
+                                        .target
+                                        .as_ref()
+                                        .is_none_or(|target| policy.permits(target)),
+                                });
+                        let address_allowed = session.peer.is_none_or(|address| match link {
+                            Some(link) => check_link_addresses(&[address], link).is_ok(),
+                            None => gateway.as_ref().is_some_and(|gateway| {
+                                session.link.is_none()
+                                    && check_addresses(&[address], &gateway.config.denied_ranges)
+                                        .is_ok()
+                            }),
                         });
                         if !policy_allowed || !address_allowed {
                             session
@@ -231,7 +298,7 @@ impl Connections {
 }
 impl IdentityPermit {
     /// Retain the actual checked peer for live address-range revocation, including named targets.
-    pub fn record_peer(&self, address: IpAddr) -> Result<()> {
+    pub fn record_peer(&self, address: IpAddr, link: Option<String>) -> Result<()> {
         let mut identities = self
             .registry
             .identities
@@ -242,6 +309,7 @@ impl IdentityPermit {
             .and_then(|group| group.sessions.get_mut(&self.id))
             .ok_or_else(|| AlienError::new(unavailable("connection registration missing")))?;
         session.peer = Some(address);
+        session.link = link;
         Ok(())
     }
 }
@@ -269,5 +337,79 @@ impl Drop for IdentityPermit {
             }
         }
         self.registry.active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use std::{sync::Arc, time::Duration};
+
+    use super::{Connections, Timeouts};
+    use crate::{io::Counters, token::Claims};
+
+    fn claims() -> Claims {
+        let now = chrono::Utc::now().timestamp() as u64;
+        Claims {
+            iss: "alien-sandbox".into(),
+            aud: "p/r".into(),
+            sub: "s".into(),
+            iat: now,
+            exp: now + 600,
+        }
+    }
+
+    /// A declared link's connection outlives the idle and lifetime limits of other
+    /// connections and ends only on its own idle limit; the others keep theirs.
+    #[tokio::test(start_paused = true)]
+    async fn a_link_connection_outlives_the_other_limits_and_ends_on_its_own_idle_limit() {
+        let registry = Arc::new(Connections::with_timeouts(Timeouts {
+            idle: Duration::from_secs(2),
+            lifetime: Duration::from_secs(5),
+            link_idle: Duration::from_secs(60),
+        }));
+        let open = |link: Option<&str>| {
+            let counters = Arc::new(Counters::default());
+            let (permit, cancelled) = registry.register(claims(), None, counters.clone()).unwrap();
+            permit
+                .record_peer("10.0.0.5".parse().unwrap(), link.map(str::to_owned))
+                .unwrap();
+            (permit, cancelled, counters)
+        };
+        let (_link, link, link_counters) = open(Some("api"));
+        let (_quiet, quiet, _) = open(None);
+        let (_busy, busy, busy_counters) = open(None);
+
+        // Quiet past the idle limit: only the unlinked quiet connection ends.
+        tokio::time::advance(Duration::from_secs(3)).await;
+        busy_counters.touch();
+        registry.expire_idle();
+        assert_eq!(*quiet.borrow(), Some("idle timeout"));
+        assert_eq!(*link.borrow(), None);
+        assert_eq!(*busy.borrow(), None);
+
+        // Past the lifetime: the busy unlinked connection ends, the link stays.
+        tokio::time::advance(Duration::from_secs(3)).await;
+        busy_counters.touch();
+        registry.expire_idle();
+        assert_eq!(*busy.borrow(), Some("connection lifetime exceeded"));
+        assert_eq!(*link.borrow(), None);
+
+        // Activity keeps the link open well past both; quiet past its own limit ends it.
+        tokio::time::advance(Duration::from_secs(50)).await;
+        link_counters.touch();
+        tokio::time::advance(Duration::from_secs(50)).await;
+        registry.expire_idle();
+        assert_eq!(*link.borrow(), None);
+        tokio::time::advance(Duration::from_secs(11)).await;
+        registry.expire_idle();
+        assert_eq!(*link.borrow(), Some("idle timeout"));
+    }
+
+    #[test]
+    fn default_limits() {
+        let limits = Timeouts::default();
+        assert_eq!(limits.idle, Duration::from_secs(120));
+        assert_eq!(limits.lifetime, Duration::from_secs(3600));
+        assert_eq!(limits.link_idle, Duration::from_secs(1800));
     }
 }

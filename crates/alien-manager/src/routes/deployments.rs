@@ -467,11 +467,31 @@ fn deployment_model_name(model: DeploymentModel) -> &'static str {
     }
 }
 
+/// Refuses a non-empty list the manager's controllers would not apply.
+pub(crate) fn refuse_unenforced_source_ranges(
+    stack_settings: &StackSettings,
+    enforces_endpoint_source_ranges: bool,
+) -> Result<(), alien_error::AlienError<ErrorData>> {
+    if !stack_settings.endpoint_source_ranges.is_empty() && !enforces_endpoint_source_ranges {
+        return Err(ErrorData::bad_request(
+            "This manager does not enforce endpointSourceRanges, so the list would be saved \
+             while the endpoints stay open to everyone. Remove endpointSourceRanges or use a \
+             manager that supports it",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn stack_settings_for_platform(
     platform: Platform,
     stack_settings: Option<StackSettings>,
+    enforces_endpoint_source_ranges: bool,
 ) -> Result<StackSettings, alien_error::AlienError<ErrorData>> {
     let mut stack_settings = stack_settings.unwrap_or_default();
+    stack_settings
+        .validate_endpoint_source_ranges()
+        .map_err(ErrorData::bad_request)?;
+    refuse_unenforced_source_ranges(&stack_settings, enforces_endpoint_source_ranges)?;
     if stack_settings.airgapped && platform != Platform::Kubernetes {
         return Err(ErrorData::bad_request(
             "Air-gapped delivery requires Kubernetes",
@@ -725,8 +745,11 @@ async fn create_deployment(
         None => None,
     };
 
-    let stack_settings = match stack_settings_for_platform(req.platform, req.stack_settings.clone())
-    {
+    let stack_settings = match stack_settings_for_platform(
+        req.platform,
+        req.stack_settings.clone(),
+        state.deployment_store.enforces_endpoint_source_ranges(),
+    ) {
         Ok(settings) => settings,
         Err(e) => return e.into_response(),
     };
@@ -2495,7 +2518,7 @@ mod tests {
 
     #[test]
     fn local_deployments_default_to_push_for_embedded_dev_loop() {
-        let settings = stack_settings_for_platform(Platform::Local, None)
+        let settings = stack_settings_for_platform(Platform::Local, None, false)
             .expect("local defaults should be valid");
 
         assert_eq!(settings.deployment_model, DeploymentModel::Push);
@@ -2506,7 +2529,7 @@ mod tests {
         let mut requested = StackSettings::default();
         requested.deployment_model = DeploymentModel::Pull;
 
-        let settings = stack_settings_for_platform(Platform::Local, Some(requested))
+        let settings = stack_settings_for_platform(Platform::Local, Some(requested), false)
             .expect("local pull mode should be valid");
 
         assert_eq!(settings.deployment_model, DeploymentModel::Pull);
@@ -2514,7 +2537,7 @@ mod tests {
 
     #[test]
     fn kubernetes_deployments_are_pull_mode() {
-        let settings = stack_settings_for_platform(Platform::Kubernetes, None)
+        let settings = stack_settings_for_platform(Platform::Kubernetes, None, false)
             .expect("kubernetes defaults should be valid");
 
         assert_eq!(settings.deployment_model, DeploymentModel::Pull);
@@ -2527,7 +2550,7 @@ mod tests {
             ..Default::default()
         };
         let settings =
-            stack_settings_for_platform(Platform::Kubernetes, Some(requested.clone())).unwrap();
+            stack_settings_for_platform(Platform::Kubernetes, Some(requested.clone()), false).unwrap();
         assert!(settings.airgapped);
         assert_eq!(settings.deployment_model, DeploymentModel::Pull);
         for platform in [
@@ -2536,7 +2559,7 @@ mod tests {
             Platform::Azure,
             Platform::Local,
         ] {
-            assert!(stack_settings_for_platform(platform, Some(requested.clone())).is_err());
+            assert!(stack_settings_for_platform(platform, Some(requested.clone()), false).is_err());
         }
     }
 
@@ -2545,11 +2568,50 @@ mod tests {
         let mut requested = StackSettings::default();
         requested.deployment_model = DeploymentModel::Pull;
 
-        let error = stack_settings_for_platform(Platform::Machines, Some(requested))
+        let error = stack_settings_for_platform(Platform::Machines, Some(requested), false)
             .expect_err("machines deployments should reject pull mode");
 
         assert!(error
             .to_string()
             .contains("must use deploymentModel 'push'"));
+    }
+    #[test]
+    fn settings_for_a_new_deployment_refuse_invalid_endpoint_source_ranges() {
+        let with = |ranges: Vec<String>, access| StackSettings {
+            endpoint_source_ranges: ranges,
+            endpoint_access: access,
+            ..StackSettings::default()
+        };
+        let internet = alien_core::EndpointAccess::Internet;
+        let too_many: Vec<String> = (0..26).map(|i| format!("10.0.{i}.0/24")).collect();
+        for (settings, named) in [
+            (with(vec!["bogus".into()], internet), "bogus"),
+            (with(vec!["10.0.0.1/24".into()], internet), "10.0.0.1/24"),
+            (
+                with(vec!["10.0.0.0/24".into(), "10.0.0.0/24".into()], internet),
+                "10.0.0.0/24",
+            ),
+            (with(too_many, internet), "25"),
+            (
+                with(
+                    vec!["10.0.0.0/24".into()],
+                    alien_core::EndpointAccess::Private,
+                ),
+                "10.0.0.0/24",
+            ),
+        ] {
+            let error = stack_settings_for_platform(Platform::Aws, Some(settings), true)
+                .expect_err("invalid ranges are refused");
+            assert!(error.to_string().contains(named), "{error}");
+        }
+        let ok = with(vec!["203.0.113.0/24".into()], internet);
+        assert!(stack_settings_for_platform(Platform::Aws, Some(ok.clone()), true).is_ok());
+
+        // A manager whose controllers do not apply the list refuses it, and still
+        // accepts settings without one.
+        let error = stack_settings_for_platform(Platform::Aws, Some(ok), false)
+            .expect_err("a manager that cannot enforce the list refuses it");
+        assert!(error.to_string().contains("does not enforce"), "{error}");
+        assert!(stack_settings_for_platform(Platform::Aws, None, false).is_ok());
     }
 }

@@ -2372,6 +2372,8 @@ async fn push_sandbox_agent_image(
         }
         protocol => protocol.clone(),
     };
+    #[cfg(feature = "test-sandbox-agent-image")]
+    let protocol = gcp_sandbox_image::with_test_agent_registry(protocol, agent_image);
     let image = gcp_sandbox_image::build_sandbox_agent_image(
         resource_name,
         base,

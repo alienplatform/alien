@@ -531,6 +531,20 @@ jobs:
         if: needs.changes.outputs.run_all == 'true' || needs.changes.outputs.platform_sdk == 'true'
         run: cargo test --locked -p alien-platform-api --features full-api
 
+      - name: alien-cli with the full-api client
+        # Another crate in a build can turn on `full-api`; alien-cli must still compile
+        # against the complete client's type names.
+        if: needs.changes.outputs.run_all == 'true' || needs.changes.outputs.platform_sdk == 'true'
+        run: cargo check --locked -p alien-cli --features alien-platform-api/full-api
+
+      - name: Egress gateway link tests
+        if: needs.changes.outputs.rust_mode != 'affected' || contains(needs.changes.outputs.rust_packages, '-p alien-egress-gateway ') || endsWith(needs.changes.outputs.rust_packages, '-p alien-egress-gateway')
+        # The link tests need the gateway's `local` feature, which no other package turns on,
+        # and the socket test needs the linked service's address on a local interface.
+        run: |
+          sudo ip addr add 10.244.7.9/32 dev lo
+          cargo nextest run --locked -p alien-egress-gateway --features local --test links --run-ignored all --no-tests=fail
+
       - name: Local Redis integration tests
         if: needs.changes.outputs.rust_mode != 'affected' || needs.changes.outputs.rust_core == 'true'
         # Runs the pinned Valkey image through the runner's Docker engine: start, password,

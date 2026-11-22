@@ -33,11 +33,38 @@ impl GcpServiceConfig for ServiceUsageServiceConfig {
     }
 }
 
+/// The same service's beta surface, the only one with `generateServiceIdentity`.
+#[derive(Debug)]
+pub struct ServiceUsageBetaServiceConfig;
+
+impl GcpServiceConfig for ServiceUsageBetaServiceConfig {
+    fn base_url(&self) -> &'static str {
+        "https://serviceusage.googleapis.com/v1beta1"
+    }
+
+    fn default_audience(&self) -> &'static str {
+        "https://serviceusage.googleapis.com/"
+    }
+
+    fn service_name(&self) -> &'static str {
+        "Service Usage"
+    }
+
+    fn service_key(&self) -> &'static str {
+        "serviceusage"
+    }
+}
+
 #[cfg_attr(feature = "test-utils", automock)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait ServiceUsageApi: Send + Sync + Debug {
     async fn enable_service(&self, service_name: String) -> Result<Operation>;
+
+    /// Creates the project's service agent for a Google service if it does not exist yet, so a
+    /// role can be bound to it. Returns the operation to poll.
+    /// See: https://cloud.google.com/service-usage/docs/reference/rest/v1beta1/services/generateServiceIdentity
+    async fn generate_service_identity(&self, service_name: String) -> Result<Operation>;
 
     async fn disable_service(
         &self,
@@ -55,6 +82,7 @@ pub trait ServiceUsageApi: Send + Sync + Debug {
 #[derive(Debug)]
 pub struct ServiceUsageClient {
     base: GcpClientBase,
+    beta: GcpClientBase,
     project_id: String,
 }
 
@@ -64,6 +92,11 @@ impl ServiceUsageClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         let project_id = config.project_id.clone();
         Self {
+            beta: GcpClientBase::new(
+                client.clone(),
+                config.clone(),
+                Box::new(ServiceUsageBetaServiceConfig),
+            ),
             base: GcpClientBase::new(client, config, Box::new(ServiceUsageServiceConfig)),
             project_id,
         }
@@ -89,6 +122,16 @@ impl ServiceUsageApi for ServiceUsageClient {
                 Option::<()>::None, // Empty request body as per API docs
                 &service_name,
             )
+            .await
+    }
+
+    async fn generate_service_identity(&self, service_name: String) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/services/{}:generateServiceIdentity",
+            self.project_id, service_name
+        );
+        self.beta
+            .execute_request(Method::POST, &path, None, Option::<()>::None, &service_name)
             .await
     }
 

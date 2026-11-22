@@ -8323,8 +8323,11 @@ async fn initialize(
             }
 
             let settings =
-                match super::deployments::stack_settings_for_platform(platform, req.stack_settings)
-                {
+                match super::deployments::stack_settings_for_platform(
+                    platform,
+                    req.stack_settings,
+                    state.deployment_store.enforces_endpoint_source_ranges(),
+                ) {
                     Ok(settings) => settings,
                     Err(e) => return e.into_response(),
                 };

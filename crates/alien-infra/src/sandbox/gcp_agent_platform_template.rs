@@ -17,6 +17,7 @@ use tracing::{info, warn};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use crate::sandbox::gcp_placement::{self, Connection, Placement};
 use crate::sandbox::GcpAgentPlatformEngineController;
 use alien_core::sandbox_image::GCP_AGENT_PLATFORM;
 use alien_core::{
@@ -26,7 +27,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::agent_platform::{
     ContainerPort, ContainerResources, CustomContainerEnvironment, CustomContainerSpec,
-    EgressControlConfig, SandboxEnvironmentTemplate,
+    EgressControlConfig, IngressControlConfig, SandboxEnvironmentTemplate,
 };
 use alien_gcp_clients::longrunning::OperationResult;
 use alien_gcp_clients::platform::GcpClientConfigExt;
@@ -36,6 +37,10 @@ use super::gcp_image_copy::{copy_image, CopyDestination, CopySource};
 
 /// Lifecycle state the API reports for a template that is ready to cut sessions from.
 const TEMPLATE_ACTIVE: &str = "ACTIVE";
+
+/// How many 2-second polls an ACTIVE template waits for its attachment to connect: 3 minutes.
+/// Connections arrived 30 to 70 seconds after the template was created.
+const ATTACHMENT_CONNECT_POLLS: u32 = 90;
 
 /// State the API reports for a template whose container exited (it gives no reason).
 const TEMPLATE_FAILED: &str = "FAILED";
@@ -57,7 +62,7 @@ fn last_segment(name: &str) -> &str {
 /// which egress config the body carries. A body field that is not here, such as the
 /// declared port, cannot force a replace on its own — an existing template picks up a new value
 /// only at the next replace.
-fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool)> {
+fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool, bool)> {
     let image = match &sandbox.code {
         SandboxCode::Image { image, .. } => image.clone(),
         SandboxCode::Source { .. } => {
@@ -69,7 +74,14 @@ fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool)>
         }
     };
     let internet_access = internet_access_or_refuse(sandbox)?;
-    Ok((image, sandbox.resolved_limits(), internet_access))
+    // The last element is the gateway path: it changes the template's placement, so it is part of
+    // what forces a replace even though the cloud's boolean reads `false` for it and for `none`.
+    Ok((
+        image,
+        sandbox.resolved_limits(),
+        internet_access,
+        uses_gateway_path(sandbox),
+    ))
 }
 
 /// The image Agent Platform pulls. Agent Platform pulls from the registry directly, as its own
@@ -139,6 +151,7 @@ fn per_project_image_project_id(path: &str) -> Option<&str> {
 /// rather than approximated. The mode→switch mapping is `SandboxEgress::internet_access_switch`, so
 /// this cannot disagree with the emitter or the provider on what a mode means.
 fn internet_access_or_refuse(sandbox: &Sandbox) -> Result<bool> {
+    // `internet` maps to a closed switch there: its only way out is the network attachment.
     sandbox.egress.internet_access_switch().ok_or_else(|| {
         AlienError::new(ErrorData::ResourceConfigInvalid {
             message: format!(
@@ -149,6 +162,12 @@ fn internet_access_or_refuse(sandbox: &Sandbox) -> Result<bool> {
             resource_id: Some(sandbox.id().to_string()),
         })
     })
+}
+
+/// Whether the sandbox's egress goes through the deployment's egress gateway: a network attachment
+/// into the VPC instead of the cloud's own internet switch.
+fn uses_gateway_path(sandbox: &Sandbox) -> bool {
+    sandbox.egress == alien_core::SandboxEgress::Internet
 }
 
 /// The egress switch a template reports. The API omits a false `internetAccess`, answering `{}`
@@ -162,12 +181,31 @@ fn served_internet_access(template: &SandboxEnvironmentTemplate) -> bool {
 }
 
 /// Builds the immutable template body from the declaration.
+///
+/// `network_attachment` is the full path of the attachment setup created for the deployment's
+/// egress gateway. An `internet` sandbox names it and turns on private ingress, which the API
+/// requires beside it; any other sandbox must not, or it would leave the default placement.
 fn build_template_body(
     sandbox: &Sandbox,
     display_name: &str,
     deployment_config: &DeploymentConfig,
+    network_attachment: Option<&str>,
 ) -> Result<SandboxEnvironmentTemplate> {
-    let (image, limits, internet_access) = template_identity(sandbox)?;
+    let (image, limits, internet_access, gateway) = template_identity(sandbox)?;
+    let network_attachment = match (gateway, network_attachment) {
+        (true, Some(attachment)) => Some(attachment.to_string()),
+        (true, None) => {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "sandbox '{}' has egress internet, but the deployment has no network \
+                     attachment for it; re-run setup to create it",
+                    sandbox.id()
+                ),
+                resource_id: Some(sandbox.id().to_string()),
+            }))
+        }
+        (false, _) => None,
+    };
     let image = pulled_image(&image, deployment_config, sandbox.id())?;
 
     // cpu, memory and ephemeral-storage are the ceilings the API's resource map expresses;
@@ -223,6 +261,11 @@ fn build_template_body(
         }),
         egress_control_config: Some(EgressControlConfig {
             internet_access: Some(internet_access),
+            network_attachment: network_attachment.clone(),
+            extra: Default::default(),
+        }),
+        ingress_control_config: network_attachment.map(|_| IngressControlConfig {
+            enable_private_service_connect: Some(true),
             extra: Default::default(),
         }),
         state: None,
@@ -467,6 +510,119 @@ async fn create_template(
         .name)
 }
 
+/// The network attachment an `internet` sandbox's template names: the one setup recorded on the
+/// deployment's Network. `None` for any other egress. Setup releases that predate the gateway
+/// recorded none, so an `internet` sandbox there is refused with a request to re-run setup.
+fn gateway_attachment(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+) -> Result<Option<String>> {
+    use crate::core::state_utils::StackResourceStateExt;
+    if !uses_gateway_path(sandbox) {
+        return Ok(None);
+    }
+    let no_gateway = |message: &str| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "sandbox '{}' has egress internet, but {message}; re-run setup to create it",
+                sandbox.id()
+            ),
+            resource_id: Some(sandbox.id().to_string()),
+        })
+    };
+    let network_id = ctx
+        .desired_stack
+        .resources()
+        .find_map(|(id, entry)| {
+            entry
+                .config
+                .downcast_ref::<alien_core::Network>()
+                .map(|_| id.to_string())
+        })
+        .ok_or_else(|| no_gateway("the deployment has no network"))?;
+    let state = ctx.state.resources.get(&network_id).ok_or_else(|| {
+        AlienError::new(ErrorData::DependencyNotReady {
+            resource_id: sandbox.id().to_string(),
+            dependency_id: network_id.clone(),
+        })
+    })?;
+    let network = state.get_internal_controller_typed::<crate::network::GcpNetworkController>()?;
+    network
+        .sandbox_network
+        .map(|declared| declared.network_attachment)
+        .map(Some)
+        .ok_or_else(|| no_gateway("setup created no network attachment and gateway for it"))
+}
+
+/// Refuses a template the project's placement cannot host, before it is created.
+///
+/// Reading placement needs `compute.networkAttachments.list`, which setup grants with the gateway.
+/// A default-placement sandbox on a deployment that predates it cannot be read, and must not start
+/// failing for that, so there the check is best effort. For `internet` it is required.
+async fn check_project_placement(
+    ctx: &ResourceControllerContext<'_>,
+    client: &std::sync::Arc<dyn alien_gcp_clients::gcp::agent_platform::AgentPlatformApi>,
+    sandbox_id: &str,
+    attachment: Option<&str>,
+) -> Result<()> {
+    // While Google Cloud `internet` is not available no template asks for Private Service
+    // Connect, so a default-network template is created exactly as before, with no extra reads.
+    if attachment.is_none() && !alien_core::gcp_sandbox_gateway::internet_egress_available() {
+        return Ok(());
+    }
+    let gcp_config = ctx.get_gcp_config()?;
+    let wanted = if attachment.is_some() {
+        Placement::PrivateServiceConnect
+    } else {
+        Placement::Default
+    };
+    let read = async {
+        let mut templates = Vec::new();
+        for engine in client
+            .list_engines()
+            .await
+            .map_err(|error| error.into_generic())?
+        {
+            if let Some(name) = engine.name.as_deref() {
+                templates.extend(
+                    client
+                        .list_templates(last_segment(name))
+                        .await
+                        .map_err(|error| error.into_generic())?,
+                );
+            }
+        }
+        let attachments = ctx
+            .service_provider
+            .get_gcp_compute_client(gcp_config)
+            .map_err(|error| error.into_generic())?
+            .list_network_attachments(gcp_config.region.clone())
+            .await
+            .map_err(|error| error.into_generic())?;
+        Ok::<_, AlienError<alien_error::GenericError>>((templates, attachments))
+    };
+    let (templates, attachments) = match read.await {
+        Ok(facts) => facts,
+        Err(error) if wanted == Placement::Default => {
+            warn!(id=%sandbox_id, error=%error, "could not read the project's sandbox placement; creating the template anyway");
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(error).context(ErrorData::CloudPlatformError {
+                message: "Failed to read the project's sandbox placement".to_string(),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        }
+    };
+    gcp_placement::check_placement(
+        sandbox_id,
+        wanted,
+        attachment.map(last_segment),
+        &templates,
+        &attachments,
+    )
+}
+
 #[controller]
 pub struct GcpAgentPlatformTemplateController {
     /// Reasoning-engine id the template is created under, as the client's path interpolation wants
@@ -509,6 +665,40 @@ pub struct GcpAgentPlatformTemplateController {
     /// only when a profile or caller changed.
     #[serde(default)]
     pub(crate) reconciled_grants: Option<String>,
+    /// Full path of the network attachment an `internet` template names, from setup.
+    #[serde(default)]
+    pub(crate) network_attachment: Option<String>,
+    /// Polls of the attachment while it waits for Agent Platform's connection.
+    #[serde(default)]
+    pub(crate) attachment_polls: u32,
+    /// The binding an `internet` sandbox publishes: the gateway, its signing key and replicas.
+    #[serde(default)]
+    pub(crate) egress_gateway: Option<alien_core::bindings::SandboxEgressBinding>,
+    /// Public signing material; the private key stays in the secrets vault and is never read
+    /// back. Other internet sandboxes take the key from the owner's copy of this field.
+    #[serde(default)]
+    pub(crate) egress_public_key: Option<super::egress::GatewayPublicKey>,
+    /// Digest of the gateway configuration this owner last published.
+    #[serde(default)]
+    pub(crate) egress_config_digest: Option<String>,
+    /// The owner has written the gateway's replica secret, which it never reads.
+    #[serde(default)]
+    pub(crate) egress_replica_secret_ready: bool,
+    /// The key is initialized and the configuration published, so the template can be created.
+    #[serde(default)]
+    pub(crate) egress_ready: bool,
+    /// `address:port` of the deployment's private endpoint, once it exists. A template with a
+    /// network attachment is reached only through it.
+    #[serde(default)]
+    pub(crate) private_endpoint: Option<String>,
+    #[serde(default)]
+    pub(crate) endpoint_progress: super::gcp_private_endpoint::EndpointProgress,
+}
+
+impl super::egress::RecordsEgressKey for GcpAgentPlatformTemplateController {
+    fn egress_public_key(&self) -> Option<&super::egress::GatewayPublicKey> {
+        self.egress_public_key.as_ref()
+    }
 }
 
 #[controller]
@@ -528,6 +718,14 @@ impl GcpAgentPlatformTemplateController {
     )]
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        // An `internet` sandbox's gateway key and configuration come before its template: the
+        // sandboxes it creates later need both.
+        if uses_gateway_path(config) && !self.egress_ready {
+            return Ok(HandlerAction::Continue {
+                state: InitializingEgressKey,
+                suggested_delay: None,
+            });
+        }
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
             .service_provider
@@ -544,8 +742,16 @@ impl GcpAgentPlatformTemplateController {
             .engine_id
             .ok_or_else(|| missing_state(&config.id, "engine id from the engine dependency"))?;
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
-        let mut body = build_template_body(config, &display_name, ctx.deployment_config)?;
+        let attachment = gateway_attachment(ctx, config)?;
+        let mut body = build_template_body(
+            config,
+            &display_name,
+            ctx.deployment_config,
+            attachment.as_deref(),
+        )?;
         copy_image_into_own_project(ctx, &config.id, &mut body).await?;
+        check_project_placement(ctx, &client, &config.id, attachment.as_deref()).await?;
+        self.network_attachment = attachment;
 
         self.engine = Some(engine.clone());
         self.project_id = Some(gcp_config.project_id.clone());
@@ -581,6 +787,47 @@ impl GcpAgentPlatformTemplateController {
         Ok(HandlerAction::Continue {
             state: AwaitingTemplateOperation,
             suggested_delay: Some(Duration::from_secs(2)),
+        })
+    }
+
+    #[handler(
+        state = InitializingEgressKey,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn initializing_egress_key(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.egress_gateway =
+            Some(super::gcp_egress::initialize_key(ctx, &mut self.egress_public_key).await?);
+        Ok(HandlerAction::Continue {
+            state: PublishingEgressConfig,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = PublishingEgressConfig,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn publishing_egress_config(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        super::gcp_egress::publish_config(
+            ctx,
+            self.egress_gateway.as_ref(),
+            self.egress_public_key.as_ref(),
+            &mut self.egress_config_digest,
+            &mut self.egress_replica_secret_ready,
+        )
+        .await?;
+        self.egress_ready = true;
+        Ok(HandlerAction::Continue {
+            state: CreateStart,
+            suggested_delay: None,
         })
     }
 
@@ -692,7 +939,8 @@ impl GcpAgentPlatformTemplateController {
                     "template '{pending}' FAILED without a reason. Agent Platform reports this \
                      when the image's container exits at start: its ENTRYPOINT must keep running \
                      in the foreground and serve the declared ports, and the image must be \
-                     linux/amd64"
+                     linux/amd64. {}",
+                    gcp_placement::PLACEMENT_HINT
                 ),
                 resource_id: Some(config.id.clone()),
             }));
@@ -705,6 +953,47 @@ impl GcpAgentPlatformTemplateController {
             });
         }
 
+        // A template on the gateway path is only useful once Agent Platform has connected to the
+        // attachment. It goes ACTIVE either way: an attachment that failed its permission check
+        // earlier stays unconnected for good and the template says nothing about it.
+        if let Some(attachment) = self.network_attachment.clone() {
+            let gcp = ctx.get_gcp_config()?;
+            let attachments = ctx
+                .service_provider
+                .get_gcp_compute_client(gcp)?
+                .list_network_attachments(gcp.region.clone())
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to read the sandbox network attachment".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            match gcp_placement::connection(last_segment(&attachment), &attachments) {
+                Connection::Connected(_) => {}
+                Connection::Missing => {
+                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: format!(
+                            "network attachment '{attachment}' does not exist; re-run setup"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }))
+                }
+                Connection::NotYet => {
+                    self.attachment_polls += 1;
+                    if self.attachment_polls > ATTACHMENT_CONNECT_POLLS {
+                        return Err(gcp_placement::never_connected(
+                            &config.id,
+                            last_segment(&attachment),
+                        ));
+                    }
+                    return Ok(HandlerAction::Stay {
+                        max_times: None,
+                        suggested_delay: Some(Duration::from_secs(2)),
+                    });
+                }
+            }
+            self.attachment_polls = 0;
+        }
+
         // Read off the template rather than the config: desired config can change while this
         // template is being built, and the binding must describe the one that serves.
         let allow_egress = served_internet_access(&template);
@@ -715,9 +1004,68 @@ impl GcpAgentPlatformTemplateController {
         self.allow_egress = Some(allow_egress);
 
         Ok(HandlerAction::Continue {
-            state: ReapingOldTemplates,
+            state: CreatingPrivateEndpoint,
             suggested_delay: None,
         })
+    }
+
+    /// A template with an attachment has private ingress: its sandboxes are reached through an
+    /// endpoint in the VPC, which needs the tenant's service attachment, which a sandbox reveals.
+    #[handler(
+        state = CreatingPrivateEndpoint,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_private_endpoint(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        if self.network_attachment.is_none() || self.private_endpoint.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: ReapingOldTemplates,
+                suggested_delay: None,
+            });
+        }
+        let (engine, template_id) = self.engine_and_template(&config.id)?;
+        let project = self.project_id.clone().unwrap_or_default();
+        let region = self.region.clone().unwrap_or_default();
+        let template = format!(
+            "projects/{project}/locations/{region}/reasoningEngines/{engine}/sandboxEnvironmentTemplates/{template_id}"
+        );
+        let network = super::gcp_egress::workload_network(ctx)?;
+        let inputs = super::gcp_private_endpoint::Inputs {
+            resource_id: &config.id,
+            resource_prefix: ctx.resource_prefix,
+            region: &region,
+            engine: &engine,
+            template: &template,
+            subnetwork: &network.subnetwork,
+            network: &network.network,
+        };
+        let gcp = ctx.get_gcp_config()?;
+        let compute = ctx.service_provider.get_gcp_compute_client(gcp)?;
+        let platform = ctx.service_provider.get_gcp_agent_platform_client(gcp)?;
+        match super::gcp_private_endpoint::run(
+            compute.as_ref(),
+            platform.as_ref(),
+            &inputs,
+            &mut self.endpoint_progress,
+        )
+        .await?
+        {
+            super::gcp_private_endpoint::Step::Ready(endpoint) => {
+                self.private_endpoint = Some(endpoint);
+                Ok(HandlerAction::Continue {
+                    state: ReapingOldTemplates,
+                    suggested_delay: None,
+                })
+            }
+            super::gcp_private_endpoint::Step::Wait => Ok(HandlerAction::Stay {
+                max_times: Some(150),
+                suggested_delay: Some(Duration::from_secs(4)),
+            }),
+        }
     }
 
     #[handler(
@@ -893,8 +1241,16 @@ impl GcpAgentPlatformTemplateController {
         })?;
 
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
-        let mut body = build_template_body(config, &display_name, ctx.deployment_config)?;
+        let attachment = gateway_attachment(ctx, config)?;
+        let mut body = build_template_body(
+            config,
+            &display_name,
+            ctx.deployment_config,
+            attachment.as_deref(),
+        )?;
         copy_image_into_own_project(ctx, &config.id, &mut body).await?;
+        check_project_placement(ctx, &client, &config.id, attachment.as_deref()).await?;
+        self.network_attachment = attachment;
 
         info!(id=%config.id, "sandbox template body changed; creating a replacement");
         let operation_name = create_template(ctx, &client, &config.id, &engine, body).await?;
@@ -931,6 +1287,28 @@ impl GcpAgentPlatformTemplateController {
             .service_provider
             .get_gcp_agent_platform_client(gcp_config)?;
 
+        if self.private_endpoint.is_some() || self.endpoint_progress.probe_requested {
+            let compute = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+            // The endpoint is the deployment's, shared by every internet sandbox: it goes with
+            // the last one. A failed delete fails the step, so it is retried rather than left
+            // in the subnet, where it would block the network's own teardown.
+            let shared = super::gcp_private_endpoint::endpoint_still_needed(ctx, &config.id);
+            super::gcp_private_endpoint::delete(
+                compute.as_ref(),
+                client.as_ref(),
+                &engine,
+                ctx.resource_prefix,
+                &gcp_config.region,
+                &config.id,
+                !shared,
+            )
+            .await?;
+        }
+
+        super::gcp_egress::delete_shared_secrets(ctx, &config.id, self.egress_public_key.is_some())
+            .await?;
+        self.egress_public_key = None;
+
         // Best-effort and idempotent: delete_template treats a not-found as success, and both the
         // serving and any half-created template are torn down so a failed create leaves nothing.
         for template_id in [self.template_id.clone(), self.pending_template_id.clone()]
@@ -949,12 +1327,12 @@ impl GcpAgentPlatformTemplateController {
                 &self.engine_setup,
             )
             .await?;
-        } else if !config.preview_ports.is_empty()
+        } else if config.needs_gcp_edge_signer()
             && ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
         {
             // The record may have been dropped by an older manager rewriting the state; the
             // signer's own description still names this deployment. Only a direct-setup
-            // deployment with preview ports can have a signer, and a package install's
+            // deployment with preview ports or an internet sandbox can have a signer, and a package install's
             // management identity cannot read service accounts (GCP answers 403).
             crate::sandbox::gcp_engine_setup::remove_marked_signer(ctx, &config.id).await?;
         }
@@ -1031,6 +1409,11 @@ impl GcpAgentPlatformTemplateController {
             if let Some(egress) = &self.egress {
                 value.egress = Some(egress.clone().into());
             }
+            // An `internet` sandbox publishes its gateway: the signing key and the replicas.
+            if let Some(gateway) = &self.egress_gateway {
+                value.egress = Some(gateway.clone());
+            }
+            value.private_endpoint = self.private_endpoint.clone();
             value.default_policy = self.default_policy.clone();
             value.preview_ports = self.preview_ports.clone();
             value.preview_service_account = self
@@ -1119,6 +1502,15 @@ impl GcpAgentPlatformTemplateController {
             preview_service_account: None,
             engine_setup: Default::default(),
             reconciled_grants: None,
+            network_attachment: None,
+            attachment_polls: 0,
+            egress_gateway: None,
+            egress_public_key: None,
+            egress_config_digest: None,
+            egress_replica_secret_ready: false,
+            egress_ready: false,
+            private_endpoint: None,
+            endpoint_progress: Default::default(),
             _internal_stay_count: None,
         }
     }
@@ -1139,6 +1531,7 @@ mod tests {
     use alien_core::Platform;
     use alien_core::{SandboxEgress, SandboxLifecyclePolicy};
     use alien_gcp_clients::agent_platform::MockAgentPlatformApi;
+    use alien_gcp_clients::gcp::compute::MockComputeApi;
     use alien_gcp_clients::longrunning::{Operation, OperationResult};
     use std::sync::{Arc, Mutex};
 
@@ -1200,7 +1593,8 @@ mod tests {
             display_name: None,
             custom_container_environment: None,
             egress_control_config: None,
-                state: Some(TEMPLATE_ACTIVE.to_string()),
+            ingress_control_config: None,
+            state: Some(TEMPLATE_ACTIVE.to_string()),
             extra: Default::default(),
         }
     }
@@ -1230,6 +1624,7 @@ mod tests {
     /// A mock that carries one sandbox from create through a heartbeat and a clean delete.
     fn happy_client() -> Arc<MockAgentPlatformApi> {
         let mut m = MockAgentPlatformApi::new();
+        serve_empty_project(&mut m);
         serve_created_egress(&mut m);
         m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
         m.expect_list_templates()
@@ -1257,7 +1652,22 @@ mod tests {
         provider
             .expect_get_gcp_iam_client()
             .returning(move |_| Ok(iam.clone()));
+        let compute: Arc<dyn alien_gcp_clients::gcp::compute::ComputeApi> = {
+            let mut compute = MockComputeApi::new();
+            compute
+                .expect_list_network_attachments()
+                .returning(|_| Ok(Vec::new()));
+            Arc::new(compute)
+        };
+        provider
+            .expect_get_gcp_compute_client()
+            .returning(move |_| Ok(compute.clone()));
         Arc::new(provider)
+    }
+
+    /// A project that has never hosted a sandbox: no engines, so no templates.
+    fn serve_empty_project(m: &mut MockAgentPlatformApi) {
+        m.expect_list_engines().returning(|| Ok(Vec::new()));
     }
 
     async fn build_executor(
@@ -1421,7 +1831,7 @@ mod tests {
     #[tokio::test]
     async fn create_delete_allow_egress() {
         create_then_delete(sandbox_with(
-            SandboxEgress::Internet,
+            SandboxEgress::Allow,
             "ubuntu:24.04",
             None,
             None,
@@ -1449,7 +1859,7 @@ mod tests {
             max_processes: None,
         };
         create_then_delete(sandbox_with(
-            SandboxEgress::Internet,
+            SandboxEgress::Allow,
             "ghcr.io/org/sbx:v1",
             Some(1800),
             Some(limits),
@@ -1550,9 +1960,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn binding_preserves_the_declaration_across_create_and_same_switch_updates() {
+    async fn binding_preserves_the_declaration_across_create_and_updates() {
         use crate::core::ResourceController;
-        for initial in [SandboxEgress::Internet, SandboxEgress::Allow] {
+        for initial in [SandboxEgress::None, SandboxEgress::Allow] {
             let mut executor = build_executor(
                 sandbox_with(initial.clone(), "ubuntu:24.04", None, None),
                 provider_with(happy_client()),
@@ -1570,10 +1980,10 @@ mod tests {
                 binding.egress().unwrap().declaration().clone()
             };
             assert_eq!(declaration(&executor), initial);
-            let updated = if initial == SandboxEgress::Internet {
+            let updated = if initial == SandboxEgress::None {
                 SandboxEgress::Allow
             } else {
-                SandboxEgress::Internet
+                SandboxEgress::None
             };
             executor
                 .update(sandbox_with(updated.clone(), "ubuntu:24.04", None, None))
@@ -1610,7 +2020,7 @@ mod tests {
             }
         };
 
-        for egress in [SandboxEgress::Internet, SandboxEgress::None] {
+        for egress in [SandboxEgress::Allow, SandboxEgress::None] {
             let mut executor = build_executor(
                 sandbox_with(egress.clone(), "ubuntu:24.04", None, None),
                 provider_with(happy_client()),
@@ -1619,12 +2029,13 @@ mod tests {
             executor.run_until_terminal().await.expect("create runs");
             assert_eq!(
                 allow_egress(&executor),
-                egress == SandboxEgress::Internet,
+                egress == SandboxEgress::Allow,
                 "{egress:?}"
             );
         }
 
         let mut m = MockAgentPlatformApi::new();
+        serve_empty_project(&mut m);
         serve_created_egress(&mut m);
         m.expect_get_operation().returning(|_| Ok(done_op("tpl2")));
         m.expect_list_templates()
@@ -1648,7 +2059,7 @@ mod tests {
             .expect("executor builds");
         executor
             .update(sandbox_with(
-                SandboxEgress::Internet,
+                SandboxEgress::Allow,
                 "ubuntu:24.04",
                 None,
                 None,
@@ -1659,15 +2070,14 @@ mod tests {
 
         // Desired config is the opposite of what serves in both cases, and state saved before the
         // field existed reads as deny until the first Ready.
-        for (served, desired) in [
-            (true, SandboxEgress::None),
-            (false, SandboxEgress::Internet),
-        ] {
+        for (served, desired) in [(true, SandboxEgress::None), (false, SandboxEgress::Allow)] {
             let mut m = MockAgentPlatformApi::new();
+            serve_empty_project(&mut m);
             m.expect_get_template().returning(move |_, id| {
                 Ok(SandboxEnvironmentTemplate {
                     egress_control_config: Some(EgressControlConfig {
                         internet_access: served.then_some(true),
+                        network_attachment: None,
                         extra: Default::default(),
                     }),
                     ..active_template(id)
@@ -1698,6 +2108,7 @@ mod tests {
     #[tokio::test]
     async fn update_with_unchanged_body_creates_no_template() {
         let mut m = MockAgentPlatformApi::new();
+        serve_empty_project(&mut m);
         // The heartbeat still reads the template; a replace would create, and it must not.
         m.expect_get_template()
             .returning(|_, id| Ok(active_template(id)));
@@ -1739,6 +2150,7 @@ mod tests {
         let calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
         let mut m = MockAgentPlatformApi::new();
+        serve_empty_project(&mut m);
         m.expect_create_template()
             .returning(|_, _| Ok(pending_op()));
         m.expect_get_operation().returning(|_| Ok(done_op("tpl2")));
@@ -1810,6 +2222,7 @@ mod tests {
     #[tokio::test]
     async fn delete_is_best_effort_when_the_api_errors() {
         let mut m = MockAgentPlatformApi::new();
+        serve_empty_project(&mut m);
         m.expect_get_template()
             .returning(|_, id| Ok(active_template(id)));
         m.expect_delete_template().returning(|_, _| {
@@ -1853,7 +2266,8 @@ mod tests {
 
     #[tokio::test]
     async fn delete_before_anything_created_is_already_done() {
-        let m = MockAgentPlatformApi::new();
+        let mut m = MockAgentPlatformApi::new();
+        serve_empty_project(&mut m);
         let provider = provider_with(Arc::new(m));
         let mut executor = build_executor(
             sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None),
@@ -1876,6 +2290,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_template_stops_the_create_and_names_the_likely_cause() {
         let mut m = MockAgentPlatformApi::new();
+        serve_empty_project(&mut m);
         m.expect_create_template()
             .returning(|_, _| Ok(pending_op()));
         m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
@@ -1902,6 +2317,7 @@ mod tests {
     #[tokio::test]
     async fn create_carries_the_declared_image_limits_and_egress() {
         let mut m = MockAgentPlatformApi::new();
+        serve_empty_project(&mut m);
         m.expect_create_template()
             .withf(|_engine, template| {
                 let env = template
@@ -1944,7 +2360,7 @@ mod tests {
         };
         let mut executor = build_executor(
             sandbox_with(
-                SandboxEgress::Internet,
+                SandboxEgress::Allow,
                 "ghcr.io/org/sbx:v9",
                 None,
                 Some(limits),
@@ -1963,8 +2379,8 @@ mod tests {
     /// `None`, so a struct that looks right can still put a shape on the wire the API rejects.
     #[test]
     fn build_template_body_declares_the_port_the_agent_image_serves() {
-        let sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
-        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
+        let sandbox = sandbox_with(SandboxEgress::Allow, "ubuntu:24.04", None, None);
+        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None), None)
             .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
         assert_eq!(
@@ -1974,33 +2390,84 @@ mod tests {
         );
     }
 
+    /// The verifier signs off on the body the controller builds for an `internet` sandbox: the
+    /// install's own attachment, private ingress and the closed switch. A `none` sandbox's body
+    /// with that attachment added is refused.
+    #[test]
+    fn the_verifier_accepts_the_controllers_internet_template_body() {
+        use alien_core::gcp_sandbox_gateway::{attachment_path, resource_name, suffix};
+        use alien_verifier::cloud_write::resource::check_sandbox_template;
+        let attachment = attachment_path(
+            "proj",
+            "us-central1",
+            &resource_name("pfx", suffix::ATTACHMENT),
+        );
+        let sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
+        let body = build_template_body(
+            &sandbox,
+            "pfx-agent-sbx",
+            &deployment_config(None, None),
+            Some(&attachment),
+        )
+        .expect("an internet sandbox builds a body with its attachment");
+        let wire = serde_json::to_value(&body).expect("the template body serializes");
+        assert_eq!(
+            wire["egressControlConfig"]["internetAccess"],
+            serde_json::json!(false)
+        );
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &wire)
+            .expect("the controller's own internet body");
+        check_sandbox_template(&sandbox, "pfx", "other", "us-central1", "123", &wire)
+            .expect_err("an attachment in a project the verifier does not write to");
+
+        let none = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        let mut none_body = serde_json::to_value(
+            build_template_body(&none, "pfx-agent-sbx", &deployment_config(None, None), None)
+                .expect("a none sandbox builds a body"),
+        )
+        .expect("the template body serializes");
+        none_body["egressControlConfig"]["networkAttachment"] = serde_json::json!(attachment);
+        none_body["ingressControlConfig"] =
+            serde_json::json!({ "enablePrivateServiceConnect": true });
+        check_sandbox_template(&none, "pfx", "proj", "us-central1", "123", &none_body)
+            .expect_err("a none sandbox with the install's attachment");
+    }
+
     /// The verifier signs off on exactly the body the controller builds, disk ceiling and agent
     /// port included, and refuses the same body with a different disk ceiling or an extra key.
     #[test]
     fn the_verifier_accepts_the_controllers_full_template_body() {
         use alien_verifier::cloud_write::resource::check_sandbox_template;
         let sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
-        let body = build_template_body(&sandbox, "pfx-agent-sbx", &deployment_config(None, None))
-            .expect("a valid sandbox builds a body");
+        let body = build_template_body(
+            &sandbox,
+            "pfx-agent-sbx",
+            &deployment_config(None, None),
+            None,
+        )
+        .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
         let disk = sandbox.resolved_limits().disk;
         assert_eq!(
             wire["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"],
             serde_json::json!(disk)
         );
-        check_sandbox_template(&sandbox, "pfx", "123", &wire).expect("the controller's own body");
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &wire)
+            .expect("the controller's own body");
 
         let mut other_disk = wire.clone();
         other_disk["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"] =
             serde_json::json!("1Gi");
-        check_sandbox_template(&sandbox, "pfx", "123", &other_disk)
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &other_disk)
             .expect_err("a disk ceiling that is not the signed one");
         let mut extra = wire.clone();
         extra["customContainerEnvironment"]["resources"]["limits"]["gpu"] = serde_json::json!("1");
-        check_sandbox_template(&sandbox, "pfx", "123", &extra).expect_err("an extra limit");
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &extra)
+            .expect_err("an extra limit");
         let mut other_port = wire;
         other_port["customContainerEnvironment"]["ports"][0]["port"] = serde_json::json!(8080);
-        check_sandbox_template(&sandbox, "pfx", "123", &other_port).expect_err("another port");
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &other_port)
+            .expect_err("another port");
     }
 
     /// The preview ports the signed sandbox declares are the ones the verifier lets the template
@@ -2010,17 +2477,24 @@ mod tests {
         use alien_verifier::cloud_write::resource::check_sandbox_template;
         let mut sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
         sandbox.preview_ports = vec![8081, 8090, 8080];
-        let body = build_template_body(&sandbox, "pfx-agent-sbx", &deployment_config(None, None))
-            .expect("a valid sandbox builds a body");
+        let body = build_template_body(
+            &sandbox,
+            "pfx-agent-sbx",
+            &deployment_config(None, None),
+            None,
+        )
+        .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
-        check_sandbox_template(&sandbox, "pfx", "123", &wire).expect("the controller's own body");
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &wire)
+            .expect("the controller's own body");
 
         let mut extra = wire.clone();
         extra["customContainerEnvironment"]["ports"]
             .as_array_mut()
             .expect("ports")
             .push(serde_json::json!({"port": 9999, "protocol": "TCP"}));
-        check_sandbox_template(&sandbox, "pfx", "123", &extra).expect_err("an unsigned port");
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &extra)
+            .expect_err("an unsigned port");
 
         // `:execute` goes to the first declared port, so the agent's port must be the first.
         let mut sorted = wire.clone();
@@ -2028,7 +2502,7 @@ mod tests {
             .as_array_mut()
             .expect("ports")
             .sort_by_key(|port| port["port"].as_i64());
-        check_sandbox_template(&sandbox, "pfx", "123", &sorted)
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &sorted)
             .expect_err("the agent's port is not first");
 
         let mut missing = wire;
@@ -2036,15 +2510,15 @@ mod tests {
             .as_array_mut()
             .expect("ports")
             .remove(0);
-        check_sandbox_template(&sandbox, "pfx", "123", &missing)
+        check_sandbox_template(&sandbox, "pfx", "proj", "us-central1", "123", &missing)
             .expect_err("a signed port left out");
     }
 
     #[test]
     fn build_template_body_declares_preview_ports_and_disk() {
-        let mut sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
+        let mut sandbox = sandbox_with(SandboxEgress::Allow, "ubuntu:24.04", None, None);
         sandbox.preview_ports = vec![8081, 8090, 8080];
-        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
+        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None), None)
             .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
         let ports: Vec<i64> = wire["customContainerEnvironment"]["ports"]
@@ -2067,7 +2541,7 @@ mod tests {
     #[test]
     fn build_template_body_leaves_network_placement_default() {
         let sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
-        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
+        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None), None)
             .expect("builds");
         let wire = serde_json::to_value(&body).expect("serializes");
         assert!(wire["egressControlConfig"]
@@ -2096,7 +2570,7 @@ mod tests {
 
     fn template_image(image: &str, config: &DeploymentConfig) -> Result<String> {
         let sandbox = sandbox_with(SandboxEgress::None, image, None, None);
-        build_template_body(&sandbox, "agent-sbx", config).map(|body| {
+        build_template_body(&sandbox, "agent-sbx", config, None).map(|body| {
             body.custom_container_environment
                 .and_then(|environment| environment.custom_container_spec)
                 .expect("the body names an image")
@@ -2608,5 +3082,100 @@ mod tests {
             executor.run_until_terminal().await.expect("create runs");
             assert_eq!(executor.status(), ResourceStatus::Running);
         }
+    }
+
+    // ---- Egress internet: the gateway path and the project's placement. ----------------------
+
+    const ATTACHMENT: &str = "projects/p/regions/us-central1/networkAttachments/stack-sandbox";
+
+    /// The two settings the API wants together, and the switch that stays closed so nothing can
+    /// bypass the gateway.
+    #[test]
+    fn an_internet_template_names_the_attachment_with_private_ingress_and_a_closed_switch() {
+        let sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
+        let body = build_template_body(
+            &sandbox,
+            "agent-sbx",
+            &deployment_config(None, None),
+            Some(ATTACHMENT),
+        )
+        .expect("builds");
+        let wire = serde_json::to_value(&body).expect("serializes");
+        assert_eq!(wire["egressControlConfig"]["networkAttachment"], ATTACHMENT);
+        assert!(
+            wire["egressControlConfig"].get("internetAccess").is_none()
+                || wire["egressControlConfig"]["internetAccess"] == false,
+            "{wire}"
+        );
+        assert_eq!(
+            wire["ingressControlConfig"]["enablePrivateServiceConnect"],
+            true
+        );
+    }
+
+    #[test]
+    fn an_internet_template_without_the_setup_attachment_asks_for_setup_to_be_rerun() {
+        let sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
+        let error =
+            build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None), None)
+                .expect_err("a deployment that predates the gateway has no attachment");
+        assert!(error.message.contains("re-run setup"), "{}", error.message);
+    }
+
+    #[test]
+    fn the_gateway_path_forces_a_replace_but_a_plain_deny_does_not_look_like_it() {
+        let internet = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
+        let none = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        // Both close the cloud's own switch, but only one changes the project's placement.
+        assert_ne!(
+            template_identity(&internet).unwrap(),
+            template_identity(&none).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_default_sandbox_is_refused_before_the_template_in_a_psc_project() {
+        // A default template is checked against the project's placement once `internet` is
+        // available; before that nothing can have pinned a project to Private Service Connect.
+        let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
+        use alien_gcp_clients::gcp::compute::{
+            NetworkAttachment, NetworkAttachmentConnectedEndpoint,
+        };
+        let mut m = MockAgentPlatformApi::new();
+        serve_empty_project(&mut m);
+        m.expect_create_template().never();
+        let mut provider = MockPlatformServiceProvider::new();
+        let client = Arc::new(m);
+        provider
+            .expect_get_gcp_agent_platform_client()
+            .returning(move |_| Ok(client.clone()));
+        let mut compute = MockComputeApi::new();
+        compute.expect_list_network_attachments().returning(|_| {
+            Ok(vec![NetworkAttachment {
+                name: Some("elsewhere".into()),
+                connection_endpoints: vec![NetworkAttachmentConnectedEndpoint {
+                    status: Some("ACCEPTED".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }])
+        });
+        let compute: Arc<dyn alien_gcp_clients::gcp::compute::ComputeApi> = Arc::new(compute);
+        provider
+            .expect_get_gcp_compute_client()
+            .returning(move |_| Ok(compute.clone()));
+        let mut executor = build_executor(
+            sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None),
+            Arc::new(provider),
+        )
+        .await;
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("the project is pinned to Private Service Connect");
+        assert!(
+            format!("{error:?}").contains("Private Service Connect"),
+            "{error:?}"
+        );
     }
 }

@@ -5,7 +5,7 @@ management:
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
-  releaseVersion: 3.3.71
+  releaseVersion: 3.3.73
   configChecksum: 31935c3f1e47fed13e1e25899530ca47
   repoURL: https://github.com/alienplatform/alien.git
   repoSubDirectory: client-sdks/manager/typescript

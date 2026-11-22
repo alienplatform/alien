@@ -6,7 +6,7 @@ use alien_error::{AlienError, Context};
 use super::{egress, AzureSandboxController};
 use crate::{
     core::{state_utils::StackResourceStateExt, ResourceControllerContext},
-    network::{validate_azure_sandbox_network, AzureNetworkController},
+    network::{validate_azure_sandbox_network_with_hosting, AzureNetworkController},
     ErrorData, Result,
 };
 
@@ -65,6 +65,7 @@ pub(super) async fn initialize_key(
     }
     let key = public_key.as_ref().expect("key initialized above");
     Ok(SandboxEgressBinding::Gateway(SandboxEgressGateway {
+        links: alien_core::sandbox_links::cluster_link_bindings(ctx.desired_stack, config),
         container: sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
         audience: format!("{}/{}", ctx.resource_prefix, config.id),
         signing_key: SandboxEgressSigningKey {
@@ -79,6 +80,7 @@ pub(super) async fn initialize_key(
             port: GATEWAY_ADMIN_PORT,
             count: 2,
             min_protocol: alien_core::bindings::EGRESS_GATEWAY_ADMIN_PROTOCOL,
+            proxy_port: 0,
         }),
     }))
 }
@@ -90,7 +92,7 @@ pub(super) async fn publish_config(
     published: &mut Option<String>,
     replica_secret_ready: &mut bool,
 ) -> Result<()> {
-    let facts = validate_network(ctx).await?;
+    let (facts, private_cidrs) = validate_network(ctx).await?;
     let key = match (binding, public_key) {
         (Some(alien_core::bindings::SandboxEgressBinding::Gateway(gateway)), Some(key))
             if gateway.kid == key.kid =>
@@ -108,6 +110,7 @@ pub(super) async fn publish_config(
         ctx,
         key,
         &facts.vpc_cidrs,
+        &private_cidrs,
         &gateway_addresses(ctx)?,
         published,
         replica_secret_ready,
@@ -149,14 +152,16 @@ fn network_controller(
     Ok((network_id, network))
 }
 
+/// The verified sandbox network and the private subnet's address prefixes.
 pub(super) async fn validate_network(
     ctx: &ResourceControllerContext<'_>,
-) -> Result<AzureSandboxNetwork> {
+) -> Result<(AzureSandboxNetwork, Vec<String>)> {
     let (network_id, network) = network_controller(ctx)?;
     let network_id = network_id.as_str();
     let azure = ctx.get_azure_config()?;
     let client = ctx.service_provider.get_azure_network_client(azure)?;
-    let facts = validate_azure_sandbox_network(client.as_ref(), network_id, &network).await?;
+    let (facts, private_cidrs) =
+        validate_azure_sandbox_network_with_hosting(client.as_ref(), network_id, &network).await?;
     let arm = ctx
         .service_provider
         .get_azure_sandbox_groups_client(azure)?;
@@ -262,7 +267,7 @@ pub(super) async fn validate_network(
             ));
         }
     }
-    Ok(facts)
+    Ok((facts, private_cidrs))
 }
 
 fn invalid(

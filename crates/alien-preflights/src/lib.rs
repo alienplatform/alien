@@ -407,6 +407,7 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(
             compile_time::sandbox_platform_support::SandboxPlatformSupportCheck,
         ));
+        registry.add_compile_time_check(Box::new(compile_time::sandbox_links::SandboxLinksCheck));
         registry.add_compile_time_check(Box::new(
             compile_time::sandbox_grants_placeable::SandboxGrantsPlaceableCheck,
         ));
@@ -454,6 +455,9 @@ impl PreflightRegistry {
         ));
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::AzureSandboxGroupFromSetupCheck,
+        ));
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::GcpInternetSandboxUnavailableCheck,
         ));
 
         // Add deployment prerequisite checks. These validate the concrete
@@ -511,6 +515,12 @@ impl PreflightRegistry {
             // registry.add_runtime_check(Box::new(runtime::CloudConnectivityCheck));
             registry.add_runtime_check(Box::new(runtime::CloudQuotasCheck));
             registry.add_runtime_check(Box::new(runtime::aws_replication::ReplicationRulesCheck));
+            registry.add_runtime_check(Box::new(
+                runtime::gcp_sandbox_gateway::GcpSandboxGatewayRegionCheck,
+            ));
+            registry.add_runtime_check(Box::new(
+                runtime::gcp_sandbox_gateway::GcpSandboxPlacementCheck,
+            ));
             // registry.add_runtime_check(Box::new(runtime::CloudApisEnabledCheck));
             // registry.add_runtime_check(Box::new(runtime::SufficientPermissionsCheck));
         }

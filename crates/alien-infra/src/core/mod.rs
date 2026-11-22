@@ -22,6 +22,7 @@ pub use certificates::*;
 pub(crate) mod aws_ownership;
 #[cfg(feature = "aws")]
 mod aws_permissions_boundary;
+pub(crate) mod aws_role_owner;
 #[cfg(feature = "aws")]
 pub use aws_permissions_boundary::{
     aws_permissions_boundary_for_stack, validate_installed_aws_permissions_boundary,

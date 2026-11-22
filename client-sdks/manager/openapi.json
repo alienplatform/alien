@@ -22352,6 +22352,13 @@
             "$ref": "#/components/schemas/EndpointAccess",
             "description": "Who can reach public endpoints. Private access requires AWS managed containers.\nThis choice cannot change after setup; create a new deployment to change it."
           },
+          "endpointSourceRanges": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Source address ranges (IPv4 or IPv6 CIDR, in canonical network form) allowed to reach\nthe deployment's public endpoints, for example the ranges of a proxy in front of it.\nEmpty means anyone can connect. At most 25 entries; needs `endpoint_access: internet`.\nUnlike `endpoint_access`, this can change on a running deployment."
+          },
           "externalBindings": {
             "oneOf": [
               {

@@ -744,10 +744,12 @@ jobs:
           install_args: node pnpm
           cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
 
+      # Only qualification installs dependencies here. Publishing uploads the qualified
+      # tarballs, so it has no pnpm store, and a pnpm cache would fail the job's post step.
       - name: Cache pnpm dependencies and configure npm registry
         uses: actions/setup-node@v7
         with:
-          cache: pnpm
+          cache: ${{ inputs.stable_action == 'qualification' && 'pnpm' || '' }}
           registry-url: https://registry.npmjs.org
 
       - if: ${{ inputs.stable_action == 'qualification' }}

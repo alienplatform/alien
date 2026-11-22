@@ -1282,6 +1282,7 @@ mod tests {
         let token = tempfile::NamedTempFile::new().expect("a token file");
         std::fs::write(token.path(), "service-account-token").unwrap();
         let gateway = alien_core::SandboxEgressGateway {
+            links: Default::default(),
             container: "gateway".to_string(),
             audience: "prefix/sbx".to_string(),
             signing_key: alien_core::bindings::SandboxEgressSigningKey {

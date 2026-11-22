@@ -8,6 +8,10 @@ license-file.workspace = true
 
 [features]
 test-utils = ["alien-core/test-utils"]
+# Test builds only: `sandbox_agent_image` reads ALIEN_TEST_SANDBOX_AGENT_IMAGE, so a live test can
+# layer an agent built from the tree. Never enabled outside [dev-dependencies]
+# (alien-core/tests/test_only_features.rs checks every manifest).
+test-sandbox-agent-image = []
 
 [dependencies]
 zip = { workspace = true }

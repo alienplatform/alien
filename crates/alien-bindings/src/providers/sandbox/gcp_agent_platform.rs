@@ -199,14 +199,52 @@ pub fn egress_control_config(
 
     Ok(EgressControlConfig {
         internet_access: Some(internet_access),
+        network_attachment: None,
         extra: Default::default(),
     })
+}
+
+/// Where the agent's loopback forwarder listens in the guest once it has its gateway replicas
+/// (`alien-sandbox-agent` `proxy_failover::CONTROL_CHANNEL_LISTEN`); commands' proxy variables
+/// point here.
+const PROXY_LOOPBACK: &str = "127.0.0.1:18128";
+
+/// How long before its expiry a cached proxy credential is replaced.
+const PROXY_TOKEN_REFRESH_MARGIN_SECONDS: i64 = 60;
+
+/// The deployment's egress gateway as this provider reaches it: the manager that mints sandbox
+/// identities and writes their records, and the replica addresses the agent's forwarder dials.
+#[derive(Debug, Clone)]
+struct GatewayEgress {
+    manager: Arc<crate::sandbox_egress::SandboxEgressManager>,
+    /// `ip:port` of every gateway replica, on the port sandboxes dial.
+    replicas: Vec<String>,
+}
+
+/// A minted proxy credential and when it stops working.
+#[derive(Clone)]
+struct CachedProxyToken {
+    token: String,
+    expires_at: i64,
+}
+
+impl std::fmt::Debug for CachedProxyToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedProxyToken")
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A Sandbox backed by the Vertex AI Agent Platform.
 #[derive(Debug)]
 pub struct GcpAgentPlatformSandbox {
     egress: Option<alien_core::SandboxEgress>,
+    /// Set when the declaration is `internet`: every sandbox leaves through the deployment's
+    /// gateway, and this provider writes its records and tells the agent where the replicas are.
+    gateway: Option<GatewayEgress>,
+    default_policy: Option<alien_core::EgressPolicy>,
+    proxy_tokens: std::sync::Mutex<std::collections::HashMap<String, CachedProxyToken>>,
     client: Arc<dyn AgentPlatformApi>,
     /// Bare reasoning-engine id the client interpolates into its paths. The binding may carry a
     /// full resource name, so it is reduced to its last segment once, here.
@@ -417,6 +455,126 @@ impl GcpAgentPlatformSandbox {
         self
     }
 
+    /// Routes every sandbox's outbound traffic through the deployment's gateway. `replicas` are the
+    /// gateway VMs on the port that crosses from Agent Platform's tenant into the VPC, which setup
+    /// recorded in the binding.
+    pub fn with_egress_gateway(
+        mut self,
+        manager: Arc<crate::sandbox_egress::SandboxEgressManager>,
+        replicas: Vec<String>,
+        default_policy: Option<alien_core::EgressPolicy>,
+    ) -> Self {
+        self.gateway = Some(GatewayEgress { manager, replicas });
+        self.default_policy = default_policy;
+        self
+    }
+
+    /// The policy a create or update runs under: the caller's, else the resource default, else
+    /// `internet`, checked against the declaration like on every backend.
+    fn gateway_policy(
+        &self,
+        requested: Option<&alien_core::EgressPolicy>,
+    ) -> Result<alien_core::EgressPolicy> {
+        let policy = requested
+            .or(self.default_policy.as_ref())
+            .cloned()
+            .unwrap_or(alien_core::EgressPolicy::Internet);
+        super::egress::validate(&policy, self.egress_declaration())?;
+        Ok(policy)
+    }
+
+    /// When the sandbox stops, as a Unix time: the deadline a proxy credential is bounded by.
+    async fn sandbox_deadline(&self, operation: &str, sandbox_id: &str) -> Result<i64> {
+        let sandbox = self
+            .read_sandbox(operation, sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxGone".to_string(),
+                    reason: format!("{operation}: the sandbox does not exist"),
+                })
+            })?;
+        sandbox
+            .expire_time
+            .as_deref()
+            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+            .map(|time| time.timestamp())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::UnexpectedResponseFormat {
+                    provider: "gcp-agent-platform".to_string(),
+                    binding_name: operation.to_string(),
+                    field: "expireTime".to_string(),
+                    response_json: "the sandbox has no expiry to bound its proxy credential"
+                        .to_string(),
+                })
+            })
+    }
+
+    /// Writes a new sandbox's gateway record, then tells its agent the gateway replicas, so the
+    /// sandbox can reach exactly what the policy allows and nothing before that.
+    async fn bring_up_gateway(
+        &self,
+        sandbox_id: &str,
+        policy: &alien_core::EgressPolicy,
+    ) -> Result<()> {
+        let Some(gateway) = &self.gateway else {
+            return Ok(());
+        };
+        let expires_at = self.sandbox_deadline(CREATE, sandbox_id).await?;
+        gateway
+            .manager
+            .create(sandbox_id, policy, expires_at)
+            .await?;
+        self.execute_op(sandbox_id, CREATE, egress_proxy_envelope(&gateway.replicas))
+            .await?;
+        Ok(())
+    }
+
+    /// Adds the proxy variables to a command's environment: until the sandbox's gateway record
+    /// and the agent's forwarder exist a command gets none, and the sandbox's own outbound path
+    /// is closed besides.
+    async fn with_proxy_env(
+        &self,
+        sandbox_id: &str,
+        mut request: RunCommandRequest,
+    ) -> Result<RunCommandRequest> {
+        let Some(gateway) = &self.gateway else {
+            return Ok(request);
+        };
+        let now = chrono::Utc::now().timestamp();
+        let cached = self
+            .proxy_tokens
+            .lock()
+            .expect("proxy token cache lock")
+            .get(sandbox_id)
+            .filter(|cached| cached.expires_at - now > PROXY_TOKEN_REFRESH_MARGIN_SECONDS)
+            .cloned();
+        let token = match cached {
+            Some(cached) => cached.token,
+            None => {
+                let expires_at = self.sandbox_deadline(RUN_COMMAND, sandbox_id).await?;
+                let token = gateway
+                    .manager
+                    .mint_identity(sandbox_id, expires_at)
+                    .await?;
+                let mut cache = self.proxy_tokens.lock().expect("proxy token cache lock");
+                cache.retain(|_, cached| cached.expires_at > now);
+                cache.insert(
+                    sandbox_id.to_string(),
+                    CachedProxyToken {
+                        token: token.clone(),
+                        expires_at,
+                    },
+                );
+                token
+            }
+        };
+        for (name, value) in proxy_environment(&token) {
+            request.env.insert(name, value);
+        }
+        Ok(request)
+    }
+
     /// The `ttl` a create is sent with: what the caller asked for, never above what the
     /// declaration allows.
     fn lifetime_seconds(&self, timeout_ms: Option<u64>, operation: &str) -> Result<Option<u32>> {
@@ -442,6 +600,9 @@ impl GcpAgentPlatformSandbox {
         let engine = engine.rsplit('/').next().unwrap_or(&engine).to_string();
         Self {
             egress: None,
+            gateway: None,
+            default_policy: None,
+            proxy_tokens: Default::default(),
             client,
             engine,
             template,
@@ -1311,6 +1472,31 @@ impl GcpAgentPlatformSandbox {
     }
 }
 
+/// The control-channel envelope that gives the agent its gateway replicas, once.
+fn egress_proxy_envelope(replicas: &[String]) -> serde_json::Value {
+    json!({
+        "v": AGENT_PROTOCOL_VERSION,
+        "op": "setEgressProxy",
+        "replicas": replicas,
+    })
+}
+
+/// The proxy variables a command runs with: the loopback forwarder, carrying the sandbox's own
+/// identity token. The variables are reserved, so a caller cannot have set them.
+fn proxy_environment(token: &str) -> Vec<(String, String)> {
+    let proxy = format!("http://alien:{token}@{PROXY_LOOPBACK}");
+    let mut env: Vec<(String, String)> = ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]
+        .into_iter()
+        .map(|name| (name.to_string(), proxy.clone()))
+        .collect();
+    env.extend(
+        ["NO_PROXY", "no_proxy"]
+            .into_iter()
+            .map(|name| (name.to_string(), "localhost,127.0.0.1".to_string())),
+    );
+    env
+}
+
 impl Binding for GcpAgentPlatformSandbox {}
 
 /// A runtime policy is validated like on every backend, then refused: Google Cloud has no
@@ -1329,7 +1515,7 @@ fn refuse_runtime_policy(
     }
     Err(AlienError::new(
         ErrorData::SandboxEgressAllowlistUnsupported {
-            reason: alien_core::GCP_NO_EGRESS_ALLOWLIST.to_string(),
+            reason: alien_core::GCP_NO_GATEWAY_POLICY.to_string(),
         },
     ))
 }
@@ -1346,10 +1532,16 @@ impl Sandbox for GcpAgentPlatformSandbox {
     /// Google's outbound path has no enforcement point of ours, so no policy can change.
     async fn update_egress(
         &self,
-        _sandbox_id: &str,
+        sandbox_id: &str,
         egress: alien_core::EgressPolicy,
     ) -> Result<()> {
-        refuse_runtime_policy(Some(&egress), self.egress_declaration())
+        // Through the gateway the policy is the sandbox's own record, changed live and applied
+        // to its next connection. Without one (`none`) there is nothing to change.
+        let Some(gateway) = &self.gateway else {
+            return refuse_runtime_policy(Some(&egress), self.egress_declaration());
+        };
+        self.gateway_policy(Some(&egress))?;
+        gateway.manager.update(sandbox_id, &egress).await
     }
 
     /// The platform's row, unnarrowed. `sandboxLifetime` stays true even with no declared ttl:
@@ -1360,7 +1552,13 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        refuse_runtime_policy(request.egress.as_ref(), self.egress_declaration())?;
+        let policy = match &self.gateway {
+            Some(_) => Some(self.gateway_policy(request.egress.as_ref())?),
+            None => {
+                refuse_runtime_policy(request.egress.as_ref(), self.egress_declaration())?;
+                None
+            }
+        };
         // A sandbox takes no environment of its own: `SandboxCreateRequest` has no env field,
         // so silently dropping one would run the caller's code without the variables it asked for.
         // They travel per command through `run_command` instead.
@@ -1444,7 +1642,15 @@ impl Sandbox for GcpAgentPlatformSandbox {
         let sandbox_id = sandbox_id.to_string();
 
         // Past here a sandbox exists the caller has no id for, so every failure deletes it.
-        match self.settle(CREATE, &sandbox_id).await {
+        let ready = async {
+            let generation = self.settle(CREATE, &sandbox_id).await?;
+            if let Some(policy) = &policy {
+                self.bring_up_gateway(&sandbox_id, policy).await?;
+            }
+            Ok(generation)
+        }
+        .await;
+        match ready {
             Ok(generation) => {
                 // The first marker, best effort: it lets a container that later replaces this
                 // one be told from this one by the marker it lacks. A failed write never fails
@@ -1509,7 +1715,11 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        refuse_runtime_policy(request.egress.as_ref(), self.egress_declaration())?;
+        if self.gateway.is_some() {
+            self.gateway_policy(request.egress.as_ref())?;
+        } else {
+            refuse_runtime_policy(request.egress.as_ref(), self.egress_declaration())?;
+        }
         let Some(key) = request.sandbox_id.clone() else {
             return self.create(request).await.map(ResolvedSandbox::created);
         };
@@ -1646,6 +1856,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
         Self::checked_sandbox_id(RUN_COMMAND, sandbox_id)?;
         Self::checked_command(RUN_COMMAND, &request)?;
+        let request = self.with_proxy_env(sandbox_id, request).await?;
 
         // The synchronous window is the proxy's, not the command's: a command that outlives one
         // `:execute` is detached as a job so a later poll can still reach its output.
@@ -1659,6 +1870,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
     async fn start_job(&self, sandbox_id: &str, request: RunCommandRequest) -> Result<JobStart> {
         Self::checked_sandbox_id(JOB_START, sandbox_id)?;
         Self::checked_command(JOB_START, &request)?;
+        let request = self.with_proxy_env(sandbox_id, request).await?;
 
         let envelope = exec_envelope("jobStart", sandbox_id, &request);
         let body = self.execute_op(sandbox_id, JOB_START, envelope).await?;
@@ -2238,6 +2450,16 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
+        // The record goes first, so the sandbox's identity can open no new connection even if the
+        // delete is slow. A failure to remove it is reported, not swallowed: the record outlives
+        // the sandbox until its token expires.
+        if let Some(gateway) = &self.gateway {
+            gateway.manager.delete(sandbox_id).await?;
+            self.proxy_tokens
+                .lock()
+                .expect("proxy token cache lock")
+                .remove(sandbox_id);
+        }
         let outcome = self.delete_until_gone(sandbox_id).await;
         if outcome.is_ok() {
             // Nothing can use a grant for a sandbox that is gone, and a long-lived binding that
