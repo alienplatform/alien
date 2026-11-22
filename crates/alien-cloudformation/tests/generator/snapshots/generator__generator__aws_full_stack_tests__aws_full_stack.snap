@@ -1055,6 +1055,8 @@ Resources:
           - acm:DescribeCertificate
           - acm:ImportCertificate
           - acm:ListTagsForCertificate
+          - apigateway:AddCertificateToDomain
+          - apigateway:RemoveCertificateFromDomain
           Condition:
             StringEquals:
               aws:ResourceTag/deployment:
@@ -1114,18 +1116,6 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/*
           Sid: ManageHttpApiEndpoints
         - Action:
-          - events:PutRule
-          - events:TagResource
-          Condition:
-            StringEquals:
-              aws:RequestTag/deployment:
-                Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: runtime
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
-          Sid: CreateEventbridgeSchedules
-        - Action:
           - events:DeleteRule
           - events:DescribeRule
           - events:PutTargets
@@ -1139,6 +1129,16 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
           Sid: ManageEventbridgeSchedules
+        - Action:
+          - dynamodb:DescribeContinuousBackups
+          - dynamodb:DescribeTable
+          - dynamodb:DescribeTimeToLive
+          - dynamodb:ListTables
+          - dynamodb:ListTagsOfResource
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AWS::StackName}-*
+          Sid: CheckDynamodbTableHealth
       Roles:
       - Ref: ManagementRole
     DependsOn:
@@ -1290,6 +1290,18 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/*
           Sid: DenyUntaggedDomainMappingReads
         - Action:
+          - events:PutRule
+          - events:TagResource
+          Condition:
+            StringEquals:
+              aws:RequestTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:RequestTag/managed-by: runtime
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
+          Sid: CreateEventbridgeSchedules
+        - Action:
           - s3:GetBucketAcl
           - s3:GetBucketLocation
           - s3:GetBucketPolicy
@@ -1308,16 +1320,6 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
           Sid: CheckSqsQueueHealth
-        - Action:
-          - dynamodb:DescribeContinuousBackups
-          - dynamodb:DescribeTable
-          - dynamodb:DescribeTimeToLive
-          - dynamodb:ListTables
-          - dynamodb:ListTagsOfResource
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AWS::StackName}-*
-          Sid: CheckDynamodbTableHealth
         - Action:
           - ssm:AddTagsToResource
           - ssm:DeleteParameter

@@ -423,6 +423,38 @@
         }
       },
       {
+        // Creating or changing an API Gateway custom domain that uses an ACM certificate is
+        // also authorised against the certificate: AWS checks apigateway:AddCertificateToDomain
+        // (and RemoveCertificateFromDomain on delete) on the certificate ARN, and refuses the
+        // create without it. The domain itself must still carry the boundary tags (above).
+        "label": "attach-tls-certificates-to-domains",
+        "description": "Attach and detach this account's ACM certificates on API Gateway custom domain names.",
+        "grant": {
+          "actions": ["apigateway:AddCertificateToDomain", "apigateway:RemoveCertificateFromDomain"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
         // REST tagging also checks PATCH on the underlying owned resource.
         // The /tags path itself does not expose ResourceTag condition keys.
         "label": "tag-http-api-endpoints",
