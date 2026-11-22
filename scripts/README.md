@@ -48,3 +48,7 @@ Small operational scripts used by root `package.json` commands and GitHub Action
 - Never commit permanent local-path dependencies into `examples/package.json`.
 - `test-examples-local.sh` must always restore `examples/package.json` and `examples/pnpm-lock.yaml`.
 - Shared Kubernetes bootstrap resources for EKS, GKE, and AKS are setup-owned. Runtime E2E stacks should consume them, not recreate them.
+
+## Workflow checks
+
+- **`check-artifact-paths.py`** — Used by `.github/workflows/ci-fast.yml` (with `check-artifact-paths.test.py`). Reads every workflow and composite action and fails when an `actions/upload-artifact` or `actions/cache` step has a `path` that matches an env, key or state file pattern, or sets `include-hidden-files`. Reviewed exceptions go in `.github/artifact-allowlist.txt` as `workflow:step-name | reason`.
