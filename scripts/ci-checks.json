@@ -64,7 +64,15 @@
         "paths": ["client-sdks/"],
         "suffixes": ["openapi.json"],
         "why": "packages/core/src/__tests__/platform-binding-serialization.test.ts imports the generated platform client by relative path, and core's generated schemas come from the OpenAPI specs."
+      },
+      "@alienplatform/permissions": {
+        "paths": ["crates/alien-permissions/"],
+        "why": "packages/permissions/test.mjs reads the operation catalog in crates/alien-permissions and runs its operation-permission-compiler, so a change to the crate changes what the package tests check."
       }
+    },
+    "every_package_inputs": {
+      "paths": ["pnpm-lock.yaml", "pnpm-workspace.yaml", "package.json"],
+      "why": "The lockfile, the workspace list and the root manifest decide which dependencies every package installs, so a change to any of them selects every test package."
     }
   }
 }

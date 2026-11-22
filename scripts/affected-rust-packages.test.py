@@ -108,6 +108,18 @@ class TypeScript(unittest.TestCase):
     def test_a_dependency_of_core_selects_core(self):
         self.assertIn("@alienplatform/core", select(["packages/typescript-config/base.json"])["ts_filters"])
 
+    def test_a_permissions_crate_change_selects_the_permissions_package(self):
+        self.assertIn("@alienplatform/permissions", select(["crates/alien-permissions/src/operations/catalog.json"])["ts_filters"])
+
+    def test_a_lockfile_change_selects_every_test_package(self):
+        filters = select(["pnpm-lock.yaml"])["ts_filters"]
+        for name in CONFIG["typescript"]["test_packages"]:
+            if name in TS:
+                self.assertIn(f"--filter {name}", filters)
+
+    def test_a_nested_package_manifest_is_not_a_shared_input(self):
+        self.assertEqual(select(["packages/other/package.json"])["ts_filters"], "")
+
     def test_an_unrelated_package_selects_nothing(self):
         self.assertEqual(select(["packages/other/src/index.ts"])["ts_filters"], "")
 

@@ -115,6 +115,10 @@ def select_typescript(changed_files, ts_packages, config) -> list[str]:
             pending.extend(ts_packages[current]["deps"])
         return seen
 
+    shared = config["typescript"]["every_package_inputs"]["paths"]
+    if any(path in shared for path in changed_files):
+        return [name for name in wanted if name in ts_packages]
+
     selected = []
     for name in wanted:
         if name not in ts_packages:

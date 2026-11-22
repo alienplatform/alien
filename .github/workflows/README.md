@@ -28,7 +28,10 @@ Three rules add to the changed packages' own tests:
    `commands` and `ai-gateway` run when a file in the package, in one of its workspace
    dependencies (read from `package.json`), or in a listed extra input changes. For `core`
    the extra inputs are `client-sdks/**` and any `openapi.json`, because its tests import the
-   generated client. `bindings` is left out: its tests need the native addon, a Rust build.
+   generated client. For `permissions` it is `crates/alien-permissions/`, whose catalog and
+   compiler its tests run. A change to `pnpm-lock.yaml`, `pnpm-workspace.yaml` or the root
+   `package.json` selects every one of these packages. `bindings` is left out: its tests need
+   the native addon, a Rust build.
 3. **Dependents' output checks.** A changed package also selects named test targets of its
    direct dependents that check its output (golden, snapshot, compatibility and
    permission-rendering tests), not their whole suites. The mapping is `dependents` in
@@ -45,7 +48,8 @@ Adding the label starts `ci-full-label.yml`, which calls `ci-fast.yml` on the pu
 commit with `full: true`. Its checks are named `<job> / …`, so they never replace the pull
 request's own required `All tests passed`. `ci-fast.yml` itself does not run on `labeled` events:
 a run started by an unrelated label would show a skipped `All tests passed` on the same commit
-and could hide a red one.
+and could hide a red one. Each label gets its own concurrency group, so adding another label
+does not cancel a full run in progress.
 
 ## Adding a test that reads outside its package
 

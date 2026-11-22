@@ -11,8 +11,9 @@ on:
 permissions:
   contents: read
 
+# The label is part of the group, so adding another label cannot cancel a full run in progress.
 concurrency:
-  group: ci-full-label-${{ github.event.pull_request.number }}
+  group: ci-full-label-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
   cancel-in-progress: true
 
 jobs:
