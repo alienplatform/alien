@@ -708,6 +708,7 @@ impl Ec2Client {
             | "NatGatewayLimitExceeded"
             | "SubnetLimitExceeded"
             | "SecurityGroupLimitExceeded"
+            | "RulesPerSecurityGroupLimitExceeded"
             | "AddressLimitExceeded" => ErrorData::QuotaExceeded { message },
             "InvalidVpcState"
             | "InvalidSubnetID.DuplicateSubnet"
@@ -4721,6 +4722,14 @@ mod error_mapping_tests {
                 matches!(mapped(code), Some(ErrorData::QuotaExceeded { message }) if message == "m")
             );
         }
+    }
+
+    #[test]
+    fn the_security_group_rule_limit_decodes_as_a_quota() {
+        assert!(matches!(
+            mapped("RulesPerSecurityGroupLimitExceeded"),
+            Some(ErrorData::QuotaExceeded { message }) if message == "m"
+        ));
     }
 
     #[test]

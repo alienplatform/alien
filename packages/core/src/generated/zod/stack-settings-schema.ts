@@ -34,6 +34,7 @@ get "domains"(){
 get "endpointAccess"(){
                 return EndpointAccessSchema.describe("Reachability of the deployment's public endpoints, fixed at setup.").optional()
               },
+"endpointSourceRanges": z.optional(z.array(z.string()).describe("Source address ranges (IPv4 or IPv6 CIDR, in canonical network form) allowed to reach\nthe deployment's public endpoints, for example the ranges of a proxy in front of it.\nEmpty means anyone can connect. At most 25 entries; needs `endpoint_access: internet`.\nUnlike `endpoint_access`, this can change on a running deployment.")),
 get "externalBindings"(){
                 return z.union([ExternalBindingsSchema, z.null()]).optional()
               },
