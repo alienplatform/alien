@@ -9,8 +9,8 @@
 #![cfg(feature = "azure")]
 
 use alien_core::{
-    AzureClientConfig, AzureCredentials, ClientConfig, Platform, ResourceLifecycle, Sandbox,
-    SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+    ClientConfig, Platform, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
+    SandboxLifecyclePolicy,
 };
 use alien_infra::controller_test::SingleControllerExecutor;
 use alien_infra::AzureSandboxController;
@@ -25,10 +25,10 @@ fn region() -> String {
 
 fn client_config() -> ClientConfig {
     ClientConfig::Azure(Box::new({
-    let mut config = alien_azure_clients::live_test::live_test_config("TARGET");
-    config.region = Some(region());
-    config
-}))
+        let mut config = alien_azure_clients::live_test::live_test_config("TARGET");
+        config.region = Some(region());
+        config
+    }))
 }
 
 fn sandbox(image: &str) -> Sandbox {

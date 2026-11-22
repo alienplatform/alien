@@ -597,7 +597,9 @@ async fn test_proxy_push_pull_gar() {
     });
 
     let mut env_vars = HashMap::new();
-    env_vars.extend(alien_gcp_clients::live_test::live_test_provider_env("MANAGEMENT"));
+    env_vars.extend(alien_gcp_clients::live_test::live_test_provider_env(
+        "MANAGEMENT",
+    ));
     env_vars.insert("GCP_PROJECT_ID".into(), project_id.clone());
     env_vars.insert("GCP_REGION".into(), region);
     env_vars.insert("ALIEN_DEPLOYMENT_TYPE".into(), "gcp".into());
@@ -645,7 +647,9 @@ async fn test_proxy_push_gar_via_ngrok() {
     });
 
     let mut env_vars = HashMap::new();
-    env_vars.extend(alien_gcp_clients::live_test::live_test_provider_env("MANAGEMENT"));
+    env_vars.extend(alien_gcp_clients::live_test::live_test_provider_env(
+        "MANAGEMENT",
+    ));
     env_vars.insert("GCP_PROJECT_ID".into(), project_id.clone());
     env_vars.insert("GCP_REGION".into(), region);
     env_vars.insert("ALIEN_DEPLOYMENT_TYPE".into(), "gcp".into());
@@ -739,7 +743,9 @@ async fn test_proxy_push_pull_acr() {
 
     let mut env_vars = HashMap::new();
     env_vars.insert("AZURE_SUBSCRIPTION_ID".into(), subscription_id);
-    env_vars.extend(alien_azure_clients::live_test::live_test_provider_env("MANAGEMENT"));
+    env_vars.extend(alien_azure_clients::live_test::live_test_provider_env(
+        "MANAGEMENT",
+    ));
     env_vars.insert("ALIEN_DEPLOYMENT_TYPE".into(), "azure".into());
 
     // OIDC for CI

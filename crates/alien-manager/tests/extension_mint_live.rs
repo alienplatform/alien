@@ -12,9 +12,8 @@ use std::sync::Arc;
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{
     bindings::ServiceAccountBinding, AwsClientConfig, AwsCredentials, AwsEnvironmentInfo,
-    AzureEnvironmentInfo, AzureResourceGroup,
-    AzureResourceGroupOutputs, ClientConfig, EnvironmentInfo,
-    GcpEnvironmentInfo, ManagementExternalId, Platform, RemoteStackManagement,
+    AzureEnvironmentInfo, AzureResourceGroup, AzureResourceGroupOutputs, ClientConfig,
+    EnvironmentInfo, GcpEnvironmentInfo, ManagementExternalId, Platform, RemoteStackManagement,
     RemoteStackManagementOutputs, Resource, ResourceLifecycle, ResourceOutputs, ResourceStatus,
     StackResourceState, StackState,
 };

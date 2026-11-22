@@ -22,9 +22,9 @@
 #![cfg(feature = "azure")]
 
 use alien_core::{
-    import::ImportContext, AzureClientConfig, AzureCredentials, ClientConfig, DeploymentConfig,
-    EnvironmentVariablesSnapshot, ExternalBindings, InitialSetupAuthority, Platform,
-    ResourceLifecycle, ResourceStatus, Stack, StackSettings, StackState,
+    import::ImportContext, ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
+    ExternalBindings, InitialSetupAuthority, Platform, ResourceLifecycle, ResourceStatus, Stack,
+    StackSettings, StackState,
 };
 use alien_infra::{ImporterRegistry, RunningResourcePolicy, StackExecutor, StackResourceStateExt};
 use serde_json::Value;
@@ -100,10 +100,10 @@ async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
     }
 
     let client_config = ClientConfig::Azure(Box::new({
-    let mut config = alien_azure_clients::live_test::live_test_config("TARGET");
-    config.region = Some(region);
-    config
-}));
+        let mut config = alien_azure_clients::live_test::live_test_config("TARGET");
+        config.region = Some(region);
+        config
+    }));
     let config = DeploymentConfig::builder()
         .stack_settings(settings)
         .environment_variables(EnvironmentVariablesSnapshot {
