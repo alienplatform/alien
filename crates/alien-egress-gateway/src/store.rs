@@ -62,6 +62,20 @@ impl PolicyStore {
             .and_then(|entry| entry.policy.clone())
             .ok_or_else(|| denied("policy missing or deleted"))
     }
+    /// The live policy of one sandbox, without awaiting.
+    pub fn resolve_now(&self, aud: &str, sub: &str) -> Option<Arc<Policy>> {
+        self.state
+            .read()
+            .ok()?
+            .entries
+            .get(&(aud.to_string(), sub.to_string()))
+            .filter(|entry| {
+                !entry
+                    .record
+                    .expired(chrono::Utc::now().timestamp_millis().max(0) as u64)
+            })
+            .and_then(|entry| entry.policy.clone())
+    }
     pub async fn version(&self, aud: &str, sub: &str) -> Result<Option<Version>> {
         Ok(self
             .state

@@ -355,6 +355,109 @@ impl Replication {
         }
         Ok(())
     }
+    /// A credential set counts as live only once every discovered replica holds it. A peer that
+    /// does not know the route (an older gateway) fails the fan-out: it would serve the sandbox
+    /// without the rules the caller was told are live.
+    pub async fn fanout_credentials(
+        &self,
+        record: &crate::sandbox_credentials::CredentialRecord,
+    ) -> Result<()> {
+        let body = serde_json::to_vec(&Mutation {
+            record: record.signed.clone(),
+        })
+        .into_alien_error()
+        .context(unavailable("encode replica credentials"))?;
+        for peer in self.peers().await? {
+            let (status, _) = match self
+                .request(peer, "/v1/replicas/credentials-write", body.clone())
+                .await
+            {
+                Ok(answer) => answer,
+                Err(error) => {
+                    tracing::warn!(%peer, code = %error.code, "credential fan-out to a peer failed");
+                    return Err(error);
+                }
+            };
+            if status != 204 {
+                tracing::warn!(%peer, status, "a peer did not acknowledge fanned-out credentials");
+                return Err(AlienError::new(unavailable(
+                    "replica did not acknowledge credentials",
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Exchange credential sets with one peer, after policies (a set needs its policy). A peer
+    /// that answers 404 is an older gateway and holds none.
+    async fn catch_up_credentials(
+        &self,
+        peer: SocketAddr,
+        gateway: &crate::server::Gateway,
+    ) -> Result<()> {
+        loop {
+            let known = serde_json::to_vec(&gateway.sandbox_credentials.summary()?)
+                .into_alien_error()
+                .context(unavailable("encode credential summary"))?;
+            let (status, bytes) = self
+                .request(peer, "/v1/replicas/credentials-pull", known)
+                .await?;
+            if status == 404 {
+                return Ok(());
+            }
+            if status != 200 {
+                return Err(AlienError::new(unavailable(
+                    "replica credentials unavailable",
+                )));
+            }
+            let records: Vec<String> = serde_json::from_slice(&bytes)
+                .map_err(|_| AlienError::new(unavailable("decode replica credentials")))?;
+            let mut applied = 0;
+            for signed in records {
+                let record = gateway.verify_credentials(signed)?;
+                // A set whose policy this replica does not hold (deleted, or not yet arrived)
+                // is skipped; the policy's own catch-up decides.
+                if gateway
+                    .policies
+                    .resolve_now(&record.aud, &record.sub)
+                    .is_some()
+                    && gateway.sandbox_credentials.apply(record)?
+                {
+                    applied += 1;
+                }
+            }
+            if applied == 0 {
+                break;
+            }
+        }
+        let (status, bytes) = self
+            .request(peer, "/v1/replicas/credentials-summary", b"null".to_vec())
+            .await?;
+        if status == 404 {
+            return Ok(());
+        }
+        if status != 200 {
+            return Err(AlienError::new(unavailable(
+                "replica credential summary unavailable",
+            )));
+        }
+        let known: Vec<Summary> = serde_json::from_slice(&bytes)
+            .map_err(|_| AlienError::new(unavailable("decode replica credential summary")))?;
+        for signed in gateway
+            .sandbox_credentials
+            .newer_than(&known, &gateway.config.audiences)?
+        {
+            let body = serde_json::to_vec(&Mutation { record: signed })
+                .into_alien_error()
+                .context(unavailable("encode replica credentials"))?;
+            // The peer may not hold the policy yet; it takes the set on a later pass.
+            let _ = self
+                .request(peer, "/v1/replicas/credentials-write", body)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn catch_up(&self, live: &LiveGateway) -> Result<()> {
         let gateway = live
             .snapshot()
@@ -402,7 +505,13 @@ impl Replication {
                     }
                 }
             }
+            self.catch_up_credentials(peer, &gateway).await?;
         }
+        // Rules of sandboxes whose policy is gone (deleted, expired, or a retired audience).
+        gateway.sandbox_credentials.retain(|aud, sub| {
+            gateway.config.audiences.iter().any(|known| known == aud)
+                && gateway.policies.resolve_now(aud, sub).is_some()
+        })?;
         gateway.policies.set_ready();
         Ok(())
     }
@@ -436,8 +545,7 @@ impl<'de> Visitor<'de> for RecordVisitor {
                 });
             } else {
                 self.0
-                    .policies
-                    .apply(record, false)
+                    .apply_policy(record, false)
                     .map_err(serde::de::Error::custom)?;
             }
             count += 1;

@@ -221,8 +221,8 @@ impl Cluster {
             // Ready means synchronized and serving: the proxy port opens a moment after health.
             let mut all = true;
             for index in 0..3 {
-                all &= self.health(index).await
-                    && TcpStream::connect(self.proxy[index]).await.is_ok();
+                all &=
+                    self.health(index).await && TcpStream::connect(self.proxy[index]).await.is_ok();
             }
             if all {
                 return;
@@ -666,13 +666,14 @@ async fn a_replica_that_has_not_synchronized_does_not_open_its_proxy_port() {
     // Long enough for several sync attempts, all of which fail.
     tokio::time::sleep(Duration::from_secs(4)).await;
     assert!(!cluster.health(2).await, "an isolated replica is not ready");
-    let refused = tokio::time::timeout(
-        Duration::from_secs(2),
-        TcpStream::connect(cluster.proxy[2]),
-    )
-    .await
-    .expect("the connect answers at once");
-    assert!(refused.is_err(), "the proxy port must be closed until synchronized");
+    let refused =
+        tokio::time::timeout(Duration::from_secs(2), TcpStream::connect(cluster.proxy[2]))
+            .await
+            .expect("the connect answers at once");
+    assert!(
+        refused.is_err(),
+        "the proxy port must be closed until synchronized"
+    );
 
     cluster.isolate(2, Fault::Heal);
     cluster.ready_all().await;
@@ -682,7 +683,11 @@ async fn a_replica_that_has_not_synchronized_does_not_open_its_proxy_port() {
         assert!(Instant::now() < deadline, "the port never opened");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert_eq!(cluster.connect(2, &token).await, 403, "serving once synchronized");
+    assert_eq!(
+        cluster.connect(2, &token).await,
+        403,
+        "serving once synchronized"
+    );
     for index in 0..3 {
         cluster.stop(index).await;
     }

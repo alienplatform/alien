@@ -53,6 +53,10 @@ pub fn router(admin: Arc<LiveGateway>) -> Router {
         .route("/metrics", get(metrics))
         .route("/v1/policies", put(update).delete(remove).get(version))
         .route("/v1/ca", post(issue_ca))
+        .route(
+            "/v1/credentials",
+            put(update_credentials).get(credentials_version),
+        )
         .route("/v1/policies/record", get(read_record))
         .route("/v1/replicas/{operation}", post(exchange))
         .layer(DefaultBodyLimit::max(crate::replication::MAX_SNAPSHOT))
@@ -149,7 +153,7 @@ async fn publish(gateway: &Gateway, record: Record) -> Response {
     if record.expired(chrono::Utc::now().timestamp_millis().max(0) as u64) {
         return StatusCode::NO_CONTENT.into_response();
     }
-    if let Err(error) = gateway.policies.apply(record.clone(), false) {
+    if let Err(error) = gateway.apply_policy(record.clone(), false) {
         tracing::warn!(code = %error.code, "policy record not applied");
         return failure(error);
     }
@@ -242,8 +246,36 @@ async fn exchange(
                 Ok(record) => record,
                 Err(error) => return failure(error),
             };
-            match gateway.policies.apply(record, operation == "register") {
+            match gateway.apply_policy(record, operation == "register") {
                 Ok(_) => StatusCode::NO_CONTENT.into_response(),
+                Err(error) => failure(error),
+            }
+        }
+        "credentials-summary" => match gateway.sandbox_credentials.summary() {
+            Ok(summary) => Json(summary).into_response(),
+            Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        },
+        "credentials-pull" => {
+            let Ok(known) = serde_json::from_slice::<Vec<Summary>>(&body) else {
+                return StatusCode::BAD_REQUEST.into_response();
+            };
+            match gateway
+                .sandbox_credentials
+                .newer_than(&known, &gateway.config.audiences)
+            {
+                Ok(records) => stream_signed(records),
+                Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            }
+        }
+        "credentials-write" => {
+            let Ok(mutation) = serde_json::from_slice::<Mutation>(&body) else {
+                return StatusCode::BAD_REQUEST.into_response();
+            };
+            match gateway.verify_credentials(mutation.record) {
+                Ok(record) => match gateway.apply_credentials(record) {
+                    Ok(()) => StatusCode::NO_CONTENT.into_response(),
+                    Err(error) => failure(error),
+                },
                 Err(error) => failure(error),
             }
         }
@@ -252,13 +284,22 @@ async fn exchange(
 }
 
 fn stream_snapshot(records: Vec<Arc<Record>>) -> Response {
+    stream_signed(
+        records
+            .into_iter()
+            .map(|record| record.signed.clone())
+            .collect(),
+    )
+}
+
+fn stream_signed(records: Vec<String>) -> Response {
     let chunks = std::iter::once(bytes::Bytes::from_static(b"["))
-        .chain(records.into_iter().enumerate().map(|(index, record)| {
+        .chain(records.into_iter().enumerate().map(|(index, signed)| {
             // Verified compact JWS uses only base64url characters and dots, with no JSON escapes.
             bytes::Bytes::from(format!(
                 "{}\"{}\"",
                 if index == 0 { "" } else { "," },
-                record.signed
+                signed
             ))
         }))
         .chain(std::iter::once(bytes::Bytes::from_static(b"]")))
@@ -333,6 +374,83 @@ async fn issue_ca(
     }
 }
 
+/// Replace one sandbox's credential rules. Answers 204 only once this replica and every peer
+/// hold the new set. The body is parsed with our own error text: a parser's message could
+/// repeat part of a value.
+async fn update_credentials(
+    State(live): State<Arc<LiveGateway>>,
+    headers: HeaderMap,
+    body: bytes::Bytes,
+) -> Response {
+    let Some(gateway) = live.snapshot() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let admin = Admin { gateway };
+    let Some(grant) = admin.authorized(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let Ok(mutation) = serde_json::from_slice::<Mutation>(&body) else {
+        return failure(crate::error::invalid("invalid credential request body"));
+    };
+    let record = match admin.gateway.verify_credentials(mutation.record) {
+        Ok(record) => record,
+        Err(error) => return failure(error),
+    };
+    if grant.method != "PUT"
+        || grant.aud != record.aud
+        || grant.sub != record.sub
+        || grant.policy.is_some()
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !admin.gateway.policies.ready() {
+        return failure(alien_error::AlienError::new(
+            crate::error::ErrorData::GatewayUnavailable,
+        ));
+    }
+    if let Err(error) = admin.gateway.apply_credentials(record.clone()) {
+        return failure(error);
+    }
+    match admin.gateway.replication.fanout_credentials(&record).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => failure(alien_error::AlienError::new(
+            crate::error::ErrorData::GatewayUnavailable,
+        )),
+    }
+}
+
+/// The version of the credential set this replica holds for one sandbox; never the rules.
+async fn credentials_version(
+    State(live): State<Arc<LiveGateway>>,
+    headers: HeaderMap,
+    Query(identity): Query<Identity>,
+) -> Response {
+    let Some(gateway) = live.snapshot() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let admin = Admin { gateway };
+    let Some(grant) = admin.authorized(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if grant.method != "GET" || grant.aud != identity.aud || grant.sub != identity.sub {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !identity_valid(&admin, &identity.aud, &identity.sub) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if !admin.gateway.policies.ready() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    match admin
+        .gateway
+        .sandbox_credentials
+        .version(&identity.aud, &identity.sub)
+    {
+        Ok(version) => Json(serde_json::json!({"version":version})).into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
 async fn metrics(State(live): State<Arc<LiveGateway>>, headers: HeaderMap) -> Response {
     let Some(gateway) = live.snapshot() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -375,9 +493,10 @@ async fn metrics(State(live): State<Arc<LiveGateway>>, headers: HeaderMap) -> Re
 }
 
 /// Nonsecret: lets a binding refuse a gateway it cannot serve ("re-run setup to update").
-/// Must equal `alien_core::bindings::EGRESS_GATEWAY_ADMIN_PROTOCOL`.
+/// Protocol 2 adds per-sandbox credential rules (`/v1/credentials`).
+pub const ADMIN_PROTOCOL: u32 = 2;
 async fn protocol() -> Response {
-    Json(serde_json::json!({ "protocol": 1 })).into_response()
+    Json(serde_json::json!({ "protocol": ADMIN_PROTOCOL })).into_response()
 }
 
 async fn health(State(live): State<Arc<LiveGateway>>) -> Response {

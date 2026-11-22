@@ -49,9 +49,10 @@ pub struct Config {
     /// Additional deployment-owned trust roots, base64 DER, for upstream TLS.
     #[serde(default)]
     pub upstream_ca_certificates: Vec<String>,
-    /// Opt-in credential rules; no rule means TLS is spliced after SNI validation.
+    /// Accepted only empty, as configurations written by earlier controllers carry it. Credential
+    /// rules are per sandbox and set at runtime (`PUT /v1/credentials`), never in configuration.
     #[serde(default)]
-    pub credentials: Vec<CredentialRule>,
+    pub credentials: Vec<serde::de::IgnoredAny>,
     /// Services of the deployment each audience reaches by their exact internal hostname,
     /// declared in the stack. Every other private destination stays refused.
     #[serde(default)]
@@ -96,31 +97,6 @@ pub struct VerificationKey {
     pub public_key: String,
 }
 
-/// Header injection scope. Matching is exact host/method and path-prefix at a slash boundary.
-#[derive(Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CredentialRule {
-    /// Audience permitted to use this credential.
-    pub aud: String,
-    /// Exact host, never a wildcard.
-    pub host: String,
-    /// HTTPS port.
-    pub port: u16,
-    /// Exact uppercase HTTP method.
-    pub method: String,
-    /// Absolute path or subtree, e.g. /v1/messages or /v1/.
-    pub path: String,
-    /// Header to replace in matching requests.
-    pub header: String,
-    /// Vault binding name.
-    pub vault_binding: String,
-    /// Vault secret name.
-    pub secret: String,
-    /// Optional value prefix, e.g. "Bearer ".
-    #[serde(default)]
-    pub value_prefix: String,
-}
-
 impl Config {
     /// The declared link a connection from `aud` to `host:port` names, if any. A literal IP
     /// never names one: link hosts are DNS names.
@@ -131,8 +107,21 @@ impl Config {
             .find(|link| link.matches(host, port))
     }
 
+    /// Declared link ids of one audience.
+    pub fn link_ids(&self, aud: &str) -> Vec<String> {
+        self.links
+            .get(aud)
+            .map(|links| links.iter().map(|link| link.id.clone()).collect())
+            .unwrap_or_default()
+    }
+
     /// Decode public keys and reject duplicate key IDs.
     pub fn verification_keys(&self) -> Result<HashMap<String, PublicKey>> {
+        if !self.credentials.is_empty() {
+            return Err(invalid(
+                "credentials in the gateway configuration are no longer read; sandbox credential rules are set at runtime",
+            ));
+        }
         if self.max_connections == 0 || self.max_connections > 65536 {
             return Err(invalid("maxConnections must be between 1 and 65536"));
         }
