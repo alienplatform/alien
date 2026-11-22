@@ -217,8 +217,12 @@ impl LocalSandboxManager {
         let image = crate::sandbox_identity::inspect(&self.docker, &config.image, sandbox).await?;
 
         // Every session that reaches anything goes through the sandbox's gateway, links or not,
-        // so its policy and credential rules apply as on the cloud platforms.
-        let linked = config.egress == SandboxEgressMode::Allow;
+        // so its policy and credential rules apply as on the cloud platforms. The one exception
+        // is a sandbox with preview ports and no links: Docker publishes no port of a container
+        // whose only network is internal, so its sessions keep the shared network and run
+        // without a gateway (no policy, no credential rules), as before.
+        let linked = config.egress == SandboxEgressMode::Allow
+            && (!config.links.is_empty() || config.preview_ports.is_empty());
         let created = async {
             let session_egress = if linked {
                 let gateway = self.gateway(sandbox, &config.links).await?;
@@ -520,8 +524,11 @@ impl LocalSandboxManager {
             .ok_or_else(|| {
                 AlienError::new(ErrorData::SandboxSessionFailed {
                     session_id: session_id.to_string(),
-                    operation: "update credentials: this sandbox runs no egress gateway; a \
-                            sandbox with egress `none` reaches nothing to put a credential on"
+                    operation: "update credentials: this sandbox runs no egress gateway in \
+                                alien dev. A sandbox with egress `none` reaches nothing to put a \
+                                credential on, and one that declares preview ports without \
+                                links runs on a shared network, because Docker cannot publish a \
+                                preview port from the isolated network a gateway needs"
                         .to_string(),
                 })
             })?;
