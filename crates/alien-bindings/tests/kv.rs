@@ -180,7 +180,7 @@ impl AsyncTestContext for AwsProviderTestContext {
             credentials: AwsCredentials::AccessKeys {
                 access_key_id: access_key.clone(),
                 secret_access_key: secret_key.clone(),
-                session_token: None,
+                session_token: std::env::var("AWS_MANAGEMENT_SESSION_TOKEN").ok(),
             },
             service_overrides: None,
         };

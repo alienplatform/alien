@@ -63,7 +63,7 @@ impl AsyncTestContext for StsTestContext {
             credentials: alien_aws_clients::AwsCredentials::AccessKeys {
                 access_key_id: access_key,
                 secret_access_key: secret_key,
-                session_token: None,
+                session_token: std::env::var("AWS_MANAGEMENT_SESSION_TOKEN").ok(),
             },
             service_overrides: None,
         };
@@ -505,7 +505,7 @@ async fn test_sts_client_with_invalid_region(ctx: &mut StsTestContext) {
         credentials: alien_aws_clients::AwsCredentials::AccessKeys {
             access_key_id: access_key,
             secret_access_key: secret_key,
-            session_token: None,
+            session_token: std::env::var("AWS_MANAGEMENT_SESSION_TOKEN").ok(),
         },
         service_overrides: None,
     };
