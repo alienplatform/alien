@@ -618,9 +618,9 @@ gateway image setup installs to serve the gateway's admin protocol, as on Azure:
 release pins does not, so the release that turns the switch on also moves the gateway pin to one
 that does.
 
-The plan warns on every GCP sandbox that uses the default network: a project whose first sandbox
-used the default network can never run gateway-backed `internet` sandboxes, even after every
-sandbox is deleted. To use `internet` later, deploy to a new project.
+Once `internet` is available, the plan warns on every GCP sandbox that uses the default network:
+a project whose first sandbox used the default network can never run gateway-backed `internet`
+sandboxes, even after every sandbox is deleted. To use `internet` later, deploy to a new project.
 
 `internet` sends the sandbox's outbound traffic through the deployment's egress gateway, as on AWS
 and Azure, with the same per-sandbox host:port rules and the same `update_egress`. The template is

@@ -207,12 +207,15 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
         // A project's first sandbox template fixes its network placement for good. A sandbox on
         // Google's default network (`none`, `allow`) therefore keeps the project from ever
         // hosting a gateway-backed `internet` sandbox, and deleting every sandbox does not undo it.
+        // Like the hint above, this is said only once `internet` is available to switch to.
         warnings.extend(
             stack
                 .resources()
                 .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
                 .filter(|sandbox| {
-                    platform == Platform::Gcp && sandbox.egress != SandboxEgress::Internet
+                    gcp_internet
+                        && platform == Platform::Gcp
+                        && sandbox.egress != SandboxEgress::Internet
                 })
                 .map(|sandbox| {
                     format!(
@@ -850,9 +853,6 @@ mod tests {
         assert!(allowed.success, "{:?}", allowed.errors);
     }
 
-    /// With the switch on, a Google Cloud internet sandbox nobody holds execute on is refused:
-    /// its private ingress answers only to a credential signed for an execute holder, so nobody
-    /// could use it. Preview ports are not needed for that credential.
     /// The switch alone is not the flip: with the gateway image this release pins, which does
     /// not serve the admin protocol, a Google Cloud internet sandbox is still refused with the
     /// same message, before any setup could build the gateway VMs.
@@ -893,6 +893,9 @@ mod tests {
         assert!(allowed.success, "{:?}", allowed.errors);
     }
 
+    /// With the switch on, a Google Cloud internet sandbox nobody holds execute on is refused:
+    /// its private ingress answers only to a credential signed for an execute holder, so nobody
+    /// could use it. Preview ports are not needed for that credential.
     #[tokio::test]
     async fn a_gcp_internet_sandbox_needs_an_execute_holder() {
         let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
@@ -945,10 +948,24 @@ mod tests {
             .expect("build passes with the switch on");
     }
 
-    /// Every Google Cloud sandbox on the default network is told that its project can never
-    /// switch to gateway-backed `internet`, and how to get there instead.
+    /// Once `internet` is available, every Google Cloud sandbox on the default network is told
+    /// that its project can never switch to gateway-backed `internet`, and how to get there
+    /// instead. While it is not available there is nothing to switch to, so nothing is said.
     #[tokio::test]
     async fn a_gcp_default_network_sandbox_is_told_its_project_cannot_switch_later() {
+        for egress in [SandboxEgress::None, SandboxEgress::Allow] {
+            let result = SandboxPlatformSupportCheck
+                .check(
+                    &stack_with(sandbox("agent", None, egress.clone())),
+                    Platform::Gcp,
+                )
+                .await
+                .unwrap();
+            assert!(result.success, "{:?}", result.errors);
+            assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        }
+
+        let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
         for egress in [SandboxEgress::None, SandboxEgress::Allow] {
             let result = SandboxPlatformSupportCheck
                 .check(&stack_with(sandbox("agent", None, egress)), Platform::Gcp)

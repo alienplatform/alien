@@ -1551,9 +1551,6 @@ mod tests {
             assert!(rendered.contains("frozen"), "names the fix: {rendered}");
         }
 
-        /// The emitted keys are read against the binding type, not a second hand-typed list, so
-        /// a rename on either side fails here rather than reaching a customer's cluster. The ttl is
-        /// set on both sides so the key sets are comparable whole.
         /// An `internet` sandbox answers only through its private endpoint, to the edge credential
         /// the signing identity signs, so its binding names that identity without preview ports.
         #[test]
@@ -1568,6 +1565,9 @@ mod tests {
             assert!(!object_keys(&open).contains("previewServiceAccount"));
         }
 
+        /// The emitted keys are read against the binding type, not a second hand-typed list, so
+        /// a rename on either side fails here rather than reaching a customer's cluster. The ttl is
+        /// set on both sides so the key sets are comparable whole.
         #[test]
         fn emitted_binding_keys_match_the_binding_type() {
             let emitted = emit_binding(SandboxEgress::Allow, Some(3600))

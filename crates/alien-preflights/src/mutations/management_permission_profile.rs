@@ -499,12 +499,12 @@ fn management_profile_contains(
         .any(|permission| permission.id() == permission_set_id)
 }
 
-/// Generates the default management permission profile from resource ownership
-/// and feature settings.
 /// The set that lets management create and delete the private endpoint of Google Cloud
 /// `internet` sandboxes.
 pub(crate) const GCP_SANDBOX_PRIVATE_ENDPOINT: &str = "sandbox/private-endpoint";
 
+/// Generates the default management permission profile from resource ownership
+/// and feature settings.
 pub(crate) fn generate_auto_management_profile(
     stack: &Stack,
     stack_state: &StackState,
