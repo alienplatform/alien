@@ -306,7 +306,8 @@ async fn get_secret(
             message: "Failed to load deployment".to_string(),
         })?
         .ok_or_else(|| ErrorData::not_found_deployment(&deployment_id))?;
-    if !state.authz.can_read_deployment(&subject, &deployment) {
+    // Reading a value needs the same access as writing it.
+    if !state.authz.can_update_deployment(&subject, &deployment) {
         return Err(ErrorData::forbidden(
             "Access denied: cannot read vault for this deployment",
         ));
