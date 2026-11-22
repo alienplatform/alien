@@ -5189,9 +5189,6 @@ mod tests {
         }
     }
 
-    /// A running deployment whose setup is behind is offered the setup update, on the platform
-    /// and on a standalone manager; with nothing behind, "Nothing to do" stays. Anything that
-    /// is not running, or has an update waiting, is unchanged by drift.
     #[test]
     fn a_busy_refusal_is_recognised_by_its_code_only() {
         assert!(setup_update_busy(
@@ -5208,6 +5205,9 @@ mod tests {
         assert_eq!(setup_update_busy_message("not json"), SETUP_UPDATE_BUSY_MESSAGE);
     }
 
+    /// A running deployment whose setup is behind is offered the setup update, on the platform
+    /// and on a standalone manager; with nothing behind, "Nothing to do" stays. Anything that
+    /// is not running, or has an update waiting, is unchanged by drift.
     #[test]
     fn a_running_deployment_with_setup_drift_is_offered_a_setup_update() {
         use ExistingDeploymentPlan::*;
