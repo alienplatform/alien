@@ -61,6 +61,8 @@ pub(crate) struct LocalGateway {
     egress: SandboxEgressManager,
     /// The admin protocol the running gateway answered with; 1 when it names none.
     protocol: u64,
+    /// The policy each live session was given, so a replacement gateway can publish it again.
+    policies: std::sync::Mutex<HashMap<String, EgressPolicy>>,
 }
 
 impl LocalGateway {
@@ -231,10 +233,16 @@ pub(crate) async fn ensure_gateway(
     let digest = hex::encode(Sha256::digest(config.as_bytes()));
     let name = gateway_name(sandbox);
 
+    let mut previous_policies = HashMap::new();
     if let Some(current) = current {
         if current.digest == digest && gateway_running(docker, &name, &digest).await? {
             return Ok(current);
         }
+        previous_policies = current
+            .policies
+            .lock()
+            .expect("no panic holds this lock")
+            .clone();
     }
 
     remove_gateway(docker, sandbox).await?;
@@ -310,12 +318,22 @@ pub(crate) async fn ensure_gateway(
         digest,
         egress,
         protocol,
+        policies: std::sync::Mutex::new(previous_policies),
     });
     for session_id in session_networks(docker, sandbox).await?.into_values() {
         join_session_network(docker, &gateway, sandbox, &session_id).await?;
+        // A session this process did not start (it restarted) has no recorded policy; it stays
+        // closed rather than opening to the internet.
+        let policy = gateway
+            .policies
+            .lock()
+            .expect("no panic holds this lock")
+            .get(&session_id)
+            .cloned()
+            .unwrap_or(EgressPolicy::Allow { allow: Vec::new() });
         gateway
             .egress
-            .publish_new_grant(&session_id, &EgressPolicy::Internet)
+            .publish_new_grant(&session_id, &policy)
             .await
             .context(failed("publish the session's egress policy", &session_id))?;
     }
@@ -434,6 +452,7 @@ pub(crate) async fn attach_session(
     gateway: &LocalGateway,
     sandbox: &str,
     session_id: &str,
+    policy: &EgressPolicy,
 ) -> Result<SessionEgress> {
     let network = session_network_name(sandbox, session_id);
     let created = docker
@@ -482,9 +501,14 @@ pub(crate) async fn attach_session(
         .context(failed("mint the session's gateway token", session_id))?;
     gateway
         .egress
-        .publish_new_grant(session_id, &EgressPolicy::Internet)
+        .publish_new_grant(session_id, policy)
         .await
         .context(failed("publish the session's egress policy", session_id))?;
+    gateway
+        .policies
+        .lock()
+        .expect("no panic holds this lock")
+        .insert(session_id.to_string(), policy.clone());
 
     let ca = gateway.egress.sandbox_ca(session_id).await.context(failed(
         "read the session's CA from the egress gateway",
@@ -543,6 +567,11 @@ pub(crate) async fn detach_session(
             .delete(session_id)
             .await
             .context(failed("remove the session's egress policy", session_id))?;
+        gateway
+            .policies
+            .lock()
+            .expect("no panic holds this lock")
+            .remove(session_id);
     }
     // By name, not through the handle: after a restart this process holds none, and the
     // previous run's gateway may still be on the network.

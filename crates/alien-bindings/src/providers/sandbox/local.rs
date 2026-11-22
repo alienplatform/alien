@@ -98,15 +98,19 @@ impl LocalSandbox {
         {
             return Err(super::egress::unsupported("gateway-backed sandbox"));
         }
-        super::egress::require_default(
-            binding.default_policy.as_ref().or_else(|| {
-                binding
-                    .egress
-                    .as_ref()
-                    .and_then(|value| value.default_policy())
-            }),
-            binding.egress.as_ref().map(|value| value.declaration()),
-        )?;
+        // The local manager enforces the policy in its own gateway, so a default needs only to
+        // be valid for the declaration; it travels in the session template, not in requests.
+        if let Some(policy) = binding.default_policy.as_ref().or_else(|| {
+            binding
+                .egress
+                .as_ref()
+                .and_then(|value| value.default_policy())
+        }) {
+            super::egress::validate(
+                policy,
+                binding.egress.as_ref().map(|value| value.declaration()),
+            )?;
+        }
 
         let base_url = binding
             .manager_url
@@ -309,7 +313,9 @@ impl Sandbox for LocalSandbox {
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
+        if let Some(policy) = &request.egress {
+            super::egress::validate(policy, self.egress_declaration())?;
+        }
         // Whole seconds, as on every backend. The route applies the declared ceiling, so a request
         // can only shorten a sandbox.
         let timeout_ms = request
@@ -321,14 +327,16 @@ impl Sandbox for LocalSandbox {
             .sandbox_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
 
-        // The id, and a lifetime that can only shorten the declared one. Image, limits, egress
-        // and preview ports come from the controller's template, so an application cannot raise
+        // The id, a lifetime that can only shorten the declared one, and an egress policy the
+        // route validates again. Image, limits and preview ports come from the controller's template, so an application cannot raise
         // its own ceilings.
         let created: SessionBody = self
             .send(
-                self.client
-                    .post(self.url("/v1/sessions"))
-                    .json(&json!({ "sessionId": sandbox_id, "timeoutMs": timeout_ms })),
+                self.client.post(self.url("/v1/sessions")).json(&json!({
+                    "sessionId": sandbox_id,
+                    "timeoutMs": timeout_ms,
+                    "egress": request.egress,
+                })),
                 "sandbox.create",
             )
             .await?;
@@ -349,7 +357,9 @@ impl Sandbox for LocalSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
+        if let Some(policy) = &request.egress {
+            super::egress::validate(policy, self.egress_declaration())?;
+        }
         if let Some(id) = request.sandbox_id.as_deref() {
             if let Some(existing) = self.get(id).await? {
                 return Ok(ResolvedSandbox::found(existing));

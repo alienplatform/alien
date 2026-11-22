@@ -82,6 +82,9 @@ pub struct SandboxSessionConfig {
     /// The declaration's `maxLifetimeSeconds`: the route ends each session this long after it
     /// is created. `None`, a session runs until it is terminated.
     pub max_lifetime: Option<std::time::Duration>,
+    /// The policy a session's gateway enforces when the create names none: the declaration's
+    /// default. `None`, the whole public internet.
+    pub egress_policy: Option<alien_core::EgressPolicy>,
 }
 
 /// A service a sandbox links: a container on `deployment-network`, by its resource id, on its
@@ -239,6 +242,10 @@ impl LocalSandboxManager {
                             &gateway,
                             sandbox,
                             session_id,
+                            config
+                                .egress_policy
+                                .as_ref()
+                                .unwrap_or(&alien_core::EgressPolicy::Internet),
                         )
                         .await?,
                     )
@@ -1488,6 +1495,7 @@ mod tests {
                         env: HashMap::from([(name.to_string(), "0".to_string())]),
                         links: Vec::new(),
                         max_lifetime: None,
+                        egress_policy: None,
                     },
                 )
                 .await

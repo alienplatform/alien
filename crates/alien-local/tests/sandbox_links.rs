@@ -81,6 +81,7 @@ fn config(links: Vec<SandboxLink>) -> SandboxSessionConfig {
         env: HashMap::new(),
         links,
         max_lifetime: None,
+        egress_policy: None,
     }
 }
 

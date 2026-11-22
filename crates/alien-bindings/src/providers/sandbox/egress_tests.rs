@@ -68,21 +68,6 @@ async fn every_provider_refuses_requested_policy_without_a_gateway_before_io() {
                 )
                 .unwrap(),
             ),
-            Box::new(
-                LocalSandbox::new(
-                    "box",
-                    &LocalSandboxBinding {
-                        default_policy: None,
-                        egress: Some(bound.clone().into()),
-                        manager_url: value("http://127.0.0.1:1"),
-                        sandbox_key: value("box"),
-                        token_path: value(&token.path().display().to_string()),
-                        links: Default::default(),
-                    },
-                )
-                .await
-                .unwrap(),
-            ),
         ];
         for provider in providers {
             for (policy, code) in [
@@ -189,4 +174,48 @@ async fn gcp_names_the_missing_gateway_for_every_runtime_policy() {
             assert_eq!(error.code, "SANDBOX_EGRESS_ALLOWLIST_UNSUPPORTED");
         }
     }
+}
+
+/// A local sandbox's gateway runs in the local manager, so an `internet` declaration with a
+/// default policy loads without one, and a policy named at create time is checked before the
+/// route is called.
+#[tokio::test]
+async fn a_local_sandbox_takes_internet_and_checks_policies_before_io() {
+    let token = tempfile::NamedTempFile::new().unwrap();
+    let value = |text: &str| BindingValue::value(text.to_string());
+    let local =
+        |declaration: SandboxEgress, default_policy: Option<EgressPolicy>| LocalSandboxBinding {
+            default_policy,
+            egress: Some(declaration.into()),
+            manager_url: value("http://127.0.0.1:1"),
+            sandbox_key: value("box"),
+            token_path: value(&token.path().display().to_string()),
+            links: Default::default(),
+        };
+    let default = EgressPolicy::Allow {
+        allow: vec!["link:api".into()],
+    };
+    let provider = LocalSandbox::new(
+        "box",
+        &local(SandboxEgress::Internet, Some(default.clone())),
+    )
+    .await
+    .expect("internet with a default policy loads");
+
+    let invalid = CreateSandboxRequest {
+        egress: Some(EgressPolicy::Allow {
+            allow: vec!["169.254.169.254".into()],
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        provider.create(invalid).await.unwrap_err().code,
+        "SANDBOX_EGRESS_INVALID"
+    );
+
+    // A default policy needs the internet declaration.
+    let error = LocalSandbox::new("box", &local(SandboxEgress::None, Some(default)))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "SANDBOX_EGRESS_REQUIRES_INTERNET");
 }

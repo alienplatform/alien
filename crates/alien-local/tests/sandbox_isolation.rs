@@ -28,6 +28,7 @@ fn config(egress: SandboxEgressMode) -> SandboxSessionConfig {
         env: HashMap::new(),
         links: Vec::new(),
         max_lifetime: None,
+        egress_policy: None,
     }
 }
 

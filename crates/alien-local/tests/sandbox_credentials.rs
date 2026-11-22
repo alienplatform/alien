@@ -80,6 +80,8 @@ fn config() -> SandboxSessionConfig {
             id: "connector".into(),
             ports: vec![8080],
         }],
+        max_lifetime: None,
+        egress_policy: None,
     }
 }
 

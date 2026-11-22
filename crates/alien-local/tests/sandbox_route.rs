@@ -46,6 +46,7 @@ impl Harness {
             env: Default::default(),
             links: Vec::new(),
             max_lifetime: None,
+            egress_policy: None,
         };
 
         let route = SandboxRoute::ensure(manager, SANDBOX, template)
@@ -368,6 +369,7 @@ async fn a_create_in_flight_at_removal_is_visible_to_the_reap_that_follows() {
         env: Default::default(),
         links: Vec::new(),
         max_lifetime: None,
+        egress_policy: None,
     };
     let route = SandboxRoute::ensure(Arc::clone(&manager), SANDBOX_SLOW, template)
         .await
@@ -579,8 +581,6 @@ async fn language_bindings_preserve_egress_requests_against_local() {
         "egress": {"mode":"allow"},
     })
     .to_string();
-    let mut unsupported: serde_json::Value = serde_json::from_str(&binding).unwrap();
-    unsupported["egress"] = json!("internet");
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let python = std::env::var("ALIEN_TEST_PYTHON")
         .expect("set ALIEN_TEST_PYTHON to the wheel's interpreter");
@@ -598,7 +598,6 @@ async fn language_bindings_preserve_egress_requests_against_local() {
             .arg(root.join(script))
             .env("ALIEN_DEPLOYMENT_TYPE", "local")
             .env("ALIEN_EGRESS_TEST_BINDING", &binding)
-            .env("ALIEN_EGRESS_UNSUPPORTED_BINDING", unsupported.to_string())
             .output()
             .await
             .expect("language process starts");
@@ -651,6 +650,7 @@ async fn lifetime_route(
         env: Default::default(),
         links: Vec::new(),
         max_lifetime,
+        egress_policy: None,
     };
     let route = SandboxRoute::ensure(Arc::clone(&manager), sandbox, template)
         .await

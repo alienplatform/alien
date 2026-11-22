@@ -405,6 +405,7 @@ fn session_template(
             .into_iter()
             .map(|(id, ports)| alien_local::SandboxLink { id, ports })
             .collect(),
+        egress_policy: sandbox.default_policy.clone(),
         max_lifetime: sandbox
             .lifecycle
             .max_lifetime_seconds

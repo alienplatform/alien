@@ -47,6 +47,9 @@ pub struct CreateSessionBody {
     /// it, so it is safe to take from the client.
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// The session's outbound policy, instead of the declaration's default.
+    #[serde(default)]
+    pub egress: Option<alien_core::EgressPolicy>,
 }
 
 /// A request to run a command.
@@ -609,11 +612,17 @@ async fn create_session(
     authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
 
     // Cloned out of the lock: the session create is an await, and the guard is not Send.
-    let template = state
+    let mut template = state
         .template
         .lock()
         .expect("no panic holds this lock")
         .clone();
+    if let Some(policy) = body.egress {
+        policy
+            .validate()
+            .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+        template.egress_policy = Some(policy);
+    }
 
     let handle = state
         .manager
