@@ -9,7 +9,7 @@ Set up `.env.test` with Azure credentials:
 AZURE_MANAGEMENT_SUBSCRIPTION_ID=your_subscription_id
 AZURE_MANAGEMENT_TENANT_ID=your_tenant_id
 AZURE_MANAGEMENT_CLIENT_ID=your_client_id
-AZURE_MANAGEMENT_CLIENT_SECRET=your_client_secret
+# credentials: CI sets AZURE_MANAGEMENT_FEDERATED_TOKEN_FILE; on a laptop run `az login`
 ALIEN_TEST_AZURE_RESOURCE_GROUP=your_test_resource_group
 ```
 
@@ -31,7 +31,6 @@ use alien_azure_clients::service_bus::{
     SendMessageParameters, ServiceBusDataPlaneApi, ServiceBusManagementApi,
 };
 use alien_azure_clients::AzureTokenCache;
-use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_client_core::{Error, ErrorData};
 use alien_error::{AlienError, Context};
 use base64::{engine::general_purpose, Engine as _};
@@ -64,24 +63,13 @@ impl AsyncTestContext for ServiceBusTestContext {
 
         let subscription_id = env::var("AZURE_MANAGEMENT_SUBSCRIPTION_ID")
             .expect("AZURE_MANAGEMENT_SUBSCRIPTION_ID not set");
-        let tenant_id =
-            env::var("AZURE_MANAGEMENT_TENANT_ID").expect("AZURE_MANAGEMENT_TENANT_ID not set");
-        let client_id =
-            env::var("AZURE_MANAGEMENT_CLIENT_ID").expect("AZURE_MANAGEMENT_CLIENT_ID not set");
-        let client_secret = env::var("AZURE_MANAGEMENT_CLIENT_SECRET")
-            .expect("AZURE_MANAGEMENT_CLIENT_SECRET not set");
         let resource_group_name = env::var("ALIEN_TEST_AZURE_RESOURCE_GROUP")
             .expect("ALIEN_TEST_AZURE_RESOURCE_GROUP not set");
 
-        let config = AzureClientConfig {
-            subscription_id: subscription_id.clone(),
-            tenant_id,
-            region: Some("eastus".to_string()),
-            credentials: AzureCredentials::ServicePrincipal {
-                client_id,
-                client_secret,
-            },
-            service_overrides: None,
+        let config = {
+            let mut cfg = alien_azure_clients::live_test::live_test_config("MANAGEMENT");
+            cfg.region = Some("eastus".to_string());
+            cfg
         };
 
         info!(

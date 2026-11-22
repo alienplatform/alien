@@ -34,23 +34,14 @@ impl AsyncTestContext for ManagedIdentityTestContext {
             .expect("AZURE_MANAGEMENT_SUBSCRIPTION_ID not set");
         let tenant_id =
             env::var("AZURE_MANAGEMENT_TENANT_ID").expect("AZURE_MANAGEMENT_TENANT_ID not set");
-        let client_id =
-            env::var("AZURE_MANAGEMENT_CLIENT_ID").expect("AZURE_MANAGEMENT_CLIENT_ID not set");
-        let client_secret = env::var("AZURE_MANAGEMENT_CLIENT_SECRET")
-            .expect("AZURE_MANAGEMENT_CLIENT_SECRET not set");
         let resource_group_name = env::var("ALIEN_TEST_AZURE_RESOURCE_GROUP")
             .expect("ALIEN_TEST_AZURE_RESOURCE_GROUP not set");
 
         // Create platform config with service principal credentials
-        let client_config = AzureClientConfig {
-            subscription_id: subscription_id.clone(),
-            tenant_id,
-            region: Some("eastus".to_string()),
-            credentials: AzureCredentials::ServicePrincipal {
-                client_id,
-                client_secret,
-            },
-            service_overrides: None,
+        let client_config = {
+            let mut cfg = alien_azure_clients::live_test::live_test_config("MANAGEMENT");
+            cfg.region = Some("eastus".to_string());
+            cfg
         };
 
         info!(

@@ -9,7 +9,7 @@ Set up `.env.test` with Azure credentials:
 AZURE_MANAGEMENT_SUBSCRIPTION_ID=your_subscription_id
 AZURE_MANAGEMENT_TENANT_ID=your_tenant_id
 AZURE_MANAGEMENT_CLIENT_ID=your_client_id
-AZURE_MANAGEMENT_CLIENT_SECRET=your_client_secret
+# credentials: CI sets AZURE_MANAGEMENT_FEDERATED_TOKEN_FILE; on a laptop run `az login`
 ALIEN_TEST_AZURE_RESOURCE_GROUP=your_test_resource_group
 ```
 
@@ -20,14 +20,13 @@ use alien_azure_clients::keyvault::{
     AzureKeyVaultCertificatesClient, AzureKeyVaultManagementClient, AzureKeyVaultSecretsClient,
     KeyVaultCertificatesApi, KeyVaultManagementApi, KeyVaultSecretsApi,
 };
-use alien_azure_clients::models::certificates::{CertificateBundle, CertificateImportParameters};
+use alien_azure_clients::models::certificates::CertificateImportParameters;
 use alien_azure_clients::models::keyvault::{
     AccessPolicyEntry, Permissions, PermissionsSecretsItem, Sku, SkuFamily, SkuName,
     VaultCreateOrUpdateParameters, VaultProperties,
 };
 use alien_azure_clients::models::secrets::SecretSetParameters;
 use alien_azure_clients::AzureTokenCache;
-use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_client_core::{Error, ErrorData};
 use alien_error::{AlienError, Context};
 use base64::{engine::general_purpose, Engine as _};
@@ -59,24 +58,15 @@ impl AsyncTestContext for KeyVaultTestContext {
 
         let subscription_id = env::var("AZURE_MANAGEMENT_SUBSCRIPTION_ID")
             .expect("AZURE_MANAGEMENT_SUBSCRIPTION_ID not set");
-        let tenant_id =
+        let _tenant_id =
             env::var("AZURE_MANAGEMENT_TENANT_ID").expect("AZURE_MANAGEMENT_TENANT_ID not set");
-        let client_id =
-            env::var("AZURE_MANAGEMENT_CLIENT_ID").expect("AZURE_MANAGEMENT_CLIENT_ID not set");
-        let client_secret = env::var("AZURE_MANAGEMENT_CLIENT_SECRET")
-            .expect("AZURE_MANAGEMENT_CLIENT_SECRET not set");
         let resource_group_name = env::var("ALIEN_TEST_AZURE_RESOURCE_GROUP")
             .expect("ALIEN_TEST_AZURE_RESOURCE_GROUP not set");
 
-        let config = AzureClientConfig {
-            subscription_id: subscription_id.clone(),
-            tenant_id,
-            region: Some("eastus".to_string()),
-            credentials: AzureCredentials::ServicePrincipal {
-                client_id,
-                client_secret,
-            },
-            service_overrides: None,
+        let config = {
+            let mut cfg = alien_azure_clients::live_test::live_test_config("MANAGEMENT");
+            cfg.region = Some("eastus".to_string());
+            cfg
         };
 
         info!(
@@ -753,15 +743,10 @@ async fn test_error_handling(ctx: &mut KeyVaultTestContext) {
 #[test_context(KeyVaultTestContext)]
 #[tokio::test]
 async fn test_invalid_credentials(_ctx: &mut KeyVaultTestContext) {
-    let invalid_config = AzureClientConfig {
-        subscription_id: "fake-subscription".to_string(),
-        tenant_id: "fake-tenant".to_string(),
-        region: Some("eastus".to_string()),
-        credentials: AzureCredentials::ServicePrincipal {
-            client_id: "fake-client-id".to_string(),
-            client_secret: "fake-client-secret".to_string(),
-        },
-        service_overrides: None,
+    let invalid_config = {
+        let mut cfg = alien_azure_clients::live_test::live_test_config("MANAGEMENT");
+        cfg.region = Some("eastus".to_string());
+        cfg
     };
     let invalid_client =
         AzureKeyVaultManagementClient::new(Client::new(), AzureTokenCache::new(invalid_config));
