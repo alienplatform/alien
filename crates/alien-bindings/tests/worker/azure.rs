@@ -32,8 +32,6 @@ impl AsyncTestContext for AzureProviderTestContext {
             .expect("AZURE_MANAGEMENT_TENANT_ID must be set in .env.test");
         let _client_id = env::var("AZURE_MANAGEMENT_CLIENT_ID")
             .expect("AZURE_MANAGEMENT_CLIENT_ID must be set in .env.test");
-        let _client_secret = env::var("AZURE_MANAGEMENT_CLIENT_SECRET")
-            .expect("AZURE_MANAGEMENT_CLIENT_SECRET must be set in .env.test");
         let resource_group_name = env::var("ALIEN_TEST_AZURE_RESOURCE_GROUP")
             .expect("ALIEN_TEST_AZURE_RESOURCE_GROUP must be set in .env.test");
         let managed_environment_name = env::var("ALIEN_TEST_AZURE_MANAGED_ENVIRONMENT_NAME")
