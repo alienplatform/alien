@@ -128,9 +128,33 @@ development. A sandbox without the gateway (egress `none`) refuses `updateCreden
 gateway older than this release refuses it too, with a message to re-run setup; it never
 accepts rules it cannot apply.
 
-On GCP the sandbox CA is not installed in the sandbox yet: `link` rules work as everywhere,
-and a `host` rule needs the sandbox's processes to trust the CA, which they do not do on
-their own there yet.
+On GCP the agent in the sandbox forwards traffic to the gateway, and it installs the CA when
+the sandbox is created: it writes the trust bundle (the image's roots plus the CA) and every
+command gets the same trust variables as elsewhere. A sandbox whose agent image predates this
+refuses a `host` rule with a message that says so (`link` rules keep working, since they need no
+CA); create the sandbox again with the agent image of the current release.
+
+## Refusals
+
+`updateCredentials` fails loudly and applies nothing when it cannot give the guarantees above:
+
+| Situation | Message says |
+|---|---|
+| The deployment's gateway image predates credentials | per-sandbox credentials are not available with the egress gateway image this release installs; a later release enables them |
+| The installed gateway is older than this release needs | the egress gateway does not serve per-sandbox credentials yet; deploy a release that installs a newer egress gateway and re-run setup |
+| A replica did not acknowledge | a retryable error; call again (the list replaces, so repeating is safe) |
+| GCP, `host` rule, agent image without the CA install | this sandbox's agent predates trust-bundle delivery |
+| The sandbox has no egress policy (egress `none`) | the sandbox has no gateway enforcement |
+
+## Limits we accepted
+
+- Rules live only in gateway memory. After a gateway restart a replica catches up from its peers;
+  if every replica restarted, send the list again (calling it each turn already does).
+- One update per sandbox is acknowledged by every replica or it fails: no partial success.
+- A `host` rule is HTTPS only, a `link` rule is plain HTTP only. A client with its own trust
+  store needs the CA imported (see above).
+- A destination that echoes request headers can show the value to the sandbox.
+- Only the CA is delivered into the sandbox, never a key; rules cannot widen the egress policy.
 
 ### Local development
 
