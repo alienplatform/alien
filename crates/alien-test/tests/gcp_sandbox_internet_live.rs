@@ -849,6 +849,330 @@ fn provider(
         .map_err(|error| anyhow::anyhow!("bindings: {error}"))
 }
 
+// ---- Temporary: which credential the private (PSC) ingress edge accepts --------------------------
+// Removed once the private ingress fix is proven. Records only each variant's status and the
+// edge's error text; no token is ever written anywhere.
+
+/// The signing key id of a JWT (its public header), or empty.
+fn jwt_kid(token: &str) -> String {
+    use base64::Engine as _;
+    token
+        .split('.')
+        .next()
+        .and_then(|header| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(header)
+                .ok()
+        })
+        .and_then(|header| serde_json::from_slice::<serde_json::Value>(&header).ok())
+        .and_then(|header| header["kid"].as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+async fn probe_private_ingress(
+    deployed: &Deployed,
+    workload: &GcpClientConfig,
+    endpoint_port: u16,
+    proof: &mut Proof,
+) -> anyhow::Result<()> {
+    use alien_gcp_clients::gcp::agent_platform::{
+        AgentPlatformApi, AgentPlatformClient, SandboxCreateRequest,
+    };
+    use alien_gcp_clients::gcp::iam::{GenerateIdTokenRequest, SignJwtRequest};
+    let field = |key: &str| {
+        deployed.binding[key]
+            .as_str()
+            .map(str::to_string)
+            .with_context(|| format!("the binding names no {key}"))
+    };
+    // The client takes the engine id; the binding names the engine's full resource name.
+    let engine = field("engine")?
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    let template = field("template")?;
+    let signer = field("previewServiceAccount")?;
+    let http = reqwest::Client::new();
+    let platform = AgentPlatformClient::new(http.clone(), workload.clone());
+    let iam = IamClient::new(http.clone(), workload.clone());
+    let display = format!("probe-{}", uuid::Uuid::new_v4().simple());
+    platform
+        .create_sandbox(
+            &engine,
+            SandboxCreateRequest {
+                display_name: Some(display.clone()),
+                sandbox_environment_template: Some(template),
+                sandbox_environment_snapshot: None,
+                ttl: Some("900s".to_string()),
+            },
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("probe create: {error}"))?;
+    // A listing carries no routing token; read each listed sandbox to get it.
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let (name, routing, attachment) = loop {
+        let found = platform
+            .list_sandboxes_by_display_names(&engine, &[display.clone()])
+            .await
+            .map_err(|error| anyhow::anyhow!("probe list: {error}"))?;
+        let mut ready = None;
+        for listed in found {
+            let Some(name) = listed.name.clone() else {
+                continue;
+            };
+            let id = name.rsplit('/').next().unwrap_or_default().to_string();
+            let Ok(sandbox) = platform.get_sandbox(&engine, &id).await else {
+                continue;
+            };
+            let Some(info) = sandbox.connection_info.clone() else {
+                continue;
+            };
+            let Some(token) = info.routing_token.clone() else {
+                continue;
+            };
+            if sandbox.state.as_deref() == Some("STATE_RUNNING") {
+                let raw = serde_json::to_value(&info).unwrap_or_default();
+                let attachment = raw["serviceAttachment"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                ready = Some((name, token, attachment));
+            }
+        }
+        if let Some(ready) = ready {
+            break ready;
+        }
+        if Instant::now() > deadline {
+            bail!("probe sandbox did not run within 300 s");
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    };
+    let id = name.rsplit('/').next().unwrap_or_default().to_string();
+    proof.note(format!("[probe] sandbox {name} attachment {attachment}"));
+    let endpoint_url = format!("http://{}/", deployed.private_endpoint);
+    let jwt = |aud: String| {
+        let iam = &iam;
+        let signer = signer.clone();
+        async move {
+            let now = chrono::Utc::now().timestamp();
+            let payload = serde_json::json!({
+                "iat": now, "exp": now + 300, "iss": signer, "sub": signer,
+                "nonce": uuid::Uuid::new_v4().as_u128() % 1_000_000_000 + 1, "aud": aud,
+            });
+            iam.sign_jwt(
+                signer.clone(),
+                SignJwtRequest {
+                    payload: payload.to_string(),
+                },
+            )
+            .await
+            .map(|signed| signed.signed_jwt)
+            .map_err(|error| format!("sign: {error}"))
+        }
+    };
+    let body = serde_json::json!({"v": 1, "op": "health"}).to_string();
+    // Time to first acceptance: every 30 s, one fresh SDK-shape JWT and the first JWT ever
+    // refused, resent unchanged while it is still valid. A refused JWT that later passes as is
+    // points at the edge learning the key late; a fresh one passing while the old one still
+    // fails points at the token itself.
+    let running_at = Instant::now();
+    let mut first_refused: Option<(String, i64)> = None;
+    let mut refused_passed = false;
+    for _ in 0..20u32 {
+        let mut accepted = false;
+        let fresh = jwt("https://aiplatform.googleapis.com/".into()).await;
+        let mut tries = vec![("fresh".to_string(), fresh.clone())];
+        if let Some((token, signed_at)) = &first_refused {
+            if chrono::Utc::now().timestamp() < signed_at + 280 {
+                tries.push(("first refused, unchanged".to_string(), Ok(token.clone())));
+            }
+        }
+        for (label, credential) in tries {
+            let Ok(credential) = credential else {
+                proof.note(format!(
+                    "[probe] t+{}s {label}: no credential",
+                    running_at.elapsed().as_secs()
+                ));
+                continue;
+            };
+            let status = http
+                .post(format!("http://127.0.0.1:{endpoint_port}/"))
+                .bearer_auth(&credential)
+                .header("X-Sandbox-Routing-Token", &routing)
+                .header(
+                    "X-Sandbox-Port",
+                    alien_core::sandbox_image::AGENT_PORT.to_string(),
+                )
+                .header("content-type", "application/json")
+                .timeout(Duration::from_secs(60))
+                .body(body.clone())
+                .send()
+                .await
+                .map(|response| response.status());
+            proof.note(format!(
+                "[probe] t+{}s {label} kid={}: {status:?}",
+                running_at.elapsed().as_secs(),
+                jwt_kid(&credential)
+            ));
+            match status {
+                Ok(status) if status.is_success() => {
+                    if label == "fresh" {
+                        accepted = true;
+                    } else {
+                        refused_passed = true;
+                    }
+                }
+                Ok(status)
+                    if status == reqwest::StatusCode::UNAUTHORIZED && first_refused.is_none() =>
+                {
+                    first_refused = Some((credential, chrono::Utc::now().timestamp()));
+                }
+                _ => {}
+            }
+        }
+        // Stop once a fresh JWT passes and the first refused one has passed too or expired.
+        let refused_pending = first_refused
+            .as_ref()
+            .is_some_and(|(_, at)| !refused_passed && chrono::Utc::now().timestamp() < at + 280);
+        if accepted && !refused_pending {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    }
+    // Six fresh JWTs of the shape the SDK signs: whether the edge refuses only some, and each
+    // one's signing key id (`kid`, public), tell an intermittent refusal from a wrong shape.
+    let mut variants: Vec<(String, Result<String, String>)> = Vec::new();
+    for attempt in 1..=6 {
+        let signed = jwt("https://aiplatform.googleapis.com/".into()).await;
+        let kid = signed.as_deref().map(jwt_kid).unwrap_or_default();
+        let iat = chrono::Utc::now().timestamp();
+        variants.push((
+            format!("jwt aud=aiplatform #{attempt} kid={kid} signed_at={iat}"),
+            signed,
+        ));
+    }
+    // The signer's Google-managed keys and their start times: a refusal that follows a key
+    // created minutes ago points at a key the private edge has not learned yet.
+    if let Ok(token) = std::env::var("GOOGLE_TARGET_ACCESS_TOKEN") {
+        let keys = http
+            .get(format!(
+                "https://iam.googleapis.com/v1/projects/-/serviceAccounts/{signer}/keys?keyTypes=SYSTEM_MANAGED"
+            ))
+            .bearer_auth(token)
+            .send()
+            .await;
+        let observed = match keys {
+            Err(error) => format!("no answer: {error}"),
+            Ok(response) => {
+                let status = response.status();
+                let body: serde_json::Value = response.json().await.unwrap_or_default();
+                let keys: Vec<String> = body["keys"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|key| {
+                        format!(
+                            "{} valid_after={}",
+                            key["name"]
+                                .as_str()
+                                .unwrap_or("")
+                                .rsplit('/')
+                                .next()
+                                .unwrap_or(""),
+                            key["validAfterTime"].as_str().unwrap_or("")
+                        )
+                    })
+                    .collect();
+                format!("{status} {}", keys.join(", "))
+            }
+        };
+        proof.note(format!(
+            "[probe] signer keys at {}: {observed}",
+            chrono::Utc::now()
+        ));
+    }
+    variants.push(("jwt aud=endpoint url".to_string(), jwt(endpoint_url).await));
+    variants.push((
+        "jwt aud=service attachment".to_string(),
+        jwt(attachment.clone()).await,
+    ));
+    variants.push((
+        "jwt aud=sandbox resource name".to_string(),
+        jwt(name.clone()).await,
+    ));
+    variants.push((
+        "signer access token".to_string(),
+        iam.generate_access_token(
+            signer.clone(),
+            GenerateAccessTokenRequest {
+                scope: vec!["https://www.googleapis.com/auth/cloud-platform".to_string()],
+                delegates: None,
+                lifetime: Some("600s".to_string()),
+            },
+        )
+        .await
+        .map(|token| token.access_token)
+        .map_err(|error| format!("access token: {error}")),
+    ));
+    variants.push((
+        "signer id token aud=aiplatform".to_string(),
+        iam.generate_id_token(
+            signer.clone(),
+            GenerateIdTokenRequest {
+                audience: "https://aiplatform.googleapis.com/".to_string(),
+            },
+        )
+        .await
+        .map(|token| token.token)
+        .map_err(|error| format!("id token: {error}")),
+    ));
+    for (label, credential) in variants {
+        let observed = match credential {
+            Err(error) => format!("no credential: {error}"),
+            Ok(credential) => match http
+                .post(format!("http://127.0.0.1:{endpoint_port}/"))
+                .bearer_auth(credential)
+                .header("X-Sandbox-Routing-Token", &routing)
+                .header(
+                    "X-Sandbox-Port",
+                    alien_core::sandbox_image::AGENT_PORT.to_string(),
+                )
+                .header("content-type", "application/json")
+                .timeout(Duration::from_secs(60))
+                .body(body.clone())
+                .send()
+                .await
+            {
+                Err(error) => format!("no answer: {error}"),
+                Ok(response) => {
+                    let status = response.status();
+                    let date = response
+                        .headers()
+                        .get("date")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    let skew = chrono::DateTime::parse_from_rfc2822(&date)
+                        .map(|edge| (chrono::Utc::now().timestamp() - edge.timestamp()).to_string())
+                        .unwrap_or_else(|_| "?".to_string());
+                    let text = response.text().await.unwrap_or_default();
+                    let text: String = text.chars().take(240).collect();
+                    format!(
+                        "{status} edge_date={date:?} box_minus_edge_s={skew} {}",
+                        text.replace('\n', " ")
+                    )
+                }
+            },
+        };
+        proof.note(format!("[probe] {label}: {observed}"));
+    }
+    if let Err(error) = platform.delete_sandbox(&engine, &id).await {
+        proof.note(format!("[probe] delete {id}: {error}"));
+    }
+    Ok(())
+}
+
 async fn prove(
     sandbox: &dyn Sandbox,
     deployed: &Deployed,
@@ -977,6 +1301,11 @@ async fn gcp_internet_sandbox_egress_goes_through_the_gateway_only(ctx: &mut Gcp
                     _admin_tunnels.push((child, Forwarder::start(listen, port).await?));
                 }
                 let workload = act_as_workload(&deployed, &mut proof).await?;
+                if let Err(error) =
+                    probe_private_ingress(&deployed, &workload, endpoint_port, &mut proof).await
+                {
+                    proof.note(format!("[probe] stopped: {error:#}"));
+                }
                 let provider = provider(&deployed, workload, endpoint_port)?;
                 let sandbox = provider
                     .load_sandbox(SANDBOX)
