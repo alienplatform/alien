@@ -1011,16 +1011,19 @@ mod differential {
             .await;
             let mut record = Default::default();
             executor.with_context(|ctx| {
-                futures::executor::block_on(crate::sandbox::gcp_engine_setup::set_up_engine_access(
-                    ctx,
-                    &case.sandbox(),
-                    "eng",
-                    &mut record,
-                ))
+                futures::executor::block_on(
+                    crate::sandbox::gcp_engine_setup::set_up_engine_access(
+                        ctx,
+                        &case.sandbox(),
+                        "eng",
+                        &mut record,
+                    ),
+                )
                 .expect("engine access is placed")
             });
         } else {
-            let mut executor = executor_full(iam, platform, true, true, case == Case::Remote).await;
+            let mut executor =
+                executor_full(iam, platform, true, true, case == Case::Remote).await;
             executor.run_until_terminal().await.expect("create runs");
         }
         let calls = calls.lock().unwrap();
@@ -1038,10 +1041,7 @@ mod differential {
                 "the comparison is empty ({case:?}), so it proves nothing"
             );
             let direct = direct(case).await;
-            assert_eq!(
-                direct, package,
-                "direct setup and the package differ ({case:?})"
-            );
+            assert_eq!(direct, package, "direct setup and the package differ ({case:?})");
         }
     }
 
