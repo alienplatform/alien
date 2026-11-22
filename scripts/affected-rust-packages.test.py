@@ -29,8 +29,10 @@ PACKAGES = {
         "alien-cloudformation",
         "alien-helm",
         "alien-client-core",
+        "alien-stack-toml",
     )
 }
+PACKAGES["alien-platform-api"] = PurePosixPath("client-sdks/platform/rust")
 DEPENDENTS = {name: set() for name in PACKAGES}
 for dependent in ("alien-preflights", "alien-terraform", "alien-cloudformation", "alien-helm"):
     DEPENDENTS["alien-permissions"].add(dependent)
@@ -77,9 +79,15 @@ class Selection(unittest.TestCase):
         self.assertIn("package(alien-helm) |", result["test_filter"] + " |")
         self.assertNotIn("(package(alien-helm) &", result["test_filter"])
 
-    def test_alien_core_is_not_expanded_in_own_only_mode(self):
+    def test_alien_core_selects_only_the_checked_in_output_of_its_dependents(self):
         result = select(["crates/alien-core/src/lib.rs"])
-        self.assertEqual(result["packages"], "-p alien-client-core -p alien-core")
+        self.assertEqual(
+            result["packages"],
+            "-p alien-client-core -p alien-core -p alien-platform-api -p alien-stack-toml",
+        )
+        self.assertIn("package(alien-core)", result["test_filter"])
+        self.assertIn("(package(alien-stack-toml) & ((binary(schema) | binary(differential))))", result["test_filter"])
+        self.assertNotIn("alien-cli", result["test_filter"])
 
     def test_a_full_run_selects_every_package_without_a_filter(self):
         result = select(["crates/alien-core/src/lib.rs"], own_only=False)
@@ -128,18 +136,20 @@ class ConfigStillMatchesTheRepository(unittest.TestCase):
     def test_every_dependents_entry_names_a_real_dependent_and_test_target(self):
         for changed, entries in CONFIG["dependents"].items():
             for entry in entries:
-                manifest = (ROOT / "crates" / entry["package"] / "Cargo.toml").read_text()
+                directory = ROOT / entry.get("dir", f"crates/{entry['package']}")
+                manifest = (directory / "Cargo.toml").read_text()
                 self.assertRegex(manifest, rf"(?m)^{re.escape(changed)}\s*=", f"{entry['package']} does not depend on {changed}")
                 self.assertTrue(entry["why"])
                 for target in re.findall(r"binary\((\w+)\)", entry["filter"]):
                     if target == "generator":
                         continue
                     self.assertTrue(
-                        (ROOT / "crates" / entry["package"] / "tests" / f"{target}.rs").exists(),
+                        (directory / "tests" / f"{target}.rs").exists()
+                        or (directory / "tests" / target / "main.rs").exists(),
                         f"{entry['package']} has no test target {target}",
                     )
                 for module in re.findall(r"test\((\w+)\)", entry["filter"]):
-                    found = list((ROOT / "crates" / entry["package"] / "tests").rglob(f"{module}.rs"))
+                    found = list((directory / "tests").rglob(f"{module}.rs"))
                     self.assertTrue(found, f"{entry['package']} has no test module {module}")
 
     def test_every_repo_wide_check_has_a_reason_and_a_real_directory(self):

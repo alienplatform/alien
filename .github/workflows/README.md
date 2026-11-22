@@ -36,8 +36,11 @@ Three rules add to the changed packages' own tests:
    direct dependents that check its output (golden, snapshot, compatibility and
    permission-rendering tests), not their whole suites. The mapping is `dependents` in
    `scripts/ci-checks.json`; today `alien-permissions` selects targets in `alien-preflights`,
-   `alien-terraform`, `alien-cloudformation` and `alien-helm`. `alien-core` is not expanded
-   (most packages depend on it): use the label below.
+   `alien-terraform`, `alien-cloudformation` and `alien-helm`. `alien-core` selects only the
+   tests that compare checked-in output generated from its types: the `alien.toml` schemas
+   and fixtures in `alien-stack-toml`, and the platform client's round-trip tests against
+   its vendored spec. Its other dependents (most of the workspace) are not expanded: use the
+   label below.
 
 ## The `ci:full` label
 

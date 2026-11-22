@@ -26,6 +26,19 @@
     }
   ],
   "dependents": {
+    "alien-core": [
+      {
+        "package": "alien-stack-toml",
+        "filter": "binary(schema) | binary(differential)",
+        "why": "schema/ holds the alien.toml schemas generated from alien-core's types, and the differential test resolves the checked-in fixtures into alien_core::Stack. A change to a core type makes them stale."
+      },
+      {
+        "package": "alien-platform-api",
+        "dir": "client-sdks/platform/rust",
+        "filter": "binary(runtime_metadata_round_trip) | binary(automatic_setup) | binary(event_state) | binary(observed_inventory) | binary(protected_stack_settings) | binary(quota_settings) | binary(stored_secret_presence)",
+        "why": "These send alien-core values through the client generated from the checked-in openapi.json. A core field the spec lacks is dropped, so a core change without a regenerated spec fails here."
+      }
+    ],
     "alien-permissions": [
       {
         "package": "alien-preflights",
