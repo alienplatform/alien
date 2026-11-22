@@ -10,7 +10,7 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::{ErrorData, Result};
 
@@ -327,18 +327,6 @@ mod oauth_flow {
                 })
         }
 
-        /// Persist tokens from a login or refresh response, keeping the
-        /// existing refresh token when the response doesn't carry a new one.
-        fn save_response(&self, t: &TokenResponse) -> Result<()> {
-            // A corrupt existing file must not block `alien login` — it gets
-            // rewritten here; only the previous refresh token would be lost.
-            let existing_refresh = self.load().ok().flatten().and_then(|s| s.refresh_token);
-            self.save(&StoredTokens {
-                access_token: t.access_token.clone(),
-                refresh_token: t.refresh_token.clone().or(existing_refresh),
-            })
-        }
-
         /// Store a login response as it came: a response without a refresh token must not
         /// inherit the previous session's.
         fn save_login(&self, t: &TokenResponse) -> Result<()> {
@@ -392,7 +380,7 @@ mod oauth_flow {
 
         let success_url = derive_dashboard_success_url(&base_url);
         let tokens = login_pkce(&base_url, opts.no_browser, success_url.as_deref()).await?;
-        store_tokens(&tokens)?;
+        TokenStore::new()?.save_login(&tokens)?;
         let auth_value = format!("Bearer {}", tokens.access_token);
         let client = client_with_header(&auth_value)?;
         Ok(build_auth_http(client, base_url, Some(tokens.access_token)))
@@ -416,8 +404,7 @@ mod oauth_flow {
         // leaves the user signed in. The login response replaces the saved session as it came.
         let store = TokenStore::new()?;
         let tokens = login_with_ui(&base_url, opts.no_browser).await?;
-        store.save_login(&tokens)?;
-        remove_profile()?;
+        replace_session(&store, &cfg_path(), &tokens)?;
         let auth_value = format!("Bearer {}", tokens.access_token);
         let client = client_with_header(&auth_value)?;
         Ok(build_auth_http(client, base_url, Some(tokens.access_token)))
@@ -426,19 +413,29 @@ mod oauth_flow {
     /// Explicit logout util
     pub fn logout() -> Result<()> {
         TokenStore::new()?.clear()?;
-        remove_profile()
+        remove_profile(&cfg_path())
+    }
+
+    /// Replace the saved session with a fresh login. The order matters: if the profile cannot
+    /// be removed nothing has changed yet, so the reported failure is true; the old credentials
+    /// file is deleted before the new one is written, so the new file is created fresh with
+    /// mode 0600; and a new session is never on disk next to an older workspace profile.
+    fn replace_session(store: &TokenStore, profile: &Path, tokens: &TokenResponse) -> Result<()> {
+        remove_profile(profile)?;
+        store.clear()?;
+        store.save_login(tokens)
     }
 
     /// Remove the saved workspace profile.
-    fn remove_profile() -> Result<()> {
-        match fs::remove_file(cfg_path()) {
+    fn remove_profile(profile: &Path) -> Result<()> {
+        match fs::remove_file(profile) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e
                 .into_alien_error()
                 .context(ErrorData::FileOperationFailed {
                     operation: "delete".to_string(),
-                    file_path: cfg_path().display().to_string(),
+                    file_path: profile.display().to_string(),
                     reason: "Failed to delete the saved workspace profile".to_string(),
                 })),
         }
@@ -538,10 +535,6 @@ mod oauth_flow {
             }
         }
         true
-    }
-
-    fn store_tokens(t: &TokenResponse) -> Result<()> {
-        TokenStore::new()?.save_response(t)
     }
 
     /// Result of a refresh-token exchange the server answered.
@@ -941,86 +934,12 @@ mod oauth_flow {
         }
 
         #[test]
-        fn save_response_keeps_existing_refresh_token_when_response_omits_it() {
-            let (_dir, store) = temp_store();
-            store
-                .save(&StoredTokens {
-                    access_token: "access-1".to_string(),
-                    refresh_token: Some("refresh-1".to_string()),
-                })
-                .expect("seed session");
-
-            store
-                .save_response(&TokenResponse {
-                    access_token: "access-2".to_string(),
-                    refresh_token: None,
-                    expires_in: Some(3600),
-                })
-                .expect("save_response should succeed");
-
-            let loaded = store
-                .load()
-                .expect("load should succeed")
-                .expect("session should exist");
-            assert_eq!(loaded.access_token, "access-2");
-            assert_eq!(loaded.refresh_token.as_deref(), Some("refresh-1"));
-        }
-
-        #[test]
-        fn save_login_does_not_inherit_previous_refresh_token() {
-            let (_dir, store) = temp_store();
-            store
-                .save(&StoredTokens {
-                    access_token: "old-access".to_string(),
-                    refresh_token: Some("old-refresh".to_string()),
-                })
-                .expect("seed session");
-
-            store
-                .save_login(&TokenResponse {
-                    access_token: "new-access".to_string(),
-                    refresh_token: None,
-                    expires_in: Some(3600),
-                })
-                .expect("save_login should succeed");
-
-            let loaded = store.load().expect("load").expect("session should exist");
-            assert_eq!(loaded.access_token, "new-access");
-            assert_eq!(loaded.refresh_token, None);
-        }
-
-        #[test]
-        fn save_response_takes_rotated_refresh_token() {
-            let (_dir, store) = temp_store();
-            store
-                .save(&StoredTokens {
-                    access_token: "access-1".to_string(),
-                    refresh_token: Some("refresh-1".to_string()),
-                })
-                .expect("seed session");
-
-            store
-                .save_response(&TokenResponse {
-                    access_token: "access-2".to_string(),
-                    refresh_token: Some("refresh-2".to_string()),
-                    expires_in: Some(3600),
-                })
-                .expect("save_response should succeed");
-
-            let loaded = store
-                .load()
-                .expect("load should succeed")
-                .expect("session should exist");
-            assert_eq!(loaded.refresh_token.as_deref(), Some("refresh-2"));
-        }
-
-        #[test]
-        fn save_response_recovers_from_corrupt_file() {
+        fn save_login_overwrites_corrupt_file() {
             let (_dir, store) = temp_store();
             fs::write(&store.path, "not-json{{{").expect("write corrupt file");
 
             store
-                .save_response(&TokenResponse {
+                .save_login(&TokenResponse {
                     access_token: "access-1".to_string(),
                     refresh_token: Some("refresh-1".to_string()),
                     expires_in: Some(3600),
@@ -1032,6 +951,79 @@ mod oauth_flow {
                 .expect("load should succeed")
                 .expect("session should exist");
             assert_eq!(loaded.access_token, "access-1");
+        }
+
+        #[test]
+        fn replace_session_fails_before_changing_anything_when_profile_cannot_be_removed() {
+            let (dir, store) = temp_store();
+            store
+                .save(&StoredTokens {
+                    access_token: "old-access".to_string(),
+                    refresh_token: Some("old-refresh".to_string()),
+                })
+                .expect("seed session");
+            // A non-empty directory makes remove_file fail with something other than NotFound.
+            let profile = dir.path().join("profile.json");
+            fs::create_dir_all(profile.join("inner")).expect("make blocking directory");
+
+            let result = replace_session(
+                &store,
+                &profile,
+                &TokenResponse {
+                    access_token: "new-access".to_string(),
+                    refresh_token: None,
+                    expires_in: Some(3600),
+                },
+            );
+
+            assert!(result.is_err());
+            let loaded = store.load().expect("load").expect("session should exist");
+            assert_eq!(loaded.access_token, "old-access");
+            assert_eq!(loaded.refresh_token.as_deref(), Some("old-refresh"));
+        }
+
+        #[test]
+        fn replace_session_drops_old_profile_and_refresh_token_and_writes_0600() {
+            let (dir, store) = temp_store();
+            store
+                .save(&StoredTokens {
+                    access_token: "old-access".to_string(),
+                    refresh_token: Some("old-refresh".to_string()),
+                })
+                .expect("seed session");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&store.path, fs::Permissions::from_mode(0o644))
+                    .expect("loosen old file mode");
+            }
+            let profile = dir.path().join("profile.json");
+            fs::write(&profile, "{}").expect("write old profile");
+
+            replace_session(
+                &store,
+                &profile,
+                &TokenResponse {
+                    access_token: "new-access".to_string(),
+                    refresh_token: None,
+                    expires_in: Some(3600),
+                },
+            )
+            .expect("replace_session should succeed");
+
+            assert!(!profile.exists());
+            let loaded = store.load().expect("load").expect("session should exist");
+            assert_eq!(loaded.access_token, "new-access");
+            assert_eq!(loaded.refresh_token, None);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = fs::metadata(&store.path)
+                    .expect("stat")
+                    .permissions()
+                    .mode();
+                assert_eq!(mode & 0o777, 0o600);
+            }
         }
 
         #[test]
