@@ -273,6 +273,42 @@ impl DeploymentPrerequisiteCheck for AzureInternetSandboxGatewayProtocolCheck {
     }
 }
 
+/// Google Cloud internet egress through the gateway is behind one switch
+/// ([`alien_core::gcp_sandbox_gateway::INTERNET_EGRESS_AVAILABLE`]). The compile-time check
+/// already refuses it at build and render; this is the backstop for a deployment prepared from a
+/// stack that skipped those, so setup never creates the gateway wiring while the switch is off.
+pub struct GcpInternetSandboxUnavailableCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for GcpInternetSandboxUnavailableCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("GCP_INTERNET_SANDBOX_UNAVAILABLE")
+    }
+
+    fn description(&self) -> &'static str {
+        "Google Cloud internet sandboxes go through the egress gateway, which is not available yet"
+    }
+
+    fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
+        state.platform == Platform::Gcp && alien_core::sandbox_egress::has_internet_sandbox(stack)
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        _state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        if alien_core::gcp_sandbox_gateway::internet_egress_available_for(stack) {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(vec![
+                alien_core::gcp_sandbox_gateway::INTERNET_SANDBOX_UNAVAILABLE.into(),
+            ]))
+        }
+    }
+}
+
 /// Private endpoints must never silently become internet-facing on unsupported targets.
 pub struct PrivateEndpointAccessCheck;
 
@@ -326,11 +362,19 @@ fn is_cloud_platform(platform: Platform) -> bool {
     matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
 }
 
-fn stack_requires_managed_container_backend(stack: &Stack) -> bool {
-    stack.resources().any(|(_, entry)| {
-        entry.config.downcast_ref::<Container>().is_some()
-            || entry.config.downcast_ref::<ComputeCluster>().is_some()
-    })
+/// Containers that need a managed container backend. On GCP and Azure the managed egress gateway
+/// is a declaration only: setup runs it on its own VMs, so it needs no backend.
+fn containers_requiring_backend(stack: &Stack, platform: Platform) -> Vec<String> {
+    stack
+        .resources()
+        .filter(|(resource_id, entry)| {
+            (entry.config.downcast_ref::<Container>().is_some()
+                || entry.config.downcast_ref::<ComputeCluster>().is_some())
+                && !(matches!(platform, Platform::Gcp | Platform::Azure)
+                    && alien_core::sandbox_egress::is_managed_gateway(stack, resource_id))
+        })
+        .map(|(resource_id, _)| resource_id.clone())
+        .collect()
 }
 
 /// Public HTTP containers whose domain Alien generates. Resources listed in
@@ -452,32 +496,21 @@ impl DeploymentPrerequisiteCheck for ManagedContainerBackendRequiredCheck {
         stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> bool {
-        is_cloud_platform(stack_state.platform) && stack_requires_managed_container_backend(stack)
+        is_cloud_platform(stack_state.platform)
+            && !containers_requiring_backend(stack, stack_state.platform).is_empty()
     }
 
     async fn check(
         &self,
         stack: &Stack,
-        _stack_state: &StackState,
+        stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<CheckResult> {
         if matches!(config.compute_backend, Some(ComputeBackend::Horizon(_))) {
             return Ok(CheckResult::success());
         }
 
-        let resources = stack
-            .resources()
-            .filter_map(|(resource_id, entry)| {
-                if entry.config.downcast_ref::<Container>().is_some()
-                    || entry.config.downcast_ref::<ComputeCluster>().is_some()
-                {
-                    Some(resource_id.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
+        let resources = containers_requiring_backend(stack, stack_state.platform).join(", ");
 
         Ok(CheckResult::failed(vec![format!(
             "Cloud container deployments require a managed container backend. \
@@ -1787,6 +1820,61 @@ mod tests {
         }
     }
 
+    /// The deployment backstop of the Google Cloud switch: a prepared internet stack is refused
+    /// with the message while the switch is off, and with it on the full gateway path (the
+    /// gateway Container) is planned and passes. Other modes and clouds are not looked at.
+    #[tokio::test]
+    async fn gcp_internet_deploys_only_once_the_switch_flips() {
+        let check = GcpInternetSandboxUnavailableCheck;
+        let config = deployment_config();
+        let gcp = stack_state(Platform::Gcp);
+        let internet = prepared(
+            sandbox_stack(alien_core::SandboxEgress::Internet),
+            Platform::Gcp,
+        )
+        .await;
+        assert!(check.should_run(&internet, &gcp, &config));
+        let refused = check.check(&internet, &gcp, &config).await.unwrap();
+        assert!(!refused.success);
+        assert_eq!(
+            refused.errors,
+            vec![alien_core::gcp_sandbox_gateway::INTERNET_SANDBOX_UNAVAILABLE.to_string()]
+        );
+        for egress in [
+            alien_core::SandboxEgress::None,
+            alien_core::SandboxEgress::Allow,
+        ] {
+            let stack = prepared(sandbox_stack(egress), Platform::Gcp).await;
+            assert!(!check.should_run(&stack, &gcp, &config));
+        }
+        for platform in [Platform::Aws, Platform::Azure, Platform::Kubernetes] {
+            assert!(!check.should_run(&internet, &stack_state(platform), &config));
+        }
+
+        // The switch alone is not the flip: a stack prepared with the gateway image this release
+        // pins is still refused, because that gateway cannot serve the sandbox binding.
+        let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
+        assert!(alien_core::sandbox_egress::has_sandbox_gateway(&internet));
+        let old_gateway = check.check(&internet, &gcp, &config).await.unwrap();
+        assert_eq!(
+            old_gateway.success,
+            alien_core::sandbox_egress::gateway_image_serves_admin_protocol(
+                alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE
+            )
+        );
+        // The flip: the switch on and the gateway pin bumped to an image that serves it.
+        let flipped = prepared(
+            sandbox_stack(alien_core::SandboxEgress::Internet),
+            Platform::Gcp,
+        )
+        .await;
+        assert_eq!(
+            alien_core::sandbox_egress::planned_gateway_image(&flipped),
+            alien_core::gcp_sandbox_gateway::FLIPPED_GATEWAY_IMAGE
+        );
+        assert!(check.check(&flipped, &gcp, &config).await.unwrap().success);
+    }
+
     async fn azure_protocol_check(stack: &Stack, platform: Platform) -> Option<CheckResult> {
         let check = AzureInternetSandboxGatewayProtocolCheck;
         let state = stack_state(platform);
@@ -1900,6 +1988,40 @@ mod tests {
             .unwrap();
 
         assert!(result.success);
+    }
+
+    /// On GCP and Azure setup runs the gateway on its own VMs: its declaration needs no container
+    /// backend, while any application container beside it still does.
+    #[tokio::test]
+    async fn managed_container_backend_exempts_the_gcp_gateway_declaration() {
+        assert_gateway_declaration_needs_no_backend(Platform::Gcp).await;
+    }
+
+    #[tokio::test]
+    async fn managed_container_backend_exempts_the_azure_gateway_declaration() {
+        assert_gateway_declaration_needs_no_backend(Platform::Azure).await;
+    }
+
+    async fn assert_gateway_declaration_needs_no_backend(platform: Platform) {
+        let config = deployment_config();
+        let check = ManagedContainerBackendRequiredCheck;
+        let stack = prepared(sandbox_stack(alien_core::SandboxEgress::Internet), platform).await;
+        assert!(stack
+            .resources
+            .contains_key(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID));
+        assert!(!check.should_run(&stack, &stack_state(platform), &config));
+
+        let mut with_app = stack.clone();
+        with_app
+            .resources
+            .insert("api".to_string(), create_container_entry("api"));
+        assert!(check.should_run(&with_app, &stack_state(platform), &config));
+        let result = check
+            .check(&with_app, &stack_state(platform), &config)
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.errors[0].contains("Found container resources: api."));
     }
 
     #[tokio::test]

@@ -166,6 +166,7 @@ pub(super) async fn configure(
             port: 3129,
             count: gateway_replicas(ctx),
             min_protocol: 0,
+            proxy_port: 0,
         }),
     }))
 }
@@ -896,6 +897,7 @@ mod tests {
                 port: 3129,
                 count: 1,
                 min_protocol: 0,
+                proxy_port: 0,
             })
         );
         let stored = vault.get_secret(egress::GATEWAY_CONFIG).await.unwrap();

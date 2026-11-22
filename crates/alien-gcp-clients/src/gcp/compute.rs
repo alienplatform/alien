@@ -116,6 +116,36 @@ pub trait ComputeApi: Send + Sync + Debug {
     async fn delete_subnetwork(&self, region: String, subnetwork_name: String)
         -> Result<Operation>;
 
+    // --- Network Attachment Operations ---
+
+    /// Lists the network attachments in a region, following every page.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/networkAttachments/list
+    async fn list_network_attachments(&self, region: String) -> Result<Vec<NetworkAttachment>>;
+
+    /// Gets a network attachment, with its producer connections.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/networkAttachments/get
+    async fn get_network_attachment(
+        &self,
+        region: String,
+        attachment_name: String,
+    ) -> Result<NetworkAttachment>;
+
+    /// Creates a network attachment.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/networkAttachments/insert
+    async fn insert_network_attachment(
+        &self,
+        region: String,
+        attachment: NetworkAttachment,
+    ) -> Result<Operation>;
+
+    /// Deletes a network attachment. Google refuses (412) while a producer is connected.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/networkAttachments/delete
+    async fn delete_network_attachment(
+        &self,
+        region: String,
+        attachment_name: String,
+    ) -> Result<Operation>;
+
     // --- Router Operations ---
 
     /// Lists routers in a region.
@@ -568,9 +598,21 @@ pub trait ComputeApi: Send + Sync + Debug {
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/instances/get
     async fn get_instance(&self, zone: String, instance_name: String) -> Result<Instance>;
 
+    /// Creates an instance.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/instances/insert
+    async fn insert_instance(&self, zone: String, instance: Instance) -> Result<Operation>;
+
     /// Deletes an instance.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/instances/delete
     async fn delete_instance(&self, zone: String, instance_name: String) -> Result<Operation>;
+
+    /// Stops a running instance (it keeps its disk and address).
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/instances/stop
+    async fn stop_instance(&self, zone: String, instance_name: String) -> Result<Operation>;
+
+    /// Starts a stopped instance.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/instances/start
+    async fn start_instance(&self, zone: String, instance_name: String) -> Result<Operation>;
 
     /// Attaches a disk to an instance.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/instances/attachDisk
@@ -725,6 +767,27 @@ impl ComputeClient {
     pub fn project_id(&self) -> &str {
         &self.project_id
     }
+
+    async fn instance_action(
+        &self,
+        zone: String,
+        instance_name: String,
+        action: &str,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/zones/{}/instances/{}/{}",
+            self.project_id, zone, instance_name, action
+        );
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Option::<()>::None,
+                &instance_name,
+            )
+            .await
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
@@ -851,6 +914,90 @@ impl ComputeApi for ComputeClient {
                 None,
                 Option::<()>::None,
                 &subnetwork_name,
+            )
+            .await
+    }
+
+    // --- Network Attachment Operations ---
+
+    async fn list_network_attachments(&self, region: String) -> Result<Vec<NetworkAttachment>> {
+        let path = format!(
+            "projects/{}/regions/{}/networkAttachments",
+            self.project_id, region
+        );
+        let mut attachments = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let query = page_token.take().map(|token| vec![("pageToken", token)]);
+            let page: NetworkAttachmentList = self
+                .base
+                .execute_request(
+                    Method::GET,
+                    &path,
+                    query,
+                    Option::<()>::None,
+                    "networkAttachments",
+                )
+                .await?;
+            attachments.extend(page.items);
+            match page.next_page_token.filter(|token| !token.is_empty()) {
+                Some(token) => page_token = Some(token),
+                None => return Ok(attachments),
+            }
+        }
+    }
+
+    async fn get_network_attachment(
+        &self,
+        region: String,
+        attachment_name: String,
+    ) -> Result<NetworkAttachment> {
+        let path = format!(
+            "projects/{}/regions/{}/networkAttachments/{}",
+            self.project_id, region, attachment_name
+        );
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                None,
+                Option::<()>::None,
+                &attachment_name,
+            )
+            .await
+    }
+
+    async fn insert_network_attachment(
+        &self,
+        region: String,
+        attachment: NetworkAttachment,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{}/networkAttachments",
+            self.project_id, region
+        );
+        let resource_name = attachment.name.clone().unwrap_or_default();
+        self.base
+            .execute_request(Method::POST, &path, None, Some(attachment), &resource_name)
+            .await
+    }
+
+    async fn delete_network_attachment(
+        &self,
+        region: String,
+        attachment_name: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{}/networkAttachments/{}",
+            self.project_id, region, attachment_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &attachment_name,
             )
             .await
     }
@@ -1994,6 +2141,22 @@ impl ComputeApi for ComputeClient {
         self.base
             .execute_request(Method::GET, &path, None, Option::<()>::None, &instance_name)
             .await
+    }
+
+    async fn insert_instance(&self, zone: String, instance: Instance) -> Result<Operation> {
+        let path = format!("projects/{}/zones/{}/instances", self.project_id, zone);
+        let resource_name = instance.name.clone().unwrap_or_default();
+        self.base
+            .execute_request(Method::POST, &path, None, Some(instance), &resource_name)
+            .await
+    }
+
+    async fn stop_instance(&self, zone: String, instance_name: String) -> Result<Operation> {
+        self.instance_action(zone, instance_name, "stop").await
+    }
+
+    async fn start_instance(&self, zone: String, instance_name: String) -> Result<Operation> {
+        self.instance_action(zone, instance_name, "start").await
     }
 
     async fn delete_instance(&self, zone: String, instance_name: String) -> Result<Operation> {
@@ -3290,6 +3453,73 @@ pub enum NetworkTier {
     Premium,
     /// Standard tier.
     Standard,
+}
+
+/// A Private Service Connect network attachment. A producer (here Google's sandbox tenant)
+/// connects to it and draws interface addresses from its subnetwork.
+/// See: https://cloud.google.com/compute/docs/reference/rest/v1/networkAttachments
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkAttachment {
+    /// Name of the attachment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Server-defined URL of the attachment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_link: Option<String>,
+
+    /// `ACCEPT_AUTOMATIC`, `ACCEPT_MANUAL` or `INVALID`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_preference: Option<String>,
+
+    /// URLs of the subnetworks producers draw addresses from.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subnetworks: Vec<String>,
+
+    /// Producer connections. Empty until a producer connects.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connection_endpoints: Vec<NetworkAttachmentConnectedEndpoint>,
+
+    /// Type of resource (always "compute#networkAttachment").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+/// One producer interface connected to a network attachment.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkAttachmentConnectedEndpoint {
+    /// `ACCEPTED`, `PENDING`, `REJECTED`, `CLOSED`, ...
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+
+    /// The interface's address in the attachment's subnetwork.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip_address: Option<String>,
+
+    /// Project number of the producer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id_or_num: Option<String>,
+
+    /// URL of the subnetwork the address comes from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subnetwork: Option<String>,
+}
+
+/// One page of network attachments.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkAttachmentList {
+    /// Attachments on this page.
+    #[serde(default)]
+    pub items: Vec<NetworkAttachment>,
+
+    /// Token for the next page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
 }
 
 /// List of routers.
@@ -6380,6 +6610,31 @@ pub struct SerialPortOutput {
 
 #[cfg(test)]
 mod tests {
+    /// The shape Compute answered for a connected attachment in a live project: a connected
+    /// attachment lists its producer interfaces, an unconnected one lists none.
+    #[test]
+    fn a_network_attachment_reads_its_producer_connections() {
+        let connected: NetworkAttachment = serde_json::from_value(serde_json::json!({
+            "kind": "compute#networkAttachment",
+            "name": "att",
+            "connectionPreference": "ACCEPT_AUTOMATIC",
+            "subnetworks": ["https://www.googleapis.com/compute/v1/projects/p/regions/us-central1/subnetworks/att"],
+            "connectionEndpoints": [
+                {"status": "ACCEPTED", "projectIdOrNum": "123", "subnetwork": "s", "ipAddress": "10.30.0.2"},
+                {"status": "ACCEPTED", "projectIdOrNum": "123", "subnetwork": "s", "ipAddress": "10.30.0.3"}
+            ]
+        }))
+        .expect("a connected attachment reads");
+        assert_eq!(connected.connection_endpoints.len(), 2);
+        assert_eq!(
+            connected.connection_endpoints[0].status.as_deref(),
+            Some("ACCEPTED")
+        );
+        let idle: NetworkAttachment =
+            serde_json::from_value(serde_json::json!({"name": "idle"})).expect("an idle one reads");
+        assert!(idle.connection_endpoints.is_empty());
+    }
+
     use super::*;
 
     const SERVICE_ATTACHMENT: &str =

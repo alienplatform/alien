@@ -220,14 +220,24 @@ async fn azure_internet_needs_an_agent_image_not_a_catalog_entry() {
     assert!(!rendered.contains("Alien sandbox agent"), "{rendered}");
 }
 
-/// Google Cloud's `internet` is native open outbound: it plans with no gateway, and an
-/// allowlist default policy is refused by name.
+/// With the switch flipped, Google Cloud's `internet` plans like every cloud's: through the
+/// gateway, so a default policy that names hosts is accepted at plan time too.
 #[tokio::test]
-async fn gcp_plans_internet_without_a_gateway_and_refuses_an_allowlist_default() {
+async fn gcp_plans_internet_and_an_allowlist_default() {
+    let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
     let mut declared = sandbox(None);
     declared.egress = SandboxEgress::Internet;
+    // A Google Cloud internet sandbox needs a profile that holds execute on it.
+    let granted = |sandbox: Sandbox| {
+        let mut stack = stack_with(sandbox);
+        stack.permissions.profiles.insert(
+            "operator".to_string(),
+            PermissionProfile::new().resource("agent", ["sandbox/execute"]),
+        );
+        stack
+    };
     let result = PreflightRunner::new()
-        .run_compile_time_checks(&stack_with(declared.clone()), Platform::Gcp)
+        .run_compile_time_checks(&granted(declared.clone()), Platform::Gcp)
         .await
         .expect("preflight runs");
     assert!(result.success, "{result:?}");
@@ -236,14 +246,10 @@ async fn gcp_plans_internet_without_a_gateway_and_refuses_an_allowlist_default()
         allow: vec!["api.example.com".into()],
     });
     let result = PreflightRunner::new()
-        .run_compile_time_checks(&stack_with(declared), Platform::Gcp)
+        .run_compile_time_checks(&granted(declared), Platform::Gcp)
         .await
         .expect("preflight runs");
-    assert!(!result.success);
-    assert!(
-        format!("{result:?}").contains("Google Cloud sandboxes have no outbound allowlist"),
-        "{result:?}"
-    );
+    assert!(result.success, "{result:?}");
 }
 
 /// Image permissions and the image's own pause and resume steps are AWS Lambda MicroVM only.

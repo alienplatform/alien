@@ -206,8 +206,8 @@ pub async fn serve(listener: TcpListener, replicas: Arc<Replicas>) {
     }
 }
 
-/// Starts the forwarder when the Azure backend asked for it. The listener is bound before this
-/// returns, so the proxy address works as soon as the workload starts.
+/// Starts the forwarder when the backend asked for it in the environment. The listener is bound
+/// before this returns, so the proxy address works as soon as the workload starts.
 pub fn spawn_from_env() -> Result<(), String> {
     let Some(list) = std::env::var(ENV_PROXY_REPLICAS)
         .ok()
@@ -228,6 +228,11 @@ pub fn spawn_from_env() -> Result<(), String> {
         .filter(|address| !address.is_empty())
         .map(str::to_string)
         .collect();
+    spawn(listen, addresses)
+}
+
+/// Binds `listen` and forwards each connection to the replicas, on a thread of its own.
+pub fn spawn(listen: SocketAddr, addresses: Vec<String>) -> Result<(), String> {
     let std_listener = std::net::TcpListener::bind(listen)
         .map_err(|error| format!("cannot bind the proxy failover listener on {listen}: {error}"))?;
     std_listener
@@ -249,6 +254,94 @@ pub fn spawn_from_env() -> Result<(), String> {
         });
     });
     Ok(())
+}
+
+/// Where the forwarder listens when the replicas arrive from the control channel instead of the
+/// environment. Commands' proxy variables point here.
+pub const CONTROL_CHANNEL_LISTEN: &str = "127.0.0.1:18128";
+
+/// The most replicas a control-channel list may name.
+const MAX_REPLICAS: usize = 4;
+
+/// Checks a replica list that came over the control channel: one to four `ip:port` entries, each
+/// a private IPv4 address (RFC 1918) and a non-zero port. A hostname, a public, loopback or
+/// link-local address, or a duplicate is refused, so the forwarder can only ever dial inside the
+/// deployment's own network.
+pub fn validate_replicas(list: &[String]) -> Result<Vec<String>, String> {
+    if list.is_empty() || list.len() > MAX_REPLICAS {
+        return Err(format!(
+            "the proxy replica list must name 1 to {MAX_REPLICAS} addresses"
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for entry in list {
+        let address: std::net::SocketAddrV4 = entry
+            .parse()
+            .map_err(|_| format!("proxy replica '{entry}' is not an IPv4 ip:port address"))?;
+        if address.port() == 0 {
+            return Err(format!("proxy replica '{entry}' has port 0"));
+        }
+        if !address.ip().is_private() {
+            return Err(format!(
+                "proxy replica '{entry}' is not a private address; replicas must be inside the deployment's network"
+            ));
+        }
+        if !seen.insert(address) {
+            return Err(format!("proxy replica '{entry}' is listed twice"));
+        }
+        out.push(address.to_string());
+    }
+    Ok(out)
+}
+
+/// Replicas the control channel has set, once. The proxy is fixed for the sandbox's life: a later
+/// call with the same list is accepted and a different one is refused.
+static CONTROL_REPLICAS: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+
+/// Starts the loopback forwarder over `list`, which arrived from the authenticated control
+/// channel. The first valid list wins; the same list again is a no-op.
+pub fn configure_from_control(list: &[String]) -> Result<(), String> {
+    configure_with(list, &CONTROL_REPLICAS, |addresses| {
+        spawn(
+            CONTROL_CHANNEL_LISTEN
+                .parse()
+                .expect("the control-channel listen address is a literal"),
+            addresses,
+        )
+    })
+}
+
+/// Whether the control channel has set the proxy replicas. Until it has, no proxy listens and a
+/// command gets no proxy variables, so a sandbox with `internetAccess` off reaches nothing.
+pub fn control_proxy_configured() -> bool {
+    configured_in(&CONTROL_REPLICAS)
+}
+
+fn configured_in(slot: &std::sync::Mutex<Option<Vec<String>>>) -> bool {
+    slot.lock()
+        .map(|replicas| replicas.is_some())
+        .unwrap_or(false)
+}
+
+fn configure_with(
+    list: &[String],
+    slot: &std::sync::Mutex<Option<Vec<String>>>,
+    start: impl FnOnce(Vec<String>) -> Result<(), String>,
+) -> Result<(), String> {
+    let validated = validate_replicas(list)?;
+    let mut current = slot
+        .lock()
+        .map_err(|_| "the proxy replica state is poisoned".to_string())?;
+    match current.as_ref() {
+        Some(existing) if *existing == validated => Ok(()),
+        Some(_) => Err("the proxy replicas are already set and cannot change".to_string()),
+        None => {
+            start(validated.clone())?;
+            *current = Some(validated);
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -646,5 +739,87 @@ mod tests {
         std::env::remove_var(ENV_PROXY_REPLICAS);
         std::env::remove_var(ENV_PROXY_LISTEN);
         assert!(error.contains("loopback"), "{error}");
+    }
+
+    fn strings(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_private_replica_list_is_accepted() {
+        let list = validate_replicas(&strings(&["192.168.251.10:22", "10.0.6.4:3128"])).unwrap();
+        assert_eq!(list, strings(&["192.168.251.10:22", "10.0.6.4:3128"]));
+    }
+
+    #[test]
+    fn no_list_a_public_loopback_link_local_or_malformed_replica_is_refused() {
+        for bad in [
+            strings(&[]),
+            strings(&["8.8.8.8:22"]),
+            strings(&["127.0.0.1:22"]),
+            strings(&["169.254.169.254:80"]),
+            strings(&["100.64.0.1:22"]),
+            strings(&["gateway.example.com:22"]),
+            strings(&["10.0.0.1"]),
+            strings(&["10.0.0.1:0"]),
+            strings(&["10.0.0.1:22", "10.0.0.1:22"]),
+            strings(&[
+                "10.0.0.1:22",
+                "10.0.0.2:22",
+                "10.0.0.3:22",
+                "10.0.0.4:22",
+                "10.0.0.5:22",
+            ]),
+        ] {
+            assert!(validate_replicas(&bad).is_err(), "{bad:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn the_first_list_starts_the_forwarder_once_and_a_different_one_is_refused() {
+        let slot = std::sync::Mutex::new(None);
+        let mut started = Vec::new();
+        let first = strings(&["10.0.0.1:22", "10.0.0.2:22"]);
+        configure_with(&first, &slot, |addresses| {
+            started.push(addresses);
+            Ok(())
+        })
+        .unwrap();
+        // The same list again starts nothing.
+        configure_with(&first, &slot, |_| panic!("started twice")).unwrap();
+        // A different one, public or private, changes nothing.
+        for other in [strings(&["10.0.0.3:22"]), strings(&["8.8.8.8:22"])] {
+            assert!(configure_with(&other, &slot, |_| panic!("started again")).is_err());
+        }
+        assert_eq!(started, vec![first.clone()]);
+        assert_eq!(slot.lock().unwrap().as_ref(), Some(&first));
+    }
+
+    #[test]
+    fn before_the_control_channel_sets_replicas_nothing_listens() {
+        // The fail-closed start: no replicas, so no forwarder was started and none is reported.
+        let slot = std::sync::Mutex::new(None);
+        assert!(!configured_in(&slot));
+        // A refused list leaves it that way.
+        assert!(configure_with(&strings(&["8.8.8.8:22"]), &slot, |_| panic!("started")).is_err());
+        assert!(!configured_in(&slot));
+        // Only a valid list changes it, and it starts the forwarder exactly once.
+        configure_with(&strings(&["10.0.0.1:22"]), &slot, |_| Ok(())).unwrap();
+        assert!(configured_in(&slot));
+        assert!(
+            !control_proxy_configured(),
+            "the process-wide proxy was never set in this test"
+        );
+    }
+
+    #[test]
+    fn a_forwarder_that_cannot_start_leaves_the_proxy_unset() {
+        let slot = std::sync::Mutex::new(None);
+        let list = strings(&["10.0.0.1:22"]);
+        assert!(configure_with(&list, &slot, |_| Err("bind failed".into())).is_err());
+        assert!(
+            slot.lock().unwrap().is_none(),
+            "a failed start is not recorded as set"
+        );
     }
 }

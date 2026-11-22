@@ -816,6 +816,124 @@ async fn sandbox_consumers_get_signing_access_only_with_management_permissions()
     }
 }
 
+/// On Google Cloud a profile holding `sandbox/management` on an internet sandbox gets an exact
+/// read of the signing key's versions and nothing else in the vault; execute-only grants, an
+/// inline set that reuses the management ID, and a `none` sandbox get no vault access.
+#[tokio::test]
+async fn gcp_sandbox_managers_get_only_the_signing_key_read() {
+    for (permission, inline, contents, egress, signs) in [
+        (
+            "sandbox/execute",
+            false,
+            "sandbox/execute",
+            SandboxEgress::Internet,
+            false,
+        ),
+        (
+            "sandbox/management",
+            false,
+            "sandbox/management",
+            SandboxEgress::Internet,
+            true,
+        ),
+        (
+            "sandbox/management",
+            true,
+            "sandbox/management",
+            SandboxEgress::Internet,
+            true,
+        ),
+        (
+            "sandbox/management",
+            true,
+            "sandbox/execute",
+            SandboxEgress::Internet,
+            false,
+        ),
+        (
+            "sandbox/management",
+            false,
+            "sandbox/management",
+            SandboxEgress::None,
+            false,
+        ),
+    ] {
+        let reference = if inline {
+            let mut set = alien_permissions::get_permission_set(contents)
+                .unwrap()
+                .clone();
+            set.id = permission.into();
+            alien_core::permissions::PermissionSetReference::from_inline(set)
+        } else {
+            alien_core::permissions::PermissionSetReference::from_name(permission)
+        };
+        let sandbox = Sandbox::new("box".into())
+            .code(SandboxCode::Image {
+                image: "example.invalid/sandbox:1".into(),
+                bundled_from: None,
+            })
+            .egress(egress.clone())
+            .lifecycle(SandboxLifecyclePolicy::default())
+            .build();
+        let stack = Stack::new("sandbox-operator".into())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .permission(
+                "operator",
+                PermissionProfile::new().resource("box", [reference]),
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let state = StackState::new(Platform::Gcp);
+        let prepared = PreflightRunner::new()
+            .apply_mutations(stack, &state, &config)
+            .await
+            .expect("prepare the GCP sandbox operator");
+        for pass in [
+            prepared.clone(),
+            PreflightRunner::new()
+                .apply_mutations(prepared, &state, &config)
+                .await
+                .expect("prepare again without widening permissions"),
+        ] {
+            let case = format!(
+                "permission={permission}, inline={inline}, contents={contents}, egress={egress:?}"
+            );
+            let profile = &pass.permissions.profiles["operator"];
+            let vault = profile.0.get(SECRETS_VAULT_ID).cloned().unwrap_or_default();
+            if !signs {
+                assert!(vault.is_empty(), "{case}: {vault:?}");
+                continue;
+            }
+            assert_eq!(vault.len(), 1, "{case}");
+            let alien_core::permissions::PermissionSetReference::Inline(set) = &vault[0] else {
+                panic!("{case}: the signing key read is inline");
+            };
+            assert_eq!(set.id, "vault/sandbox-egress-signing-key-read", "{case}");
+            assert_eq!(set.platforms.aws, None, "{case}");
+            assert_eq!(set.platforms.azure, None, "{case}");
+            assert_eq!(
+                serde_json::to_value(&set.platforms.gcp).unwrap(),
+                serde_json::json!([{
+                    "grant": {"predefinedRoles": ["roles/secretmanager.secretAccessor"]},
+                    "binding": {"resource": {
+                        "scope": "projects/${projectName}",
+                        "condition": {
+                            "title": "SandboxEgressSigningKeyRead",
+                            "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-sandbox-egress-signing-key/\")"
+                        }
+                    }}
+                }]),
+                "{case}"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn internet_sandbox_key_dependencies_respect_setup_ownership() {
     for (first, last, owner) in [

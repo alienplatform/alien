@@ -706,7 +706,7 @@ mod tests {
             write: &ResourceWrite,
         ) -> Result<()> {
             if self.gcp_bucket_policy.lock().unwrap().is_some() {
-                return crate::cloud_write::resource::check_gcp_write(facts, write);
+                return crate::cloud_write::resource::check_gcp_write(facts, write, "proj", REGION);
             }
             if *self.azure.lock().unwrap() {
                 return crate::cloud_write::resource::check_azure_write(facts, write);
@@ -1928,8 +1928,9 @@ mod tests {
                 "egressControlConfig": {"internetAccess": false}
             })
         };
-        let check =
-            |engine: &str, body: &Value| check_sandbox_template(&sandbox, PREFIX, engine, body);
+        let check = |engine: &str, body: &Value| {
+            check_sandbox_template(&sandbox, PREFIX, "proj", "us-central1", engine, body)
+        };
         check("123", &template(signed)).expect("the signed template");
         check("123", &template(native)).expect("the signed image on the native host");
 
@@ -1955,7 +1956,18 @@ mod tests {
         other_port["customContainerEnvironment"]["ports"][0]["port"] = json!(1);
         let mut state = template(signed);
         state["state"] = json!("ACTIVE");
+        // A `none` sandbox names no network attachment and sets no ingress, not even this
+        // install's own: either would move it off the default placement it was signed for.
+        let own_attachment =
+            format!("projects/proj/regions/us-central1/networkAttachments/{PREFIX}-sbx-attachment");
+        let mut attachment = template(signed);
+        attachment["egressControlConfig"]["networkAttachment"] = json!(own_attachment);
+        attachment["ingressControlConfig"] = json!({"enablePrivateServiceConnect": true});
+        let mut ingress_only = template(signed);
+        ingress_only["ingressControlConfig"] = json!({"enablePrivateServiceConnect": true});
         for (what, engine, body) in [
+            ("a network attachment on a none sandbox", "123", attachment),
+            ("private ingress on a none sandbox", "123", ingress_only),
             (
                 "an image of another registry",
                 "123",
@@ -1978,6 +1990,88 @@ mod tests {
             ("an engine path", "1/../2", template(signed)),
         ] {
             check(engine, &body).expect_err(what);
+        }
+    }
+
+    /// An `internet` sandbox's template names exactly this install's own network attachment, in
+    /// the verifier's own project and region, with private ingress beside it and the cloud's
+    /// internet switch closed. Any other attachment, a missing one, or the open switch is refused.
+    #[test]
+    fn a_gcp_internet_sandbox_template_names_only_the_installs_own_attachment() {
+        use crate::cloud_write::resource::check_sandbox_template;
+        let signed = "registry.example.com/vendor/artifacts-prj-abc/prj_abc:sbx-agent";
+        let sandbox = alien_core::Sandbox::new("agent".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: signed.to_string(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::Internet)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+                ..Default::default()
+            })
+            .build();
+        let limits = sandbox.resolved_limits();
+        let own =
+            format!("projects/proj/regions/us-central1/networkAttachments/{PREFIX}-sbx-attachment");
+        let template = |attachment: Option<&str>| {
+            let mut body = json!({
+                "displayName": format!("{PREFIX}-agent"),
+                "customContainerEnvironment": {
+                    "customContainerSpec": {"imageUri": signed},
+                    "resources": {"limits": {"cpu": limits.cpu, "memory": limits.memory,
+                                           "ephemeral-storage": limits.disk}},
+                    "ports": [{"port": alien_core::sandbox_image::GCP_AGENT_PLATFORM.port,
+                               "protocol": "TCP"}]
+                },
+                "egressControlConfig": {"internetAccess": false},
+                "ingressControlConfig": {"enablePrivateServiceConnect": true}
+            });
+            if let Some(attachment) = attachment {
+                body["egressControlConfig"]["networkAttachment"] = json!(attachment);
+            }
+            body
+        };
+        let check = |body: &Value| {
+            check_sandbox_template(&sandbox, PREFIX, "proj", "us-central1", "123", body)
+        };
+        check(&template(Some(&own))).expect("the install's own attachment");
+
+        let mut open = template(Some(&own));
+        open["egressControlConfig"]["internetAccess"] = json!(true);
+        let mut no_ingress = template(Some(&own));
+        no_ingress
+            .as_object_mut()
+            .unwrap()
+            .remove("ingressControlConfig");
+        let mut ingress_field = template(Some(&own));
+        ingress_field["ingressControlConfig"]["other"] = json!(true);
+        for (what, body) in [
+            ("no attachment", template(None)),
+            (
+                "another project's attachment",
+                template(Some(&format!(
+                    "projects/evil/regions/us-central1/networkAttachments/{PREFIX}-sbx-attachment"
+                ))),
+            ),
+            (
+                "another region's attachment",
+                template(Some(&format!(
+                    "projects/proj/regions/europe-west4/networkAttachments/{PREFIX}-sbx-attachment"
+                ))),
+            ),
+            (
+                "another attachment name",
+                template(Some(
+                    "projects/proj/regions/us-central1/networkAttachments/other-sbx-attachment",
+                )),
+            ),
+            ("the open internet switch", open),
+            ("no private ingress", no_ingress),
+            ("an unknown ingress field", ingress_field),
+        ] {
+            check(&body).expect_err(what);
         }
     }
 

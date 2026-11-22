@@ -107,7 +107,13 @@ pub fn planned_gateway_image(stack: &Stack) -> &str {
             crate::ContainerCode::Image { image } => Some(image.as_str()),
             _ => None,
         })
-        .unwrap_or(SANDBOX_EGRESS_GATEWAY_IMAGE)
+        .unwrap_or(installed_gateway_image())
+}
+
+/// The gateway image preparation installs: [`SANDBOX_EGRESS_GATEWAY_IMAGE`], unless a test
+/// turned on the Google Cloud flip with its own image (dev-only feature).
+pub fn installed_gateway_image() -> &'static str {
+    crate::gcp_sandbox_gateway::gateway_image_override().unwrap_or(SANDBOX_EGRESS_GATEWAY_IMAGE)
 }
 
 /// Whether preflight installed the managed gateway for this deployment.

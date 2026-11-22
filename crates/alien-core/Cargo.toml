@@ -11,6 +11,10 @@ default = []
 openapi = ["dep:utoipa", "alien-permission-types/openapi", "alien-signing/openapi"]
 jsonschema = ["dep:schemars"]
 test-utils = []
+# Lets a test turn on Google Cloud internet egress for its own thread
+# (`gcp_sandbox_gateway::enable_internet_egress_for_test`). Only `[dev-dependencies]` may enable
+# it, so no shipped build carries the override; `tests/test_only_features.rs` holds that.
+test-gcp-internet-egress = []
 local = ["tokio/fs"]
 # Signing and verifying sandbox capability tokens. Gated because alien-core is also built for
 # targets that have no business carrying a crypto implementation.

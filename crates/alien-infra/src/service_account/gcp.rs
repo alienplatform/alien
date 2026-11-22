@@ -1107,6 +1107,117 @@ mod tests {
             .unwrap_or_else(|error| panic!("the extension's set did not resolve: {error}"));
     }
 
+    /// Direct setup writes the operator's signing-key read as the Terraform module does: one
+    /// `secretAccessor` binding conditioned on the versions of that one secret. The profile is the
+    /// one preflight prepares for an operator holding `sandbox/management` on an internet sandbox.
+    #[tokio::test]
+    async fn direct_setup_grants_the_sandbox_operator_only_the_signing_key_read() {
+        use alien_core::{
+            permissions::PermissionProfile, DeploymentConfig, EnvironmentVariablesSnapshot,
+            ExternalBindings, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
+            SandboxLifecyclePolicy, Stack, StackSettings, StackState,
+        };
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "example.invalid/sandbox:1".to_string(),
+                bundled_from: None,
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(SandboxLifecyclePolicy::default())
+            .build();
+        let stack = Stack::new("sandbox-operator".to_string())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .permission(
+                "operator",
+                PermissionProfile::new().resource("agents", ["sandbox/management"]),
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let prepared = alien_preflights::runner::PreflightRunner::new()
+            .apply_mutations(stack, &StackState::new(Platform::Gcp), &config)
+            .await
+            .expect("prepare the operator");
+        // Only the vault entry: the sandbox's own grants are custom roles, covered elsewhere.
+        let mut profile = PermissionProfile::new();
+        profile.0.insert(
+            alien_core::SECRETS_VAULT_ID.to_string(),
+            prepared.permissions.profiles["operator"].0[alien_core::SECRETS_VAULT_ID].clone(),
+        );
+
+        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut resource_manager = MockResourceManagerApi::new();
+        resource_manager
+            .expect_get_project_iam_policy()
+            .returning(|_, _| Ok(IamPolicy::builder().version(3).bindings(vec![]).build()));
+        let seen = written.clone();
+        resource_manager
+            .expect_set_project_iam_policy()
+            .returning(move |_, policy, _| {
+                seen.lock().unwrap().extend(policy.bindings.clone());
+                Ok(policy)
+            });
+        let resource_manager = Arc::new(resource_manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(resource_manager.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(ServiceAccount::new("operator-sa".to_string()).build())
+            .controller(GcpServiceAccountController {
+                state: GcpServiceAccountState::BindingStackRoles,
+                service_account_email: Some(
+                    "test-operator-sa@test-project.iam.gserviceaccount.com".to_string(),
+                ),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .permission_profile("operator", profile)
+            .client_config(alien_core::ClientConfig::Gcp(Box::new(
+                alien_core::GcpClientConfig {
+                    project_number: Some("123".to_string()),
+                    ..<alien_gcp_clients::GcpClientConfig as alien_gcp_clients::GcpClientConfigExt>::mock()
+                },
+            )))
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+
+        let written = written.lock().unwrap().clone();
+        let reads: Vec<_> = written
+            .iter()
+            .filter(|binding| {
+                binding
+                    .members
+                    .iter()
+                    .any(|member| member.starts_with("serviceAccount:test-operator-sa@"))
+            })
+            .collect();
+        assert_eq!(reads.len(), 1, "{written:?}");
+        assert_eq!(reads[0].role, "roles/secretmanager.secretAccessor");
+        let expression = &reads[0]
+            .condition
+            .as_ref()
+            .expect("the read is conditioned")
+            .expression;
+        assert!(
+            expression
+                == "resource.name.startsWith(\"projects/123/secrets/test-secrets-sandbox-egress-signing-key/\")",
+            "{expression}"
+        );
+    }
+
     /// Direct setup lets the manager, federated through the management identity, impersonate an
     /// extension's identity, as the setup template does.
     #[tokio::test]
