@@ -11,34 +11,6 @@ import {
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
-  CloudAccountAssignedEvent,
-  CloudAccountAssignedEvent$inboundSchema,
-} from "./cloudaccountassignedevent.js";
-import {
-  CloudAccountClosureRequestedEvent,
-  CloudAccountClosureRequestedEvent$inboundSchema,
-} from "./cloudaccountclosurerequestedevent.js";
-import {
-  CloudAccountComputeCleanupRequestedEvent,
-  CloudAccountComputeCleanupRequestedEvent$inboundSchema,
-} from "./cloudaccountcomputecleanuprequestedevent.js";
-import {
-  CloudAccountRequestedEvent,
-  CloudAccountRequestedEvent$inboundSchema,
-} from "./cloudaccountrequestedevent.js";
-import {
-  CloudAccountSetupCleanupRequestedEvent,
-  CloudAccountSetupCleanupRequestedEvent$inboundSchema,
-} from "./cloudaccountsetupcleanuprequestedevent.js";
-import {
-  DeploymentAirgappedBundleDownloadedEvent,
-  DeploymentAirgappedBundleDownloadedEvent$inboundSchema,
-} from "./deploymentairgappedbundledownloadedevent.js";
-import {
-  DeploymentAirgappedReportReceivedEvent,
-  DeploymentAirgappedReportReceivedEvent$inboundSchema,
-} from "./deploymentairgappedreportreceivedevent.js";
-import {
   DeploymentCheckRequestedEvent,
   DeploymentCheckRequestedEvent$inboundSchema,
 } from "./deploymentcheckrequestedevent.js";
@@ -51,26 +23,10 @@ import {
   DeploymentEndpointHealthChangedEvent$inboundSchema,
 } from "./deploymentendpointhealthchangedevent.js";
 import {
-  DeploymentGroupAccessApproverChangedEvent,
-  DeploymentGroupAccessApproverChangedEvent$inboundSchema,
-} from "./deploymentgroupaccessapproverchangedevent.js";
-import {
   DeploymentGroupMovedEvent,
   DeploymentGroupMovedEvent$inboundSchema,
 } from "./deploymentgroupmovedevent.js";
-import {
-  DeploymentSetupComputeIgnoredEvent,
-  DeploymentSetupComputeIgnoredEvent$inboundSchema,
-} from "./deploymentsetupcomputeignoredevent.js";
-import {
-  DeploymentSetupCredentialIssuedEvent,
-  DeploymentSetupCredentialIssuedEvent$inboundSchema,
-} from "./deploymentsetupcredentialissuedevent.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
-import {
-  ProjectFeatureChangedEvent,
-  ProjectFeatureChangedEvent$inboundSchema,
-} from "./projectfeaturechangedevent.js";
 
 export type EventDataDeploymentDeletionRequested = {
   /**
@@ -1452,30 +1408,12 @@ export type EventResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<EventDependency> | undefined;
-  /**
-   * Whether this resource owes an update because a dependency is changing, though its own
-   *
-   * @remarks
-   * config is not. The update waits until the dependency has rolled to the release being
-   * applied, so the owed update must survive between plans and restarts. Cleared when the
-   * update starts. State written before this field existed reads as not owing one.
-   */
-  dependencyUpdatePending?: boolean | undefined;
   description?: string | null | undefined;
   /**
    * Presentation metadata from the effective resource entry, outside runtime configuration.
    */
   displayName?: string | null | undefined;
   error?: EventErrorNextState | string | null | undefined;
-  /**
-   * Whether this resource was adopted from an external binding instead of provisioned.
-   *
-   * @remarks
-   * The binding may exist only where the adopting executor ran (a Helm value or a
-   * chart-created database), so the record carries it: deleting the resource releases it
-   * and never touches what the binding points at.
-   */
-  externalBinding?: boolean | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
    *
@@ -1500,17 +1438,6 @@ export type EventResources = {
    * Populated by controllers during provisioning using get_binding_params().
    */
   remoteBindingParams?: any | null | undefined;
-  /**
-   * The rollout in which an update ran because the controller asked for one while the
-   *
-   * @remarks
-   * config was unchanged. While the controller keeps asking in that same rollout, its
-   * dependents no longer wait for it, so a check that never settles cannot hold them back
-   * for good. A later rollout is a new request and is waited for again. Cleared once the
-   * controller stops asking. State written before this field existed (it was a flag then)
-   * reads as none.
-   */
-  requestedUpdateRan?: string | null | undefined;
   /**
    * Tracks consecutive retry attempts for the current state transition.
    */
@@ -1709,17 +1636,7 @@ export type EventDataLoadingConfiguration = {
 };
 
 export type EventDataUnion =
-  | ProjectFeatureChangedEvent
-  | DeploymentGroupAccessApproverChangedEvent
-  | DeploymentAirgappedBundleDownloadedEvent
-  | DeploymentAirgappedReportReceivedEvent
   | DeploymentCheckRequestedEvent
-  | DeploymentSetupComputeIgnoredEvent
-  | CloudAccountComputeCleanupRequestedEvent
-  | CloudAccountSetupCleanupRequestedEvent
-  | CloudAccountClosureRequestedEvent
-  | CloudAccountAssignedEvent
-  | CloudAccountRequestedEvent
   | DeploymentEndpointHealthChangedEvent
   | DeploymentGroupMovedEvent
   | EventDataLoadingConfiguration
@@ -1769,8 +1686,7 @@ export type EventDataUnion =
   | EventDataDeploymentVolumeRestoreRequested
   | EventDataDeploymentVolumeRestoreCancelled
   | EventDataDeploymentDeletionRequested
-  | DeploymentCredentialRotationEvent
-  | DeploymentSetupCredentialIssuedEvent;
+  | DeploymentCredentialRotationEvent;
 
 export const EventStateSuccess = {
   Success: "success",
@@ -1916,17 +1832,7 @@ export type Event = {
    */
   debugSessionId?: string | null | undefined;
   data:
-    | ProjectFeatureChangedEvent
-    | DeploymentGroupAccessApproverChangedEvent
-    | DeploymentAirgappedBundleDownloadedEvent
-    | DeploymentAirgappedReportReceivedEvent
     | DeploymentCheckRequestedEvent
-    | DeploymentSetupComputeIgnoredEvent
-    | CloudAccountComputeCleanupRequestedEvent
-    | CloudAccountSetupCleanupRequestedEvent
-    | CloudAccountClosureRequestedEvent
-    | CloudAccountAssignedEvent
-    | CloudAccountRequestedEvent
     | DeploymentEndpointHealthChangedEvent
     | DeploymentGroupMovedEvent
     | EventDataLoadingConfiguration
@@ -1976,8 +1882,7 @@ export type Event = {
     | EventDataDeploymentVolumeRestoreRequested
     | EventDataDeploymentVolumeRestoreCancelled
     | EventDataDeploymentDeletionRequested
-    | DeploymentCredentialRotationEvent
-    | DeploymentSetupCredentialIssuedEvent;
+    | DeploymentCredentialRotationEvent;
   /**
    * Represents the state of an event
    */
@@ -3582,13 +3487,11 @@ export const EventResources$inboundSchema: z.ZodType<EventResources, unknown> =
     ).optional(),
     dependencies: z.array(z.lazy(() => EventDependency$inboundSchema))
       .optional(),
-    dependencyUpdatePending: z.boolean().optional(),
     description: z.nullable(z.string()).optional(),
     displayName: z.nullable(z.string()).optional(),
     error: z.nullable(
       z.union([z.lazy(() => EventErrorNextState$inboundSchema), z.string()]),
     ).optional(),
-    externalBinding: z.boolean().optional(),
     lastFailedState: z.nullable(z.any()).optional(),
     lifecycle: z.nullable(
       z.union([EventLifecycleEnum$inboundSchema, z.string()]),
@@ -3601,7 +3504,6 @@ export const EventResources$inboundSchema: z.ZodType<EventResources, unknown> =
     ).optional(),
     progress: z.nullable(z.string()).optional(),
     remoteBindingParams: z.nullable(z.any()).optional(),
-    requestedUpdateRan: z.nullable(z.string()).optional(),
     retryAttempt: z.int().optional(),
     status: EventStatus$inboundSchema,
     type: z.string(),
@@ -3936,17 +3838,7 @@ export function eventDataLoadingConfigurationFromJSON(
 /** @internal */
 export const EventDataUnion$inboundSchema: z.ZodType<EventDataUnion, unknown> =
   z.union([
-    ProjectFeatureChangedEvent$inboundSchema,
-    DeploymentGroupAccessApproverChangedEvent$inboundSchema,
-    DeploymentAirgappedBundleDownloadedEvent$inboundSchema,
-    DeploymentAirgappedReportReceivedEvent$inboundSchema,
     DeploymentCheckRequestedEvent$inboundSchema,
-    DeploymentSetupComputeIgnoredEvent$inboundSchema,
-    CloudAccountComputeCleanupRequestedEvent$inboundSchema,
-    CloudAccountSetupCleanupRequestedEvent$inboundSchema,
-    CloudAccountClosureRequestedEvent$inboundSchema,
-    CloudAccountAssignedEvent$inboundSchema,
-    CloudAccountRequestedEvent$inboundSchema,
     DeploymentEndpointHealthChangedEvent$inboundSchema,
     DeploymentGroupMovedEvent$inboundSchema,
     z.lazy(() => EventDataLoadingConfiguration$inboundSchema),
@@ -3997,7 +3889,6 @@ export const EventDataUnion$inboundSchema: z.ZodType<EventDataUnion, unknown> =
     z.lazy(() => EventDataDeploymentVolumeRestoreCancelled$inboundSchema),
     z.lazy(() => EventDataDeploymentDeletionRequested$inboundSchema),
     DeploymentCredentialRotationEvent$inboundSchema,
-    DeploymentSetupCredentialIssuedEvent$inboundSchema,
   ]);
 
 export function eventDataUnionFromJSON(
@@ -4127,17 +4018,7 @@ export const Event$inboundSchema: z.ZodType<Event, unknown> = z.object({
   releaseId: z.nullable(z.string()).optional(),
   debugSessionId: z.nullable(z.string()).optional(),
   data: z.union([
-    ProjectFeatureChangedEvent$inboundSchema,
-    DeploymentGroupAccessApproverChangedEvent$inboundSchema,
-    DeploymentAirgappedBundleDownloadedEvent$inboundSchema,
-    DeploymentAirgappedReportReceivedEvent$inboundSchema,
     DeploymentCheckRequestedEvent$inboundSchema,
-    DeploymentSetupComputeIgnoredEvent$inboundSchema,
-    CloudAccountComputeCleanupRequestedEvent$inboundSchema,
-    CloudAccountSetupCleanupRequestedEvent$inboundSchema,
-    CloudAccountClosureRequestedEvent$inboundSchema,
-    CloudAccountAssignedEvent$inboundSchema,
-    CloudAccountRequestedEvent$inboundSchema,
     DeploymentEndpointHealthChangedEvent$inboundSchema,
     DeploymentGroupMovedEvent$inboundSchema,
     z.lazy(() => EventDataLoadingConfiguration$inboundSchema),
@@ -4188,7 +4069,6 @@ export const Event$inboundSchema: z.ZodType<Event, unknown> = z.object({
     z.lazy(() => EventDataDeploymentVolumeRestoreCancelled$inboundSchema),
     z.lazy(() => EventDataDeploymentDeletionRequested$inboundSchema),
     DeploymentCredentialRotationEvent$inboundSchema,
-    DeploymentSetupCredentialIssuedEvent$inboundSchema,
   ]),
   state: z.union([
     z.lazy(() => EventState$inboundSchema),

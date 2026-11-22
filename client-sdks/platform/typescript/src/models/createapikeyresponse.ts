@@ -10,10 +10,6 @@ import {
   APIKeyDeploymentSetupConfig,
   APIKeyDeploymentSetupConfig$inboundSchema,
 } from "./apikeydeploymentsetupconfig.js";
-import {
-  ApplicationRole,
-  ApplicationRole$inboundSchema,
-} from "./applicationrole.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export const CreateAPIKeyResponseType = {
@@ -36,10 +32,6 @@ export type KeyInfo = {
   keyPrefix: string;
   type: CreateAPIKeyResponseType;
   role: string;
-  /**
-   * Application roles a project key holds beside `role`
-   */
-  additionalRoles: Array<ApplicationRole>;
   workspaceId: string;
   projectId: string | null;
   deploymentId: string | null;
@@ -51,10 +43,6 @@ export type KeyInfo = {
   lastUsedAt: Date | null;
   revokedAt: Date | null;
   deploymentSetupConfig: APIKeyDeploymentSetupConfig | null;
-  /**
-   * Who may open this setup link: email addresses and @domains. Empty for a one-time handoff link. Null for keys that are not setup links, and for callers below the project, such as the links' own customers.
-   */
-  allowed: Array<string> | null;
 };
 
 /**
@@ -80,7 +68,6 @@ export const KeyInfo$inboundSchema: z.ZodType<KeyInfo, unknown> = z.object({
   keyPrefix: z.string(),
   type: CreateAPIKeyResponseType$inboundSchema,
   role: z.string(),
-  additionalRoles: z.array(ApplicationRole$inboundSchema),
   workspaceId: z.string(),
   projectId: z.nullable(z.string()),
   deploymentId: z.nullable(z.string()),
@@ -98,7 +85,6 @@ export const KeyInfo$inboundSchema: z.ZodType<KeyInfo, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ),
   deploymentSetupConfig: z.nullable(APIKeyDeploymentSetupConfig$inboundSchema),
-  allowed: z.nullable(z.array(z.string())),
 });
 
 export function keyInfoFromJSON(

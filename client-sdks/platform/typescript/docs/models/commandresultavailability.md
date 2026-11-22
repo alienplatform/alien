@@ -1,6 +1,6 @@
 # CommandResultAvailability
 
-Whether a successful operation result is included or withheld. `protected` means withheld: pending explicit confirmation, or kept in a Private Alien Instance (see `resultKeptInInstance`).
+Whether a successful operation result is included or withheld pending explicit confirmation
 
 ## Example Usage
 

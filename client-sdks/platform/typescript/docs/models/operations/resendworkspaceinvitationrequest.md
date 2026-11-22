@@ -6,7 +6,7 @@
 import { ResendWorkspaceInvitationRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: ResendWorkspaceInvitationRequest = {
-  id: "ws_It13CUaGEhLLAB87simX07Xb",
+  id: "ws_It13CUaGEhLLAB87simX0",
   invitationId: "<id>",
 };
 ```
@@ -15,5 +15,5 @@ let value: ResendWorkspaceInvitationRequest = {
 
 | Field                                | Type                                 | Required                             | Description                          | Example                              |
 | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ |
-| `id`                                 | *string*                             | :heavy_check_mark:                   | Unique identifier for the workspace. | ws_It13CUaGEhLLAB87simX07Xb          |
+| `id`                                 | *string*                             | :heavy_check_mark:                   | Unique identifier for the workspace. | ws_It13CUaGEhLLAB87simX0             |
 | `invitationId`                       | *string*                             | :heavy_check_mark:                   | N/A                                  |                                      |

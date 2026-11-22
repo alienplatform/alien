@@ -15,13 +15,13 @@ let value: DataBuild = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
+          reason: "timed-out",
           severity: "error",
           source: "<value>",
         },
       ],
-      health: "degraded",
-      lifecycle: "unknown",
+      health: "healthy",
+      lifecycle: "failed",
       partial: false,
       stale: true,
     },
@@ -33,7 +33,7 @@ let value: DataBuild = {
 
 ## Fields
 
-| Field                                                                        | Type                                                                         | Required                                                                     | Description                                                                  |
-| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `data`                                                                       | *operations.DataUnion15*                                                     | :heavy_check_mark:                                                           | N/A                                                                          |
-| `resourceType`                                                               | [operations.ResourceTypeBuild](../../models/operations/resourcetypebuild.md) | :heavy_check_mark:                                                           | N/A                                                                          |
+| Field                    | Type                     | Required                 | Description              |
+| ------------------------ | ------------------------ | ------------------------ | ------------------------ |
+| `data`                   | *operations.DataUnion14* | :heavy_check_mark:       | N/A                      |
+| `resourceType`           | *"build"*                | :heavy_check_mark:       | N/A                      |

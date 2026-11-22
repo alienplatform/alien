@@ -179,6 +179,9 @@ impl StackMutation for SecretsVaultMutation {
                     &mut stack,
                 )?
             }
+            Platform::Gcp => {
+                super::sandbox_gateway_permissions::configure_gcp_gateway_permissions(&mut stack)?
+            }
             _ => {}
         }
 

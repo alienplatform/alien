@@ -122,7 +122,7 @@ export function invalidateDeploymentsListFilterEnvironments(
     ...filters,
     queryKey: [
       "@alienplatform/platform-api",
-      "Deployments",
+      "deployments",
       "listFilterEnvironments",
       ...queryKeyBase,
     ],
@@ -137,7 +137,7 @@ export function invalidateAllDeploymentsListFilterEnvironments(
     ...filters,
     queryKey: [
       "@alienplatform/platform-api",
-      "Deployments",
+      "deployments",
       "listFilterEnvironments",
     ],
   });

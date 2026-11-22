@@ -3,14 +3,13 @@
 
 ## Supported Types
 
-### `models.DataAwsCodeBuild`
+### `models.DataGcpServiceUsage`
 
 ```typescript
-const value: models.DataAwsCodeBuild = {
-  encryptionKeyPresent: true,
-  environmentVariableCount: 879452,
-  projectName: "<value>",
-  serviceRolePresent: true,
+const value: models.DataGcpServiceUsage = {
+  enabled: true,
+  projectId: "<id>",
+  serviceName: "<value>",
   status: {
     collectionIssues: [
       {
@@ -20,88 +19,30 @@ const value: models.DataAwsCodeBuild = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
-    partial: false,
-    stale: true,
-  },
-  backend: "awsCodeBuild",
-};
-```
-
-### `models.DataGcpCloudBuild`
-
-```typescript
-const value: models.DataGcpCloudBuild = {
-  buildConfigId: "<id>",
-  environmentVariableCount: 982514,
-  location: "<value>",
-  projectId: "<id>",
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "deleting",
-    partial: true,
-    stale: true,
-  },
-  backend: "gcpCloudBuild",
-};
-```
-
-### `models.DataAzureContainerApps2`
-
-```typescript
-const value: models.DataAzureContainerApps2 = {
-  environmentVariableCount: 246098,
-  managedEnvironmentId: "<id>",
-  resourceGroupName: "<value>",
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
     health: "unhealthy",
-    lifecycle: "deleting",
+    lifecycle: "stopped",
     partial: true,
     stale: true,
   },
-  backend: "azureContainerApps",
+  backend: "gcpServiceUsage",
 };
 ```
 
-### `models.DataKubernetesJob`
+### `models.DataAzureResourceProvider`
 
 ```typescript
-const value: models.DataKubernetesJob = {
-  conditionCount: 902553,
-  events: [],
-  jobName: "<value>",
+const value: models.DataAzureResourceProvider = {
   namespace: "<value>",
+  registered: true,
+  resourceTypeCount: 563831,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
     lifecycle: "scaling",
-    partial: false,
+    partial: true,
     stale: true,
   },
-  backend: "kubernetesJob",
+  backend: "azureResourceProvider",
 };
 ```
+

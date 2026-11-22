@@ -4,7 +4,6 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../../lib/schemas.js";
-import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
@@ -16,31 +15,11 @@ export type ListAPIKeysGlobals = {
   workspace?: string | undefined;
 };
 
-/**
- * Also list installer keys: the 24-hour keys minted for a setup link's prepared installers and portal sessions. They are left out by default; each stops working with its setup link. Honored for users and for workspace or project keys; other keys never list installer keys.
- */
-export const IncludeInstallers = {
-  True: "true",
-  False: "false",
-} as const;
-/**
- * Also list installer keys: the 24-hour keys minted for a setup link's prepared installers and portal sessions. They are left out by default; each stops working with its setup link. Honored for users and for workspace or project keys; other keys never list installer keys.
- */
-export type IncludeInstallers = ClosedEnum<typeof IncludeInstallers>;
-
 export type ListAPIKeysRequest = {
   /**
    * Filter by project ID or name.
    */
   project?: string | undefined;
-  /**
-   * List setup links for this deployment group, excluding dashboard sessions
-   */
-  setupLinksForGroup?: string | undefined;
-  /**
-   * Also list installer keys: the 24-hour keys minted for a setup link's prepared installers and portal sessions. They are left out by default; each stops working with its setup link. Honored for users and for workspace or project keys; other keys never list installer keys.
-   */
-  includeInstallers?: IncludeInstallers | undefined;
   /**
    * Maximum number of items to return per page
    */
@@ -66,15 +45,8 @@ export type ListAPIKeysResponse = {
 };
 
 /** @internal */
-export const IncludeInstallers$outboundSchema: z.ZodEnum<
-  typeof IncludeInstallers
-> = z.enum(IncludeInstallers);
-
-/** @internal */
 export type ListAPIKeysRequest$Outbound = {
   project?: string | undefined;
-  setupLinksForGroup?: string | undefined;
-  includeInstallers?: string | undefined;
   limit: number;
   cursor?: string | undefined;
 };
@@ -85,8 +57,6 @@ export const ListAPIKeysRequest$outboundSchema: z.ZodType<
   ListAPIKeysRequest
 > = z.object({
   project: z.string().optional(),
-  setupLinksForGroup: z.string().optional(),
-  includeInstallers: IncludeInstallers$outboundSchema.optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),
 });

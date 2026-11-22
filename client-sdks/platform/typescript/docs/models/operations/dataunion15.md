@@ -3,14 +3,13 @@
 
 ## Supported Types
 
-### `operations.DataAwsCodeBuild`
+### `operations.DataGcpServiceUsage`
 
 ```typescript
-const value: operations.DataAwsCodeBuild = {
-  encryptionKeyPresent: true,
-  environmentVariableCount: 879452,
-  projectName: "<value>",
-  serviceRolePresent: true,
+const value: operations.DataGcpServiceUsage = {
+  enabled: true,
+  projectId: "<id>",
+  serviceName: "<value>",
   status: {
     collectionIssues: [
       {
@@ -20,88 +19,30 @@ const value: operations.DataAwsCodeBuild = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
-    partial: false,
-    stale: true,
-  },
-  backend: "awsCodeBuild",
-};
-```
-
-### `operations.DataGcpCloudBuild`
-
-```typescript
-const value: operations.DataGcpCloudBuild = {
-  buildConfigId: "<id>",
-  environmentVariableCount: 982514,
-  location: "<value>",
-  projectId: "<id>",
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "deleting",
+    health: "unhealthy",
+    lifecycle: "stopped",
     partial: true,
     stale: true,
   },
-  backend: "gcpCloudBuild",
+  backend: "gcpServiceUsage",
 };
 ```
 
-### `operations.DataAzureContainerApps2`
+### `operations.DataAzureResourceProvider`
 
 ```typescript
-const value: operations.DataAzureContainerApps2 = {
-  environmentVariableCount: 246098,
-  managedEnvironmentId: "<id>",
-  resourceGroupName: "<value>",
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
-    health: "healthy",
-    lifecycle: "updating",
-    partial: false,
-    stale: false,
-  },
-  backend: "azureContainerApps",
-};
-```
-
-### `operations.DataKubernetesJob`
-
-```typescript
-const value: operations.DataKubernetesJob = {
-  conditionCount: 902553,
-  events: [],
-  jobName: "<value>",
+const value: operations.DataAzureResourceProvider = {
   namespace: "<value>",
+  registered: true,
+  resourceTypeCount: 563831,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
     lifecycle: "scaling",
-    partial: false,
+    partial: true,
     stale: true,
   },
-  backend: "kubernetesJob",
+  backend: "azureResourceProvider",
 };
 ```
+

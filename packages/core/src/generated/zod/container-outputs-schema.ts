@@ -20,6 +20,7 @@ export const ContainerOutputsSchema = z.object({
 "internalUrls": z.optional(z.object({
     
     }).catchall(z.string()).describe("Internal URLs keyed by port for cluster members and linking resources.")),
+"linkAddress": z.string().describe("Private address the deployment's sandbox egress gateway dials when a sandbox links this\ncontainer and the platform puts a load balancer in front of it (on Azure, the internal\nload balancer's static frontend IP). Absent when no sandbox links it, and on platforms\nwhose gateway resolves the container by name.").nullish(),
 "name": z.string().describe("Container name in the managed container backend"),
 "publicEndpoints": z.optional(z.object({
     

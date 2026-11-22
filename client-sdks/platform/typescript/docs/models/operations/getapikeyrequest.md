@@ -6,12 +6,12 @@
 import { GetAPIKeyRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetAPIKeyRequest = {
-  id: "apikey_ye96yxs1tjnrrwulp8frh6w5t6e0",
+  id: "apikey_ye96yxs1tjnrrwulp8frh",
 };
 ```
 
 ## Fields
 
-| Field                               | Type                                | Required                            | Description                         | Example                             |
-| ----------------------------------- | ----------------------------------- | ----------------------------------- | ----------------------------------- | ----------------------------------- |
-| `id`                                | *string*                            | :heavy_check_mark:                  | Unique identifier for the api key.  | apikey_ye96yxs1tjnrrwulp8frh6w5t6e0 |
+| Field                              | Type                               | Required                           | Description                        | Example                            |
+| ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- |
+| `id`                               | *string*                           | :heavy_check_mark:                 | Unique identifier for the api key. | apikey_ye96yxs1tjnrrwulp8frh       |

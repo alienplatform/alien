@@ -3,7 +3,7 @@
 Domain configuration for the stack.
 
 When `custom_domains` is set, the specified resources use customer-provided
-domains with supplied or managed certificates. Otherwise, Alien auto-generates domains.
+domains and certificates. Otherwise, Alien auto-generates domains.
 
 ## Example Usage
 

@@ -15,10 +15,10 @@ const value: number = 128403;
 const value: any = "<value>";
 ```
 
-### `models.Database`
+### `models.Database1`
 
 ```typescript
-const value: models.Database = {
+const value: models.Database1 = {
   secretRef: {
     key: "<key>",
     name: "<value>",
@@ -31,3 +31,4 @@ const value: models.Database = {
 ```typescript
 const value: string = "<value>";
 ```
+

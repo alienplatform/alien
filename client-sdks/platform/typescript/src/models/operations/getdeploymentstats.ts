@@ -13,26 +13,6 @@ export type GetDeploymentStatsGlobals = {
   workspace?: string | undefined;
 };
 
-export const GetDeploymentStatsListState = {
-  Active: "active",
-  Attention: "attention",
-  Inactive: "inactive",
-} as const;
-export type GetDeploymentStatsListState = ClosedEnum<
-  typeof GetDeploymentStatsListState
->;
-
-/**
- * Include live deployment list section counts
- */
-export const IncludeListCounts = {
-  True: "true",
-} as const;
-/**
- * Include live deployment list section counts
- */
-export type IncludeListCounts = ClosedEnum<typeof IncludeListCounts>;
-
 /**
  * Represents the target cloud platform.
  */
@@ -107,11 +87,6 @@ export type GetDeploymentStatsRequest = {
    * Filter by deployment group ID or name
    */
   deploymentGroup?: string | undefined;
-  listState?: GetDeploymentStatsListState | undefined;
-  /**
-   * Include live deployment list section counts
-   */
-  includeListCounts?: IncludeListCounts | undefined;
   /**
    * Filter by manager ID
    */
@@ -135,16 +110,6 @@ export type GetDeploymentStatsRequest = {
 };
 
 /** @internal */
-export const GetDeploymentStatsListState$outboundSchema: z.ZodEnum<
-  typeof GetDeploymentStatsListState
-> = z.enum(GetDeploymentStatsListState);
-
-/** @internal */
-export const IncludeListCounts$outboundSchema: z.ZodEnum<
-  typeof IncludeListCounts
-> = z.enum(IncludeListCounts);
-
-/** @internal */
 export const GetDeploymentStatsEnvironment$outboundSchema: z.ZodEnum<
   typeof GetDeploymentStatsEnvironment
 > = z.enum(GetDeploymentStatsEnvironment);
@@ -158,8 +123,6 @@ export const GetDeploymentStatsStatus$outboundSchema: z.ZodEnum<
 export type GetDeploymentStatsRequest$Outbound = {
   project?: string | undefined;
   deploymentGroup?: string | undefined;
-  listState?: string | undefined;
-  includeListCounts?: string | undefined;
   managerId?: string | undefined;
   purpose?: string | undefined;
   environment?: Array<string> | undefined;
@@ -174,8 +137,6 @@ export const GetDeploymentStatsRequest$outboundSchema: z.ZodType<
 > = z.object({
   project: z.string().optional(),
   deploymentGroup: z.string().optional(),
-  listState: GetDeploymentStatsListState$outboundSchema.optional(),
-  includeListCounts: IncludeListCounts$outboundSchema.optional(),
   managerId: z.string().optional(),
   purpose: models.DeploymentPurpose$outboundSchema.optional(),
   environment: z.array(GetDeploymentStatsEnvironment$outboundSchema).optional(),

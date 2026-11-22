@@ -127,6 +127,22 @@ pub fn check_addresses(addresses: &[IpAddr], extra: &[Ipv4Net]) -> Result<()> {
     Ok(())
 }
 
+/// Check every answer for a linked name before connecting: all of them must fall in the
+/// link's ranges, which lie inside the deployment's internal address spaces. One answer
+/// outside, including any IPv6 answer, refuses the whole resolution.
+pub fn check_link_addresses(
+    addresses: &[IpAddr],
+    link: &alien_core::sandbox_links::GatewayLink,
+) -> Result<()> {
+    if addresses.is_empty() {
+        return Err(denied("DNS returned no addresses"));
+    }
+    if addresses.iter().any(|address| !link.admits(*address)) {
+        return Err(denied("address is outside the link's ranges"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

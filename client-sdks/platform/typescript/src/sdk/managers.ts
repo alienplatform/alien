@@ -4,7 +4,6 @@
 
 import { managersCancelSetup } from "../funcs/managersCancelSetup.js";
 import { managersCreate } from "../funcs/managersCreate.js";
-import { managersCreateSetupUpdate } from "../funcs/managersCreateSetupUpdate.js";
 import { managersDelete } from "../funcs/managersDelete.js";
 import { managersGenerateManagerBindingToken } from "../funcs/managersGenerateManagerBindingToken.js";
 import { managersGenerateManagerToken } from "../funcs/managersGenerateManagerToken.js";
@@ -15,7 +14,6 @@ import { managersGetManagementConfig } from "../funcs/managersGetManagementConfi
 import { managersList } from "../funcs/managersList.js";
 import { managersListEvents } from "../funcs/managersListEvents.js";
 import { managersProvision } from "../funcs/managersProvision.js";
-import { managersRecheckDomainBinding } from "../funcs/managersRecheckDomainBinding.js";
 import { managersReportHeartbeat } from "../funcs/managersReportHeartbeat.js";
 import { managersResolveGcpOAuthProvider } from "../funcs/managersResolveGcpOAuthProvider.js";
 import { managersRetry } from "../funcs/managersRetry.js";
@@ -66,22 +64,6 @@ export class Managers extends ClientSDK {
     return unwrapAsync(managersRetrySetup(
       this,
       request,
-      options,
-    ));
-  }
-
-  /**
-   * Prepare running setup again on an active Private Alien Instance, to turn on resources it declined. Returns the newest template, the instance's stack, and a fresh setup token for the stack's Token parameter.
-   */
-  async createSetupUpdate(
-    id: string,
-    managerSetupUpdateRequest?: models.ManagerSetupUpdateRequest | undefined,
-    options?: RequestOptions,
-  ): Promise<models.ManagerSetupUpdateResponse> {
-    return unwrapAsync(managersCreateSetupUpdate(
-      this,
-      id,
-      managerSetupUpdateRequest,
       options,
     ));
   }
@@ -168,20 +150,6 @@ export class Managers extends ClientSDK {
       this,
       id,
       updateManagerDomainBinding,
-      options,
-    ));
-  }
-
-  /**
-   * Queue the manager's custom domain binding for another DNS, certificate and health check. Repeated calls while a check is queued do nothing.
-   */
-  async recheckDomainBinding(
-    request: operations.RecheckManagerDomainBindingRequest,
-    options?: RequestOptions,
-  ): Promise<models.ManagerDomainBindingResponse> {
-    return unwrapAsync(managersRecheckDomainBinding(
-      this,
-      request,
       options,
     ));
   }

@@ -87,10 +87,27 @@ pub struct GcpConfig {
     pub project_id: String,
     pub region: String,
     pub credentials_json: Option<String>,
+    /// A short-lived OAuth access token. When set it is used instead of `credentials_json`.
+    pub access_token: Option<String>,
     /// Separate management SA email (for cross-project impersonation).
     pub management_identity_email: Option<String>,
     /// Separate management SA unique ID.
     pub management_identity_unique_id: Option<String>,
+}
+
+impl GcpConfig {
+    /// The credentials to call Google Cloud with: the access token when one is set, otherwise
+    /// the service account key. `None` when neither is set.
+    pub fn credentials(&self) -> Option<alien_core::GcpCredentials> {
+        if let Some(token) = &self.access_token {
+            return Some(alien_core::GcpCredentials::AccessToken {
+                token: token.clone(),
+            });
+        }
+        self.credentials_json
+            .as_ref()
+            .map(|json| alien_core::GcpCredentials::ServiceAccountKey { json: json.clone() })
+    }
 }
 
 /// GCP-specific test resources provisioned by Terraform.
@@ -363,37 +380,18 @@ impl TestConfig {
     // -- GCP ------------------------------------------------------------------
 
     fn load_gcp_mgmt() -> Option<GcpConfig> {
-        let project_id = env::var("GOOGLE_MANAGEMENT_PROJECT_ID").ok()?;
-        let region = env::var("GOOGLE_MANAGEMENT_REGION").ok()?;
-        Some(GcpConfig {
-            project_id,
-            region,
-            credentials_json: env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty()),
-            management_identity_email: env::var("GOOGLE_MANAGEMENT_IDENTITY_EMAIL")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            management_identity_unique_id: env::var("GOOGLE_MANAGEMENT_IDENTITY_UNIQUE_ID")
-                .ok()
-                .filter(|s| !s.is_empty()),
-        })
+        let mut gcp = gcp_config_from("GOOGLE_MANAGEMENT", |name| env::var(name).ok())?;
+        gcp.management_identity_email = env::var("GOOGLE_MANAGEMENT_IDENTITY_EMAIL")
+            .ok()
+            .filter(|s| !s.is_empty());
+        gcp.management_identity_unique_id = env::var("GOOGLE_MANAGEMENT_IDENTITY_UNIQUE_ID")
+            .ok()
+            .filter(|s| !s.is_empty());
+        Some(gcp)
     }
 
     fn load_gcp_target() -> Option<GcpConfig> {
-        let project_id = env::var("GOOGLE_TARGET_PROJECT_ID").ok()?;
-        let region = env::var("GOOGLE_TARGET_REGION").ok()?;
-        Some(GcpConfig {
-            project_id,
-            region,
-            credentials_json: env::var("GOOGLE_TARGET_SERVICE_ACCOUNT_KEY")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty()),
-            management_identity_email: None,
-            management_identity_unique_id: None,
-        })
+        gcp_config_from("GOOGLE_TARGET", |name| env::var(name).ok())
     }
 
     // -- Azure ----------------------------------------------------------------
@@ -665,6 +663,7 @@ impl TestConfig {
         for gcp in [&self.gcp_mgmt, &self.gcp_target].into_iter().flatten() {
             mask(&gcp.project_id);
             mask_opt(&gcp.credentials_json);
+            mask_opt(&gcp.access_token);
             mask_opt(&gcp.management_identity_email);
             mask_opt(&gcp.management_identity_unique_id);
         }
@@ -709,9 +708,86 @@ impl TestConfig {
     }
 }
 
+/// One GCP role (`GOOGLE_MANAGEMENT` or `GOOGLE_TARGET`) from `<prefix>_PROJECT_ID`,
+/// `<prefix>_REGION` and either `<prefix>_ACCESS_TOKEN` or `<prefix>_SERVICE_ACCOUNT_KEY`.
+fn gcp_config_from(prefix: &str, var: impl Fn(&str) -> Option<String>) -> Option<GcpConfig> {
+    let non_empty = |name: String| {
+        var(&name)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    Some(GcpConfig {
+        project_id: var(&format!("{prefix}_PROJECT_ID"))?,
+        region: var(&format!("{prefix}_REGION"))?,
+        credentials_json: non_empty(format!("{prefix}_SERVICE_ACCOUNT_KEY")),
+        access_token: non_empty(format!("{prefix}_ACCESS_TOKEN")),
+        management_identity_email: None,
+        management_identity_unique_id: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{e2e_resource_prefix_from_slot, validate_e2e_resource_prefix};
+    use super::{e2e_resource_prefix_from_slot, gcp_config_from, validate_e2e_resource_prefix};
+    use alien_core::GcpCredentials;
+    use std::collections::HashMap;
+
+    fn gcp(vars: &[(&str, &str)]) -> Option<super::GcpConfig> {
+        let vars: HashMap<String, String> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        gcp_config_from("GOOGLE_TARGET", |name| vars.get(name).cloned())
+    }
+
+    const PLACE: [(&str, &str); 2] = [
+        ("GOOGLE_TARGET_PROJECT_ID", "p"),
+        ("GOOGLE_TARGET_REGION", "us-central1"),
+    ];
+
+    #[test]
+    fn gcp_access_token_is_used_when_set() {
+        let config = gcp(&[
+            PLACE[0],
+            PLACE[1],
+            ("GOOGLE_TARGET_ACCESS_TOKEN", " ya29.token\n"),
+            (
+                "GOOGLE_TARGET_SERVICE_ACCOUNT_KEY",
+                "{\"type\":\"service_account\"}",
+            ),
+        ])
+        .unwrap();
+        match config.credentials() {
+            Some(GcpCredentials::AccessToken { token }) => assert_eq!(token, "ya29.token"),
+            other => panic!("expected the access token, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gcp_key_is_used_without_a_token() {
+        for token in [None, Some("  ")] {
+            let mut vars = vec![
+                PLACE[0],
+                PLACE[1],
+                ("GOOGLE_TARGET_SERVICE_ACCOUNT_KEY", "{}"),
+            ];
+            if let Some(token) = token {
+                vars.push(("GOOGLE_TARGET_ACCESS_TOKEN", token));
+            }
+            let config = gcp(&vars).unwrap();
+            assert!(config.access_token.is_none());
+            match config.credentials() {
+                Some(GcpCredentials::ServiceAccountKey { json }) => assert_eq!(json, "{}"),
+                other => panic!("expected the key, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn gcp_without_credentials_or_project() {
+        assert!(gcp(&PLACE).unwrap().credentials().is_none());
+        assert!(gcp(&[PLACE[1], ("GOOGLE_TARGET_ACCESS_TOKEN", "t")]).is_none());
+    }
 
     #[test]
     fn e2e_resource_prefix_accepts_bounded_slots() {

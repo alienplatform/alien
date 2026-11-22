@@ -22,7 +22,7 @@ let value: DeploymentInfoSetupConfig = {
         type: "built-in",
         definitionId: "customer-ai",
         version: "<value>",
-        sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+        sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       },
       required: true,
     },

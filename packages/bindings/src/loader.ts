@@ -298,6 +298,7 @@ export interface RawSandboxHandle {
   readFile(sandboxId: string, path: string): Promise<Buffer>
   writeFile(sandboxId: string, path: string, contents: Buffer): Promise<void>
   preview(sandboxId: string, port: number): Promise<RawSandboxPreview>
+  linkUrl(id: string, port: number): string | null
   pause(sandboxId: string): Promise<void>
   resume(sandboxId: string): Promise<void>
   terminate(sandboxId: string): Promise<void>

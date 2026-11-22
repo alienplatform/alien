@@ -77,6 +77,7 @@ async fn every_provider_refuses_requested_policy_without_a_gateway_before_io() {
                         manager_url: value("http://127.0.0.1:1"),
                         sandbox_key: value("box"),
                         token_path: value(&token.path().display().to_string()),
+                        links: Default::default(),
                     },
                 )
                 .await
@@ -133,11 +134,11 @@ async fn every_provider_refuses_requested_policy_without_a_gateway_before_io() {
     }
 }
 
-/// Google Cloud has no outbound allowlist: a runtime policy is refused at create and at
+/// A Google Cloud sandbox with no gateway takes no runtime policy: it is refused at create and at
 /// `update_egress` with a message that says so, before any backend call (the mock has no
 /// expectations, so a call would panic).
 #[tokio::test]
-async fn gcp_names_the_missing_allowlist_for_every_runtime_policy() {
+async fn gcp_names_the_missing_gateway_for_every_runtime_policy() {
     let gcp = GcpAgentPlatformSandbox::new(
         Arc::new(alien_gcp_clients::agent_platform::MockAgentPlatformApi::new()),
         "engine".to_string(),
@@ -181,7 +182,7 @@ async fn gcp_names_the_missing_allowlist_for_every_runtime_policy() {
             assert!(
                 error
                     .to_string()
-                    .contains("Google Cloud sandboxes have no outbound allowlist"),
+                    .contains("this Google Cloud sandbox has no egress gateway"),
                 "{error}"
             );
             assert!(!error.retryable);

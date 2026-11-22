@@ -9,7 +9,7 @@ let value: RevokeAccessRequestDeployment = {
   id: "<id>",
   name: "<value>",
   deploymentGroup: {
-    id: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
+    id: "dg_r27ict8c7vcgsumpj90ackf7b",
     name: "prod-us-east-1",
     externalId: "ext_example_01",
   },

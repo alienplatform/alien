@@ -2469,6 +2469,7 @@ mod tests {
             SandboxEgressBinding, SandboxEgressGateway, SandboxEgressSigningKey,
         };
         let gateway = SandboxEgressBinding::Gateway(SandboxEgressGateway {
+            links: Default::default(),
             container: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
             audience: "deployment/subject".into(),
             signing_key: SandboxEgressSigningKey {

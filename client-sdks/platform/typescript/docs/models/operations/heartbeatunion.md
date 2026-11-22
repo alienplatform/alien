@@ -21,18 +21,35 @@ const value: operations.HeartbeatAvailable = {
     controllerPlatform: "gcp",
     data: {
       data: {
+        imageIdentifier: "<value>",
         status: {
-          collectionIssues: [],
-          health: "unhealthy",
-          lifecycle: "failed",
-          partial: false,
-          stale: false,
+          collectionIssues: [
+            {
+              message: "<value>",
+              reason: "forbidden",
+              severity: "info",
+              source: "<value>",
+            },
+          ],
+          health: "healthy",
+          lifecycle: "updating",
+          partial: true,
+          stale: true,
         },
+        backend: "awsMicrovm",
       },
-      resourceType: "<value>",
+      resourceType: "sandbox",
     },
-    observedAt: new Date("2024-03-08T08:46:36.237Z"),
-    raw: [],
+    observedAt: new Date("2024-04-26T23:19:48.455Z"),
+    raw: [
+      {
+        body: "<value>",
+        collectedAt: new Date("2025-01-29T23:35:36.058Z"),
+        format: "json",
+        source: "<value>",
+        truncated: true,
+      },
+    ],
     resourceId: "<id>",
     resourceType: "<value>",
   },
@@ -54,3 +71,4 @@ const value: operations.HeartbeatMissing = {
   resourceType: "<value>",
 };
 ```
+

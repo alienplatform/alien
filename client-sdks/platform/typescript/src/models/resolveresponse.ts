@@ -143,10 +143,6 @@ export type ResolveResponseInstallContext = {
     | ResolveResponseManagementConfigGcp
     | ResolveResponseManagementConfigAzure
     | ResolveResponseManagementConfigKubernetes;
-  /**
-   * AWS only, for a deployment-group or deployment token that may read its group or deployment: the ExternalId the group's management roles require. A direct setup writes it into the trust of the roles it creates.
-   */
-  managementExternalId?: string | undefined;
 };
 
 export type ResolveResponse = {
@@ -354,7 +350,6 @@ export const ResolveResponseInstallContext$inboundSchema: z.ZodType<
     z.lazy(() => ResolveResponseManagementConfigAzure$inboundSchema),
     z.lazy(() => ResolveResponseManagementConfigKubernetes$inboundSchema),
   ]),
-  managementExternalId: z.string().optional(),
 });
 
 export function resolveResponseInstallContextFromJSON(

@@ -6,27 +6,24 @@
 import { DomainWithUsage } from "@alienplatform/platform-api/models";
 
 let value: DomainWithUsage = {
-  id: "dom_469m0agk8luj4s16sakmmpddz07x",
-  workspaceId: "ws_It13CUaGEhLLAB87simX07Xb",
+  id: "dom_469m0agk8luj4s16sakmmpdd",
+  workspaceId: "ws_It13CUaGEhLLAB87simX0",
   domain: "free-antelope.name",
-  dns: "customer",
-  isSystem: true,
+  isSystem: false,
   claimToken: "<value>",
-  status: "lost-verification",
-  createdAt: new Date("2025-02-11T22:17:17.700Z"),
-  updatedAt: new Date("2024-07-21T08:54:10.474Z"),
+  status: "pending-verification",
+  createdAt: new Date("2025-12-13T18:16:52.351Z"),
+  updatedAt: new Date("2025-02-11T22:17:17.700Z"),
   endpoints: [],
   usage: {
     deploymentUrlProjects: [],
-    portalBindings: [
+    portalBindings: [],
+    packageDomains: [
       {
         id: "<id>",
-        projectId: "<id>",
-        projectName: "<value>",
-        hostname: "superior-mathematics.name",
+        hostname: "faint-submitter.com",
       },
     ],
-    packageDomains: [],
     managerBindings: [],
   },
 };
@@ -36,11 +33,9 @@ let value: DomainWithUsage = {
 
 | Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   | Example                                                                                       |
 | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `id`                                                                                          | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the domain.                                                             | dom_469m0agk8luj4s16sakmmpddz07x                                                              |
-| `workspaceId`                                                                                 | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the workspace.                                                          | ws_It13CUaGEhLLAB87simX07Xb                                                                   |
+| `id`                                                                                          | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the domain.                                                             | dom_469m0agk8luj4s16sakmmpdd                                                                  |
+| `workspaceId`                                                                                 | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the workspace.                                                          | ws_It13CUaGEhLLAB87simX0                                                                      |
 | `domain`                                                                                      | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
-| `dns`                                                                                         | [models.Dns](../models/dns.md)                                                                | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
-| `acmeChallengeTarget`                                                                         | *string*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |
 | `isSystem`                                                                                    | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `claimToken`                                                                                  | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `hostedZoneId`                                                                                | *string*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |
@@ -50,6 +45,5 @@ let value: DomainWithUsage = {
 | `createdAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `updatedAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `verifiedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |
-| `verificationFailingSince`                                                                    | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |
 | `endpoints`                                                                                   | [models.DomainEndpoint](../models/domainendpoint.md)[]                                        | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `usage`                                                                                       | [models.DomainWithUsageUsage](../models/domainwithusageusage.md)                              | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |

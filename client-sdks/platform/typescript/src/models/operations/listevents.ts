@@ -16,28 +16,10 @@ export type ListEventsGlobals = {
   workspace?: string | undefined;
 };
 
-/**
- * Return only carried sync history.
- */
-export const ListEventsCategory = {
-  AirgappedSync: "airgappedSync",
-} as const;
-/**
- * Return only carried sync history.
- */
-export type ListEventsCategory = ClosedEnum<typeof ListEventsCategory>;
-
 export const ListEventsInclude = {
   ReleaseCreatedAt: "releaseCreatedAt",
   EndpointHealth: "endpointHealth",
   Releases: "releases",
-  AirgappedSyncs: "airgappedSyncs",
-  SetupCompute: "setupCompute",
-  Deployments: "deployments",
-  CloudAccounts: "cloudAccounts",
-  Rollouts: "rollouts",
-  Actors: "actors",
-  ProjectFeatures: "projectFeatures",
 } as const;
 export type ListEventsInclude = ClosedEnum<typeof ListEventsInclude>;
 
@@ -55,11 +37,7 @@ export type ListEventsRequest = {
    */
   releaseId?: string | undefined;
   /**
-   * Return only carried sync history.
-   */
-  category?: ListEventsCategory | undefined;
-  /**
-   * Optional additions: releaseCreatedAt metadata, endpointHealth events, setupCompute events (setup compute the platform kept its own over), and `releases`, the title, version and commit of every release the listed events reference. `deployments` adds names for the deployments referenced by the events. `rollouts` adds how many deployments each listed release reached per day. `actors` adds the name and avatar of the people who acted, and the name of the API keys that did. `projectFeatures` adds the events for features turned on and off. Health, setup compute and project feature events are opt-in for compatibility with existing clients.
+   * Optional additions: releaseCreatedAt metadata, endpointHealth events, and `releases`, the title, version and commit of every release the listed events reference. Health events are opt-in for compatibility with existing clients.
    */
   include?: Array<ListEventsInclude> | undefined;
   /**
@@ -70,16 +48,6 @@ export type ListEventsRequest = {
    * Cursor for pagination - omit for first page
    */
   cursor?: string | undefined;
-};
-
-export type CloudAccount = {
-  id: string;
-  name: string;
-};
-
-export type ListEventsDeployment = {
-  id: string;
-  name: string;
 };
 
 export type ListEventsRelease = {
@@ -96,33 +64,6 @@ export type ListEventsRelease = {
   createdAt: Date;
 };
 
-export type Actor = {
-  id: string;
-  name: string;
-  email: string;
-  image: string | null;
-};
-
-export type ApiKey = {
-  id: string;
-  /**
-   * The key's description, or its prefix when it has none
-   */
-  name: string;
-};
-
-export type ListEventsRollout = {
-  releaseId: string;
-  /**
-   * UTC day, YYYY-MM-DD
-   */
-  day: string;
-  /**
-   * Distinct deployments the release reached that day
-   */
-  deployments: number;
-};
-
 /**
  * Retrieved events.
  */
@@ -136,35 +77,10 @@ export type ListEventsResponse = {
    */
   nextCursor: string | null;
   /**
-   * Subaccounts referenced by events, with ?include=cloudAccounts
-   */
-  cloudAccounts?: Array<CloudAccount> | undefined;
-  /**
-   * Deployments the listed events reference, with ?include=deployments
-   */
-  deployments?: Array<ListEventsDeployment> | undefined;
-  /**
    * Releases the listed events reference, with ?include=releases
    */
   releases?: Array<ListEventsRelease> | undefined;
-  /**
-   * People the listed events name as their actor, with their display name and avatar, with ?include=actors
-   */
-  actors?: Array<Actor> | undefined;
-  /**
-   * API keys the listed events name as their actor, by name, with ?include=actors; only keys the caller can read
-   */
-  apiKeys?: Array<ApiKey> | undefined;
-  /**
-   * For each release the listed DeploymentReleased events name, how many deployments it reached on each of their UTC days, counted over all events rather than this page, with ?include=rollouts
-   */
-  rollouts?: Array<ListEventsRollout> | undefined;
 };
-
-/** @internal */
-export const ListEventsCategory$outboundSchema: z.ZodEnum<
-  typeof ListEventsCategory
-> = z.enum(ListEventsCategory);
 
 /** @internal */
 export const ListEventsInclude$outboundSchema: z.ZodEnum<
@@ -176,7 +92,6 @@ export type ListEventsRequest$Outbound = {
   project?: string | undefined;
   deploymentId?: string | undefined;
   releaseId?: string | undefined;
-  category?: string | undefined;
   include?: Array<string> | undefined;
   limit: number;
   cursor?: string | undefined;
@@ -190,7 +105,6 @@ export const ListEventsRequest$outboundSchema: z.ZodType<
   project: z.string().optional(),
   deploymentId: z.string().optional(),
   releaseId: z.string().optional(),
-  category: ListEventsCategory$outboundSchema.optional(),
   include: z.array(ListEventsInclude$outboundSchema).optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),
@@ -201,42 +115,6 @@ export function listEventsRequestToJSON(
 ): string {
   return JSON.stringify(
     ListEventsRequest$outboundSchema.parse(listEventsRequest),
-  );
-}
-
-/** @internal */
-export const CloudAccount$inboundSchema: z.ZodType<CloudAccount, unknown> = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-  });
-
-export function cloudAccountFromJSON(
-  jsonString: string,
-): SafeParseResult<CloudAccount, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CloudAccount$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CloudAccount' from JSON`,
-  );
-}
-
-/** @internal */
-export const ListEventsDeployment$inboundSchema: z.ZodType<
-  ListEventsDeployment,
-  unknown
-> = z.object({
-  id: z.string(),
-  name: z.string(),
-});
-
-export function listEventsDeploymentFromJSON(
-  jsonString: string,
-): SafeParseResult<ListEventsDeployment, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ListEventsDeployment$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ListEventsDeployment' from JSON`,
   );
 }
 
@@ -263,73 +141,13 @@ export function listEventsReleaseFromJSON(
 }
 
 /** @internal */
-export const Actor$inboundSchema: z.ZodType<Actor, unknown> = z.object({
-  id: z.string(),
-  name: z.string(),
-  email: z.string(),
-  image: z.nullable(z.string()),
-});
-
-export function actorFromJSON(
-  jsonString: string,
-): SafeParseResult<Actor, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Actor$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Actor' from JSON`,
-  );
-}
-
-/** @internal */
-export const ApiKey$inboundSchema: z.ZodType<ApiKey, unknown> = z.object({
-  id: z.string(),
-  name: z.string(),
-});
-
-export function apiKeyFromJSON(
-  jsonString: string,
-): SafeParseResult<ApiKey, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ApiKey$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ApiKey' from JSON`,
-  );
-}
-
-/** @internal */
-export const ListEventsRollout$inboundSchema: z.ZodType<
-  ListEventsRollout,
-  unknown
-> = z.object({
-  releaseId: z.string(),
-  day: z.string(),
-  deployments: z.int(),
-});
-
-export function listEventsRolloutFromJSON(
-  jsonString: string,
-): SafeParseResult<ListEventsRollout, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ListEventsRollout$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ListEventsRollout' from JSON`,
-  );
-}
-
-/** @internal */
 export const ListEventsResponse$inboundSchema: z.ZodType<
   ListEventsResponse,
   unknown
 > = z.object({
   items: z.array(models.EventListItemResponse$inboundSchema),
   nextCursor: z.nullable(z.string()),
-  cloudAccounts: z.array(z.lazy(() => CloudAccount$inboundSchema)).optional(),
-  deployments: z.array(z.lazy(() => ListEventsDeployment$inboundSchema))
-    .optional(),
   releases: z.array(z.lazy(() => ListEventsRelease$inboundSchema)).optional(),
-  actors: z.array(z.lazy(() => Actor$inboundSchema)).optional(),
-  apiKeys: z.array(z.lazy(() => ApiKey$inboundSchema)).optional(),
-  rollouts: z.array(z.lazy(() => ListEventsRollout$inboundSchema)).optional(),
 });
 
 export function listEventsResponseFromJSON(

@@ -10,30 +10,22 @@ import { RedeployDeploymentResponse } from "@alienplatform/platform-api/models/o
 let value: RedeployDeploymentResponse = {
   message: "<value>",
   operation: {
-    id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
+    id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
     status: "failed",
     reasons: [
       "configuration",
     ],
-    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     changedKeys: [
       "<value 1>",
       "<value 2>",
     ],
-    blocker: {
-      kind: "other",
-      message: "<value>",
-      signedSetupUpdate: {
-        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
-        templateDigest: "<value>",
-      },
-    },
     cause: {
-      kind: "promotion",
-      at: new Date("2026-12-01T10:04:11.187Z"),
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+      kind: "volume-restore",
+      at: new Date("2024-04-20T16:58:36.345Z"),
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     },
-    requestedAt: new Date("2025-04-09T03:01:22.653Z"),
+    requestedAt: new Date("2025-01-25T18:29:02.081Z"),
   },
 };
 ```

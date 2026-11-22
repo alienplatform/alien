@@ -31,6 +31,7 @@ impl ResourceImporter for AwsServiceAccountImporter {
             stack_permissions_applied: data.stack_permissions_applied,
             assume_role_policy: None,
             runtime_created: false,
+            setup_owned_role: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

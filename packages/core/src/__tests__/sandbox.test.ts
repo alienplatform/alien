@@ -111,6 +111,25 @@ describe("Sandbox", () => {
     expect("imagePermissions" in complete().build().config).toBe(false)
   })
 
+  it("links a service once, by resource or reference", () => {
+    const api = new Resource({ type: "container", id: "api" })
+    const r = complete()
+      .egress("internet")
+      .link(api)
+      .link({ type: "container", id: "api" })
+      .link({ type: "container", id: "billing" })
+      .build()
+
+    expect(r.config.gatewayLinks).toEqual([
+      { type: "container", id: "api" },
+      { type: "container", id: "billing" },
+    ])
+  })
+
+  it("writes no gatewayLinks when none are declared", () => {
+    expect("gatewayLinks" in complete().build().config).toBe(false)
+  })
+
   it("exposes the resource type for permission targets", () => {
     expect(Sandbox.any()).toBe("sandbox")
   })

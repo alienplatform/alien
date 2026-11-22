@@ -34,7 +34,24 @@ pub(super) fn allowed_sources(config: &Container, stack: &Stack) -> BTreeSet<Str
                 .is_some_and(|other| other.cluster == config.cluster);
         member.then(|| id.clone())
     });
-    linked.chain(cluster_members).collect()
+    // A sandbox's link reaches this Container through the managed gateway, which may sit in
+    // another cluster, so the gateway's pods need the same ports.
+    let gateway = stack
+        .resources()
+        .any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<alien_core::Sandbox>()
+                .is_some_and(|sandbox| {
+                    sandbox.egress == alien_core::SandboxEgress::Internet
+                        && sandbox
+                            .gateway_links
+                            .iter()
+                            .any(|link| link.id == config.id)
+                })
+        })
+        .then(|| alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.to_string());
+    linked.chain(cluster_members).chain(gateway).collect()
 }
 
 /// The namespace a linking Sandbox's pods run in, when the chart sets one.
@@ -387,6 +404,45 @@ fn require_owner(
     }
 }
 
+/// The managed gateway's egress to the services sandboxes link: each linked Container's pods
+/// and its Service ClusterIP, on its declared ports only. A plugin that filters after the
+/// Service address is translated sees the pod; one that filters before sees the ClusterIP.
+/// The ClusterIP is added once the Service exists; the Ready refresh picks it up. Nothing is
+/// added for a stack without links, and nothing for any Container but the gateway.
+pub(super) async fn gateway_link_rules(
+    config: &Container,
+    namespace: &str,
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<Vec<NetworkPolicyEgressRule>> {
+    if !alien_core::sandbox_egress::is_managed_gateway(ctx.desired_stack, &config.id) {
+        return Ok(Vec::new());
+    }
+    let mut rules = Vec::new();
+    for (target, ports) in alien_core::sandbox_links::gateway_link_targets(ctx.desired_stack) {
+        let service = alien_core::kubernetes_resource_name(&ctx.resource_prefix, &target);
+        let mut peers = vec![NetworkPolicyPeer {
+            pod_selector: Some(selector(kubernetes_branded_resource_labels(ctx, &target))),
+            ..Default::default()
+        }];
+        if let Some(address) =
+            crate::core::k8s_network::service_cluster_ip(ctx, namespace, &service).await?
+        {
+            peers.push(NetworkPolicyPeer {
+                ip_block: Some(IPBlock {
+                    cidr: format!("{address}/32"),
+                    except: None,
+                }),
+                ..Default::default()
+            });
+        }
+        rules.push(NetworkPolicyEgressRule {
+            to: Some(peers),
+            ports: Some(ports.iter().map(|&number| port(number, "TCP")).collect()),
+        });
+    }
+    Ok(rules)
+}
+
 impl KubernetesContainerController {
     pub(super) async fn reconcile_network_policy(
         &mut self,
@@ -425,6 +481,10 @@ impl KubernetesContainerController {
                 if let Some(rules) = desired.spec.as_mut().and_then(|spec| spec.egress.as_mut()) {
                     rules.push(rule);
                 }
+            }
+            let links = gateway_link_rules(config, namespace, ctx).await?;
+            if let Some(rules) = desired.spec.as_mut().and_then(|spec| spec.egress.as_mut()) {
+                rules.extend(links);
             }
         }
         let existing = match client.get_network_policy(namespace, &name).await {

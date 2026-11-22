@@ -18,10 +18,6 @@ export type DeleteDeploymentRequestAction = ClosedEnum<
 
 export type DeleteDeploymentRequest = {
   action: DeleteDeploymentRequestAction;
-  /**
-   * Close the subaccount after this last deployment finishes cleanup.
-   */
-  closeSubaccount?: boolean | undefined;
 };
 
 /** @internal */
@@ -32,7 +28,6 @@ export const DeleteDeploymentRequestAction$outboundSchema: z.ZodEnum<
 /** @internal */
 export type DeleteDeploymentRequest$Outbound = {
   action: string;
-  closeSubaccount?: boolean | undefined;
 };
 
 /** @internal */
@@ -41,7 +36,6 @@ export const DeleteDeploymentRequest$outboundSchema: z.ZodType<
   DeleteDeploymentRequest
 > = z.object({
   action: DeleteDeploymentRequestAction$outboundSchema,
-  closeSubaccount: z.boolean().optional(),
 });
 
 export function deleteDeploymentRequestToJSON(

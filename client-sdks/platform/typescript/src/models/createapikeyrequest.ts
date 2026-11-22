@@ -15,7 +15,7 @@ export type CreateAPIKeyRequest = {
    */
   scope: Scope;
   /**
-   * Optional expiration date for the API key. A key below the workspace cannot create a key that outlives itself, so the new key can expire earlier; the response's expiresAt says when.
+   * Optional expiration date for the API key
    */
   expiresAt: Date | null;
 };

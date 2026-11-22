@@ -68,14 +68,14 @@ export type CommandTarget = {
 };
 
 /**
- * Whether a successful operation result is included or withheld. `protected` means withheld: pending explicit confirmation, or kept in a Private Alien Instance (see `resultKeptInInstance`).
+ * Whether a successful operation result is included or withheld pending explicit confirmation
  */
 export const CommandResultAvailability = {
   Available: "available",
   Protected: "protected",
 } as const;
 /**
- * Whether a successful operation result is included or withheld. `protected` means withheld: pending explicit confirmation, or kept in a Private Alien Instance (see `resultKeptInInstance`).
+ * Whether a successful operation result is included or withheld pending explicit confirmation
  */
 export type CommandResultAvailability = ClosedEnum<
   typeof CommandResultAvailability
@@ -159,13 +159,9 @@ export type Command = {
    */
   result?: any | null | undefined;
   /**
-   * Whether a successful operation result is included or withheld. `protected` means withheld: pending explicit confirmation, or kept in a Private Alien Instance (see `resultKeptInInstance`).
+   * Whether a successful operation result is included or withheld pending explicit confirmation
    */
   resultAvailability?: CommandResultAvailability | undefined;
-  /**
-   * True for a successful command on a Private Alien Instance. The result never passes through Alien, so read it there with a sender token from `POST /v1/commands/bootstrap`.
-   */
-  resultKeptInInstance?: boolean | undefined;
 };
 
 /** @internal */
@@ -232,7 +228,6 @@ export const Command$inboundSchema: z.ZodType<Command, unknown> = z.object({
   verification: z.nullable(CommandVerification$inboundSchema),
   result: z.nullable(z.any()).optional(),
   resultAvailability: CommandResultAvailability$inboundSchema.optional(),
-  resultKeptInInstance: z.boolean().optional(),
 });
 
 export function commandFromJSON(

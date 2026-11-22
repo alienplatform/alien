@@ -3,121 +3,65 @@
 
 ## Supported Types
 
-### `models.DataAwsIamRole1`
+### `models.DataAwsVpc`
 
 ```typescript
-const value: models.DataAwsIamRole1 = {
-  assumeRolePolicyPresent: false,
-  attachedPolicyCount: 410901,
-  attachedPolicyNames: [],
-  createDate: "<value>",
-  inlinePolicyCount: 846965,
-  inlinePolicyNames: [],
-  managedTagCount: 519428,
-  path: "/etc",
-  roleArn: "<value>",
-  roleId: "<id>",
-  roleName: "<value>",
-  stackPermissionsApplied: false,
-  status: {
-    collectionIssues: [],
-    health: "healthy",
-    lifecycle: "deleting",
-    partial: true,
-    stale: false,
-  },
-  tagCount: 250500,
-  backend: "awsIamRole",
-};
-```
-
-### `models.DataGcpServiceAccount1`
-
-```typescript
-const value: models.DataGcpServiceAccount1 = {
-  email: "Narciso53@hotmail.com",
-  projectBindingCount: 780560,
-  projectRoles: [
+const value: models.DataAwsVpc = {
+  availabilityZones: [
     "<value 1>",
     "<value 2>",
   ],
-  serviceAccountBindingCount: 884958,
-  serviceAccountRoles: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
+  isByoVpc: true,
+  privateSubnetIds: [],
+  publicSubnetIds: [],
+  routeTableCount: 759318,
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
-    health: "healthy",
-    lifecycle: "stopped",
-    partial: false,
-    stale: true,
-  },
-  backend: "gcpServiceAccount",
-};
-```
-
-### `models.DataAzureManagedIdentity1`
-
-```typescript
-const value: models.DataAzureManagedIdentity1 = {
-  customRoleDefinitionCount: 863031,
-  customRoleDefinitionIds: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
-  location: "<value>",
-  managedTagCount: 765674,
-  name: "<value>",
-  resourceGroup: "<value>",
-  resourceId: "<id>",
-  roleAssignmentCount: 833585,
-  roleAssignmentIds: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
-  stackPermissionsApplied: false,
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "error",
+        reason: "timed-out",
+        severity: "warning",
         source: "<value>",
       },
     ],
     health: "unknown",
+    lifecycle: "unknown",
+    partial: true,
+    stale: false,
+  },
+  backend: "awsVpc",
+};
+```
+
+### `models.DataGcpVpc`
+
+```typescript
+const value: models.DataGcpVpc = {
+  isByoVpc: true,
+  status: {
+    collectionIssues: [],
+    health: "degraded",
     lifecycle: "deleting",
     partial: true,
     stale: false,
   },
-  backend: "azureManagedIdentity",
+  backend: "gcpVpc",
 };
 ```
 
-### `models.DataLocal11`
+### `models.DataAzureVnet`
 
 ```typescript
-const value: models.DataLocal11 = {
-  configured: false,
-  identity: "<value>",
+const value: models.DataAzureVnet = {
+  isByoVnet: true,
   status: {
     collectionIssues: [],
     health: "unhealthy",
-    lifecycle: "deleting",
+    lifecycle: "unknown",
     partial: true,
     stale: true,
   },
-  backend: "local",
+  backend: "azureVnet",
 };
 ```
+

@@ -9,7 +9,7 @@
 const value: models.APIKeyDeploymentSetupConfigSourceProjectRelease = {
   type: "project-release",
   releaseChannel: "<value>",
-  releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+  releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };
 ```
 
@@ -20,6 +20,7 @@ const value: models.APIKeyDeploymentSetupConfigSourceBuiltIn = {
   type: "built-in",
   definitionId: "customer-key",
   version: "<value>",
-  sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+  sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };
 ```
+

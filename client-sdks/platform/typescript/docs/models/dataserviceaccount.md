@@ -27,13 +27,13 @@ let value: DataServiceAccount = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
-          severity: "error",
+          reason: "timed-out",
+          severity: "warning",
           source: "<value>",
         },
       ],
-      health: "unknown",
-      lifecycle: "deleting",
+      health: "healthy",
+      lifecycle: "stopped",
       partial: true,
       stale: false,
     },
@@ -45,7 +45,7 @@ let value: DataServiceAccount = {
 
 ## Fields
 
-| Field                                                                        | Type                                                                         | Required                                                                     | Description                                                                  |
-| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `data`                                                                       | *models.SyncReconcileRequestDataUnion11*                                     | :heavy_check_mark:                                                           | N/A                                                                          |
-| `resourceType`                                                               | [models.ResourceTypeServiceAccount](../models/resourcetypeserviceaccount.md) | :heavy_check_mark:                                                           | N/A                                                                          |
+| Field                                    | Type                                     | Required                                 | Description                              |
+| ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
+| `data`                                   | *models.SyncReconcileRequestDataUnion10* | :heavy_check_mark:                       | N/A                                      |
+| `resourceType`                           | *"service-account"*                      | :heavy_check_mark:                       | N/A                                      |

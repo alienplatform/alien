@@ -178,6 +178,9 @@ pub enum TestApp {
     /// A frozen, remotely published sandbox the test drives itself, with no Worker
     /// (`tests/e2e/test-apps/sandbox-remote`).
     SandboxRemote,
+    /// A remotely published GCP sandbox with egress `internet` through the egress gateway
+    /// (`tests/e2e/test-apps/sandbox-internet`).
+    SandboxInternet,
 }
 
 impl std::fmt::Display for TestApp {
@@ -197,6 +200,7 @@ impl std::fmt::Display for TestApp {
             TestApp::QueueDeadLetter => write!(f, "queue-dead-letter"),
             TestApp::SandboxSession => write!(f, "sandbox-session"),
             TestApp::SandboxRemote => write!(f, "sandbox-remote"),
+            TestApp::SandboxInternet => write!(f, "sandbox-internet"),
         }
     }
 }
@@ -433,6 +437,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::QueueDeadLetter => "test-apps/queue-dead-letter",
         TestApp::SandboxSession => "test-apps/sandbox-session",
         TestApp::SandboxRemote => "test-apps/sandbox-remote",
+        TestApp::SandboxInternet => "test-apps/sandbox-internet",
     }
 }
 
@@ -455,7 +460,8 @@ fn deployment_environment_variables(
         | TestApp::StorageNotifications
         | TestApp::QueueDeadLetter
         | TestApp::SandboxSession
-        | TestApp::SandboxRemote => None,
+        | TestApp::SandboxRemote
+        | TestApp::SandboxInternet => None,
         TestApp::ByoEncryptionKey | TestApp::ByoAi => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {
@@ -2049,7 +2055,10 @@ async fn setup_inner(
     if model == DeploymentModel::Push
         && !matches!(
             app,
-            TestApp::StorageNotifications | TestApp::QueueDeadLetter | TestApp::SandboxRemote
+            TestApp::StorageNotifications
+                | TestApp::QueueDeadLetter
+                | TestApp::SandboxRemote
+                | TestApp::SandboxInternet
         )
         && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
     {

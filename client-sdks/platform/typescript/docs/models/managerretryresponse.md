@@ -7,7 +7,7 @@
 
 ```typescript
 const value: models.ManagerRetryResponseSetup = {
-  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
+  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   setupStatus: "pending",
   setupToken: "<value>",
   setupTokenId: "<id>",
@@ -23,7 +23,7 @@ const value: models.ManagerRetryResponseSetup = {
       allowedSetupMethods: [],
     },
     validatedReleaseSelection: {
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       releaseChannel: "<value>",
       platform: "aws",
     },
@@ -34,7 +34,7 @@ const value: models.ManagerRetryResponseSetup = {
           type: "built-in",
           definitionId: "customer-ai",
           version: "<value>",
-          sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+          sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         },
         required: true,
       },
@@ -68,9 +68,10 @@ const value: models.ManagerRetryResponseSetup = {
 ```typescript
 const value: models.ManagerRetryDeploymentResponse = {
   mode: "deployment",
-  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
+  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   setupStatus: "provisioning",
   deploymentId: "<id>",
   message: "<value>",
 };
 ```
+

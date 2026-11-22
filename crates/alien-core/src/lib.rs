@@ -23,6 +23,7 @@ mod deployer_secrets;
 pub use deployer_secrets::*;
 pub mod aws_naming;
 pub mod gcp_naming;
+pub mod gcp_sandbox_gateway;
 pub mod vault_naming;
 
 pub mod permissions;
@@ -59,6 +60,7 @@ pub mod sandbox_egress;
 pub mod sandbox_identity;
 pub mod sandbox_image;
 pub mod sandbox_image_permissions;
+pub mod sandbox_links;
 pub mod sandbox_setup_inputs;
 pub mod sandbox_setup_parity;
 pub mod sandbox_signal;

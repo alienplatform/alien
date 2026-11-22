@@ -19,7 +19,6 @@ import {
   DeploymentPortalDensity$inboundSchema,
 } from "./deploymentportaldensity.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
-import { ProjectHealth, ProjectHealth$inboundSchema } from "./projecthealth.js";
 import {
   ProjectReleaseInfo,
   ProjectReleaseInfo$inboundSchema,
@@ -515,7 +514,6 @@ export type ProjectListItemResponse = {
   workspaceId: string;
   deploymentCount?: number | undefined;
   latestRelease?: ProjectReleaseInfo | null | undefined;
-  health?: ProjectHealth | undefined;
 };
 
 /** @internal */
@@ -1182,7 +1180,6 @@ export const ProjectListItemResponse$inboundSchema: z.ZodType<
   workspaceId: z.string(),
   deploymentCount: z.number().optional(),
   latestRelease: z.nullable(ProjectReleaseInfo$inboundSchema).optional(),
-  health: ProjectHealth$inboundSchema.optional(),
 });
 
 export function projectListItemResponseFromJSON(

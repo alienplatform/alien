@@ -40,7 +40,7 @@ let value: DataWorker = {
 
 ## Fields
 
-| Field                                                        | Type                                                         | Required                                                     | Description                                                  |
-| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| `data`                                                       | *models.SyncReconcileRequestDataUnion2*                      | :heavy_check_mark:                                           | N/A                                                          |
-| `resourceType`                                               | [models.ResourceTypeWorker](../models/resourcetypeworker.md) | :heavy_check_mark:                                           | N/A                                                          |
+| Field                                   | Type                                    | Required                                | Description                             |
+| --------------------------------------- | --------------------------------------- | --------------------------------------- | --------------------------------------- |
+| `data`                                  | *models.SyncReconcileRequestDataUnion2* | :heavy_check_mark:                      | N/A                                     |
+| `resourceType`                          | *"worker"*                              | :heavy_check_mark:                      | N/A                                     |

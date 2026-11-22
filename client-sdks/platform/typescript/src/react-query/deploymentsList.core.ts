@@ -42,11 +42,8 @@ export function buildDeploymentsListQuery(
   return {
     queryKey: queryKeyDeploymentsList({
       project: request?.project,
-      cloudAccountId: request?.cloudAccountId,
       deploymentGroup: request?.deploymentGroup,
       name: request?.name,
-      listState: request?.listState,
-      order: request?.order,
       managerId: request?.managerId,
       purpose: request?.purpose,
       search: request?.search,
@@ -82,11 +79,8 @@ export function buildDeploymentsListQuery(
 export function queryKeyDeploymentsList(
   parameters: {
     project?: string | undefined;
-    cloudAccountId?: string | undefined;
     deploymentGroup?: string | undefined;
     name?: string | undefined;
-    listState?: operations.ListDeploymentsListState | undefined;
-    order?: operations.Order | undefined;
     managerId?: string | undefined;
     purpose?: models.DeploymentPurpose | undefined;
     search?: string | undefined;
@@ -97,5 +91,5 @@ export function queryKeyDeploymentsList(
     cursor?: string | undefined;
   },
 ): QueryKey {
-  return ["@alienplatform/platform-api", "Deployments", "list", parameters];
+  return ["@alienplatform/platform-api", "deployments", "list", parameters];
 }

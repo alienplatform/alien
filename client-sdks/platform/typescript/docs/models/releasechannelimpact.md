@@ -8,7 +8,7 @@ import { ReleaseChannelImpact } from "@alienplatform/platform-api/models";
 let value: ReleaseChannelImpact = {
   channel: "<value>",
   currentRelease: {
-    id: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+    id: "rel_WbhQgksrawSKIpEN0NAssHX9",
     version: "<value>",
     gitMetadata: {
       commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
@@ -27,7 +27,7 @@ let value: ReleaseChannelImpact = {
   },
   runsThisRelease: false,
   rollbackRelease: {
-    id: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+    id: "rel_WbhQgksrawSKIpEN0NAssHX9",
     version: "<value>",
     gitMetadata: {
       commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
@@ -76,7 +76,7 @@ let value: ReleaseChannelImpact = {
 
 | Field                                                              | Type                                                               | Required                                                           | Description                                                        |
 | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| `channel`                                                          | *string*                                                           | :heavy_check_mark:                                                 | Channel the release was signed for                                 |
+| `channel`                                                          | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
 | `currentRelease`                                                   | [models.DeploymentReleaseInfo](../models/deploymentreleaseinfo.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `runsThisRelease`                                                  | *boolean*                                                          | :heavy_check_mark:                                                 | Whether the channel already points to this release                 |
 | `rollbackRelease`                                                  | [models.DeploymentReleaseInfo](../models/deploymentreleaseinfo.md) | :heavy_check_mark:                                                 | N/A                                                                |

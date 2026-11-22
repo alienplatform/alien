@@ -3,111 +3,55 @@
 
 ## Supported Types
 
-### `models.DataAwsBedrock`
+### `models.DataAwsKms`
 
 ```typescript
-const value: models.DataAwsBedrock = {
-  availability: {
-    catalogRevision: "<value>",
-    models: [],
-    source: "aws-bedrock",
+const value: models.DataAwsKms = {
+  data: {
+    enabled: true,
+    keyArn: "<value>",
+    keySpec: "<value>",
+    keyState: "<value>",
+    keyUsage: "<value>",
+    status: {
+      health: "unhealthy",
+      lifecycle: "stopped",
+    },
   },
-  region: "<value>",
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "api-unavailable",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
-    lifecycle: "running",
-    partial: false,
-    stale: false,
-  },
-  backend: "awsBedrock",
+  provider: "aws-kms",
 };
 ```
 
-### `models.DataGcpVertex`
+### `models.DataGcpCloudKms`
 
 ```typescript
-const value: models.DataGcpVertex = {
-  availability: {
-    catalogRevision: "<value>",
-    models: [
-      {
-        accessTest: "failed",
-        availability: "blocked",
-        blockers: [],
-        clientApis: [
-          "open-ai-chat-completions",
-        ],
-        publicModelId: "<id>",
-      },
-    ],
-    source: "anthropic",
+const value: models.DataGcpCloudKms = {
+  data: {
+    cryptoKeyName: "<value>",
+    purpose: "<value>",
+    status: {
+      health: "degraded",
+      lifecycle: "running",
+    },
   },
-  location: "<value>",
-  project: "<value>",
-  status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "unknown",
-    partial: false,
-    stale: false,
-  },
-  backend: "gcpVertex",
+  provider: "gcp-cloud-kms",
 };
 ```
 
-### `models.DataAzureFoundry`
+### `models.DataAzureKeyVault2`
 
 ```typescript
-const value: models.DataAzureFoundry = {
-  accountName: "<value>",
-  availability: {
-    catalogRevision: "<value>",
-    models: [
-      {
-        accessTest: "verified",
-        availability: "available",
-        blockers: [
-          "quota-configuration-required",
-        ],
-        clientApis: [
-          "open-ai-responses",
-        ],
-        publicModelId: "<id>",
-      },
-    ],
-    source: "aws-bedrock",
+const value: models.DataAzureKeyVault2 = {
+  data: {
+    keyId: "<id>",
+    keyOperations: [],
+    keyType: "<value>",
+    status: {
+      health: "unknown",
+      lifecycle: "deleting",
+    },
   },
-  status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "stopped",
-    partial: false,
-    stale: false,
-  },
-  backend: "azureFoundry",
+  provider: "azure-key-vault",
 };
 ```
 
-### `models.DataExternal`
-
-```typescript
-const value: models.DataExternal = {
-  provider: "<value>",
-  status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
-    partial: true,
-    stale: false,
-  },
-  backend: "external",
-};
-```

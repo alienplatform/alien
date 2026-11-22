@@ -190,7 +190,7 @@ async fn kubernetes_installs_and_reconciles_a_replicated_sandbox_gateway() {
             &namespace,
             "--create-namespace",
             "--timeout",
-            "5m",
+            "15m",
             "--set-string",
             &format!("serviceAccountPrefix={PREFIX}"),
             "--set-string",

@@ -92,30 +92,15 @@ const value: models.ExternalBindingFlexibleServer = {
 };
 ```
 
-### `models.ExternalBindingExternalPostgres`
+### `models.ExternalBindingExternal`
 
 ```typescript
-const value: models.ExternalBindingExternalPostgres = {
+const value: models.ExternalBindingExternal = {
   database: "<value>",
-  host: "posh-metal.biz",
-  password: {
-    secretRef: {
-      key: "<key>",
-      name: "<value>",
-    },
-  },
-  port: {
-    "secretRef": {
-      "key": "<key>",
-      "name": "<value>",
-    },
-  },
-  username: {
-    "secretRef": {
-      "key": "<key>",
-      "name": "<value>",
-    },
-  },
+  host: "rewarding-premier.biz",
+  password: "sxvGxoxE7DCD9Ar",
+  port: "<value>",
+  username: "Sister_Gutmann",
   service: "external",
   type: "postgres",
 };

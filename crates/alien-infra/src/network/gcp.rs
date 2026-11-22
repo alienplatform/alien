@@ -22,7 +22,7 @@ use alien_gcp_clients::compute::{
 };
 use alien_macros::controller;
 use chrono::Utc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // =============================================================================================
 // Controller
@@ -45,6 +45,17 @@ pub struct GcpNetworkController {
     pub(crate) region: Option<String>,
     pub cidr_block: Option<String>,
     pub is_byo_vpc: bool,
+    /// Network attachment and gateway VMs setup created for Internet sandboxes. Stack state
+    /// written before they existed has none, which reads as "no gateway".
+    #[serde(default)]
+    pub sandbox_network: Option<alien_core::import::data::GcpSandboxNetwork>,
+    /// Progress of direct setup's creation of the gateway wiring.
+    #[serde(default)]
+    pub(crate) sandbox_setup: super::gcp_sandbox_gateway_setup::SetupProgress,
+    /// Progress of the wiring's deletion, and the attachment Google kept because Agent Platform
+    /// had connected to it.
+    #[serde(default)]
+    pub(crate) sandbox_delete: super::gcp_sandbox_gateway_setup::DeleteProgress,
 
     // Operation tracking
     pub(crate) pending_operation_name: Option<String>,
@@ -180,11 +191,122 @@ impl GcpNetworkController {
             region: Some(region),
             cidr_block: Some("10.0.0.0/16".to_string()),
             is_byo_vpc: false,
+            sandbox_network: None,
+            sandbox_setup: Default::default(),
+            sandbox_delete: Default::default(),
             pending_operation_name: None,
             pending_operation_region: None,
             _internal_stay_count: None,
         }
     }
+}
+
+/// What the gateway wiring's requests are built from, as owned values.
+struct GatewayFacts {
+    resource_id: String,
+    prefix: String,
+    project: String,
+    region: String,
+    network: String,
+    workload_cidr: String,
+    image: String,
+    vault_prefix: String,
+}
+
+impl GatewayFacts {
+    fn inputs(&self) -> super::gcp_sandbox_gateway_setup::Inputs<'_> {
+        use alien_core::gcp_sandbox_gateway as plan;
+        super::gcp_sandbox_gateway_setup::Inputs {
+            resource_id: &self.resource_id,
+            placement: super::gcp_sandbox_gateway::Placement {
+                prefix: &self.prefix,
+                project: &self.project,
+                region: &self.region,
+                network: &self.network,
+                workload_cidr: &self.workload_cidr,
+            },
+            image: &self.image,
+            machine_type: plan::DEFAULT_MACHINE_TYPE,
+            proxy_port: plan::DEFAULT_PROXY_PORT,
+            vault_prefix: &self.vault_prefix,
+            secrets: &[
+                crate::sandbox::egress::GATEWAY_CONFIG,
+                alien_core::sandbox_egress::SANDBOX_EGRESS_REPLICA_SECRET,
+            ],
+            vpc_cidrs: vec![
+                self.workload_cidr.clone(),
+                plan::ATTACHMENT_CIDR.to_string(),
+                plan::GATEWAY_CIDR.to_string(),
+            ],
+            now: Utc::now().timestamp(),
+        }
+    }
+}
+
+impl GcpNetworkController {
+    /// The facts the wiring is built from. A deletion needs no image: the stack that declared
+    /// the gateway may be gone by then.
+    fn gateway_facts(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        need_image: bool,
+    ) -> Result<GatewayFacts> {
+        let config = ctx.desired_resource_config::<Network>()?;
+        let gcp = ctx.get_gcp_config()?;
+        let invalid = |message: &str| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: message.to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        };
+        let image = match gateway_image(ctx) {
+            Some(image) => image,
+            None if !need_image => String::new(),
+            None => return Err(invalid("the egress gateway container must name an image")),
+        };
+        Ok(GatewayFacts {
+            resource_id: config.id.clone(),
+            prefix: ctx.resource_prefix.to_string(),
+            project: gcp.project_id.clone(),
+            region: gcp.region.clone(),
+            network: self
+                .network_self_link
+                .clone()
+                .ok_or_else(|| invalid("the network has no self link recorded"))?,
+            workload_cidr: self
+                .cidr_block
+                .clone()
+                .ok_or_else(|| invalid("the network has no range recorded"))?,
+            image,
+            vault_prefix: format!("{}-{}", ctx.resource_prefix, alien_core::SECRETS_VAULT_ID),
+        })
+    }
+
+    /// Whether setup built any of the gateway wiring, even partly.
+    fn has_sandbox_wiring(&self) -> bool {
+        self.sandbox_network.is_some() || self.sandbox_setup.next > 0
+    }
+}
+
+/// Whether the stack declares an Internet sandbox and the preparation step installed the gateway.
+fn wants_sandbox_gateway(ctx: &ResourceControllerContext<'_>) -> bool {
+    alien_core::sandbox_egress::has_sandbox_gateway(ctx.desired_stack)
+        && ctx
+            .desired_stack
+            .resources()
+            .any(|(_, entry)| alien_core::sandbox_egress::is_internet_sandbox(&entry.config))
+}
+
+/// The image the egress gateway container runs.
+fn gateway_image(ctx: &ResourceControllerContext<'_>) -> Option<String> {
+    ctx.desired_stack
+        .resources
+        .get(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
+        .and_then(|entry| entry.config.downcast_ref::<alien_core::Container>())
+        .and_then(|container| match &container.code {
+            alien_core::ContainerCode::Image { image } => Some(image.clone()),
+            _ => None,
+        })
 }
 
 #[controller]
@@ -203,6 +325,19 @@ impl GcpNetworkController {
         info!(network_id = %config.id, "Starting GCP Network creation");
 
         self.desired_settings = Some(config.settings.clone());
+
+        // The wiring joins the network Alien creates: its subnets, router and firewall rules sit
+        // beside the workload subnet. A network it did not create is not changed this way.
+        if wants_sandbox_gateway(ctx) && !matches!(config.settings, NetworkSettings::Create { .. })
+        {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "egress internet on GCP builds its own subnets, Cloud NAT and firewall \
+                          rules, so the network must be one Alien creates; the default network \
+                          and a network you bring are not supported"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
 
         match &config.settings {
             NetworkSettings::UseDefault => {
@@ -946,9 +1081,53 @@ impl GcpNetworkController {
         );
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: if wants_sandbox_gateway(ctx) {
+                CreatingSandboxGateway
+            } else {
+                Ready
+            },
             suggested_delay: None,
         })
+    }
+
+    /// An Internet sandbox's wiring: the attachment, the gateway VMs and what they need. The
+    /// Terraform setup renders the same resources; this is the direct setup's creation of them.
+    #[handler(
+        state = CreatingSandboxGateway,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_sandbox_gateway(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        use super::gcp_sandbox_gateway_setup as setup;
+        let gcp = ctx.get_gcp_config()?;
+        let compute = ctx.service_provider.get_gcp_compute_client(gcp)?;
+        let iam = ctx.service_provider.get_gcp_iam_client(gcp)?;
+        let manager = ctx.service_provider.get_gcp_resource_manager_client(gcp)?;
+        let usage = ctx.service_provider.get_gcp_service_usage_client(gcp)?;
+        let facts = self.gateway_facts(ctx, true)?;
+        let inputs = facts.inputs();
+        let clients = setup::Clients {
+            compute: compute.as_ref(),
+            iam: iam.as_ref(),
+            resource_manager: manager.as_ref(),
+            service_usage: usage.as_ref(),
+        };
+        match setup::step(&clients, &inputs, &mut self.sandbox_setup).await? {
+            setup::Step::Wait => Ok(HandlerAction::Stay {
+                max_times: Some(600),
+                suggested_delay: Some(std::time::Duration::from_secs(5)),
+            }),
+            setup::Step::Done(wiring) => {
+                self.sandbox_network = Some(wiring);
+                Ok(HandlerAction::Continue {
+                    state: Ready,
+                    suggested_delay: None,
+                })
+            }
+        }
     }
 
     // ─────────────── READY STATE ──────────────────────────────
@@ -1046,8 +1225,13 @@ impl GcpNetworkController {
             });
         }
 
-        // Start deletion flow - firewall first
-        if self.firewall_name.is_some() {
+        // The gateway wiring goes first: its VMs, router and firewall rules sit in this VPC.
+        if self.has_sandbox_wiring() {
+            Ok(HandlerAction::Continue {
+                state: DeletingSandboxGateway,
+                suggested_delay: None,
+            })
+        } else if self.firewall_name.is_some() {
             Ok(HandlerAction::Continue {
                 state: DeletingFirewall,
                 suggested_delay: None,
@@ -1077,6 +1261,62 @@ impl GcpNetworkController {
                 state: Deleted,
                 suggested_delay: None,
             })
+        }
+    }
+
+    #[handler(
+        state = DeletingSandboxGateway,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn deleting_sandbox_gateway(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        use super::gcp_sandbox_gateway_setup as setup;
+        let gcp = ctx.get_gcp_config()?;
+        let compute = ctx.service_provider.get_gcp_compute_client(gcp)?;
+        let iam = ctx.service_provider.get_gcp_iam_client(gcp)?;
+        let manager = ctx.service_provider.get_gcp_resource_manager_client(gcp)?;
+        let usage = ctx.service_provider.get_gcp_service_usage_client(gcp)?;
+        let facts = self.gateway_facts(ctx, false)?;
+        let clients = setup::Clients {
+            compute: compute.as_ref(),
+            iam: iam.as_ref(),
+            resource_manager: manager.as_ref(),
+            service_usage: usage.as_ref(),
+        };
+        match setup::delete_step(&clients, &facts.inputs(), &mut self.sandbox_delete).await? {
+            setup::DeleteStep::Wait => Ok(HandlerAction::Stay {
+                max_times: Some(200),
+                suggested_delay: Some(std::time::Duration::from_secs(2)),
+            }),
+            setup::DeleteStep::Done { attachment_left } => {
+                self.sandbox_network = None;
+                self.sandbox_setup = Default::default();
+                if let Some(attachment) = attachment_left {
+                    warn!(
+                        attachment = %attachment,
+                        "Agent Platform connected to the network attachment, and Google does not \
+                         delete a connected attachment; it stays with its subnet and the VPC. \
+                         Delete the project to remove them"
+                    );
+                }
+                Ok(HandlerAction::Continue {
+                    state: if self.firewall_name.is_some() {
+                        DeletingFirewall
+                    } else if self.cloud_nat_name.is_some() {
+                        DeletingCloudNat
+                    } else if self.router_name.is_some() {
+                        DeletingRouter
+                    } else if self.subnetwork_name.is_some() {
+                        DeletingSubnetwork
+                    } else {
+                        DeletingNetwork
+                    },
+                    suggested_delay: None,
+                })
+            }
         }
     }
 
@@ -1434,6 +1674,17 @@ impl GcpNetworkController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
         let network_name = self.network_name.clone().unwrap();
+
+        // A connected network attachment cannot be deleted, so the VPC its subnet belongs to
+        // stays too; the warning above names what is left.
+        if self.sandbox_delete.attachment_left {
+            self.network_name = None;
+            self.network_self_link = None;
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
 
         info!(network_name = %network_name, "Deleting VPC network");
 

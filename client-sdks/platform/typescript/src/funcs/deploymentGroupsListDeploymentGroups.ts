@@ -93,10 +93,8 @@ async function $do(
 
   const query = encodeFormQuery({
     "cursor": payload?.cursor,
-    "empty": payload?.empty,
     "include": payload?.include,
     "limit": payload?.limit,
-    "pendingInvites": payload?.pendingInvites,
     "project": payload?.project,
     "search": payload?.search,
     "workspace": client._options.workspace,
