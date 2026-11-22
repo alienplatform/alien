@@ -97,3 +97,7 @@ output "ci_workload_identity_provider" {
   description = "Full resource name of the GitHub OIDC provider, for google-github-actions/auth."
   value       = google_iam_workload_identity_pool_provider.github.name
 }
+
+output "manager_service_account_unique_id" {
+  value = google_service_account.manager.unique_id
+}

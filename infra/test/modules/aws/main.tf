@@ -516,6 +516,11 @@ resource "aws_iam_role" "target_ci" {
   })
 }
 
+# Known limit: tests create roles, and IAM has no condition key for the trust
+# policy of a role being created or updated, so a rule such as "the trust stays
+# inside this account" cannot be expressed here. The role keeps the ability to
+# create other roles; it cannot change the provider, the CI roles or create
+# users and access keys.
 # Explicit denies win over the broad allows below. They cover the OIDC
 # provider, both CI roles, and long-lived credentials (users, access keys).
 data "aws_iam_policy_document" "ci_guard_management" {
