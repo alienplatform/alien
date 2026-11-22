@@ -582,10 +582,7 @@
         "label": "attach-tls-certificates-to-domains",
         "description": "Attach and detach this account's ACM certificates on API Gateway custom domain names.",
         "grant": {
-          "actions": [
-            "apigateway:AddCertificateToDomain",
-            "apigateway:RemoveCertificateFromDomain"
-          ]
+          "actions": ["apigateway:AddCertificateToDomain", "apigateway:RemoveCertificateFromDomain"]
         },
         "binding": {
           "stack": {
