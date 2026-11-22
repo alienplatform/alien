@@ -4,7 +4,7 @@ use alien_client_core::{Error, ErrorData};
 use alien_gcp_clients::gcp::cloudscheduler::{
     CloudSchedulerApi, CloudSchedulerClient, HttpTarget, SchedulerJob, SchedulerOidcToken,
 };
-use alien_gcp_clients::platform::{GcpClientConfig, GcpCredentials};
+use alien_gcp_clients::platform::GcpClientConfig;
 use reqwest::Client;
 use std::collections::HashSet;
 use std::env;
@@ -32,11 +32,8 @@ impl AsyncTestContext for CloudSchedulerTestContext {
 
         let project_id = base_gcp_config.project_id.clone();
 
-        let service_account_email = service_account_value
-            .get("client_email")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .expect("'client_email' must be present in the service account JSON");
+        let service_account_email = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_EMAIL")
+            .expect("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_EMAIL must be set");
 
         let location = "us-central1".to_string();
 

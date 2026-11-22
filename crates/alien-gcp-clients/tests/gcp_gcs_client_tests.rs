@@ -6,7 +6,6 @@ use alien_gcp_clients::gcs::{
 };
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_gcp_clients::platform::{GcpClientConfig, GcpCredentials};
-use base64::{engine::general_purpose::STANDARD as base64_standard, Engine as _};
 use reqwest::Client;
 use std::collections::HashSet;
 use std::env;
@@ -326,14 +325,8 @@ async fn test_bucket_iam_policy(ctx: &mut GcsTestContext) {
     // just test the basic get/set operations with the existing policy.
 
     // Try to get the current service account email from the environment or use a fallback
-    let current_sa_email = {
-        let base_gcp_config = alien_gcp_clients::live_test::live_test_config("MANAGEMENT").await;
-        service_account_value
-            .get("client_email")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| "serviceAccount:test-service@example.com".to_string())
-    };
+    let current_sa_email = std::env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_EMAIL")
+        .unwrap_or_else(|_| "serviceAccount:test-service@example.com".to_string());
 
     // Ensure we have the serviceAccount: prefix
     let test_member = if current_sa_email.starts_with("serviceAccount:") {
@@ -683,7 +676,7 @@ async fn test_error_translation_bucket_already_exists(ctx: &mut GcsTestContext) 
 
 #[test_context(GcsTestContext)]
 #[tokio::test]
-async fn test_error_translation_access_denied(ctx: &mut GcsTestContext) {
+async fn test_error_translation_access_denied(_ctx: &mut GcsTestContext) {
     // Test with invalid credentials
     let invalid_config = GcpClientConfig {
             project_id: "fake-project".to_string(),
@@ -1227,7 +1220,7 @@ async fn test_bucket_with_complex_configuration(ctx: &mut GcsTestContext) {
 // -------------------------------------------------------------------------
 
 /// Helper to create a PubSub client from the same credentials used by the GCS test context.
-fn create_pubsub_client() -> (alien_gcp_clients::pubsub::PubSubClient, String) {
+async fn create_pubsub_client() -> (alien_gcp_clients::pubsub::PubSubClient, String) {
     let base_gcp_config = alien_gcp_clients::live_test::live_test_config("MANAGEMENT").await;
     let project_id = base_gcp_config.project_id.clone();
 
@@ -1261,7 +1254,7 @@ async fn test_insert_and_delete_notification(ctx: &mut GcsTestContext) {
         .expect("Failed to create bucket for notification test");
 
     // Create a Pub/Sub topic for the notification
-    let (pubsub_client, project_id) = create_pubsub_client();
+    let (pubsub_client, project_id) = create_pubsub_client().await;
     let topic_id = format!("alien-test-notif-topic-{}", Uuid::new_v4().simple());
 
     let topic = Topic::builder().build();
@@ -1359,7 +1352,7 @@ async fn test_insert_notification_with_event_types(ctx: &mut GcsTestContext) {
         .expect("Failed to create bucket for notification event types test");
 
     // Create a Pub/Sub topic
-    let (pubsub_client, project_id) = create_pubsub_client();
+    let (pubsub_client, project_id) = create_pubsub_client().await;
     let topic_id = format!("alien-test-notif-evt-topic-{}", Uuid::new_v4().simple());
 
     let topic = Topic::builder().build();
