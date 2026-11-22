@@ -80,7 +80,7 @@ export default new alien.Stack("agent-sandboxes")
   .add(llm, "live")
   .add(model, "live")
   .add(connector, "live")
-  .add(agent, "live")
+  .add(agent, "frozen")
   .add(runner, "live")
   .permissions({
     profiles: {

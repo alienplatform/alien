@@ -1,0 +1,12 @@
+# The internal API for `alien dev`: a container on the local deployment network, outside the
+# stack. Start it after `alien dev` has created the network. The connector reaches it as
+# http://internal-api:8080; a sandbox cannot reach it at all.
+services:
+  internal-api:
+    build: ../../internal-api
+    container_name: internal-api
+    networks: [deployment-network]
+
+networks:
+  deployment-network:
+    external: true
