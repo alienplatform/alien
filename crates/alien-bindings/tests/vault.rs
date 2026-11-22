@@ -33,7 +33,7 @@ use alien_azure_clients::models::keyvault::{
     VaultCreateOrUpdateParameters, VaultProperties,
 };
 #[cfg(feature = "azure")]
-use alien_azure_clients::{AzureClientConfig, AzureCredentials, AzureTokenCache};
+use alien_azure_clients::AzureTokenCache;
 #[cfg(feature = "azure")]
 use alien_error::{AlienError, Context};
 #[cfg(feature = "azure")]
@@ -324,15 +324,10 @@ impl AsyncTestContext for AzureProviderTestContext {
             Uuid::new_v4().simple().to_string()[..8].to_lowercase()
         );
 
-        let config = AzureClientConfig {
-            subscription_id: subscription_id.clone(),
-            tenant_id: tenant_id.clone(),
-            region: Some("eastus".to_string()),
-            credentials: AzureCredentials::ServicePrincipal {
-                client_id: client_id.clone(),
-                client_secret: client_secret.clone(),
-            },
-            service_overrides: None,
+        let config = {
+            let mut cfg = alien_azure_clients::live_test::live_test_config("MANAGEMENT");
+            cfg.region = Some("eastus".to_string());
+            cfg
         };
 
         info!(

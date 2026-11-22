@@ -3,22 +3,18 @@
 use alien_bindings::{
     traits::{
         ArtifactRegistry, ArtifactRegistryPermissions, AwsCrossAccountAccess, BindingsProviderApi,
-        ComputeServiceType, CrossAccountAccess, CrossAccountPermissions, GcpCrossAccountAccess,
+        ComputeServiceType, CrossAccountAccess, GcpCrossAccountAccess,
     },
     BindingsProvider,
 };
-
-use alien_core::bindings::BindingValue;
 
 // Platform-specific providers are now internal implementation details
 // The unified BindingsProvider handles routing to appropriate implementations
 
 use async_trait::async_trait;
-use base64::{engine::general_purpose::STANDARD as base64_standard, Engine as _};
 use rstest::rstest;
 use serde_json;
 use std::path::PathBuf as StdPathBuf;
-use std::sync::Mutex;
 use std::{collections::HashMap, env, sync::Arc, time::Duration};
 use tempfile::TempDir;
 use test_context::AsyncTestContext;
@@ -26,17 +22,8 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 use workspace_root::get_workspace_root;
 
-#[cfg(feature = "aws")]
-use {alien_aws_clients::AwsClientConfig, reqwest::Client};
-
-#[cfg(feature = "gcp")]
-use alien_gcp_clients::{artifactregistry::ArtifactRegistryClient, GcpClientConfig};
-
 #[cfg(feature = "azure")]
-use alien_azure_clients::{
-    containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi},
-    AzureClientConfig,
-};
+use alien_azure_clients::containerregistry::ContainerRegistryApi;
 
 fn load_test_env() {
     // Load .env.test from the workspace root
@@ -1176,7 +1163,7 @@ async fn test_generate_credentials(#[case] ctx: impl ArtifactRegistryTestContext
     }
 
     // Test generating pull credentials
-    let credentials_result = artifact_registry
+    let _credentials_result = artifact_registry
         .generate_credentials(
             &create_response.name,
             ArtifactRegistryPermissions::Pull,

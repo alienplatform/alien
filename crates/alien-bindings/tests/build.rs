@@ -5,7 +5,7 @@ use alien_bindings::{
     BindingsProvider,
 };
 
-use alien_core::bindings::{self, BindingValue};
+use alien_core::bindings::{self};
 
 // Platform-specific providers are now internal implementation details
 // The unified BindingsProvider handles routing to appropriate implementations

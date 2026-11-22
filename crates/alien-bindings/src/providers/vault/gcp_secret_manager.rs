@@ -3,7 +3,7 @@ use crate::traits::SecretPresence;
 use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::secret_manager::{
     AddSecretVersionRequest, AutomaticReplication, Replication, ReplicationPolicy, Secret,
-    SecretManagerApi, SecretManagerClient, SecretPayload, SecretVersionState,
+    SecretManagerApi, SecretPayload, SecretVersionState,
 };
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as base64_standard, Engine as _};

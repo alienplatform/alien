@@ -77,3 +77,24 @@ fn az_cli_tokens(tenant_id: &str) -> HashMap<String, String> {
         })
         .collect()
 }
+
+/// Environment variables that make `AzureClientConfig::from_env` (and so a bindings provider) use
+/// the same identity through workload identity federation. Needs the federated token file, which
+/// only CI has; a laptop signed in with `az login` cannot hand that to a provider.
+pub fn live_test_provider_env(identity: &str) -> HashMap<String, String> {
+    let id = identity.to_uppercase();
+    let var = |suffix: &str| {
+        std::env::var(format!("AZURE_{id}_{suffix}")).unwrap_or_else(|_| {
+            panic!("AZURE_{id}_{suffix} must be set (this test needs the CI federated token file)")
+        })
+    };
+    HashMap::from([
+        ("AZURE_TENANT_ID".to_string(), var("TENANT_ID")),
+        ("AZURE_CLIENT_ID".to_string(), var("CLIENT_ID")),
+        ("AZURE_SUBSCRIPTION_ID".to_string(), var("SUBSCRIPTION_ID")),
+        (
+            "AZURE_FEDERATED_TOKEN_FILE".to_string(),
+            var("FEDERATED_TOKEN_FILE"),
+        ),
+    ])
+}

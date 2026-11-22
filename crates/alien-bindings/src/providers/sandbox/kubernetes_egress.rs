@@ -88,7 +88,7 @@ mod tests {
     };
     use axum::{
         http::{HeaderMap, StatusCode},
-        routing::{delete, get, post, put},
+        routing::{get, post, put},
         Json, Router,
     };
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};

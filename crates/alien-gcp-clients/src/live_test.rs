@@ -40,7 +40,9 @@ pub async fn live_test_config(identity: &str) -> GcpClientConfig {
         )
     });
     let source = GcpClientConfig::from_env(&env).await.unwrap_or_else(|e| {
-        panic!("no Application Default Credentials; run `gcloud auth application-default login`: {e}")
+        panic!(
+            "no Application Default Credentials; run `gcloud auth application-default login`: {e}"
+        )
     });
     source
         .impersonate(GcpImpersonationConfig {
@@ -50,4 +52,28 @@ pub async fn live_test_config(identity: &str) -> GcpClientConfig {
         })
         .await
         .unwrap_or_else(|e| panic!("cannot impersonate the {id} service account: {e}"))
+}
+
+/// Environment variables that make `GcpClientConfig::from_env` (and so a bindings provider) use
+/// the same identity: the project, the region and, in CI, the federation credential file. On a
+/// laptop the file is absent and the Application Default Credentials apply; for the identity to
+/// be the service account, sign in with
+/// `gcloud auth application-default login --impersonate-service-account=<email>`.
+pub fn live_test_provider_env(identity: &str) -> HashMap<String, String> {
+    let id = identity.to_uppercase();
+    let var = |suffix: &str| std::env::var(format!("GOOGLE_{id}_{suffix}")).ok();
+    let mut env = HashMap::new();
+    env.insert(
+        "GCP_PROJECT_ID".to_string(),
+        var("PROJECT_ID")
+            .unwrap_or_else(|| panic!("GOOGLE_{id}_PROJECT_ID must be set (see .env.test)")),
+    );
+    env.insert(
+        "GCP_REGION".to_string(),
+        var("REGION").unwrap_or_else(|| "us-central1".to_string()),
+    );
+    if let Some(file) = var("CREDENTIALS_FILE") {
+        env.insert("GOOGLE_APPLICATION_CREDENTIALS".to_string(), file);
+    }
+    env
 }

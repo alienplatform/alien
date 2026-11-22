@@ -26,7 +26,7 @@ use alien_azure_clients::azure::sandbox_data_plane::{
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{
     azure_disk_image_label, classify_azure_sandbox_image, AzureSandboxImage, SandboxCapabilities,
-    SandboxCapability, SandboxEgress, AZURE_DISK_IMAGE_LABEL, SANDBOX_EXPIRY_LABEL,
+    SandboxEgress, AZURE_DISK_IMAGE_LABEL, SANDBOX_EXPIRY_LABEL,
 };
 use alien_error::{AlienError, ContextError};
 use tracing::warn;

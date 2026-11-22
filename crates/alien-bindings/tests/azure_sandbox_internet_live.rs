@@ -41,7 +41,7 @@ use std::time::{Duration, Instant};
 
 use alien_bindings::traits::{CommandOutput, CreateSandboxRequest, RunCommandRequest};
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
-use alien_core::{AzureClientConfig, AzureCredentials, ClientConfig, EgressPolicy};
+use alien_core::{ClientConfig, EgressPolicy};
 use futures::{FutureExt, StreamExt};
 
 const ALLOWED: &str = "en.wikipedia.org";
@@ -265,15 +265,10 @@ async fn live_internet_proof() {
                 .expect("gateway binding JSON"),
         ),
     ]);
-    let config = ClientConfig::Azure(Box::new(AzureClientConfig {
-        subscription_id: env("AZURE_TARGET_SUBSCRIPTION_ID"),
-        tenant_id: tenant.clone(),
-        region: Some(region),
-        credentials: AzureCredentials::ServicePrincipal {
-            client_id: client_id.clone(),
-            client_secret: client_secret.clone(),
-        },
-        service_overrides: None,
+    let config = ClientConfig::Azure(Box::new({
+        let mut cfg = alien_azure_clients::live_test::live_test_config("TARGET");
+        cfg.region = Some(region);
+        cfg
     }));
     let provider = BindingsProvider::new(config, bindings).expect("bindings");
     let sandbox = provider.load_sandbox("box").await.expect("loads");
@@ -813,15 +808,10 @@ fn live_bindings(extra: &[(&str, serde_json::Value)]) -> BindingsProvider {
     for (name, value) in extra {
         bindings.insert(name.to_string(), value.clone());
     }
-    let config = ClientConfig::Azure(Box::new(AzureClientConfig {
-        subscription_id: env("AZURE_TARGET_SUBSCRIPTION_ID"),
-        tenant_id: env("AZURE_TARGET_TENANT_ID"),
-        region: Some(env("AZURE_SANDBOX_REGION")),
-        credentials: AzureCredentials::ServicePrincipal {
-            client_id: env("AZURE_TARGET_CLIENT_ID"),
-            client_secret: env("AZURE_TARGET_CLIENT_SECRET"),
-        },
-        service_overrides: None,
+    let config = ClientConfig::Azure(Box::new({
+        let mut cfg = alien_azure_clients::live_test::live_test_config("TARGET");
+        cfg.region = Some(env("AZURE_SANDBOX_REGION"));
+        cfg
     }));
     BindingsProvider::new(config, bindings).expect("bindings")
 }

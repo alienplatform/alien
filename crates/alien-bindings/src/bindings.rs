@@ -248,7 +248,7 @@ mod tests {
     use super::*;
 
     use crate::error::binding_env_var;
-    use crate::traits::MessagePayload;
+
     use alien_core::{Platform, ENV_ALIEN_DEPLOYMENT_TYPE};
     use object_store::{path::Path as ObjectPath, PutPayload};
     use std::collections::HashMap;

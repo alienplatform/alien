@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use alien_bindings::traits::{CreateSandboxRequest, RunCommandRequest};
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
-use alien_core::{AzureClientConfig, AzureCredentials, ClientConfig};
+use alien_core::ClientConfig;
 use futures::StreamExt;
 
 fn env(name: &str) -> String {
@@ -34,15 +34,10 @@ async fn live_session_from_published_binding() {
         "diskImage": image,
         "egress": { "mode": "allow" },
     });
-    let config = ClientConfig::Azure(Box::new(AzureClientConfig {
-        subscription_id: env("AZURE_TARGET_SUBSCRIPTION_ID"),
-        tenant_id: env("AZURE_TARGET_TENANT_ID"),
-        region: Some(region.clone()),
-        credentials: AzureCredentials::ServicePrincipal {
-            client_id: env("AZURE_TARGET_CLIENT_ID"),
-            client_secret: env("AZURE_TARGET_CLIENT_SECRET"),
-        },
-        service_overrides: None,
+    let config = ClientConfig::Azure(Box::new({
+        let mut cfg = alien_azure_clients::live_test::live_test_config("TARGET");
+        cfg.region = Some(region.clone());
+        cfg
     }));
     let provider =
         BindingsProvider::new(config, HashMap::from([("box".to_string(), binding)])).unwrap();
