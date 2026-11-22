@@ -377,11 +377,39 @@ async fn authorized_proxy(
     };
     audit.link = link.as_ref().map(|link| link.id.clone());
     if !connect {
-        let upstream = gateway.connect(&target, identity, link.as_ref()).await?;
+        // A WebSocket handshake to a declared link carries the WebSocket once the service
+        // accepts it; every other plain-proxy request is forwarded as exactly one request.
+        let websocket = match link {
+            Some(_) => crate::protocol::websocket_origin_head(&input[..head_len])?,
+            None => None,
+        };
+        let mut upstream = gateway.connect(&target, identity, link.as_ref()).await?;
         audit.allowed = true;
         log_open(audit);
-        return crate::http_proxy::forward(Prefixed::new(input, stream), upstream, target, None)
+        let Some(head) = websocket else {
+            return crate::http_proxy::forward(
+                Prefixed::new(input, stream),
+                upstream,
+                target,
+                None,
+            )
             .await;
+        };
+        upstream
+            .write_all(&head)
+            .await
+            .into_alien_error()
+            .context(unavailable("forward WebSocket handshake"))?;
+        let guest = Prefixed::new(input[head_len..].to_vec(), stream)
+            .flush_prefix(&mut upstream)
+            .await
+            .into_alien_error()
+            .context(unavailable("forward buffered WebSocket payload"))?;
+        crate::tunnel::relay(guest, &mut upstream)
+            .await
+            .into_alien_error()
+            .context(unavailable("relay WebSocket"))?;
+        return Ok(());
     }
     // Resolve before acknowledging, so denied ranges receive an explicit gateway denial.
     let mut upstream = match gateway.connect(&target, identity, link.as_ref()).await {
@@ -409,17 +437,22 @@ async fn authorized_proxy(
         })
         .cloned()
         .collect();
-    if target.host.parse::<std::net::Ipv4Addr>().is_ok() {
-        // Explicit IP/CIDR rules are the only grants for opaque, including server-first, protocols.
+    // A declared link's tunnel is already pinned to the linked service: its exact name, a
+    // declared port and addresses inside the link's ranges, rechecked by the sweep. Any protocol
+    // may then flow (WebSocket, database and cache protocols), as for an explicit IP grant.
+    let opaque_link = link.is_some() && rules.is_empty();
+    if opaque_link || target.host.parse::<std::net::Ipv4Addr>().is_ok() {
+        // Explicit IP/CIDR rules and declared links are the only grants for opaque, including
+        // server-first, protocols.
         let guest = guest
             .flush_prefix(&mut upstream)
             .await
             .into_alien_error()
-            .context(unavailable("forward buffered IP payload"))?;
+            .context(unavailable("forward buffered tunnel payload"))?;
         crate::tunnel::relay(guest, &mut upstream)
             .await
             .into_alien_error()
-            .context(unavailable("relay IP connection"))?;
+            .context(unavailable("relay tunnel"))?;
         return Ok(());
     }
     let first = timeout(HEADER_TIMEOUT, guest.read_u8())

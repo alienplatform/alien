@@ -30,6 +30,13 @@ Rust declares the same with `Sandbox::new("tools".into())…link(&api)`.
   periodic re-checks and its connection log. Only the gateway's last hop differs: it connects
   to the service's internal address inside the deployment's network, never through NAT or the
   internet.
+- A link carries any TCP protocol on the service's declared ports: HTTP, WebSocket, and
+  database or cache protocols. Through the proxy, use a `CONNECT` tunnel (most clients do for
+  WebSocket and other protocols) or a plain-proxy WebSocket request. On AWS, a connection made
+  with the proxy turned off for the service's hostname (`NO_PROXY`) still goes through the
+  gateway, because the sandbox's agent forwards it. On Kubernetes and locally, use the proxy.
+  Other destinations keep the gateway's checks: HTTP must name the destination it goes to, and
+  TLS must name it in its server name indication.
 - Only the service's internal hostname reaches it, and only on the service's declared ports.
   Each DNS answer for that name must fall inside the address range the service can have (the
   cluster's Service range, the compute cluster's overlay, or the local deployment network).

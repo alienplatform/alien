@@ -40,7 +40,8 @@ fn docker_ok(args: &[&str]) -> bool {
         .success()
 }
 
-/// A container on `deployment-network` answering as `<name>.svc` on 8080 and 8081.
+/// A container on `deployment-network` answering as `<name>.svc` on 8080 and 8081 (HTTP) and
+/// 9000 (echoes every byte back).
 fn service(name: &str) -> String {
     let _ = docker_ok(&["rm", "-f", &format!("links-test-{name}")]);
     docker(&[
@@ -57,7 +58,7 @@ fn service(name: &str) -> String {
         "-c",
         &format!(
             "mkdir /w && echo {name}-ok > /w/index.html && \
-             (httpd -f -p 8081 -h /w &) && httpd -f -p 8080 -h /w"
+             (httpd -f -p 8081 -h /w &) && (nc -lk -p 9000 -e cat &) && httpd -f -p 8080 -h /w"
         ),
     ]);
     docker(&[
@@ -290,6 +291,92 @@ async fn a_linked_session_reaches_its_link_through_the_gateway_and_nothing_else_
         "inspect",
         "alien-sbx-link.links-a.s2"
     ]));
+    for name in ["api", "other"] {
+        docker(&["rm", "-f", &format!("links-test-{name}")]);
+    }
+}
+
+/// Sends `payload` through a CONNECT tunnel to `authority`, authenticated as the session's proxy
+/// URL is, and prints what comes back: the gateway's answer, then the service's bytes.
+fn tunnel_command(authority: &str, payload: &str) -> String {
+    format!(
+        "T=${{HTTP_PROXY#http://alien:}}; T=${{T%@*}}; A=$(printf 'alien:%s' \"$T\" | base64 -w0); \
+         (printf 'CONNECT {authority} HTTP/1.1\\r\\nHost: {authority}\\r\\nProxy-Authorization: Basic %s\\r\\n\\r\\n' \"$A\"; \
+         sleep 1; printf '{payload}'; sleep 2) | nc egress-gateway 3128"
+    )
+}
+
+const WEBSOCKET_UPGRADE: &str = concat!(
+    "GET /ws HTTP/1.1\\r\\nHost: api.svc:9000\\r\\nConnection: Upgrade\\r\\n",
+    "Upgrade: websocket\\r\\nSec-WebSocket-Version: 13\\r\\n",
+    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\\r\\n\\r\\n",
+);
+
+#[tokio::test]
+#[ignore = "requires a real Docker daemon and a gateway image that serves links"]
+async fn a_linked_tunnel_carries_websocket_and_other_protocols_to_the_link_only() {
+    let image = std::env::var("ALIEN_TEST_EGRESS_GATEWAY_IMAGE")
+        .expect("ALIEN_TEST_EGRESS_GATEWAY_IMAGE names the gateway image to test");
+    let dir = TempDir::new().unwrap();
+    let manager = LocalSandboxManager::new(dir.path().to_path_buf())
+        .expect("Docker must be reachable")
+        .with_gateway_image(image);
+    let sandbox = "links-b";
+    manager.reap(sandbox).await.expect("clean slate");
+    if !docker_ok(&["network", "inspect", NETWORK]) {
+        docker(&["network", "create", NETWORK]);
+    }
+    service("api");
+    service("other");
+    let session = manager
+        .create_session(
+            sandbox,
+            "s1",
+            &config(vec![SandboxLink {
+                id: "api".into(),
+                ports: vec![8080, 9000],
+            }]),
+        )
+        .await
+        .expect("a linked session starts");
+    let id = &session.container_id;
+
+    // A WebSocket upgrade and a non-HTTP protocol both reach the linked service unchanged
+    // (the service echoes them back).
+    for (name, payload, expected) in [
+        ("websocket", WEBSOCKET_UPGRADE, "Upgrade: websocket"),
+        ("redis", "*1\\r\\n$4\\r\\nPING\\r\\n", "PING"),
+    ] {
+        let (_, body) = fetch(&manager, id, &tunnel_command("api.svc:9000", payload)).await;
+        eprintln!("{name} via CONNECT api.svc:9000 ->\n{body}");
+        assert!(
+            body.starts_with("HTTP/1.1 200 Connection Established"),
+            "{name}: {body}"
+        );
+        assert!(
+            body.contains(expected),
+            "{name} reached the service: {body}"
+        );
+    }
+    // Anything that is not the link keeps the gateway's checks: an unlinked service and an
+    // undeclared port are refused before any byte is sent.
+    for authority in ["other.svc:9000", "api.svc:8081"] {
+        let (_, body) = fetch(&manager, id, &tunnel_command(authority, WEBSOCKET_UPGRADE)).await;
+        eprintln!("CONNECT {authority} -> {body}");
+        assert!(body.starts_with("HTTP/1.1 403"), "{authority}: {body}");
+        assert!(!body.contains("Upgrade: websocket"), "{authority}: {body}");
+    }
+    // Plain HTTP to the link still works through the proxy.
+    let (code, body) = fetch(&manager, id, "wget -q -T 10 -O- http://api.svc:8080/").await;
+    assert_eq!((code, body.trim()), (0, "api-ok"), "{body}");
+
+    let logs = docker(&["logs", "alien-sbx-gw-links-b"]);
+    eprintln!("gateway log:\n{logs}");
+    assert!(
+        logs.contains(r#""host":"api.svc","port":9000,"link":"api","decision":"allow""#),
+        "the gateway logs the linked tunnel: {logs}"
+    );
+    manager.reap(sandbox).await.expect("reap");
     for name in ["api", "other"] {
         docker(&["rm", "-f", &format!("links-test-{name}")]);
     }
