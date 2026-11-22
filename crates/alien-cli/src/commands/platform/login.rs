@@ -1,9 +1,11 @@
-use crate::auth::{force_login, save_workspace};
+use crate::auth::{force_login, load_workspace, save_workspace};
 use crate::commands::platform::workspace::{
-    list_workspace_names, prompt_workspace, validate_workspace_name,
+    choose_workspace, list_workspace_names, validate_workspace_name,
 };
+use crate::error::ErrorData;
 use crate::error::Result;
 use crate::execution_context::ExecutionMode;
+use crate::interaction::InteractionMode;
 use crate::ui::{command, contextual_heading, dim_label, success_line};
 use clap::Parser;
 
@@ -33,6 +35,8 @@ pub struct LoginArgs {
 
 pub async fn login_task(_args: LoginArgs, ctx: ExecutionMode) -> Result<()> {
     let auth_opts = ctx.auth_opts();
+    // `force_login` replaces the saved profile, so read the previous workspace first.
+    let previous_workspace = load_workspace();
     let http = force_login(&auth_opts).await?;
 
     if !matches!(
@@ -59,7 +63,25 @@ pub async fn login_task(_args: LoginArgs, ctx: ExecutionMode) -> Result<()> {
     {
         validate_workspace_name(&http, workspace).await?
     } else {
-        prompt_workspace(&http, false).await?
+        match choose_workspace(
+            &http,
+            previous_workspace.as_deref(),
+            InteractionMode::current(false),
+        )
+        .await
+        {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                // The sign-in worked; say so before reporting that no workspace was chosen.
+                if matches!(
+                    error.error,
+                    Some(ErrorData::WorkspaceSelectionRequired { .. })
+                ) {
+                    println!("{}", success_line("Logged in."));
+                }
+                return Err(error);
+            }
+        }
     };
 
     save_workspace(&workspace)?;

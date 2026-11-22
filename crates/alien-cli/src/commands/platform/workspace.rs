@@ -215,7 +215,6 @@ pub async fn choose_workspace(
     previous: Option<&str>,
     mode: InteractionMode,
 ) -> Result<String> {
-    let _ = previous;
     let workspaces = list_workspace_names(http).await?;
     if workspaces.is_empty() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -229,6 +228,9 @@ pub async fn choose_workspace(
     }
 
     if mode.is_machine() {
+        if let Some(previous) = previous.filter(|p| workspaces.iter().any(|w| w == p)) {
+            return Ok(previous.to_string());
+        }
         return Err(AlienError::new(ErrorData::WorkspaceSelectionRequired {
             workspaces,
         }));
