@@ -405,14 +405,30 @@ async fn a_link_carries_websocket_and_other_protocols_and_nothing_else_does() {
     let key = KeyPair::from_seed(Seed::new([42; 32]));
     let seen = echo_service(9000).await;
     let other = echo_service(9001).await;
+    let credentialed = echo_service(9002).await;
     let mut config = config(&key);
     config["links"] = json!({AUD:[
-        {"id":"api","host":"api.svc","ports":[9000],"ranges":["10.244.0.0/16"],"addresses":[LINKED_ADDRESS]}
+        {"id":"api","host":"api.svc","ports":[9000],"ranges":["10.244.0.0/16"],"addresses":[LINKED_ADDRESS]},
+        {"id":"vendor","host":"vendor.svc","ports":[9002],"ranges":["10.244.0.0/16"],"addresses":[LINKED_ADDRESS]}
     ]});
+    // A credential rule on the second link keeps it on the inspected TLS path.
+    config["credentials"] = json!([{"aud":AUD,"host":"vendor.svc","port":9002,"method":"GET",
+        "path":"/","header":"Authorization","vaultBinding":"secrets","secret":"vendor-key"}]);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.json");
     std::fs::write(&path, config.to_string()).unwrap();
-    let gateway = gateway(&config).await.unwrap();
+    let mut gateway = gateway(&config).await.unwrap();
+    // Short limits for connections that are not links, so a quiet link tunnel can be shown to
+    // outlive them.
+    gateway.connections = Arc::new(
+        alien_egress_gateway::connections::Connections::with_timeouts(
+            alien_egress_gateway::connections::Timeouts {
+                idle: std::time::Duration::from_secs(1),
+                lifetime: std::time::Duration::from_secs(2),
+                link_idle: std::time::Duration::from_secs(1800),
+            },
+        ),
+    );
     apply(&gateway, &key, AUD, "open", &Policy::Internet);
     apply(
         &gateway,
@@ -494,6 +510,69 @@ async fn a_link_carries_websocket_and_other_protocols_and_nothing_else_does() {
         "{ping}"
     );
     assert!(ping.contains("PING"), "{ping}");
+
+    // A link tunnel left quiet past the idle limit and the lifetime of other connections stays
+    // open: the service still answers.
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        socket
+            .write_all(connect("api.svc:9000", &token).as_bytes())
+            .await
+            .unwrap();
+        let mut received = Vec::new();
+        read_window(&mut socket, &mut received).await;
+        assert!(
+            String::from_utf8_lossy(&received).starts_with("HTTP/1.1 200 Connection Established")
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        socket.write_all(redis).await.unwrap();
+        read_window(&mut socket, &mut received).await;
+        assert!(
+            String::from_utf8_lossy(&received).contains("PING"),
+            "{}",
+            String::from_utf8_lossy(&received)
+        );
+    }
+
+    // A malformed WebSocket handshake to the link gets a refusal, not a closed connection.
+    let malformed = format!(
+        "GET http://api.svc:9000/ws HTTP/1.1\r\nHost: api.svc:9000\r\nConnection: Upgrade\r\n\
+         Upgrade: websocket\r\nContent-Length: 0\r\nProxy-Authorization: Bearer {token}\r\n\r\n"
+    );
+    let refused = exchange(address, &malformed, b"").await;
+    assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+
+    // A link with a credential rule carries no plaintext WebSocket or other protocol, through
+    // a CONNECT tunnel or a plain-proxy request: the service never receives the bytes.
+    for (head, payload) in [
+        (
+            connect("vendor.svc:9002", &token),
+            websocket("vendor.svc:9002").into_bytes(),
+        ),
+        (connect("vendor.svc:9002", &token), redis.to_vec()),
+        (
+            format!(
+                "GET http://vendor.svc:9002/ws HTTP/1.1\r\nHost: vendor.svc:9002\r\nConnection: Upgrade\r\n\
+                 Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                 Proxy-Authorization: Bearer {token}\r\n\r\n"
+            ),
+            frame.to_vec(),
+        ),
+    ] {
+        let answer = exchange(address, &head, &payload).await;
+        assert!(!answer.contains("101 Switching"), "{answer}");
+        assert!(!answer.contains("hello") && !answer.contains("PING"), "{answer}");
+    }
+    assert!(
+        credentialed
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|first| first.is_empty()),
+        "a credential link received plaintext: {:?}",
+        credentialed.lock().unwrap()
+    );
 
     // None of the three reaches a service that is not the link, nor the link's address on an
     // undeclared port, nor the link under a policy that does not keep it.
