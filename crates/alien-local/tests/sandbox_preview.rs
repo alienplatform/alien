@@ -10,9 +10,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use alien_local::{
-    LocalSandboxManager, SandboxEgressMode, SandboxOutput, SandboxSessionConfig,
-};
+use alien_local::{LocalSandboxManager, SandboxEgressMode, SandboxOutput, SandboxSessionConfig};
 use tempfile::TempDir;
 
 const IMAGE: &str = "python:3.12-alpine";
@@ -36,7 +34,11 @@ async fn run(manager: &LocalSandboxManager, container: &str, command: &str) -> (
     let result = manager
         .exec(
             container,
-            &["/bin/sh".to_string(), "-c".to_string(), format!("{command} 2>&1")],
+            &[
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!("{command} 2>&1"),
+            ],
         )
         .await
         .expect("exec");
@@ -99,7 +101,10 @@ async fn a_preview_works_behind_the_gateway_and_the_session_has_no_other_way_out
         body
     };
     let (_, body) = tokio::join!(server, probe);
-    assert!(body.contains("preview-ok"), "preview through the relay: {body}");
+    assert!(
+        body.contains("preview-ok"),
+        "preview through the relay: {body}"
+    );
 
     // No route out except the gateway: a direct connection (no proxy) fails, and the session's
     // only proxy is its gateway.
@@ -116,7 +121,13 @@ async fn a_preview_works_behind_the_gateway_and_the_session_has_no_other_way_out
     // Terminating the session removes its relay.
     manager.terminate(SANDBOX, "s1").await.expect("terminates");
     let relays = std::process::Command::new("docker")
-        .args(["ps", "-a", "--filter", "label=dev.alien.sandbox.preview-relay", "-q"])
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            "label=dev.alien.sandbox.preview-relay",
+            "-q",
+        ])
         .output()
         .unwrap();
     assert!(

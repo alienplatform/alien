@@ -459,8 +459,9 @@ impl LocalSandboxManager {
             )
             .await
             {
-                let _ = crate::sandbox_gateway::remove_preview_relays(&self.docker, session_id, &name)
-                    .await;
+                let _ =
+                    crate::sandbox_gateway::remove_preview_relays(&self.docker, session_id, &name)
+                        .await;
                 let _ = self
                     .docker
                     .remove_container(

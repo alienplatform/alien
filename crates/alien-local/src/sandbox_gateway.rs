@@ -670,7 +670,10 @@ pub(crate) async fn start_preview_relays(
             )
             .await
             .into_alien_error()
-            .context(failed("connect the preview relay to the session", session_id))?;
+            .context(failed(
+                "connect the preview relay to the session",
+                session_id,
+            ))?;
         docker
             .start_container(&created.id, None)
             .await
@@ -708,13 +711,15 @@ pub(crate) async fn remove_preview_relays(
     container: &str,
 ) -> Result<()> {
     let relays = docker
-        .list_containers(Some(bollard::query_parameters::ListContainersOptionsBuilder::default()
-            .all(true)
-            .filters(&HashMap::from([(
-                "label".to_string(),
-                vec![format!("{LABEL_PREVIEW_RELAY}={container}")],
-            )]))
-            .build()))
+        .list_containers(Some(
+            bollard::query_parameters::ListContainersOptionsBuilder::default()
+                .all(true)
+                .filters(&HashMap::from([(
+                    "label".to_string(),
+                    vec![format!("{LABEL_PREVIEW_RELAY}={container}")],
+                )]))
+                .build(),
+        ))
         .await
         .into_alien_error()
         .context(failed("list the session's preview relays", session_id))?;

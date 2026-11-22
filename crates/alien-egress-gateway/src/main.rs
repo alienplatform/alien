@@ -42,7 +42,9 @@ async fn main() -> Result<()> {
     // `--relay <listen> <target>`: the per-session preview forwarder of `alien dev`.
     if env::args().nth(1).as_deref() == Some("--relay") {
         let (Some(listen), Some(target)) = (env::args().nth(2), env::args().nth(3)) else {
-            return Err(alien_error::AlienError::new(failed("--relay needs <listen> <target>")));
+            return Err(alien_error::AlienError::new(failed(
+                "--relay needs <listen> <target>",
+            )));
         };
         let listen = listen
             .parse()

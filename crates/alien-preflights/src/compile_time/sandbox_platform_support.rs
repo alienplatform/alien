@@ -566,6 +566,17 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn local_accepts_internet_egress_because_alien_dev_runs_a_gateway() {
+        let mut value = sandbox("agent", None, SandboxEgress::Internet);
+        value.image_user = Some(2001);
+        let result = SandboxPlatformSupportCheck
+            .check(&stack_with(value), Platform::Local)
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.errors);
+    }
+
     /// Kubernetes boots a root image only with an egress boundary outside the pod; the refusal
     /// names the declaration, and non-root images are unaffected by egress mode.
     #[tokio::test]
