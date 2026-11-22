@@ -3909,7 +3909,7 @@ async fn open_setup_update_operation(
         let body = response.text().await.unwrap_or_default();
         if setup_update_busy(&body) {
             return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: SETUP_UPDATE_BUSY_MESSAGE.to_string(),
+                message: setup_update_busy_message(&body),
             }));
         }
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -3921,7 +3921,17 @@ async fn open_setup_update_operation(
 }
 
 const SETUP_UPDATE_BUSY_MESSAGE: &str =
-    "A release update is in progress; run `alien deploy` again when it finishes.";
+    "Another update is in the way; run `alien deploy` again when it finishes.";
+
+/// The platform's own explanation of what blocks the setup update (a failed update says to
+/// retry or fix it), else a generic line.
+fn setup_update_busy_message(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("message").and_then(|m| m.as_str().map(str::to_owned)))
+        .filter(|message| !message.is_empty())
+        .unwrap_or_else(|| SETUP_UPDATE_BUSY_MESSAGE.to_string())
+}
 
 /// True when the platform refused to open a setup update because another update is active.
 fn setup_update_busy(body: &str) -> bool {
@@ -5189,6 +5199,13 @@ mod tests {
         ));
         assert!(!setup_update_busy(r#"{"code":"OTHER"}"#));
         assert!(!setup_update_busy("not json"));
+    }
+
+    #[test]
+    fn a_busy_refusal_shows_the_platforms_explanation() {
+        let body = r#"{"code":"SETUP_UPDATE_BUSY","message":"Another update is in the way. The last update failed (X); retry it or fix it first."}"#;
+        assert!(setup_update_busy_message(body).contains("retry it or fix it first"));
+        assert_eq!(setup_update_busy_message("not json"), SETUP_UPDATE_BUSY_MESSAGE);
     }
 
     #[test]
