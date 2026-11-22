@@ -244,6 +244,18 @@ class Suite:
         conn.close()
         return result
 
+    def put_credentials(self, rules, version, sub=SUB, proxy=PROXY):
+        """Replace a sandbox's credential rules with a signed record; the values travel only here."""
+        claims = {"v":1,"aud":AUD,"sub":sub,"ver":[version,"0"*32],"rules":rules}
+        message = encoded(json.dumps({"alg":"EdDSA","kid":"test","typ":"alien-egress-credentials"}).encode())+"."+encoded(json.dumps(claims).encode())
+        record = message+"."+encoded(self.key.sign(message.encode()))
+        conn = http.client.HTTPConnection(proxy,3129,timeout=10)
+        conn.request("PUT","/v1/credentials",json.dumps({"record":record}),{"Content-Type":"application/json","Authorization":"Bearer "+self.token(admin=True,aud=AUD,sub=sub,method="PUT")})
+        response=conn.getresponse()
+        result=response.status,response.read()
+        conn.close()
+        return result
+
     def version(self, aud, sub, proxy=PROXY):
         status, response = self.admin("/v1/policies?"+urlencode({"aud":aud,"sub":sub}), {"aud":aud,"sub":sub}, proxy=proxy, method="GET")
         assert status == 200, (status,response)
@@ -422,6 +434,9 @@ class Suite:
             self.tunnel(token=self.token(sub="versioned"),expected=403)
             equal(self.admin("/v1/policies", {**body,"version":base+2})[0],204)
         self.record("signed record versions ignore reordering, equal retries and old resurrection", policy_versions)
+        rules = [dict(host="inject.test", port=port, method="GET", path="/v1/", header="X-Test-Credential", value="fake-test-secret") for port in [443, 8443]]
+        status, response = self.put_credentials(rules, int(time.time()*1000))
+        assert status == 204, (status, response)
         status, response = self.admin("/v1/ca", identity)
         assert status == 200, response
         ca = self.output / "guest-ca.pem"
@@ -824,8 +839,7 @@ def main():
     public = base64.b64encode(suite.key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
     allowed = ["allowed.test", f"{ORIGIN}:80", f"{ORIGIN}:2222", "inject.test", "inject.test:8443", "rebind.test", "private.test", "mixed.test", "metadata.test", "configured-range.test", "overlay.test", "*.example.test"]
     suite.policy = {"allow": allowed}
-    rules = [dict(aud=AUD, host="inject.test", port=port, method="GET", path="/v1/", header="X-Test-Credential", vaultBinding="test-vault", secret="test") for port in [443, 8443]]
-    config = dict(listen="0.0.0.0:3128", audiences=[AUD], defaultPolicies={AUD: "internet"}, peers={"dns":"replicas.test","port":3129}, replicaSecret=base64.b64encode(bytes([7])*32).decode(), keys=[dict(kid="test", publicKey=public)], deniedRanges=["93.184.217.0/24", "10.244.0.0/16"], credentials=rules, upstreamCaCertificates=[ca])
+    config = dict(listen="0.0.0.0:3128", audiences=[AUD], defaultPolicies={AUD: "internet"}, peers={"dns":"replicas.test","port":3129}, replicaSecret=base64.b64encode(bytes([7])*32).decode(), keys=[dict(kid="test", publicKey=public)], deniedRanges=["93.184.217.0/24", "10.244.0.0/16"], credentials=[], upstreamCaCertificates=[ca])
     if args.vault_config:
         (output / "vault/secrets.json").write_text(json.dumps({"test":"fake-test-secret", "sandbox-egress-gateway-config":json.dumps(config)}))
     if args.file_config:
