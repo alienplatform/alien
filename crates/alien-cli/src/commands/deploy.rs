@@ -158,6 +158,10 @@ pub struct DeployArgs {
     #[arg(long)]
     pub automatic_setup: bool,
 
+    /// Run a recommended setup update on an installed deployment without asking first.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+
     /// Telemetry / monitoring mode.
     /// "auto" (default) uses the parent manager's built-in log store or external OTLP integration.
     /// "off" disables all monitoring.
@@ -2501,21 +2505,36 @@ async fn deploy_task_with_environment(
     let has_installed_release = deployment.current_release_id.is_some();
     // Read through the typed record, as the rest of this command does: a renamed field fails to
     // compile instead of silently reading as "not a direct setup".
-    let direct_setup = match deployment.runtime_metadata.as_ref() {
-        None => false,
+    let typed_metadata: Option<alien_core::RuntimeMetadata> = match deployment
+        .runtime_metadata
+        .as_ref()
+    {
+        None => None,
         Some(metadata) => match serde_json::to_value(metadata)
             .and_then(serde_json::from_value::<alien_core::RuntimeMetadata>)
         {
-            Ok(metadata) => {
-                metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
-            }
+            Ok(metadata) => Some(metadata),
             Err(error) => {
                 // Treated as "not a direct setup", but said out loud: a record this CLI cannot
                 // read would otherwise send a direct install down the wrong path in silence.
                 tracing::warn!(error = %error, "could not read the deployment's runtime metadata; treating it as not a direct setup");
-                false
+                None
             }
         },
+    };
+    let direct_setup = typed_metadata.as_ref().is_some_and(|metadata| {
+        metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+    });
+    // What a setup run would still change on a running install. Recommended, never required.
+    let setup_drift = if status == DeploymentStatus::Running && has_installed_release {
+        installed_setup_drift(
+            typed_metadata.as_ref(),
+            installed_stack_state.as_ref(),
+            platform,
+            aws_boundary_inputs(&client_config, deployment.stack_settings.as_ref()),
+        )?
+    } else {
+        Vec::new()
     };
     let initial_setup = existing_deployment_plan(
         &status,
@@ -2523,6 +2542,7 @@ async fn deploy_task_with_environment(
         ctx.is_platform(),
         has_installed_release,
         direct_setup,
+        false,
     ) == ExistingDeploymentPlan::InitialSetup;
     let initial_automatic_setup = initial_setup
         && deployment.stack_settings.as_ref().is_some_and(|settings| {
@@ -2549,7 +2569,14 @@ async fn deploy_task_with_environment(
         ctx.is_platform(),
         has_installed_release,
         direct_setup,
+        !setup_drift.is_empty(),
     );
+    // A running deployment whose setup is behind and has no update waiting: the setup update is
+    // offered here instead of "Nothing to do".
+    let drift_offered = !setup_drift.is_empty()
+        && status == DeploymentStatus::Running
+        && active_update.is_none()
+        && plan == (ExistingDeploymentPlan::SetupUpdate { retry: false });
     if plan == ExistingDeploymentPlan::WaitForManager {
         return Err(AlienError::new(ErrorData::DeploymentFailed {
             message: format!(
@@ -2566,6 +2593,22 @@ async fn deploy_task_with_environment(
             "{}",
             success_line("Deployment is running with no pending update. Nothing to do.")
         );
+        if !direct_setup && !setup_drift.is_empty() {
+            println!(
+                "{}\n{}",
+                dim_label("Setup is behind, and this deployment's setup is owned by its CloudFormation or Terraform template:"),
+                describe_setup_drift(&setup_drift)
+            );
+            println!(
+                "{}",
+                dim_label("Re-run your template to bring it up to date. `alien deploy` does not change resources the template owns.")
+            );
+        } else {
+            println!("{}", dim_label(&setup_current_note(direct_setup)));
+            for line in earlier_denials_note(installed_stack_state.as_ref()) {
+                println!("{}", dim_label(&line));
+            }
+        }
         println!(
             "{} {}",
             dim_label("Next"),
@@ -2575,6 +2618,46 @@ async fn deploy_task_with_environment(
             ))
         );
         return Ok(());
+    }
+
+    // Hand-added policies that go silent under the permissions boundary: listed before a
+    // drift-offered update asks, and on a retry of an interrupted setup update (which has no
+    // drift list but installs the same boundary).
+    let mut boundary_note: Option<String> = None;
+    if direct_setup
+        && platform == Platform::Aws
+        && matches!(plan, ExistingDeploymentPlan::SetupUpdate { .. })
+    {
+        if let (Some(aws), Some(state), Some(stack)) = (
+            client_config.aws_config(),
+            installed_stack_state.as_ref(),
+            typed_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.prepared_stack.as_ref()),
+        ) {
+            boundary_note = hand_added_policy_note(aws, stack, state).await;
+        }
+    }
+    if drift_offered {
+        steps.println(&format!(
+            "Setup is behind the current release:\n{}",
+            describe_setup_drift(&setup_drift)
+        ));
+    }
+    if let Some(note) = boundary_note.as_deref() {
+        steps.println(note);
+    }
+    if drift_offered {
+        if !args.yes {
+            crate::interaction::InteractionMode::current(false).require_prompt(
+                "Setup is behind. Pass --yes to run the setup update without asking.",
+            )?;
+            if !crate::output::prompt_confirm("Run the setup update now?", true)? {
+                drop(steps);
+                println!("{}", dim_label("Nothing changed."));
+                return Ok(());
+            }
+        }
     }
 
     // Setup runs with setup authority for the deployment group; the
@@ -2617,9 +2700,23 @@ async fn deploy_task_with_environment(
                 &base_url,
                 deployment_group_id,
                 &resolved_args.name,
-                &plan.setup_reason(&status),
+                &if drift_offered {
+                    "has setup behind the current release".to_string()
+                } else {
+                    plan.setup_reason(&status)
+                },
             )
             .await?;
+            if drift_offered {
+                // The platform opens the operation for the installed release, so the setup run
+                // hands off to an operation the manager completes (no stranded `provisioning`).
+                open_setup_update_operation(
+                    &base_url,
+                    &setup_token,
+                    &tracked_deployment.deployment_id,
+                )
+                .await?;
+            }
             let client = alien_manager_api::Client::new_with_client(
                 &manager_ctx.manager_url,
                 deployment_manager_http_client(&setup_token, manager_ctx.workspace.as_deref())?,
@@ -3086,6 +3183,9 @@ async fn deploy_task_with_environment(
 
     drop(steps);
     println!("{}", success_line("Deployment is running."));
+    if let Some(note) = boundary_note.as_deref() {
+        println!("{}", dim_label(note));
+    }
     println!(
         "{} {} ({})",
         dim_label("Deployment"),
@@ -3573,6 +3673,7 @@ fn existing_deployment_plan(
     platform_mode: bool,
     has_installed_release: bool,
     direct_setup: bool,
+    setup_drift: bool,
 ) -> ExistingDeploymentPlan {
     // Setup can fail after a release is installed. Status alone cannot grant
     // the deployment token authority to resume setup on that installation.
@@ -3586,6 +3687,19 @@ fn existing_deployment_plan(
             }
             _ => {}
         }
+    }
+    // A setup update this CLI ran on a direct setup that stopped part way leaves an installed
+    // deployment in an initial-setup status. It has no target release, so a first install would
+    // fail with "Target release required" and strand it: re-run the setup update.
+    if !platform_mode
+        && direct_setup
+        && has_installed_release
+        && matches!(
+            status,
+            DeploymentStatus::InitialSetup | DeploymentStatus::InitialSetupFailed
+        )
+    {
+        return ExistingDeploymentPlan::SetupUpdate { retry: true };
     }
     if matches!(
         status,
@@ -3632,9 +3746,199 @@ fn existing_deployment_plan(
         }
     }
     if *status == DeploymentStatus::Running && active_update.is_none() {
+        // Setup is behind what a setup run would install. A standalone manager drives the
+        // hand-off to `provisioning` itself; the platform opens an operation first.
+        // Only a direct setup may be updated by this CLI. An install whose template engine owns
+        // the resources keeps its setup authority: the reasons are reported, never acted on.
+        if setup_drift && has_installed_release && direct_setup {
+            return ExistingDeploymentPlan::SetupUpdate { retry: false };
+        }
         return ExistingDeploymentPlan::NothingToDo;
     }
     ExistingDeploymentPlan::Runtime
+}
+
+/// The AWS account, region and signing pin the permissions boundary is rendered with. `None`
+/// when the target is not AWS or the settings cannot be read: the boundary's content is then
+/// not compared (its presence still is).
+fn aws_boundary_inputs(
+    client_config: &alien_core::ClientConfig,
+    stack_settings: Option<&serde_json::Value>,
+) -> Option<alien_infra::AwsBoundaryInputs> {
+    let aws = client_config.aws_config()?;
+    let settings: alien_core::StackSettings =
+        serde_json::from_value(stack_settings?.clone()).ok()?;
+    Some(alien_infra::AwsBoundaryInputs {
+        account_id: aws.account_id.clone(),
+        region: aws.region.clone(),
+        signing_protected: settings.signing.is_some(),
+    })
+}
+
+/// What a setup run would still change on an installed deployment, from its recorded state alone.
+fn installed_setup_drift(
+    metadata: Option<&alien_core::RuntimeMetadata>,
+    stack_state: Option<&alien_core::StackState>,
+    platform: Platform,
+    boundary_inputs: Option<alien_infra::AwsBoundaryInputs>,
+) -> Result<Vec<alien_core::SetupDriftReason>> {
+    let (Some(metadata), Some(stack_state)) = (metadata, stack_state) else {
+        return Ok(Vec::new());
+    };
+    // Without the installed stack there is nothing to compare against; say nothing.
+    let Some(installed_stack) = metadata.prepared_stack.as_ref() else {
+        return Ok(Vec::new());
+    };
+    alien_infra::setup_drift(
+        installed_stack,
+        stack_state,
+        platform,
+        metadata.initial_setup_authority,
+        boundary_inputs.as_ref(),
+    )
+    .into_alien_error()
+    .context(ErrorData::ConfigurationError {
+        message: "Failed to check whether the deployment's setup is behind".to_string(),
+    })
+}
+
+/// Names the hand-added policies on roles that this setup update puts under the permissions
+/// boundary, read with the credentials the setup run already uses. `None` when there are none.
+/// A denied read is said in one line and never blocks the update.
+async fn hand_added_policy_note(
+    aws: &alien_aws_clients::AwsClientConfig,
+    stack: &alien_core::Stack,
+    state: &alien_core::StackState,
+) -> Option<String> {
+    let credentials = match alien_aws_clients::AwsCredentialProvider::from_config(aws.clone()).await
+    {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            return Some(format!(
+                "Could not check the service-account roles for hand-added policies: {error}"
+            ))
+        }
+    };
+    let iam = alien_aws_clients::iam::IamClient::new(reqwest::Client::new(), credentials);
+    match alien_infra::hand_added_policies_under_new_boundary(&iam, stack, state).await {
+        Err(reason) => Some(format!(
+            "Could not check the service-account roles for hand-added policies ({reason}); continuing."
+        )),
+        Ok(found) if found.is_empty() => None,
+        Ok(found) => {
+            let mut roles: Vec<(String, Vec<String>)> = Vec::new();
+            for item in found {
+                match roles.iter_mut().find(|(role, _)| *role == item.role) {
+                    Some((_, policies)) => policies.push(item.policy),
+                    None => roles.push((item.role, vec![item.policy])),
+                }
+            }
+            let list = roles
+                .iter()
+                .map(|(role, policies)| format!("{role}: {}", policies.join(", ")))
+                .collect::<Vec<_>>()
+                .join("; ");
+            Some(format!(
+                "These roles get a permissions boundary. Hand-added policies on them will stop granting anything outside it: {list}"
+            ))
+        }
+    }
+}
+
+/// One line per reason.
+fn describe_setup_drift(reasons: &[alien_core::SetupDriftReason]) -> String {
+    reasons
+        .iter()
+        .map(|reason| format!("  - {}", reason.summary()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Why a deployment with nothing to do is current.
+fn setup_current_note(direct_setup: bool) -> String {
+    if direct_setup {
+        "Setup is current: the recorded management permissions match this CLI and no flow log is recorded as missing. Changes made by hand in the cloud account are not checked."
+            .to_string()
+    } else {
+        "Setup is current as far as this CLI can tell: no denied grant is recorded.".to_string()
+    }
+}
+
+/// Denials a resource recorded earlier with the grants already current: the grant exists, so
+/// setup would change nothing, and the next update of that resource asks again.
+fn earlier_denials_note(stack_state: Option<&alien_core::StackState>) -> Vec<String> {
+    let Some(stack_state) = stack_state else {
+        return Vec::new();
+    };
+    alien_infra::recorded_denials(stack_state)
+        .into_iter()
+        .map(|reason| {
+            format!(
+                "{} It will be retried on the next update.",
+                reason.summary()
+            )
+        })
+        .collect()
+}
+
+/// Asks the platform to open a setup-update operation for the installed release, so a setup run
+/// on a running deployment hands off to an operation the manager completes.
+async fn open_setup_update_operation(
+    base_url: &str,
+    setup_token: &str,
+    deployment_id: &str,
+) -> Result<()> {
+    let url = api_url(
+        base_url,
+        &format!(
+            "/v1/deployments/{}/setup-update",
+            urlencoding::encode(deployment_id)
+        ),
+        None,
+    )?;
+    let response = create_platform_http_client(setup_token)?
+        .post(url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("opening a setup update for deployment {deployment_id}"),
+            url: None,
+        })?;
+    if response.status() == reqwest::StatusCode::CONFLICT {
+        let body = response.text().await.unwrap_or_default();
+        if setup_update_busy(&body) {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: setup_update_busy_message(&body),
+            }));
+        }
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Failed to open the setup update (HTTP 409): {body}"),
+        }));
+    }
+    parse_api_response::<serde_json::Value>(response, "Failed to open the setup update").await?;
+    Ok(())
+}
+
+const SETUP_UPDATE_BUSY_MESSAGE: &str =
+    "Another update is in the way; run `alien deploy` again when it finishes.";
+
+/// The platform's own explanation of what blocks the setup update (a failed update says to
+/// retry or fix it), else a generic line.
+fn setup_update_busy_message(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("message").and_then(|m| m.as_str().map(str::to_owned)))
+        .filter(|message| !message.is_empty())
+        .unwrap_or_else(|| SETUP_UPDATE_BUSY_MESSAGE.to_string())
+}
+
+/// True when the platform refused to open a setup update because another update is active.
+fn setup_update_busy(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("code").and_then(|code| code.as_str().map(str::to_owned)))
+        .is_some_and(|code| code == "SETUP_UPDATE_BUSY")
 }
 
 /// A platform user session able to mint a first-party deployment group
@@ -4842,26 +5146,143 @@ mod tests {
             DeploymentStatus::ProvisioningFailed,
         ] {
             assert_eq!(
-                existing_deployment_plan(&status, None, false, true, true),
+                existing_deployment_plan(&status, None, false, true, true, false),
                 ExistingDeploymentPlan::SetupUpdate { retry: true },
                 "{status:?}"
             );
             // Not a direct install, or nothing installed yet: unchanged.
             assert_eq!(
-                existing_deployment_plan(&status, None, false, true, false),
+                existing_deployment_plan(&status, None, false, true, false, false),
                 ExistingDeploymentPlan::Runtime,
                 "{status:?}"
             );
             assert_ne!(
-                existing_deployment_plan(&status, None, false, false, true),
+                existing_deployment_plan(&status, None, false, false, true, false),
                 ExistingDeploymentPlan::SetupUpdate { retry: true },
                 "{status:?}"
             );
         }
         assert_eq!(
-            existing_deployment_plan(&DeploymentStatus::Running, None, false, true, true),
+            existing_deployment_plan(&DeploymentStatus::Running, None, false, true, true, false),
             ExistingDeploymentPlan::NothingToDo
         );
+    }
+
+    /// An install whose template engine owns the resources keeps its setup authority: drift on it
+    /// is reported, and the plan never becomes a setup update (which would hand the resources
+    /// to a direct setup).
+    #[test]
+    fn imported_deployment_with_setup_drift_is_never_offered_a_setup_update() {
+        for platform_mode in [false, true] {
+            assert_eq!(
+                existing_deployment_plan(
+                    &DeploymentStatus::Running,
+                    None,
+                    platform_mode,
+                    true,
+                    false,
+                    true
+                ),
+                ExistingDeploymentPlan::NothingToDo,
+                "platform_mode={platform_mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_busy_refusal_is_recognised_by_its_code_only() {
+        assert!(setup_update_busy(
+            r#"{"code":"SETUP_UPDATE_BUSY","message":"Another update is in progress."}"#
+        ));
+        assert!(!setup_update_busy(r#"{"code":"OTHER"}"#));
+        assert!(!setup_update_busy("not json"));
+    }
+
+    #[test]
+    fn a_busy_refusal_shows_the_platforms_explanation() {
+        let body = r#"{"code":"SETUP_UPDATE_BUSY","message":"Another update is in the way. The last update failed (X); retry it or fix it first."}"#;
+        assert!(setup_update_busy_message(body).contains("retry it or fix it first"));
+        assert_eq!(setup_update_busy_message("not json"), SETUP_UPDATE_BUSY_MESSAGE);
+    }
+
+    /// A running deployment whose setup is behind is offered the setup update, on the platform
+    /// and on a standalone manager; with nothing behind, "Nothing to do" stays. Anything that
+    /// is not running, or has an update waiting, is unchanged by drift.
+    #[test]
+    fn a_running_deployment_with_setup_drift_is_offered_a_setup_update() {
+        use ExistingDeploymentPlan::*;
+        for platform_mode in [false, true] {
+            assert_eq!(
+                existing_deployment_plan(
+                    &DeploymentStatus::Running,
+                    None,
+                    platform_mode,
+                    true,
+                    true,
+                    true
+                ),
+                SetupUpdate { retry: false },
+                "platform_mode={platform_mode}"
+            );
+            assert_eq!(
+                existing_deployment_plan(
+                    &DeploymentStatus::Running,
+                    None,
+                    platform_mode,
+                    true,
+                    true,
+                    false
+                ),
+                NothingToDo,
+                "platform_mode={platform_mode}"
+            );
+            // No installed release: nothing to run setup against.
+            assert_eq!(
+                existing_deployment_plan(
+                    &DeploymentStatus::Running,
+                    None,
+                    platform_mode,
+                    false,
+                    true,
+                    true
+                ),
+                NothingToDo
+            );
+        }
+        // An update that waits for setup keeps its plan and is not re-opened.
+        assert_eq!(
+            existing_deployment_plan(
+                &DeploymentStatus::Running,
+                Some(ActiveUpdate::Pending),
+                true,
+                true,
+                true,
+                true
+            ),
+            Runtime
+        );
+    }
+
+    #[test]
+    fn a_direct_setup_update_that_stopped_part_way_is_retried_as_a_setup_update() {
+        use ExistingDeploymentPlan::*;
+        for status in [
+            DeploymentStatus::InitialSetup,
+            DeploymentStatus::InitialSetupFailed,
+        ] {
+            // Installed (has a release): setup update, not a first install without a target.
+            assert_eq!(
+                existing_deployment_plan(&status, None, false, true, true, false),
+                SetupUpdate { retry: true },
+                "{status:?}"
+            );
+            // Never installed: still a first install.
+            assert_eq!(
+                existing_deployment_plan(&status, None, false, false, true, false),
+                InitialSetup,
+                "{status:?}"
+            );
+        }
     }
 
     #[test]
@@ -4876,7 +5297,7 @@ mod tests {
         ] {
             for platform_mode in [true, false] {
                 assert_eq!(
-                    existing_deployment_plan(&status, None, platform_mode, false, false),
+                    existing_deployment_plan(&status, None, platform_mode, false, false, false),
                     InitialSetup,
                     "{status:?} is still in initial setup"
                 );
@@ -4937,7 +5358,7 @@ mod tests {
         ];
         for (status, active_update, platform_mode, expected) in cases {
             assert_eq!(
-                existing_deployment_plan(&status, active_update, platform_mode, true, false),
+                existing_deployment_plan(&status, active_update, platform_mode, true, false, false),
                 expected,
                 "{status:?} with {active_update:?} (platform: {platform_mode})"
             );
@@ -4962,15 +5383,15 @@ mod tests {
                 ),
             ] {
                 assert_eq!(
-                    existing_deployment_plan(&status, active, true, true, false),
+                    existing_deployment_plan(&status, active, true, true, false, false),
                     expected
                 );
                 assert_eq!(
-                    existing_deployment_plan(&status, active, true, false, false),
+                    existing_deployment_plan(&status, active, true, false, false, false),
                     ExistingDeploymentPlan::InitialSetup
                 );
                 assert_eq!(
-                    existing_deployment_plan(&status, active, false, true, false),
+                    existing_deployment_plan(&status, active, false, true, false, false),
                     ExistingDeploymentPlan::InitialSetup
                 );
             }

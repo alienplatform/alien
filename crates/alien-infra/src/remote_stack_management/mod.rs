@@ -64,7 +64,17 @@ pub(crate) fn resolve_management_permission_set(
 pub(crate) fn management_permissions_revision(
     ctx: &ResourceControllerContext<'_>,
 ) -> Result<Option<String>> {
-    let Some(profile) = ctx.desired_stack.management().profile() else {
+    management_permissions_revision_of(ctx.desired_stack, ctx.platform, ctx.state)
+}
+
+/// [`management_permissions_revision`] from the stack, platform and recorded state alone. The
+/// revision a setup run would record for this stack with this binary's permission sets.
+pub(crate) fn management_permissions_revision_of(
+    stack: &alien_core::Stack,
+    platform: alien_core::Platform,
+    state: &alien_core::StackState,
+) -> Result<Option<String>> {
+    let Some(profile) = stack.management().profile() else {
         return Ok(None);
     };
     let resolved = profile
@@ -73,15 +83,13 @@ pub(crate) fn management_permissions_revision(
         .map(|(scope, references)| {
             let sets = references
                 .iter()
-                .map(|reference| {
-                    resolve_management_permission_set(ctx.desired_stack, reference, scope)
-                })
+                .map(|reference| resolve_management_permission_set(stack, reference, scope))
                 .collect::<Result<Vec<_>>>()?;
             Ok((scope, sets))
         })
         .collect::<Result<Vec<_>>>()?;
-    let network = (ctx.platform == alien_core::Platform::Aws)
-        .then(|| aws_network_scope(ctx))
+    let network = (platform == alien_core::Platform::Aws)
+        .then(|| aws_network_scope_of(stack, state))
         .flatten()
         .map(|scope| match scope {
             alien_permissions::AwsNetworkScope::Vpc { vpc_id, subnet_ids } => {
@@ -101,6 +109,32 @@ pub(crate) fn management_permissions_revision(
         resource_id: None,
     })?;
     Ok(Some(format!("{:x}", Sha256::digest(&serialized))))
+}
+
+/// A digest of each permission set the management profile names, by set id, resolved to its
+/// body. Recorded next to the aggregate revision so a later comparison can name the sets whose
+/// content changed under an unchanged id.
+pub(crate) fn management_permission_set_digests(
+    stack: &alien_core::Stack,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let Some(profile) = stack.management().profile() else {
+        return Ok(Default::default());
+    };
+    let mut digests = std::collections::BTreeMap::new();
+    for (scope, references) in &profile.0 {
+        for reference in references {
+            let set = resolve_management_permission_set(stack, reference, scope)?;
+            let serialized = serde_json::to_vec(&set).into_alien_error().context(
+                ErrorData::InfrastructureError {
+                    message: "Failed to serialize a management permission set".to_string(),
+                    operation: Some("management_permission_set_digests".to_string()),
+                    resource_id: None,
+                },
+            )?;
+            digests.insert(set.id.clone(), format!("{:x}", Sha256::digest(&serialized)));
+        }
+    }
+    Ok(digests)
 }
 
 /// Whether the management identity's permissions should be refreshed.
