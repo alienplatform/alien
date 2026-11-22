@@ -369,10 +369,7 @@
         "label": "configure-lambda-image-pull-access",
         "description": "Read deployment container images from the managing account so Lambda can create and update functions from them.",
         "grant": {
-          "actions": [
-            "ecr:BatchGetImage",
-            "ecr:GetDownloadUrlForLayer"
-          ]
+          "actions": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
         },
         "binding": {
           "stack": {
