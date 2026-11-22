@@ -183,8 +183,9 @@ async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() 
 }
 
 /// Azure hosts the egress gateway in the deployment's VNet, so a catalog image (no agent) is
-/// refused for `internet`. An image that carries the agent passes that check, and while the
-/// pinned gateway image predates its admin protocol it is refused only for that reason.
+/// refused for `internet`. An image that carries the agent plans on the gateway this release
+/// installs. A stack whose installed gateway predates the admin protocol is still refused, for
+/// that reason only.
 #[tokio::test]
 async fn azure_internet_needs_an_agent_image_not_a_catalog_entry() {
     let mut catalog = sandbox(None);
@@ -208,16 +209,76 @@ async fn azure_internet_needs_an_agent_image_not_a_catalog_entry() {
     };
     registry.egress = SandboxEgress::Internet;
     let agent_image = PreflightRunner::new()
-        .run_compile_time_checks(&stack_with(registry), Platform::Azure)
+        .run_compile_time_checks(&stack_with(registry.clone()), Platform::Azure)
         .await
         .expect("preflight runs");
-    assert_eq!(agent_image.failed_checks, 1, "{agent_image:?}");
-    let rendered = format!("{agent_image:?}");
-    assert!(
-        rendered.contains(alien_core::sandbox_egress::AZURE_INTERNET_SANDBOX_UNAVAILABLE),
-        "{rendered}"
+    assert!(agent_image.success, "{agent_image:?}");
+
+    let old_gateway = PreflightRunner::new()
+        .run_compile_time_checks(
+            &with_installed_gateway(
+                stack_with(registry),
+                &format!(
+                    "ghcr.io/alienplatform/alien-egress-gateway@{}",
+                    alien_core::sandbox_egress::NO_ADMIN_PROTOCOL_GATEWAY_DIGESTS[0]
+                ),
+            ),
+            Platform::Azure,
+        )
+        .await
+        .expect("preflight runs");
+    // The installed gateway Container stands in for one an earlier release wrote, so the
+    // checks of user-declared resources refuse it too; read only the sandbox platform check.
+    let sandbox_check = old_gateway
+        .results
+        .iter()
+        .find(|result| {
+            result.check_description.as_deref()
+                == Some("A Sandbox must declare only what its target platform can enforce")
+        })
+        .expect("the sandbox platform check runs");
+    assert_eq!(
+        sandbox_check.errors,
+        vec![format!(
+            "Sandbox 'agent': {}",
+            alien_core::sandbox_egress::AZURE_INTERNET_SANDBOX_UNAVAILABLE
+        )]
     );
-    assert!(!rendered.contains("Alien sandbox agent"), "{rendered}");
+}
+
+/// `stack` with the managed gateway Container already installed, running `image`.
+fn with_installed_gateway(mut stack: Stack, image: &str) -> Stack {
+    let gateway_id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+    stack.resources.insert(
+        gateway_id.into(),
+        alien_core::ResourceEntry {
+            config: alien_core::Resource::new(
+                alien_core::Container::new(gateway_id.into())
+                    .code(alien_core::ContainerCode::Image {
+                        image: image.into(),
+                    })
+                    .cpu(alien_core::ResourceSpec {
+                        min: "0.25".into(),
+                        desired: "0.25".into(),
+                    })
+                    .memory(alien_core::ResourceSpec {
+                        min: "512Mi".into(),
+                        desired: "512Mi".into(),
+                    })
+                    .replicas(1)
+                    .permissions(gateway_id.into())
+                    .port(3128)
+                    .build(),
+            ),
+            lifecycle: alien_core::ResourceLifecycle::Live,
+            dependencies: vec![],
+            display_name: None,
+            description: None,
+            remote_access: false,
+            enabled_when: None,
+        },
+    );
+    stack
 }
 
 /// With the switch flipped, Google Cloud's `internet` plans like every cloud's: through the
