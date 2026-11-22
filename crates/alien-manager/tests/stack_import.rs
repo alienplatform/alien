@@ -5220,3 +5220,131 @@ async fn existing_cluster_import_with_unreadable_cluster_data_is_refused() {
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);
 }
+
+// --- endpoint source ranges ---
+
+fn with_ranges(mut body: StackImportRequest, ranges: &[&str]) -> StackImportRequest {
+    body.stack_settings.endpoint_source_ranges = ranges.iter().map(|r| r.to_string()).collect();
+    body
+}
+
+async fn stored_ranges(fixture: &Fixture, deployment_id: &str) -> Vec<String> {
+    fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), deployment_id)
+        .await
+        .unwrap()
+        .expect("deployment must persist")
+        .stack_settings
+        .expect("settings")
+        .endpoint_source_ranges
+}
+
+async fn settle_to_running(fixture: &Fixture, deployment_id: &str) {
+    let imported = fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), deployment_id)
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: imported.id,
+                session: "test-reconcile".to_string(),
+                execution_claim: None,
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: imported.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack: stack_with_storage("assets"),
+                        signed: None,
+                        signer_lists: Vec::new(),
+                    }),
+                    target_release: None,
+                    stack_state: imported.stack_state,
+                    error: None,
+                    environment_info: imported.environment_info,
+                    runtime_metadata: imported.runtime_metadata,
+                    retry_requested: false,
+                    protocol_version: imported.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+                operations_report: None,
+            },
+        )
+        .await
+        .expect("deployment should reach a stable state before re-import");
+}
+
+#[tokio::test]
+async fn re_import_keeps_the_saved_endpoint_source_ranges() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let body = with_ranges(
+        aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports"),
+        &["203.0.113.0/24", "2001:db8::/32"],
+    );
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let id = serde_json::from_value::<StackImportResponse>(json)
+        .unwrap()
+        .deployment_id;
+    let saved = vec!["203.0.113.0/24".to_string(), "2001:db8::/32".to_string()];
+    assert_eq!(stored_ranges(&fixture, &id).await, saved);
+
+    // Setup does not know the list: it omits the field. A changed resource
+    // forces a real write.
+    settle_to_running(&fixture, &id).await;
+    let mut omitting = with_ranges(body.clone(), &[]);
+    omitting.resources[0].import_data = serde_json::to_value(AwsStorageImportData {
+        bucket_name: "acme-imports-v2".to_string(),
+        bucket_arn: "arn:aws:s3:::acme-imports-v2".to_string(),
+    })
+    .unwrap();
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &omitting).await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    let response: StackImportResponse = serde_json::from_value(json).unwrap();
+    assert_eq!(response.stack_settings.endpoint_source_ranges, saved);
+    assert_eq!(stored_ranges(&fixture, &id).await, saved);
+
+    // An unchanged import also keeps it.
+    settle_to_running(&fixture, &id).await;
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &omitting).await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    assert_eq!(stored_ranges(&fixture, &id).await, saved);
+}
+
+#[tokio::test]
+async fn import_refuses_invalid_endpoint_source_ranges() {
+    let too_many: Vec<String> = (0..26).map(|i| format!("10.0.{i}.0/24")).collect();
+    let too_many: Vec<&str> = too_many.iter().map(String::as_str).collect();
+    for (ranges, private, expected) in [
+        (vec!["not-a-cidr"], false, "not-a-cidr"),
+        (vec!["10.0.0.1/24"], false, "10.0.0.1/24"),
+        (vec!["10.0.0.0/24", "10.0.0.0/24"], false, "10.0.0.0/24"),
+        (too_many, false, "25"),
+        (vec!["10.0.0.0/24"], true, "10.0.0.0/24"),
+    ] {
+        let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+        let mut body = with_ranges(
+            aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports"),
+            &ranges,
+        );
+        if private {
+            body.stack_settings.endpoint_access = alien_core::EndpointAccess::Private;
+        }
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{ranges:?}: {json:#}");
+        assert!(json.to_string().contains(expected), "{ranges:?}: {json:#}");
+    }
+}

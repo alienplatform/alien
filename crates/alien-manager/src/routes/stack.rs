@@ -170,6 +170,11 @@ async fn stack_import_as(
         }
     };
 
+    // Validate what the request sets. For an existing deployment the stored list replaces
+    // the incoming one below, so a stored list that is already invalid cannot block it.
+    if let Err(message) = req.stack_settings.validate_endpoint_source_ranges() {
+        return ErrorData::bad_request(message).into_response();
+    }
     let automatic = req.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
     let mut approved_automatic_installation = None;
     if automatic {
@@ -570,6 +575,11 @@ async fn stack_import_as(
         }
         if let Err(error) = validate_gcp_federation_handoff(&req, Some(&existing.id)) {
             return error.into_response();
+        }
+        // Setup never knows the source ranges, so an import keeps the stored list;
+        // only an explicit settings change sets or clears it.
+        if let Some(stored) = existing.stack_settings.as_ref() {
+            req.stack_settings.endpoint_source_ranges = stored.endpoint_source_ranges.clone();
         }
         if existing
             .stack_settings

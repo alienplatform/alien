@@ -472,6 +472,9 @@ pub(crate) fn stack_settings_for_platform(
     stack_settings: Option<StackSettings>,
 ) -> Result<StackSettings, alien_error::AlienError<ErrorData>> {
     let mut stack_settings = stack_settings.unwrap_or_default();
+    stack_settings
+        .validate_endpoint_source_ranges()
+        .map_err(ErrorData::bad_request)?;
     if stack_settings.airgapped && platform != Platform::Kubernetes {
         return Err(ErrorData::bad_request(
             "Air-gapped delivery requires Kubernetes",
@@ -2550,5 +2553,37 @@ mod tests {
         assert!(error
             .to_string()
             .contains("must use deploymentModel 'push'"));
+    }
+    #[test]
+    fn settings_for_a_new_deployment_refuse_invalid_endpoint_source_ranges() {
+        let with = |ranges: Vec<String>, access| StackSettings {
+            endpoint_source_ranges: ranges,
+            endpoint_access: access,
+            ..StackSettings::default()
+        };
+        let internet = alien_core::EndpointAccess::Internet;
+        let too_many: Vec<String> = (0..26).map(|i| format!("10.0.{i}.0/24")).collect();
+        for (settings, named) in [
+            (with(vec!["bogus".into()], internet), "bogus"),
+            (with(vec!["10.0.0.1/24".into()], internet), "10.0.0.1/24"),
+            (
+                with(vec!["10.0.0.0/24".into(), "10.0.0.0/24".into()], internet),
+                "10.0.0.0/24",
+            ),
+            (with(too_many, internet), "25"),
+            (
+                with(
+                    vec!["10.0.0.0/24".into()],
+                    alien_core::EndpointAccess::Private,
+                ),
+                "10.0.0.0/24",
+            ),
+        ] {
+            let error = stack_settings_for_platform(Platform::Aws, Some(settings))
+                .expect_err("invalid ranges are refused");
+            assert!(error.to_string().contains(named), "{error}");
+        }
+        let ok = with(vec!["203.0.113.0/24".into()], internet);
+        assert!(stack_settings_for_platform(Platform::Aws, Some(ok)).is_ok());
     }
 }
