@@ -48,8 +48,16 @@ pub struct EcrArtifactRegistry {
     push_role_arn: Option<String>,
     /// Repositories this process already set to scan on push, so a repository that existed
     /// before scanning was turned on is updated once and not on every later push.
-    scan_on_push_set: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// One cell per (region, repository): concurrent callers share a single in-flight put, and a
+    /// failed put leaves the cell empty so a later request tries again.
+    scan_on_push_set: std::sync::Mutex<
+        std::collections::HashMap<(String, String), std::sync::Arc<tokio::sync::OnceCell<()>>>,
+    >,
 }
+
+/// Longest the best-effort scan-on-push call may take, so a stalled ECR never holds a request
+/// past a load balancer's idle limit.
+const SCAN_PUT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A new repository scans every pushed image and encrypts at rest with AES-256, as the
 /// CloudFormation and Terraform templates create it.
@@ -378,42 +386,54 @@ impl EcrArtifactRegistry {
         })
     }
 
-    /// Turns scan on push on for a repository created before it was the default. Runs once per
-    /// repository per process. A refusal (the push role of an older install does not yet allow
-    /// `ecr:PutImageScanningConfiguration` until its setup is updated) is logged and does not
-    /// fail the push; the next request tries again.
-    async fn ensure_scan_on_push(&self, ecr_client: &dyn EcrApi, full_repo_name: &str) {
-        if self
-            .scan_on_push_set
+    fn scan_cell(&self, region: &str, repo: &str) -> std::sync::Arc<tokio::sync::OnceCell<()>> {
+        self.scan_on_push_set
             .lock()
             .expect("scan-on-push set lock")
-            .contains(full_repo_name)
-        {
-            return;
-        }
-        let result = ecr_client
-            .put_image_scanning_configuration(
-                PutImageScanningConfigurationRequest::builder()
-                    .repository_name(full_repo_name.to_string())
-                    .image_scanning_configuration(ImageScanningConfiguration {
-                        scan_on_push: Some(true),
-                    })
-                    .build(),
+            .entry((region.to_string(), repo.to_string()))
+            .or_default()
+            .clone()
+    }
+
+    /// Records that a repository this process just created already scans on push.
+    fn mark_scan_on_push(&self, region: &str, repo: &str) {
+        let _ = self.scan_cell(region, repo).set(());
+    }
+
+    /// Turns scan on push on for a repository created before it was the default. Runs once per
+    /// repository and region per process; concurrent callers share one call. Best effort: a
+    /// refusal (an older install's push role does not allow `ecr:PutImageScanningConfiguration`
+    /// until its setup is updated) or a stalled ECR (one attempt, `SCAN_PUT_TIMEOUT`) is logged
+    /// once and does not fail or hold up the push; the next request tries again.
+    async fn ensure_scan_on_push(&self, ecr_client: &dyn EcrApi, region: &str, repo: &str) {
+        let cell = self.scan_cell(region, repo);
+        let put = || async {
+            let request = PutImageScanningConfigurationRequest::builder()
+                .repository_name(repo.to_string())
+                .image_scanning_configuration(ImageScanningConfiguration {
+                    scan_on_push: Some(true),
+                })
+                .build();
+            match tokio::time::timeout(
+                SCAN_PUT_TIMEOUT,
+                ecr_client.put_image_scanning_configuration(request),
             )
-            .await;
-        match result {
-            Ok(_) => {
-                self.scan_on_push_set
-                    .lock()
-                    .expect("scan-on-push set lock")
-                    .insert(full_repo_name.to_string());
+            .await
+            {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(error)) => {
+                    warn!(repo_name = %repo, region = %region, error = %error,
+                        "Could not turn on scan on push for an existing ECR repository");
+                    Err(())
+                }
+                Err(_) => {
+                    warn!(repo_name = %repo, region = %region,
+                        "Turning on scan on push for an existing ECR repository timed out");
+                    Err(())
+                }
             }
-            Err(error) => warn!(
-                repo_name = %full_repo_name,
-                error = %error,
-                "Could not turn on scan on push for an existing ECR repository"
-            ),
-        }
+        };
+        let _ = cell.get_or_try_init(put).await;
     }
 
     /// Constructs the full repository name for ECR using the repository prefix.
@@ -477,7 +497,9 @@ impl EcrArtifactRegistry {
                         "ECR repository already exists"
                     );
 
-                    self.ensure_scan_on_push(&ecr_client, &full_repo_name).await;
+                    let region = self.credentials.region().to_string();
+                    self.ensure_scan_on_push(&ecr_client, &region, &full_repo_name)
+                        .await;
 
                     return Ok(RepositoryResponse {
                         name: full_repo_name.clone(),
@@ -496,10 +518,7 @@ impl EcrArtifactRegistry {
             "ECR repository created successfully"
         );
 
-        self.scan_on_push_set
-            .lock()
-            .expect("scan-on-push set lock")
-            .insert(full_repo_name.clone());
+        self.mark_scan_on_push(self.credentials.region(), &full_repo_name);
 
         // ECR repositories are ready immediately after creation
         let repository = &response.repository;
@@ -1019,7 +1038,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                     .create_repository(new_repository_request(full_repo_name.clone()))
                     .await
                 {
-                    Ok(_) => {}
+                    Ok(_) => self.mark_scan_on_push(region, &full_repo_name),
                     Err(error) => {
                         let error = map_cloud_client_error(
                             error,
@@ -1031,6 +1050,8 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                         if error.http_status_code != Some(409) {
                             return Err(error);
                         }
+                        self.ensure_scan_on_push(&target_ecr, region, &full_repo_name)
+                            .await;
                     }
                 }
             } else {
@@ -1848,7 +1869,7 @@ mod tests {
             format!("AmazonEC2ContainerRegistry_V20150921.{operation}")
         }
 
-        pub(super) async fn already_exists(server: &MockServer) {
+        pub(super) async fn already_exists(server: &MockServer) -> httpmock::Mock<'_> {
             server
                 .mock_async(|when, then| {
                     when.method(POST)
@@ -1860,7 +1881,7 @@ mod tests {
                             "message": "already exists"
                         }));
                 })
-                .await;
+                .await
         }
 
         pub(super) async fn put_scan<'a>(
@@ -2036,7 +2057,7 @@ mod tests {
     #[tokio::test]
     async fn a_new_repository_scans_on_push_and_encrypts_with_aes256() {
         let server = httpmock::MockServer::start_async().await;
-        let create = server
+        let mut create = server
             .mock_async(|when, then| {
                 when.method(httpmock::Method::POST)
                     .header(
@@ -2060,10 +2081,14 @@ mod tests {
         let registry = fake_ecr::registry(&server).await;
 
         registry.create_repository("prj_1").await.unwrap();
-        // A repository this process created already scans: no second call.
-        registry.create_repository("prj_1").await.ok();
+        assert_eq!(create.hits_async().await, 1);
+        create.delete_async().await;
 
-        assert!(create.hits_async().await >= 1);
+        // The next create finds the repository existing (409). It already scans, so no put.
+        let exists = fake_ecr::already_exists(&server).await;
+        registry.create_repository("prj_1").await.unwrap();
+
+        assert_eq!(exists.hits_async().await, 1);
         assert_eq!(put.hits_async().await, 0);
     }
 
@@ -2081,6 +2106,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_creates_of_an_existing_repository_share_one_scan_put() {
+        let server = httpmock::MockServer::start_async().await;
+        fake_ecr::already_exists(&server).await;
+        let put = fake_ecr::put_scan(&server, 200).await;
+        let registry = fake_ecr::registry(&server).await;
+
+        let (a, b, c) = tokio::join!(
+            registry.create_repository("prj_1"),
+            registry.create_repository("prj_1"),
+            registry.create_repository("prj_1"),
+        );
+        a.unwrap();
+        b.unwrap();
+        c.unwrap();
+
+        assert_eq!(put.hits_async().await, 1);
+    }
+
+    #[tokio::test]
     async fn a_refused_scan_setting_does_not_fail_the_push_and_is_tried_again() {
         let server = httpmock::MockServer::start_async().await;
         fake_ecr::already_exists(&server).await;
@@ -2090,8 +2134,51 @@ mod tests {
         registry.create_repository("prj_1").await.unwrap();
         registry.create_repository("prj_1").await.unwrap();
 
-        // The client retries a refused call itself; each push still tries at least once.
-        assert!(put.hits_async().await >= 2);
+        // One attempt per push, no retries.
+        assert_eq!(put.hits_async().await, 2);
+    }
+
+    #[tokio::test]
+    async fn a_stalled_scan_setting_ends_within_the_timeout_and_does_not_fail_the_push() {
+        let server = httpmock::MockServer::start_async().await;
+        fake_ecr::already_exists(&server).await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).header(
+                    "x-amz-target",
+                    "AmazonEC2ContainerRegistry_V20150921.PutImageScanningConfiguration",
+                );
+                then.status(200).delay(Duration::from_secs(30));
+            })
+            .await;
+        let registry = fake_ecr::registry(&server).await;
+
+        let started = Instant::now();
+        registry.create_repository("prj_1").await.unwrap();
+
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_state_is_kept_per_region_and_repository() {
+        let server = httpmock::MockServer::start_async().await;
+        let registry = fake_ecr::registry(&server).await;
+
+        registry.mark_scan_on_push("eu-west-1", "artifacts-prj_1");
+
+        assert!(registry
+            .scan_cell("eu-west-1", "artifacts-prj_1")
+            .initialized());
+        assert!(!registry
+            .scan_cell("us-east-1", "artifacts-prj_1")
+            .initialized());
+        assert!(!registry
+            .scan_cell("eu-west-1", "artifacts-prj_2")
+            .initialized());
     }
 
     /// A replica ECR has not created yet ends the grant with a retryable timeout well inside a

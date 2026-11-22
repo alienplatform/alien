@@ -514,7 +514,9 @@ impl EcrApi for EcrClient {
             },
         )?;
 
-        self.post_json(
+        // One attempt: the caller treats this as best effort and bounds it with a timeout.
+        self.post_json_with(
+            Attempts::Once,
             "PutImageScanningConfiguration",
             body,
             &request.repository_name,
