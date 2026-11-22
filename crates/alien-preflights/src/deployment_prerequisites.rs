@@ -1885,13 +1885,35 @@ mod tests {
         Some(check.check(stack, &state, &config).await.unwrap())
     }
 
+    /// Replaces the image of the gateway Container preparation installed.
+    fn set_gateway_image(stack: &mut Stack, image: &str) {
+        let entry = stack
+            .resources
+            .get_mut(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
+            .expect("gateway installed");
+        let mut gateway = entry
+            .config
+            .downcast_ref::<Container>()
+            .expect("gateway is a container")
+            .clone();
+        gateway.code = alien_core::ContainerCode::Image {
+            image: image.into(),
+        };
+        entry.config = alien_core::Resource::new(gateway);
+    }
+
     #[tokio::test]
     async fn azure_internet_sandbox_is_refused_while_the_gateway_lacks_the_admin_protocol() {
-        let stack = prepared(
+        let mut stack = prepared(
             sandbox_stack(alien_core::SandboxEgress::Internet),
             Platform::Azure,
         )
         .await;
+        // A released gateway image that predates the admin protocol.
+        set_gateway_image(
+            &mut stack,
+            "ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1",
+        );
         let result = azure_protocol_check(&stack, Platform::Azure)
             .await
             .expect("runs on Azure internet");
@@ -1927,31 +1949,26 @@ mod tests {
         }
     }
 
-    /// The refusal follows the pinned image: once the pin moves off the list, it disappears.
+    /// The refusal follows the gateway image: the image this release pins, and any image off
+    /// the list, pass.
     #[tokio::test]
     async fn azure_internet_sandbox_passes_with_a_gateway_image_that_serves_the_protocol() {
-        let mut stack = prepared(
+        let pinned = prepared(
             sandbox_stack(alien_core::SandboxEgress::Internet),
             Platform::Azure,
         )
         .await;
-        let entry = stack
-            .resources
-            .get_mut(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
-            .expect("gateway installed");
-        let mut gateway = entry
-            .config
-            .downcast_ref::<Container>()
-            .expect("gateway is a container")
-            .clone();
-        gateway.code = alien_core::ContainerCode::Image {
-            image: "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000000".into(),
-        };
-        entry.config = alien_core::Resource::new(gateway);
-        let result = azure_protocol_check(&stack, Platform::Azure)
-            .await
-            .expect("runs on Azure internet");
-        assert!(result.success);
+        let mut newer = pinned.clone();
+        set_gateway_image(
+            &mut newer,
+            "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        for stack in [pinned, newer] {
+            let result = azure_protocol_check(&stack, Platform::Azure)
+                .await
+                .expect("runs on Azure internet");
+            assert!(result.success, "{:?}", result.errors);
+        }
     }
 
     #[tokio::test]

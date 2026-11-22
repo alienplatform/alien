@@ -592,9 +592,47 @@ mod tests {
         }
     }
 
-    /// The gateway image this release installs cannot serve the Azure sandbox binding, so an
-    /// Azure internet stack is refused at build and render, before setup creates the gateway VMs.
-    /// Other clouds and other egress modes are unaffected, and a newer gateway digest lifts it.
+    /// A released gateway image that predates the admin protocol.
+    const PRE_PROTOCOL_GATEWAY: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1";
+
+    /// `stack` with the managed gateway Container already installed, running `image`.
+    fn with_gateway(mut stack: Stack, image: &str) -> Stack {
+        let gateway_id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+        stack.resources.insert(
+            gateway_id.into(),
+            ResourceEntry {
+                config: alien_core::Resource::new(
+                    alien_core::Container::new(gateway_id.into())
+                        .code(alien_core::ContainerCode::Image {
+                            image: image.into(),
+                        })
+                        .cpu(alien_core::ResourceSpec {
+                            min: "0.25".into(),
+                            desired: "0.25".into(),
+                        })
+                        .memory(alien_core::ResourceSpec {
+                            min: "512Mi".into(),
+                            desired: "512Mi".into(),
+                        })
+                        .replicas(1)
+                        .permissions(gateway_id.into())
+                        .port(3128)
+                        .build(),
+                ),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: vec![],
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+    }
+
+    /// A gateway image that cannot serve the Azure sandbox binding refuses an Azure internet
+    /// stack, before setup creates the gateway VMs. Other clouds and other egress modes are
+    /// unaffected, and the gateway this release installs serves it.
     #[tokio::test]
     async fn azure_internet_is_refused_until_the_gateway_serves_the_admin_protocol() {
         let internet = |id: &str, egress: SandboxEgress| {
@@ -606,7 +644,13 @@ mod tests {
             stack_with(value)
         };
         let refused = SandboxPlatformSupportCheck
-            .check(&internet("agent", SandboxEgress::Internet), Platform::Azure)
+            .check(
+                &with_gateway(
+                    internet("agent", SandboxEgress::Internet),
+                    PRE_PROTOCOL_GATEWAY,
+                ),
+                Platform::Azure,
+            )
             .await
             .unwrap();
         assert!(!refused.success);
@@ -634,43 +678,19 @@ mod tests {
             assert!(result.success, "{:?}", result.errors);
         }
 
-        // A stack whose gateway already names a newer digest is accepted.
-        let gateway_id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
-        let mut newer = internet("agent", SandboxEgress::Internet);
-        newer.resources.insert(
-            gateway_id.into(),
-            ResourceEntry {
-                config: alien_core::Resource::new(
-                    alien_core::Container::new(gateway_id.into())
-                        .code(alien_core::ContainerCode::Image {
-                            image: "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000001".into(),
-                        })
-                        .cpu(alien_core::ResourceSpec {
-                            min: "0.25".into(),
-                            desired: "0.25".into(),
-                        })
-                        .memory(alien_core::ResourceSpec {
-                            min: "512Mi".into(),
-                            desired: "512Mi".into(),
-                        })
-                        .replicas(1)
-                        .permissions(gateway_id.into())
-                        .port(3128)
-                        .build(),
-                ),
-                lifecycle: ResourceLifecycle::Live,
-                dependencies: vec![],
-                display_name: None,
-                description: None,
-                remote_access: false,
-                enabled_when: None,
-            },
+        // A stack whose gateway already names a newer digest is accepted, and so is one that
+        // plans the gateway this release installs.
+        let newer = with_gateway(
+            internet("agent", SandboxEgress::Internet),
+            "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000001",
         );
-        let accepted = SandboxPlatformSupportCheck
-            .check(&newer, Platform::Azure)
-            .await
-            .unwrap();
-        assert!(accepted.success, "{:?}", accepted.errors);
+        for stack in [newer, internet("agent", SandboxEgress::Internet)] {
+            let accepted = SandboxPlatformSupportCheck
+                .check(&stack, Platform::Azure)
+                .await
+                .unwrap();
+            assert!(accepted.success, "{:?}", accepted.errors);
+        }
     }
 
     /// `alien build`, `alien release` and the Terraform/CloudFormation render all run these
@@ -682,7 +702,8 @@ mod tests {
             image: "example.azurecr.io/agent:1".to_string(),
             bundled_from: None,
         };
-        let stack = stack_with(value);
+        let released = stack_with(value);
+        let stack = with_gateway(released.clone(), PRE_PROTOCOL_GATEWAY);
         let runner = crate::runner::PreflightRunner::new();
         let build = runner
             .run_build_time_preflights(&stack, Platform::Azure)
@@ -699,9 +720,18 @@ mod tests {
             );
         }
         assert!(runner
-            .run_build_time_preflights(&stack, Platform::Aws)
+            .run_build_time_preflights(&released, Platform::Aws)
             .await
             .is_ok());
+        // The gateway this release installs serves the protocol: both paths accept the stack.
+        runner
+            .run_build_time_preflights(&released, Platform::Azure)
+            .await
+            .expect("build accepts");
+        runner
+            .run_template_preflights(&released, Platform::Azure)
+            .await
+            .expect("render accepts");
     }
 
     #[tokio::test]
@@ -858,7 +888,7 @@ mod tests {
     /// same message, before any setup could build the gateway VMs.
     #[tokio::test]
     async fn gcp_internet_needs_a_gateway_image_that_serves_the_admin_protocol() {
-        const OLD_GATEWAY: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1";
+        const OLD_GATEWAY: &str = PRE_PROTOCOL_GATEWAY;
         assert!(!alien_core::sandbox_egress::gateway_image_serves_admin_protocol(OLD_GATEWAY));
         let on =
             alien_core::gcp_sandbox_gateway::enable_internet_egress_with_gateway_image_for_test(

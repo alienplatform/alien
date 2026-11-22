@@ -90,7 +90,7 @@ pub fn gateway_image_serves_admin_protocol(image: &str) -> bool {
 }
 
 /// The gateway image this release installs for an internet sandbox.
-pub const SANDBOX_EGRESS_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1";
+pub const SANDBOX_EGRESS_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037";
 
 /// The refusal for an Azure internet sandbox while the installed gateway image predates the
 /// admin protocol. Build, template and deployment checks all give this text.
