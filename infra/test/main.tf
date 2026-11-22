@@ -126,26 +126,7 @@ resource "google_iam_deny_policy" "ci_identity_guard" {
     }
   }
 
-  # The CI identity may mint tokens only for the manager service account. The
-  # workload identity user binding already limits it; this keeps it that way if
-  # a test grants more. The resource name of a service account carries its
-  # unique id, so the exception matches on that. Only the CI identity is
-  # covered, not the service accounts it impersonates, because tests create and
-  # impersonate their own service accounts.
-  rules {
-    deny_rule {
-      denied_principals = [module.gcp.ci_principal_set]
-      denied_permissions = [
-        "iam.googleapis.com/serviceAccounts.getAccessToken",
-        "iam.googleapis.com/serviceAccounts.getOpenIdToken",
-        "iam.googleapis.com/serviceAccounts.signBlob",
-        "iam.googleapis.com/serviceAccounts.signJwt",
-        "iam.googleapis.com/serviceAccounts.implicitDelegation",
-      ]
-      denial_condition {
-        title      = "other than the manager service account"
-        expression = "!resource.name.endsWith('/serviceAccounts/${module.gcp.manager_service_account_unique_id}')"
-      }
-    }
-  }
+  # No rule limits which service accounts the CI identity mints tokens for: IAM
+  # deny conditions accept only tag functions, and CI must mint tokens for the
+  # target service accounts it impersonates. Rule 1 guards what matters.
 }
