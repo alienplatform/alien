@@ -89,6 +89,7 @@ export type {
   ResolvedSandbox,
   RunCommandOptions,
   Sandbox,
+  SandboxCredentialRule,
   SandboxInstance,
   SandboxPreview,
   SignedUrlMethod,

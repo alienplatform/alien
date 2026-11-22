@@ -775,7 +775,7 @@ impl SandboxEgressManager {
         // The exact record on every attempt: a partial fan-out may already have applied it.
         for attempt in 0..attempts {
             let last = attempt + 1 == attempts;
-            let mut retry = |error: AlienError<ErrorData>| {
+            let retry = |error: AlienError<ErrorData>| {
                 if last {
                     Err(exhausted(error))
                 } else {

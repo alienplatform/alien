@@ -1,6 +1,7 @@
-//! The egress gateway a local sandbox that links services runs behind.
+//! The egress gateway a local sandbox runs behind.
 //!
-//! Only a sandbox with links gets one. Its sessions then have no route of their own: each
+//! Every sandbox whose sessions reach anything gets one, as on the cloud platforms, so its
+//! policy and credential rules apply in `alien dev` too. Its sessions have no route of their own: each
 //! session sits alone on an `--internal` Docker network, and the sandbox's gateway container
 //! joins that network next to it. The gateway also sits on `deployment-network`, where the
 //! linked services run, so it is the one way out of the session: to the internet, and to the
@@ -8,8 +9,8 @@
 //! gateway, as on the cloud platforms.
 //!
 //! One network per live session keeps sessions apart (a session reaches only its own network's
-//! members) but draws on the Docker daemon's address pools, which bound how many linked
-//! sessions can run at once.
+//! members) but draws on the Docker daemon's address pools, which bound how many sessions can
+//! run at once.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,6 +61,20 @@ pub(crate) struct LocalGateway {
     egress: SandboxEgressManager,
 }
 
+impl LocalGateway {
+    /// Replaces a session's credential rules on the sandbox's gateway; returns once it holds them.
+    pub(crate) async fn update_credentials(
+        &self,
+        session_id: &str,
+        rules: &[alien_core::SandboxCredentialRule],
+    ) -> Result<()> {
+        self.egress
+            .update_credentials(session_id, rules)
+            .await
+            .context(failed("update the session's credential rules", session_id))
+    }
+}
+
 impl std::fmt::Debug for LocalGateway {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalGateway")
@@ -70,6 +85,9 @@ impl std::fmt::Debug for LocalGateway {
 
 /// What a session needs to reach the outside through its sandbox's gateway.
 pub(crate) struct SessionEgress {
+    /// PEM of the session's CA, which it trusts for HTTPS the gateway intercepts to put a
+    /// credential on a request. `None` from a gateway image that predates credentials.
+    pub ca: Option<String>,
     /// The session's own network, to create the session container on.
     pub(crate) network: String,
     /// Proxy environment carrying the session's gateway token.
@@ -148,8 +166,17 @@ pub(crate) fn session_network_name(sandbox: &str, session_id: &str) -> String {
 
 /// The configuration the sandbox's gateway runs: the sandbox is its one audience, the process
 /// key its one key, and the sandbox's links the only private destinations it reaches.
-fn gateway_config(sandbox: &str, key: &GeneratedSigningKey, links: &[GatewayLink]) -> String {
+///
+/// `replica_secret` seeds the session CAs. It is fixed for the life of the process, so a gateway
+/// recreated for changed links issues the same CA to the sessions already running.
+fn gateway_config(
+    sandbox: &str,
+    key: &GeneratedSigningKey,
+    replica_secret: &str,
+    links: &[GatewayLink],
+) -> String {
     serde_json::json!({
+        "replicaSecret": replica_secret,
         "listen": format!("0.0.0.0:{PROXY_PORT}"),
         "admin": format!("0.0.0.0:{ADMIN_PORT}"),
         "audiences": [audience(sandbox)],
@@ -183,15 +210,17 @@ fn not_found(error: &bollard::errors::Error) -> bool {
 /// changed configuration (the stack's links changed) replaces it, and the replacement joins
 /// every live session's network again and receives their policies, so running sessions keep
 /// their proxy.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn ensure_gateway(
     docker: &Docker,
     key: &GeneratedSigningKey,
+    replica_secret: &str,
     sandbox: &str,
     image: &str,
     links: &[GatewayLink],
     current: Option<Arc<LocalGateway>>,
 ) -> Result<Arc<LocalGateway>> {
-    let config = gateway_config(sandbox, key, links);
+    let config = gateway_config(sandbox, key, replica_secret, links);
     let digest = hex::encode(Sha256::digest(config.as_bytes()));
     let name = gateway_name(sandbox);
 
@@ -448,13 +477,18 @@ pub(crate) async fn attach_session(
         .await
         .context(failed("publish the session's egress policy", session_id))?;
 
+    let ca = gateway.egress.sandbox_ca(session_id).await.context(failed(
+        "read the session's CA from the egress gateway",
+        session_id,
+    ))?;
+
     let proxy = format!("http://alien:{token}@{GATEWAY_ALIAS}:{PROXY_PORT}");
     let mut env: Vec<String> = ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]
         .into_iter()
         .map(|name| format!("{name}={proxy}"))
         .collect();
     env.extend(["NO_PROXY", "no_proxy"].map(|name| format!("{name}=localhost,127.0.0.1")));
-    Ok(SessionEgress { network, env })
+    Ok(SessionEgress { ca, network, env })
 }
 
 async fn join_session_network(
@@ -664,10 +698,12 @@ mod tests {
     fn the_gateway_config_carries_the_sandbox_links_under_its_audience() {
         let key = alien_bindings::sandbox_egress_token::generate_signing_key();
         let config: serde_json::Value =
-            serde_json::from_str(&gateway_config("agents", &key, &[link()])).unwrap();
+            serde_json::from_str(&gateway_config("agents", &key, "c2VlZA==", &[link()])).unwrap();
         assert_eq!(config["audiences"], serde_json::json!(["local/agents"]));
         assert_eq!(config["keys"][0]["kid"], key.kid.as_str());
         assert_eq!(config["deniedRanges"], serde_json::json!([]));
+        assert_eq!(config["credentials"], serde_json::json!([]));
+        assert_eq!(config["replicaSecret"], "c2VlZA==");
         assert_eq!(
             config["links"],
             serde_json::json!({"local/agents": [{"id": "api", "host": "api.svc", "ports": [8080], "ranges": ["172.30.0.0/16"]}]})

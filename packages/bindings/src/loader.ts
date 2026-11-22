@@ -36,6 +36,7 @@ import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import type {
+  SandboxCredentialRule,
   StorageGetResult,
   StorageHeadResult,
   StoragePutOptions,
@@ -268,6 +269,7 @@ export interface RawSandboxHandle {
     egress?: EgressPolicy | null,
   ): Promise<RawResolvedSandbox>
   updateEgress(sandboxId: string, egress: EgressPolicy): Promise<void>
+  updateCredentials(sandboxId: string, rules: SandboxCredentialRule[]): Promise<void>
   list(): Promise<RawSandboxInstance[]>
   runCommand(
     sandboxId: string,

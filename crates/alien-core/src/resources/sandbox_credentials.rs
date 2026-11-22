@@ -83,6 +83,28 @@ pub struct SandboxCredentialRule {
 }
 
 impl SandboxCredentialRule {
+    /// The rule as JSON, value included, for the one place it travels: the request to the
+    /// gateway (or the local sandbox route). Field names are the wire names.
+    pub fn to_wire(&self) -> serde_json::Value {
+        let mut wire = serde_json::json!({ "header": self.header, "value": self.value.0 });
+        for (name, field) in [
+            ("host", self.host.clone().map(serde_json::Value::from)),
+            ("link", self.link.clone().map(serde_json::Value::from)),
+            ("port", self.port.map(serde_json::Value::from)),
+            ("method", self.method.clone().map(serde_json::Value::from)),
+            ("path", self.path.clone().map(serde_json::Value::from)),
+            (
+                "valuePrefix",
+                self.value_prefix.clone().map(serde_json::Value::from),
+            ),
+        ] {
+            if let Some(field) = field {
+                wire[name] = field;
+            }
+        }
+        wire
+    }
+
     /// Checks the fields the gateway checks again. Messages never contain the value.
     pub fn validate(&self) -> Result<(), String> {
         match (&self.host, &self.link) {

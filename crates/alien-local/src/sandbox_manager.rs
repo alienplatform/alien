@@ -133,8 +133,11 @@ pub struct LocalSandboxManager {
     /// Running gateways, by sandbox. Held across a gateway's create so two sessions do not
     /// start two.
     gateways: tokio::sync::Mutex<HashMap<String, Arc<LocalGateway>>>,
-    /// Image of the egress gateway a sandbox with links runs behind.
+    /// Image of the egress gateway every sandbox that reaches anything runs behind.
     gateway_image: String,
+    /// Seeds the session CAs of every gateway. Per process, like `gateway_key`, so a gateway
+    /// recreated for changed links keeps issuing the CA its sessions already trust.
+    gateway_secret: String,
 }
 
 impl LocalSandboxManager {
@@ -148,6 +151,7 @@ impl LocalSandboxManager {
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.to_string(),
+            gateway_secret: new_gateway_secret(),
         })
     }
 
@@ -212,7 +216,9 @@ impl LocalSandboxManager {
         self.ensure_image(&config.image).await?;
         let image = crate::sandbox_identity::inspect(&self.docker, &config.image, sandbox).await?;
 
-        let linked = config.egress == SandboxEgressMode::Allow && !config.links.is_empty();
+        // Every session that reaches anything goes through the sandbox's gateway, links or not,
+        // so its policy and credential rules apply as on the cloud platforms.
+        let linked = config.egress == SandboxEgressMode::Allow;
         let created = async {
             let session_egress = if linked {
                 let gateway = self.gateway(sandbox, &config.links).await?;
@@ -281,8 +287,21 @@ impl LocalSandboxManager {
             format!("ALIEN_SANDBOX_EXEC_GID={}", image.identity.gid),
             format!("ALIEN_SANDBOX_ROOT={SESSION_ROOT}"),
         ]);
-        if let Some(egress) = session_egress {
-            env.extend(egress.env);
+        let mut ca_mount = None;
+        if let Some(egress) = &session_egress {
+            env.extend(egress.env.iter().cloned());
+            if let Some(ca) = &egress.ca {
+                let directory = self.ca_directory(&name);
+                write_ca_files(&directory, ca, None)
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::SandboxSessionFailed {
+                        session_id: session_id.to_string(),
+                        operation: "write the session's CA".to_string(),
+                    })?;
+                env.extend(ca_env());
+                ca_mount = Some(directory);
+            }
         }
 
         let labels = HashMap::from([
@@ -343,6 +362,10 @@ impl LocalSandboxManager {
             cap_add: Some(vec!["KILL".to_string()]),
             security_opt: Some(vec!["no-new-privileges:true".to_string()]),
             init: Some(true),
+            // The session's CA and trust bundle, read-only, for HTTPS the gateway intercepts.
+            binds: ca_mount
+                .as_ref()
+                .map(|directory| vec![format!("{}:{CA_MOUNT}:ro", directory.display())]),
             pids_limit: config.pids_limit,
             memory: Some(config.memory_bytes),
             nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
@@ -394,6 +417,23 @@ impl LocalSandboxManager {
                 session_id: session_id.to_string(),
                 operation: "create".to_string(),
             })?;
+
+        if let (Some(directory), Some(ca)) = (
+            &ca_mount,
+            session_egress
+                .as_ref()
+                .and_then(|egress| egress.ca.as_ref()),
+        ) {
+            // The image's own roots stay trusted: the bundle is them plus the session's CA.
+            let system = self.system_bundle(&created.id).await;
+            write_ca_files(directory, ca, system.as_deref())
+                .await
+                .into_alien_error()
+                .context(ErrorData::SandboxSessionFailed {
+                    session_id: session_id.to_string(),
+                    operation: "write the session's trust bundle".to_string(),
+                })?;
+        }
 
         self.docker
             .start_container(&created.id, None)
@@ -452,6 +492,7 @@ impl LocalSandboxManager {
         let gateway = crate::sandbox_gateway::ensure_gateway(
             &self.docker,
             &self.gateway_key,
+            &self.gateway_secret,
             sandbox,
             &self.gateway_image,
             &links,
@@ -460,6 +501,71 @@ impl LocalSandboxManager {
         .await?;
         gateways.insert(sandbox.to_string(), Arc::clone(&gateway));
         Ok(gateway)
+    }
+
+    /// Replaces a session's credential rules on its sandbox's gateway. Returns once the gateway
+    /// holds them, so the session's next request uses them.
+    pub async fn update_credentials(
+        &self,
+        sandbox: &str,
+        session_id: &str,
+        rules: &[alien_core::SandboxCredentialRule],
+    ) -> Result<()> {
+        let gateway = self
+            .gateways
+            .lock()
+            .await
+            .get(sandbox)
+            .cloned()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxSessionFailed {
+                    session_id: session_id.to_string(),
+                    operation: "update credentials: this sandbox runs no egress gateway; a \
+                            sandbox with egress `none` reaches nothing to put a credential on"
+                        .to_string(),
+                })
+            })?;
+        gateway.update_credentials(session_id, rules).await
+    }
+
+    /// Host directory with one session's CA and trust bundle, bind-mounted read-only.
+    fn ca_directory(&self, container: &str) -> PathBuf {
+        self.state_dir.join("sandbox-egress-ca").join(container)
+    }
+
+    /// The image's CA bundle, read from the created container before it starts.
+    async fn system_bundle(&self, container_id: &str) -> Option<String> {
+        use futures::TryStreamExt;
+        for path in SYSTEM_BUNDLES {
+            let archive: Vec<u8> = match self
+                .docker
+                .download_from_container(
+                    container_id,
+                    Some(bollard::query_parameters::DownloadFromContainerOptions {
+                        path: path.to_string(),
+                    }),
+                )
+                .map_ok(|chunk| chunk.to_vec())
+                .try_concat()
+                .await
+            {
+                Ok(archive) => archive,
+                Err(_) => continue,
+            };
+            let mut entries = tar::Archive::new(archive.as_slice());
+            let Ok(mut entries) = entries.entries() else {
+                continue;
+            };
+            if let Some(Ok(mut entry)) = entries.next() {
+                let mut text = String::new();
+                if std::io::Read::read_to_string(&mut entry, &mut text).is_ok()
+                    && text.contains("BEGIN CERTIFICATE")
+                {
+                    return Some(text);
+                }
+            }
+        }
+        None
     }
 
     /// Pulls the sandbox image if the daemon does not already have it.
@@ -973,8 +1079,9 @@ impl LocalSandboxManager {
                     })
             }
         }
-        // A session of a sandbox with links had its own network; its policy and network go
-        // with it. Nothing to do for any other session.
+        // A session behind the gateway had its own network and CA; its policy, credential rules,
+        // network and CA go with it. Nothing to do for any other session.
+        let _ = tokio::fs::remove_dir_all(self.ca_directory(&name)).await;
         let gateway = self.gateways.lock().await.get(sandbox).cloned();
         crate::sandbox_gateway::detach_session(
             &self.docker,
@@ -1025,6 +1132,54 @@ impl LocalSandboxManager {
         gateway?;
         Ok(terminated + inspections?)
     }
+}
+
+/// Where a session finds its CA (`ca.pem`) and trust bundle (`bundle.pem`).
+pub const CA_MOUNT: &str = "/etc/alien-egress";
+
+/// Where images keep their system CA bundle, most common first.
+const SYSTEM_BUNDLES: [&str; 3] = [
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/cert.pem",
+];
+
+/// The variables common TLS clients read their trust from: OpenSSL, curl and Python read the
+/// bundle; Node adds `ca.pem` to its own roots.
+fn ca_env() -> [String; 4] {
+    [
+        format!("SSL_CERT_FILE={CA_MOUNT}/bundle.pem"),
+        format!("REQUESTS_CA_BUNDLE={CA_MOUNT}/bundle.pem"),
+        format!("CURL_CA_BUNDLE={CA_MOUNT}/bundle.pem"),
+        format!("NODE_EXTRA_CA_CERTS={CA_MOUNT}/ca.pem"),
+    ]
+}
+
+/// The CA carries no private key; the gateway's never leaves the gateway.
+async fn write_ca_files(
+    directory: &std::path::Path,
+    ca: &str,
+    system: Option<&str>,
+) -> std::io::Result<()> {
+    if ca.contains("PRIVATE KEY") {
+        return Err(std::io::Error::other("the sandbox CA must not carry a key"));
+    }
+    tokio::fs::create_dir_all(directory).await?;
+    tokio::fs::write(directory.join("ca.pem"), ca).await?;
+    let mut bundle = system.unwrap_or_default().trim_end().to_string();
+    if !bundle.is_empty() {
+        bundle.push('\n');
+    }
+    bundle.push_str(ca);
+    tokio::fs::write(directory.join("bundle.pem"), bundle).await
+}
+
+fn new_gateway_secret() -> String {
+    use base64::Engine;
+    use rand::RngCore;
+    let mut secret = [0u8; 32];
+    rand::rng().fill_bytes(&mut secret);
+    base64::engine::general_purpose::STANDARD.encode(secret)
 }
 
 /// Resolves a caller-supplied path against the session root.
@@ -1196,6 +1351,7 @@ mod tests {
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: String::new(),
+            gateway_secret: new_gateway_secret(),
         };
         for name in [
             "ALIEN_SANDBOX_EXEC_UID",
@@ -1272,6 +1428,7 @@ mod tests {
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: String::new(),
+            gateway_secret: new_gateway_secret(),
         };
 
         assert!(
@@ -1351,6 +1508,7 @@ mod tests {
                 gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
                 gateways: Default::default(),
                 gateway_image: String::new(),
+                gateway_secret: new_gateway_secret(),
             };
 
             let error = manager

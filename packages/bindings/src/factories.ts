@@ -228,6 +228,8 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
       }),
     updateEgress: (sandboxId, egress) =>
       guard(handle, async raw => raw.updateEgress(sandboxId, egress)),
+    updateCredentials: (sandboxId, rules) =>
+      guard(handle, async raw => raw.updateCredentials(sandboxId, rules)),
     list: () => guard(handle, async raw => (await raw.list()).map(instance)),
     startJob: (sandboxId, command, options) =>
       guard(handle, async raw =>

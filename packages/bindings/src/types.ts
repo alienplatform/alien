@@ -1,6 +1,33 @@
 import type { EgressPolicy } from "@alienplatform/core"
 
 export type { EgressPolicy } from "@alienplatform/core"
+
+/**
+ * One credential rule of a sandbox. Exactly one of `host` and `link`.
+ *
+ * A `host` rule applies to HTTPS requests to that exact internet host: the gateway terminates
+ * the sandbox's TLS with the sandbox's own CA and re-encrypts to the host. A `link` rule
+ * applies to plain HTTP requests to a service the stack links to the sandbox. The egress policy
+ * still decides what the sandbox reaches; a rule never widens it.
+ */
+export interface SandboxCredentialRule {
+  /** Exact lowercase DNS name; no wildcard, no IP address. */
+  host?: string
+  /** Id of a link the stack declares for this sandbox (`link:<id>` in a policy). */
+  link?: string
+  /** Default: 443 for a host, every declared port for a link. */
+  port?: number
+  /** Uppercase HTTP method. Default: any. */
+  method?: string
+  /** Exact path, or a subtree when it ends in `/`. Default: `/` (every path). */
+  path?: string
+  /** Header the gateway sets, replacing whatever the sandbox sent. */
+  header: string
+  /** Prepended to the value, for example `"Bearer "`. */
+  valuePrefix?: string
+  /** The real value. Never logged and never visible inside the sandbox. */
+  value: string
+}
 /**
  * Public types for `@alienplatform/bindings`: the app-facing resource handle
  * interfaces and their operation option/result shapes. These mirror the Rust
@@ -654,6 +681,14 @@ export interface Sandbox {
    * `smtp.example.com:587`); `internet` and portless targets exclude them.
    */
   updateEgress(sandboxId: string, egress: EgressPolicy): Promise<void>
+  /**
+   * Replaces the sandbox's credential rules. The egress gateway sets each rule's header on the
+   * sandbox's matching requests, so the sandbox only ever holds a placeholder. The list is the
+   * whole set: an empty list removes every rule. Resolves once every gateway replica holds the
+   * new set, so the sandbox's next request uses it. Call it from the code that owns the
+   * sandbox, never from inside it. Backends without a gateway refuse explicitly.
+   */
+  updateCredentials(sandboxId: string, rules: SandboxCredentialRule[]): Promise<void>
   /**
    * Lists this binding's sandboxes. Not offered on AWS or Azure, which raise rather than
    * enumerate. Reach a sandbox whose id you hold with `get`.

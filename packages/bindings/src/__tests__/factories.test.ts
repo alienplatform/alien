@@ -134,6 +134,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
       throw new Error("not used by this test")
     },
     updateEgress: async () => {},
+    updateCredentials: async () => {},
     capabilities: () => ["reconnect"],
     sessionCapabilities: async () => ["reconnect"],
     create: async sandboxId => ({ sandboxId: sandboxId ?? "s1", state: "running", generation: 1 }),

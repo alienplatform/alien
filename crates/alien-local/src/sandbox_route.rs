@@ -412,6 +412,10 @@ impl SandboxRoute {
             )
             .route("/v1/sessions/{session_id}/preview", get(preview))
             .route(
+                "/v1/sessions/{session_id}/credentials",
+                axum::routing::put(update_credentials),
+            )
+            .route(
                 "/v1/sessions/{session_id}/interactive",
                 post(interactive_start),
             )
@@ -919,6 +923,32 @@ async fn preview(
         endpoint,
         allowed_ports: vec![query.port],
     }))
+}
+
+/// Replaces a session's credential rules. The body is parsed with fixed error text: a parser's
+/// message could repeat part of a value.
+async fn update_credentials(
+    State(state): State<RouteState>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> std::result::Result<StatusCode, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let rules: Vec<alien_core::SandboxCredentialRule> =
+        serde_json::from_slice(&body).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "the body must be a JSON array of credential rules".to_string(),
+            )
+        })?;
+    alien_core::validate_sandbox_credentials(&rules)
+        .map_err(|reason| (StatusCode::BAD_REQUEST, reason))?;
+    state
+        .manager
+        .update_credentials(&state.sandbox, &session_id, &rules)
+        .await
+        .map_err(failed)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn terminate(

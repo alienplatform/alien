@@ -629,6 +629,28 @@ impl Sandbox for LocalSandbox {
         Err(self.unsupported("jobs"))
     }
 
+    /// The session's gateway holds the rules; the local manager forwards them and answers once
+    /// the gateway acknowledged.
+    async fn update_credentials(
+        &self,
+        sandbox_id: &str,
+        rules: Vec<alien_core::SandboxCredentialRule>,
+    ) -> Result<()> {
+        super::egress::validate_credentials(&rules)?;
+        if matches!(self.egress, Some(alien_core::SandboxEgress::None)) {
+            return Err(super::egress::unsupported("update_credentials"));
+        }
+        let body: Vec<serde_json::Value> = rules.iter().map(|rule| rule.to_wire()).collect();
+        self.request(
+            self.client
+                .put(self.url(&format!("/v1/sessions/{sandbox_id}/credentials")))
+                .json(&body),
+            "sandbox.updateCredentials",
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
         self.request(
             self.client

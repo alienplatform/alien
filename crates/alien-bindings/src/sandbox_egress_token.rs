@@ -261,31 +261,7 @@ impl EgressTokenIssuer {
         rules: &[alien_core::SandboxCredentialRule],
     ) -> Result<String> {
         validate_identity(audience, sandbox_id)?;
-        let rules: Vec<serde_json::Value> = rules
-            .iter()
-            .map(|rule| {
-                let mut value = serde_json::json!({
-                    "header": rule.header,
-                    "value": rule.value.expose(),
-                });
-                for (name, field) in [
-                    ("host", rule.host.clone().map(serde_json::Value::from)),
-                    ("link", rule.link.clone().map(serde_json::Value::from)),
-                    ("port", rule.port.map(serde_json::Value::from)),
-                    ("method", rule.method.clone().map(serde_json::Value::from)),
-                    ("path", rule.path.clone().map(serde_json::Value::from)),
-                    (
-                        "valuePrefix",
-                        rule.value_prefix.clone().map(serde_json::Value::from),
-                    ),
-                ] {
-                    if let Some(field) = field {
-                        value[name] = field;
-                    }
-                }
-                value
-            })
-            .collect();
+        let rules: Vec<serde_json::Value> = rules.iter().map(|rule| rule.to_wire()).collect();
         let claims =
             serde_json::json!({"v":1,"aud":audience,"sub":sandbox_id,"ver":version,"rules":rules});
         self.sign("alien-egress-credentials", &claims)
