@@ -208,7 +208,7 @@ pub async fn prompt_workspace(http: &crate::auth::AuthHttp, json_mode: bool) -> 
     choose_workspace(http, None, InteractionMode::current(json_mode)).await
 }
 
-/// Picks the workspace after a sign-in. Without a terminal there is nobody to ask, so the
+/// Picks the workspace to use. Without a terminal there is nobody to ask, so the
 /// workspace saved before the sign-in (`previous`) is kept while the user is still a member.
 pub async fn choose_workspace(
     http: &crate::auth::AuthHttp,

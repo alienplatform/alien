@@ -339,6 +339,15 @@ mod oauth_flow {
             })
         }
 
+        /// Store a login response as it came: a response without a refresh token must not
+        /// inherit the previous session's.
+        fn save_login(&self, t: &TokenResponse) -> Result<()> {
+            self.save(&StoredTokens {
+                access_token: t.access_token.clone(),
+                refresh_token: t.refresh_token.clone(),
+            })
+        }
+
         fn clear(&self) -> Result<()> {
             match fs::remove_file(&self.path) {
                 Ok(()) => Ok(()),
@@ -403,13 +412,12 @@ mod oauth_flow {
             return Ok(build_auth_http(client, base_url, Some(api_key)));
         }
 
-        // The old session stays while waiting for the browser, so a login that fails or is
-        // interrupted during the wait leaves the user signed in. It is cleared before the new
-        // tokens are stored because `save_response` keeps the refresh token already on disk
-        // when a response carries none, and that would be the previous account's.
+        // The old session stays during the browser wait, so a failed or interrupted login
+        // leaves the user signed in. The login response replaces the saved session as it came.
+        let store = TokenStore::new()?;
         let tokens = login_with_ui(&base_url, opts.no_browser).await?;
-        logout()?;
-        store_tokens(&tokens)?;
+        store.save_login(&tokens)?;
+        remove_profile()?;
         let auth_value = format!("Bearer {}", tokens.access_token);
         let client = client_with_header(&auth_value)?;
         Ok(build_auth_http(client, base_url, Some(tokens.access_token)))
@@ -418,6 +426,11 @@ mod oauth_flow {
     /// Explicit logout util
     pub fn logout() -> Result<()> {
         TokenStore::new()?.clear()?;
+        remove_profile()
+    }
+
+    /// Remove the saved workspace profile.
+    fn remove_profile() -> Result<()> {
         match fs::remove_file(cfg_path()) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -951,6 +964,29 @@ mod oauth_flow {
                 .expect("session should exist");
             assert_eq!(loaded.access_token, "access-2");
             assert_eq!(loaded.refresh_token.as_deref(), Some("refresh-1"));
+        }
+
+        #[test]
+        fn save_login_does_not_inherit_previous_refresh_token() {
+            let (_dir, store) = temp_store();
+            store
+                .save(&StoredTokens {
+                    access_token: "old-access".to_string(),
+                    refresh_token: Some("old-refresh".to_string()),
+                })
+                .expect("seed session");
+
+            store
+                .save_login(&TokenResponse {
+                    access_token: "new-access".to_string(),
+                    refresh_token: None,
+                    expires_in: Some(3600),
+                })
+                .expect("save_login should succeed");
+
+            let loaded = store.load().expect("load").expect("session should exist");
+            assert_eq!(loaded.access_token, "new-access");
+            assert_eq!(loaded.refresh_token, None);
         }
 
         #[test]
