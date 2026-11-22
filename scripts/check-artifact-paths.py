@@ -35,11 +35,28 @@ PATH_PATTERNS = [
 ]
 
 
+# Whole-checkout or home-directory paths include every file below them.
+BROAD_PATHS = {"", "*", "**", "~", "$home", "${{ github.workspace }}", "$github_workspace"}
+
+
+def is_broad(entry):
+    text = entry.replace("\\", "/").lower()
+    while text.startswith("./"):
+        text = text[2:]
+    text = text.rstrip("/")
+    if text == ".":
+        text = ""
+    return text in BROAD_PATHS or text.removesuffix("/**").removesuffix("/*") in BROAD_PATHS
+
+
 def path_findings(value):
     found = []
     for raw in str(value).splitlines():
         entry = raw.strip()
         if not entry or entry.startswith("!"):
+            continue
+        if is_broad(entry):
+            found.append(f"path `{entry}` includes the whole checkout or home directory")
             continue
         for part in entry.replace("\\", "/").split("/"):
             for pattern in PATH_PATTERNS:

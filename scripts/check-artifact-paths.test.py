@@ -98,6 +98,14 @@ class ArtifactPathsTest(unittest.TestCase):
                 self.write(".github/workflows/a.yml", step("actions/upload-artifact@v4", f"'{bad}'"))
                 self.assertEqual(self.run_check().returncode, 1)
 
+    def test_broad_paths_fail(self):
+        for bad in [".", "./", "'*'", "'**'", "~", "~/", "./**", "${{ github.workspace }}", "${{ github.workspace }}/**"]:
+            with self.subTest(bad=bad):
+                self.write(".github/workflows/a.yml", step("actions/cache@v4", f"\"{bad}\"" if "'" not in bad else bad))
+                result = self.run_check()
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("whole checkout or home directory", result.stdout)
+
     def test_negated_and_plain_paths_pass(self):
         self.write(".github/workflows/a.yml", step("actions/cache@v4", "|\n            dist/\n            !dist/.env\n            node_modules"))
         self.assertEqual(self.run_check().returncode, 0)
