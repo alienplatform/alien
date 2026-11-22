@@ -106,7 +106,7 @@ fn aws_resolver(external_id: Option<&str>) -> ImpersonationCredentialResolver {
         credentials: AwsCredentials::AccessKeys {
             access_key_id: env("AWS_MANAGEMENT_ACCESS_KEY_ID"),
             secret_access_key: env("AWS_MANAGEMENT_SECRET_ACCESS_KEY"),
-            session_token: None,
+            session_token: std::env::var("AWS_MANAGEMENT_SESSION_TOKEN").ok(),
         },
         service_overrides: None,
     }));

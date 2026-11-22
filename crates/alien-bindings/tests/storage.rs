@@ -241,6 +241,9 @@ impl AsyncTestContext for AwsProviderTestContext {
             "AWS_SECRET_ACCESS_KEY".to_string(),
             env::var("AWS_MANAGEMENT_SECRET_ACCESS_KEY").unwrap(),
         );
+        if let Ok(token) = env::var("AWS_MANAGEMENT_SESSION_TOKEN") {
+            env_map.insert("AWS_SESSION_TOKEN".to_string(), token);
+        }
         env_map.insert(
             "AWS_ACCOUNT_ID".to_string(),
             env::var("AWS_MANAGEMENT_ACCOUNT_ID").unwrap(),
@@ -289,18 +292,15 @@ impl AsyncTestContext for GcpProviderTestContext {
         let binding_name = "test-gcp-storage";
         let bucket = env::var("ALIEN_TEST_GCP_GCS_BUCKET")
             .expect("ALIEN_TEST_GCP_GCS_BUCKET must be set in .env.test");
-        let service_account_key_json = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
-            .expect("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY must be set in .env.test");
         let gcp_region = env::var("GOOGLE_MANAGEMENT_REGION")
             .expect("GOOGLE_MANAGEMENT_REGION must be set in .env.test");
 
         let binding = StorageBinding::gcs(bucket);
 
         let mut env_map: HashMap<String, String> = HashMap::new();
-        env_map.insert(
-            "GOOGLE_SERVICE_ACCOUNT_KEY".to_string(),
-            service_account_key_json,
-        );
+        env_map.extend(alien_gcp_clients::live_test::live_test_provider_env(
+            "MANAGEMENT",
+        ));
         env_map.insert("GCP_REGION".to_string(), gcp_region);
         env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "gcp".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
@@ -352,18 +352,9 @@ impl AsyncTestContext for AzureProviderTestContext {
         let binding = StorageBinding::blob(storage_account, container);
 
         let mut env_map: HashMap<String, String> = HashMap::new();
-        env_map.insert(
-            "AZURE_TENANT_ID".to_string(),
-            env::var("AZURE_MANAGEMENT_TENANT_ID").unwrap(),
-        );
-        env_map.insert(
-            "AZURE_CLIENT_ID".to_string(),
-            env::var("AZURE_MANAGEMENT_CLIENT_ID").unwrap(),
-        );
-        env_map.insert(
-            "AZURE_CLIENT_SECRET".to_string(),
-            env::var("AZURE_MANAGEMENT_CLIENT_SECRET").unwrap(),
-        );
+        env_map.extend(alien_azure_clients::live_test::live_test_provider_env(
+            "MANAGEMENT",
+        ));
         env_map.insert(
             "AZURE_SUBSCRIPTION_ID".to_string(),
             env::var("AZURE_MANAGEMENT_SUBSCRIPTION_ID").unwrap(),

@@ -11,16 +11,17 @@ Then it terminates it from another process and checks `get(key)` and the list ar
 
     pip install alienplatform           # or the wheel built from the branch
     GCP_PROJECT=... GCP_REGION=... GCP_ENGINE=<engine id> GCP_TEMPLATE=<template id> \\
-    GOOGLE_SERVICE_ACCOUNT_KEY_FILE=<path to a service account key> \\
+    GOOGLE_APPLICATION_CREDENTIALS=<federation or impersonation file; optional on a laptop with ADC> \\
       python3 gcp_sandbox_key_race.py --callers 3 --rounds 20 --parallel 2 --out race.jsonl
 
-The engine and template must already exist (an image that carries the agent). The service account
-needs the Agent Platform sandbox permissions on the engine. Nothing secret is printed; results are
+The engine and template must already exist (an image that carries the agent). Credentials come from
+Application Default Credentials (`gcloud auth application-default login --impersonate-service-account=<email>`
+on a laptop); no key file. The identity needs the Agent Platform sandbox permissions on the engine. Nothing secret is printed; results are
 one JSON line per round with a hash of the key.
 """
 import argparse, asyncio, base64, concurrent.futures as cf, hashlib, json, os, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
 
-REQUIRED = ["GCP_PROJECT", "GCP_REGION", "GCP_ENGINE", "GCP_TEMPLATE", "GOOGLE_SERVICE_ACCOUNT_KEY_FILE"]
+REQUIRED = ["GCP_PROJECT", "GCP_REGION", "GCP_ENGINE", "GCP_TEMPLATE"]
 DEAD = ("STATE_DELETING", "STATE_DELETED", "STATE_TERMINATED", "STATE_STOPPED", "STATE_FAILED")
 
 
@@ -35,7 +36,6 @@ def cfg():
 async def worker(cmd, arg, barrier):
     engine, template = cfg()
     os.environ["ALIEN_DEPLOYMENT_TYPE"] = "gcp"
-    os.environ["GOOGLE_SERVICE_ACCOUNT_KEY"] = open(os.environ["GOOGLE_SERVICE_ACCOUNT_KEY_FILE"]).read()
     os.environ["ALIEN_SBX_BINDING"] = json.dumps({
         "service": "sandbox-gcp-agent-platform", "engine": engine, "template": template,
         "region": os.environ["GCP_REGION"], "egress": "none"})
@@ -79,22 +79,9 @@ def output(proc):
 
 
 def token():
-    import tempfile
-    k = json.load(open(os.environ["GOOGLE_SERVICE_ACCOUNT_KEY_FILE"]))
-    b = lambda x: base64.urlsafe_b64encode(x).rstrip(b"=")
-    now = int(time.time())
-    head = b(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
-    claims = b(json.dumps({"iss": k["client_email"], "scope": "https://www.googleapis.com/auth/cloud-platform",
-                           "aud": "https://oauth2.googleapis.com/token", "iat": now, "exp": now + 3000}).encode())
-    with tempfile.NamedTemporaryFile("w", delete=False) as f:
-        f.write(k["private_key"])
-    try:
-        sig = subprocess.run(["openssl", "dgst", "-sha256", "-sign", f.name], input=head + b"." + claims, capture_output=True, check=True).stdout
-    finally:
-        os.unlink(f.name)
-    body = urllib.parse.urlencode({"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-                                   "assertion": (head + b"." + claims + b"." + b(sig)).decode()}).encode()
-    return json.load(urllib.request.urlopen(urllib.request.Request("https://oauth2.googleapis.com/token", body)))["access_token"]
+    """An access token from Application Default Credentials."""
+    return subprocess.run(["gcloud", "auth", "application-default", "print-access-token"],
+                          capture_output=True, text=True, check=True).stdout.strip()
 
 
 def listed(tok, key):

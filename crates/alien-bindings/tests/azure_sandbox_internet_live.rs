@@ -7,8 +7,8 @@
 //! environment. Everything comes from the environment; nothing is hardcoded.
 //!
 //! Env (all required unless marked optional):
-//! - `AZURE_TARGET_SUBSCRIPTION_ID`, `AZURE_TARGET_TENANT_ID`, `AZURE_TARGET_CLIENT_ID`,
-//!   `AZURE_TARGET_CLIENT_SECRET`: the identity holding the sandbox-group data-plane role and
+//! - `AZURE_TARGET_SUBSCRIPTION_ID`, `AZURE_TARGET_TENANT_ID`, `AZURE_TARGET_CLIENT_ID`
+//!   (plus the federated token file in CI, `az login` locally): the identity holding the sandbox-group data-plane role and
 //!   Key Vault secret read on the deployment vault.
 //! - `AZURE_RESOURCE_GROUP`, `AZURE_SANDBOX_REGION`, `AZURE_INTERNET_VAULT_NAME`.
 //! - `AZURE_INTERNET_GATEWAY_BINDING`: the `sandbox-egress-gateway` Container binding its own controller published.
@@ -212,27 +212,12 @@ fn allow(hosts: &[&str]) -> EgressPolicy {
     }
 }
 
-async fn arm_token(tenant: &str, client: &str, secret: &str) -> String {
-    let response: serde_json::Value = reqwest::Client::new()
-        .post(format!(
-            "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
-        ))
-        .form(&[
-            ("grant_type", "client_credentials"),
-            ("client_id", client),
-            ("client_secret", secret),
-            ("scope", "https://management.azure.com/.default"),
-        ])
-        .send()
+async fn arm_token() -> String {
+    let cfg = alien_azure_clients::live_test::live_test_config("TARGET");
+    alien_azure_clients::AzureTokenCache::new(cfg)
+        .get_bearer_token_with_scope("https://management.azure.com/.default")
         .await
-        .expect("token request")
-        .json()
-        .await
-        .expect("token body");
-    response["access_token"]
-        .as_str()
-        .unwrap_or_else(|| panic!("no ARM token: {response}"))
-        .to_string()
+        .expect("ARM token for the target identity")
 }
 
 #[tokio::test]
@@ -242,9 +227,6 @@ async fn live_internet_proof() {
     // AZURE_INTERNET_ONLY=a,c,g3 runs only those sections (empty: all). Create, a and c always run.
     let only = std::env::var("AZURE_INTERNET_ONLY").unwrap_or_default();
     let sel = |name: &str| only.is_empty() || only.split(',').any(|part| part.trim() == name);
-    let tenant = env("AZURE_TARGET_TENANT_ID");
-    let client_id = env("AZURE_TARGET_CLIENT_ID");
-    let client_secret = env("AZURE_TARGET_CLIENT_SECRET");
     let gateway_ips = list("AZURE_INTERNET_GATEWAY_IPS");
     let gateway_vms = list("AZURE_INTERNET_GATEWAY_VMS");
     assert!(gateway_ips.len() >= 2, "two gateway replicas are required");
@@ -426,7 +408,7 @@ async fn live_internet_proof() {
         }
         // (g) restart a gateway VM: a write during the restart is not silently dropped, and the
         // restarted replica comes back holding the policy its peer holds.
-        let token = arm_token(&tenant, &client_id, &client_secret).await;
+        let token = arm_token().await;
         if sel("g") {
         // (g2) a sandbox that is deleted while a replica is away leaves no grant on either replica.
         // Its own proxy credentials are read inside it (never logged), then replayed from the subject.

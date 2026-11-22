@@ -132,7 +132,7 @@ impl AsyncTestContext for CodeBuildTestContext {
             credentials: alien_aws_clients::AwsCredentials::AccessKeys {
                 access_key_id: access_key,
                 secret_access_key: secret_key,
-                session_token: std::env::var("AWS_SESSION_TOKEN").ok(),
+                session_token: std::env::var("AWS_MANAGEMENT_SESSION_TOKEN").ok(),
             },
             service_overrides: None,
         };

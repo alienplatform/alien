@@ -168,6 +168,9 @@ impl AsyncTestContext for AwsProviderTestContext {
             "AWS_SECRET_ACCESS_KEY".to_string(),
             env::var("AWS_MANAGEMENT_SECRET_ACCESS_KEY").unwrap(),
         );
+        if let Ok(token) = env::var("AWS_MANAGEMENT_SESSION_TOKEN") {
+            env_map.insert("AWS_SESSION_TOKEN".to_string(), token);
+        }
         env_map.insert(
             "AWS_ACCOUNT_ID".to_string(),
             env::var("AWS_MANAGEMENT_ACCOUNT_ID").unwrap(),
@@ -233,16 +236,13 @@ impl AsyncTestContext for GcpProviderTestContext {
 
         let binding = VaultBinding::secret_manager(test_vault_name.clone());
 
-        let service_account_key_json = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
-            .expect("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY must be set in .env.test");
         // Using global Secret Manager, no specific region needed
         let gcp_region = env::var("GOOGLE_MANAGEMENT_REGION").unwrap_or_else(|_| "".to_string());
 
         let mut env_map: HashMap<String, String> = HashMap::new();
-        env_map.insert(
-            "GOOGLE_SERVICE_ACCOUNT_KEY".to_string(),
-            service_account_key_json,
-        );
+        env_map.extend(alien_gcp_clients::live_test::live_test_provider_env(
+            "MANAGEMENT",
+        ));
         env_map.insert("GCP_REGION".to_string(), gcp_region);
         env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "gcp".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
@@ -309,12 +309,6 @@ impl AsyncTestContext for AzureProviderTestContext {
         // Get Azure configuration from environment
         let subscription_id = env::var("AZURE_MANAGEMENT_SUBSCRIPTION_ID")
             .expect("AZURE_MANAGEMENT_SUBSCRIPTION_ID not set");
-        let tenant_id =
-            env::var("AZURE_MANAGEMENT_TENANT_ID").expect("AZURE_MANAGEMENT_TENANT_ID not set");
-        let client_id =
-            env::var("AZURE_MANAGEMENT_CLIENT_ID").expect("AZURE_MANAGEMENT_CLIENT_ID not set");
-        let client_secret = env::var("AZURE_MANAGEMENT_CLIENT_SECRET")
-            .expect("AZURE_MANAGEMENT_CLIENT_SECRET not set");
         let resource_group_name = env::var("ALIEN_TEST_AZURE_RESOURCE_GROUP")
             .expect("ALIEN_TEST_AZURE_RESOURCE_GROUP not set");
 
@@ -359,9 +353,9 @@ impl AsyncTestContext for AzureProviderTestContext {
         let binding = VaultBinding::key_vault(test_vault_name.clone());
 
         let mut env_map: HashMap<String, String> = HashMap::new();
-        env_map.insert("AZURE_TENANT_ID".to_string(), tenant_id.clone());
-        env_map.insert("AZURE_CLIENT_ID".to_string(), client_id.clone());
-        env_map.insert("AZURE_CLIENT_SECRET".to_string(), client_secret.clone());
+        env_map.extend(alien_azure_clients::live_test::live_test_provider_env(
+            "MANAGEMENT",
+        ));
         env_map.insert("AZURE_SUBSCRIPTION_ID".to_string(), subscription_id.clone());
         env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "azure".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");

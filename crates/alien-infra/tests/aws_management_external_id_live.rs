@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! export ALIEN_EXTERNAL_ID_LIVE_TEST=1 \
-//!        AWS_MANAGEMENT_ACCESS_KEY_ID=... AWS_MANAGEMENT_SECRET_ACCESS_KEY=... \
+//!        AWS_MANAGEMENT_ACCESS_KEY_ID=... AWS_MANAGEMENT_SECRET_ACCESS_KEY=... AWS_MANAGEMENT_SESSION_TOKEN=... \
 //!        AWS_MANAGEMENT_ROLE_ARN=... AWS_TARGET_ACCOUNT_ID=... AWS_TARGET_REGION=... \
 //!        ALIEN_EXTERNAL_ID_LIVE_ROLE_ARN=<the stack's management role> \
 //!        ALIEN_EXTERNAL_ID_LIVE_VALUE=<the ManagementExternalId value> \
@@ -83,7 +83,7 @@ async fn manager_handoff_sends_the_external_id_to_a_real_management_role() {
         credentials: AwsCredentials::AccessKeys {
             access_key_id: env("AWS_MANAGEMENT_ACCESS_KEY_ID"),
             secret_access_key: env("AWS_MANAGEMENT_SECRET_ACCESS_KEY"),
-            session_token: None,
+            session_token: std::env::var("AWS_MANAGEMENT_SESSION_TOKEN").ok(),
         },
         service_overrides: None,
     }
