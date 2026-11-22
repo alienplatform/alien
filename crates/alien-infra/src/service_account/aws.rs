@@ -840,8 +840,9 @@ impl AwsServiceAccountController {
         ctx.aws_permissions_boundary_arn()
     }
 
-    /// Removes the deployment boundary that earlier direct setups attached to the gateway role.
-    /// Runs only with setup credentials: management may not change an unbounded role.
+    /// Brings a gateway role an earlier direct setup created to the template setups' shape: the
+    /// deployment boundary removed and the role tagged `managed-by=setup`, which management
+    /// cannot adopt. Runs only with setup credentials: management may not change this role.
     async fn release_gateway_role_boundary(
         ctx: &ResourceControllerContext<'_>,
         client: &dyn IamApi,
@@ -854,7 +855,7 @@ impl AwsServiceAccountController {
         let Some(deployment_boundary) = ctx.aws_permissions_boundary_arn()? else {
             return Ok(());
         };
-        let attached = client
+        let role = client
             .get_role(role_name)
             .await
             .context(ErrorData::CloudPlatformError {
@@ -862,7 +863,36 @@ impl AwsServiceAccountController {
                 resource_id: Some(config.id.clone()),
             })?
             .get_role_result
-            .role
+            .role;
+        let setup_tags = alien_core::setup_resource_tags(
+            ctx.resource_prefix,
+            &config.id,
+            ServiceAccount::RESOURCE_TYPE.as_ref(),
+        );
+        let tagged_for_setup = role.tags.as_ref().is_some_and(|tags| {
+            setup_tags.iter().all(|(key, value)| {
+                tags.member
+                    .iter()
+                    .any(|tag| &tag.key == key && &tag.value == value)
+            })
+        });
+        if !tagged_for_setup {
+            info!(role_name = %role_name, "Tagging the sandbox gateway role as setup-managed");
+            client
+                .tag_role(
+                    role_name,
+                    setup_tags
+                        .into_iter()
+                        .map(|(key, value)| CreateRoleTag { key, value })
+                        .collect(),
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to tag IAM role '{role_name}'"),
+                    resource_id: Some(config.id.clone()),
+                })?;
+        }
+        let attached = role
             .permissions_boundary
             .and_then(|boundary| boundary.permissions_boundary_arn);
         if attached.as_deref() != Some(deployment_boundary.as_str()) {
@@ -2026,6 +2056,16 @@ mod tests {
                         serde_json::json!({"GetRoleResult": {"Role": gateway_role(attached)}}),
                     )
                     .unwrap())
+                });
+            iam.expect_tag_role()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|name, tags| {
+                    assert_eq!(name, "test-sandbox-egress-gateway-sa");
+                    assert!(tags
+                        .iter()
+                        .any(|tag| tag.key == "managed-by" && tag.value == "setup"));
+                    Ok(())
                 });
             iam.expect_delete_role_permissions_boundary()
                 .times(usize::from(attached.is_some()))
