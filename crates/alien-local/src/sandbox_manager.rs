@@ -76,9 +76,8 @@ pub struct SandboxSessionConfig {
     /// Environment placed in the session
     pub env: HashMap<String, String>,
     /// Services of the deployment the session reaches through the sandbox's egress gateway.
-    /// Empty, the session gets the sandbox's shared network as before. Otherwise (with
-    /// `Allow`) it sits alone on its own internal network with the gateway, which is its only
-    /// way out.
+    /// With `Allow`, the session sits alone on its own internal network with the gateway, which
+    /// is its only way out; these are the services it can reach through it.
     pub links: Vec<SandboxLink>,
 }
 
@@ -217,12 +216,10 @@ impl LocalSandboxManager {
         let image = crate::sandbox_identity::inspect(&self.docker, &config.image, sandbox).await?;
 
         // Every session that reaches anything goes through the sandbox's gateway, links or not,
-        // so its policy and credential rules apply as on the cloud platforms. The one exception
-        // is a sandbox with preview ports and no links: Docker publishes no port of a container
-        // whose only network is internal, so its sessions keep the shared network and run
-        // without a gateway (no policy, no credential rules), as before.
-        let linked = config.egress == SandboxEgressMode::Allow
-            && (!config.links.is_empty() || config.preview_ports.is_empty());
+        // so its policy and credential rules apply as on the cloud platforms. A session's
+        // preview ports are published by a relay container beside it (see
+        // `start_preview_relays`), because Docker publishes nothing from an internal network.
+        let linked = config.egress == SandboxEgressMode::Allow;
         let created = async {
             let session_egress = if linked {
                 let gateway = self.gateway(sandbox, &config.links).await?;
@@ -319,8 +316,12 @@ impl LocalSandboxManager {
 
         // Bound to 127.0.0.1, never 0.0.0.0: a preview is for the developer's own machine, and
         // publishing on all interfaces would expose untrusted code to the local network.
-        let port_bindings: HashMap<String, Option<Vec<PortBinding>>> = config
-            .preview_ports
+        let direct_preview_ports: &[u16] = if session_egress.is_some() {
+            &[]
+        } else {
+            &config.preview_ports
+        };
+        let port_bindings: HashMap<String, Option<Vec<PortBinding>>> = direct_preview_ports
             .iter()
             .map(|port| {
                 (
@@ -333,8 +334,7 @@ impl LocalSandboxManager {
             })
             .collect();
 
-        let exposed_ports: Vec<String> = config
-            .preview_ports
+        let exposed_ports: Vec<String> = direct_preview_ports
             .iter()
             .map(|port| format!("{port}/tcp"))
             .collect();
@@ -448,6 +448,34 @@ impl LocalSandboxManager {
                 operation: "start".to_string(),
             })?;
 
+        if let Some(egress) = &session_egress {
+            if let Err(error) = crate::sandbox_gateway::start_preview_relays(
+                &self.docker,
+                &self.gateway_image,
+                session_id,
+                &name,
+                &egress.network,
+                &config.preview_ports,
+            )
+            .await
+            {
+                let _ = crate::sandbox_gateway::remove_preview_relays(&self.docker, session_id, &name)
+                    .await;
+                let _ = self
+                    .docker
+                    .remove_container(
+                        &created.id,
+                        Some(RemoveContainerOptions {
+                            force: true,
+                            v: true,
+                            ..Default::default()
+                        }),
+                    )
+                    .await;
+                return Err(error);
+            }
+        }
+
         Ok(SandboxSessionHandle {
             session_id: session_id.to_string(),
             container_id: created.id,
@@ -526,9 +554,7 @@ impl LocalSandboxManager {
                     session_id: session_id.to_string(),
                     operation: "update credentials: this sandbox runs no egress gateway in \
                                 alien dev. A sandbox with egress `none` reaches nothing to put a \
-                                credential on, and one that declares preview ports without \
-                                links runs on a shared network, because Docker cannot publish a \
-                                preview port from the isolated network a gateway needs"
+                                credential on"
                         .to_string(),
                 })
             })?;
@@ -999,14 +1025,30 @@ impl LocalSandboxManager {
                 operation: "inspect for preview".to_string(),
             })?;
 
-        let host_port = inspected
-            .network_settings
-            .and_then(|settings| settings.ports)
-            .and_then(|ports| ports.get(&format!("{port}/tcp")).cloned().flatten())
-            .and_then(|bindings| {
-                bindings
-                    .first()
-                    .and_then(|binding| binding.host_port.clone())
+        // A session behind the gateway is previewed through its relay; any other publishes the
+        // port itself.
+        let relayed = match inspected.name.as_deref() {
+            Some(name) => {
+                crate::sandbox_gateway::preview_host_port(
+                    &self.docker,
+                    name.trim_start_matches('/'),
+                    port,
+                )
+                .await
+            }
+            None => None,
+        };
+        let host_port = relayed
+            .or_else(|| {
+                inspected
+                    .network_settings
+                    .and_then(|settings| settings.ports)
+                    .and_then(|ports| ports.get(&format!("{port}/tcp")).cloned().flatten())
+                    .and_then(|bindings| {
+                        bindings
+                            .first()
+                            .and_then(|binding| binding.host_port.clone())
+                    })
             })
             .ok_or_else(|| {
                 AlienError::new(ErrorData::SandboxSessionFailed {
@@ -1086,6 +1128,7 @@ impl LocalSandboxManager {
                     })
             }
         }
+        crate::sandbox_gateway::remove_preview_relays(&self.docker, session_id, &name).await?;
         // A session behind the gateway had its own network and CA; its policy, credential rules,
         // network and CA go with it. Nothing to do for any other session.
         let _ = tokio::fs::remove_dir_all(self.ca_directory(&name)).await;

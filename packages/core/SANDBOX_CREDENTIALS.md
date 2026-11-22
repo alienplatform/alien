@@ -133,7 +133,7 @@ In `alien dev` every sandbox whose egress is not `none` runs behind its own gate
 without links, so policies and credential rules behave as they do in the cloud. The CA and the
 trust bundle are mounted read-only at `/etc/alien-egress` in each session. Each running session
 has its own Docker network, so the daemon's address pools bound how many sessions run at once
-(about 30 with Docker's defaults; widen `default-address-pools` for more). A sandbox that
-declares preview ports and no links keeps its shared network and runs without a gateway,
-because Docker cannot publish a port from the isolated network the gateway needs; it refuses
-`updateCredentials`.
+(about 30 with Docker's defaults; widen `default-address-pools` for more). Declared preview ports are
+published on `127.0.0.1` by a small relay container beside each session. It sits on the
+session's network, only forwards inbound connections to that one port, and gives the session no
+route out; it is removed with the session.

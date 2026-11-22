@@ -110,7 +110,7 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                 if sandbox.egress == SandboxEgress::Internet
                     && !matches!(
                         platform,
-                        Platform::Aws | Platform::Kubernetes | Platform::Azure | Platform::Gcp
+                        Platform::Aws | Platform::Kubernetes | Platform::Azure | Platform::Gcp | Platform::Local
                     )
                 {
                     return Some(format!(

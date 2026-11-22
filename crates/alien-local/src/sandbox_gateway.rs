@@ -597,6 +597,151 @@ async fn remove_network(docker: &Docker, network: &str, session_id: &str) -> Res
     }
 }
 
+/// Label on a preview relay container: the session container it forwards to.
+const LABEL_PREVIEW_RELAY: &str = "dev.alien.sandbox.preview-relay";
+
+fn relay_name(container: &str, port: u16) -> String {
+    format!("{container}-preview-{port}")
+}
+
+/// Starts one relay per declared preview port for a session on an internal network. Docker
+/// publishes no port of a container whose only network is internal, so the relay is created on
+/// the shared network (which publishes the port on loopback) and then joins the session's
+/// network, where it reaches the session by name. It forwards inbound connections to the one
+/// port and nothing else: it gives the session no route out, and the session's own network
+/// stays internal.
+pub(crate) async fn start_preview_relays(
+    docker: &Docker,
+    image: &str,
+    session_id: &str,
+    container: &str,
+    session_network: &str,
+    ports: &[u16],
+) -> Result<()> {
+    for port in ports {
+        let name = relay_name(container, *port);
+        let key = format!("{port}/tcp");
+        let created = docker
+            .create_container(
+                Some(CreateContainerOptions {
+                    name: Some(name.clone()),
+                    ..Default::default()
+                }),
+                ContainerCreateBody {
+                    image: Some(image.to_string()),
+                    cmd: Some(vec![
+                        "--relay".to_string(),
+                        format!("0.0.0.0:{port}"),
+                        format!("{container}:{port}"),
+                    ]),
+                    labels: Some(HashMap::from([(
+                        LABEL_PREVIEW_RELAY.to_string(),
+                        container.to_string(),
+                    )])),
+                    exposed_ports: Some(vec![key.clone()]),
+                    host_config: Some(HostConfig {
+                        network_mode: Some(crate::container_manager::NETWORK_NAME.to_string()),
+                        port_bindings: Some(HashMap::from([(
+                            key,
+                            Some(vec![PortBinding {
+                                host_ip: Some("127.0.0.1".to_string()),
+                                host_port: None,
+                            }]),
+                        )])),
+                        readonly_rootfs: Some(true),
+                        cap_drop: Some(vec!["ALL".to_string()]),
+                        security_opt: Some(vec!["no-new-privileges:true".to_string()]),
+                        memory: Some(64 * 1024 * 1024),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .into_alien_error()
+            .context(failed("create the preview relay", session_id))?;
+        docker
+            .connect_network(
+                session_network,
+                NetworkConnectRequest {
+                    container: created.id.clone(),
+                    endpoint_config: None,
+                },
+            )
+            .await
+            .into_alien_error()
+            .context(failed("connect the preview relay to the session", session_id))?;
+        docker
+            .start_container(&created.id, None)
+            .await
+            .into_alien_error()
+            .context(failed("start the preview relay", session_id))?;
+    }
+    Ok(())
+}
+
+/// The loopback port a session's preview port is published on, if it has a relay for it.
+pub(crate) async fn preview_host_port(
+    docker: &Docker,
+    container: &str,
+    port: u16,
+) -> Option<String> {
+    let inspected = docker
+        .inspect_container(&relay_name(container, port), None)
+        .await
+        .ok()?;
+    inspected
+        .network_settings?
+        .ports?
+        .get(&format!("{port}/tcp"))
+        .cloned()
+        .flatten()?
+        .first()?
+        .host_port
+        .clone()
+}
+
+/// Removes a session's preview relays. Idempotent.
+pub(crate) async fn remove_preview_relays(
+    docker: &Docker,
+    session_id: &str,
+    container: &str,
+) -> Result<()> {
+    let relays = docker
+        .list_containers(Some(bollard::query_parameters::ListContainersOptionsBuilder::default()
+            .all(true)
+            .filters(&HashMap::from([(
+                "label".to_string(),
+                vec![format!("{LABEL_PREVIEW_RELAY}={container}")],
+            )]))
+            .build()))
+        .await
+        .into_alien_error()
+        .context(failed("list the session's preview relays", session_id))?;
+    for relay in relays {
+        let Some(id) = relay.id else { continue };
+        match docker
+            .remove_container(
+                &id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+        {
+            Ok(()) => {}
+            Err(error) if not_found(&error) => {}
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(failed("remove the preview relay", session_id))
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Removes the sandbox's gateway container. An absent one is success.
 pub(crate) async fn remove_gateway(docker: &Docker, sandbox: &str) -> Result<()> {
     match docker

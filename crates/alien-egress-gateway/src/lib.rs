@@ -26,5 +26,6 @@ pub mod token;
 mod tunnel;
 
 pub mod recovery;
+pub mod relay;
 
 pub mod memory;
