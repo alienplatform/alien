@@ -4,24 +4,24 @@
 //! shell or no `/etc/passwd` layers the same way.
 
 use crate::error::{ErrorData, Result};
-use crate::registry::{registry_failure, RegistryFailure};
-use crate::sandbox_identity::{image_command, image_layers, unreadable_file, BaseIdentity};
+use crate::registry::{RegistryFailure, registry_failure};
+use crate::sandbox_identity::{BaseIdentity, image_command, image_layers, unreadable_file};
 use crate::{
-    base_image_build_retry_delay, is_retryable_dockdash_image_pull_error,
-    BASE_IMAGE_BUILD_MAX_ATTEMPTS,
+    BASE_IMAGE_BUILD_MAX_ATTEMPTS, base_image_build_retry_delay,
+    is_retryable_dockdash_image_pull_error,
 };
 use alien_core::presigned::redact_url_for_error;
 use alien_core::sandbox_image::{
-    SandboxImage, AGENT_MODE, AGENT_PATH, AZURE_SANDBOX, GCP_AGENT_PLATFORM, IMAGE_COMMAND_PATH,
-    SESSION_ROOT_MODE,
+    AGENT_MODE, AGENT_PATH, AZURE_SANDBOX, GCP_AGENT_PLATFORM, IMAGE_COMMAND_PATH,
+    SESSION_ROOT_MODE, SandboxImage,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use dockdash::{
     Arch, BlobCache, BuildDiagnostics, ClientProtocol, Image, ImageBuilder, Layer, PullPolicy,
     RegistryAuth,
 };
-use oci_client::errors::{OciDistributionError, OciErrorCode};
 use oci_client::Reference;
+use oci_client::errors::{OciDistributionError, OciErrorCode};
 use std::error::Error as StdError;
 use tokio::time::sleep;
 use tracing::warn;
@@ -33,11 +33,7 @@ use tracing::warn;
 /// when it is set, so a live test proves the agent of the tree it runs from.
 pub fn sandbox_agent_image() -> String {
     #[cfg(feature = "test-sandbox-agent-image")]
-    if let Some(image) = std::env::var("ALIEN_TEST_SANDBOX_AGENT_IMAGE")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(image) = test_sandbox_agent_image() {
         return image;
     }
     format!(
@@ -46,14 +42,30 @@ pub fn sandbox_agent_image() -> String {
     )
 }
 
-/// Test builds only: an agent from `ALIEN_TEST_SANDBOX_AGENT_IMAGE` on a loopback registry (a
-/// registry the live test runs beside the build) is pulled over plain HTTP. Every other registry
-/// keeps `protocol`.
 #[cfg(feature = "test-sandbox-agent-image")]
-pub(crate) fn with_loopback_agent_registry(
+fn test_sandbox_agent_image() -> Option<String> {
+    std::env::var("ALIEN_TEST_SANDBOX_AGENT_IMAGE")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Test builds only: the agent named by `ALIEN_TEST_SANDBOX_AGENT_IMAGE`, when it is on a
+/// loopback registry (a registry the live test runs beside the build), is pulled over plain HTTP.
+/// Any other agent, also one on a loopback registry, and every other registry keep `protocol`.
+#[cfg(feature = "test-sandbox-agent-image")]
+pub(crate) fn with_test_agent_registry(
     protocol: ClientProtocol,
     agent_image: &str,
 ) -> ClientProtocol {
+    if test_sandbox_agent_image().as_deref() != Some(agent_image) {
+        return protocol;
+    }
+    with_loopback_agent_registry(protocol, agent_image)
+}
+
+#[cfg(feature = "test-sandbox-agent-image")]
+fn with_loopback_agent_registry(protocol: ClientProtocol, agent_image: &str) -> ClientProtocol {
     let Ok(reference) = Reference::try_from(agent_image) else {
         return protocol;
     };
@@ -593,8 +605,8 @@ mod loopback_agent_registry_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dockdash::test_utils::setup_local_registry;
     use dockdash::PushOptions;
+    use dockdash::test_utils::setup_local_registry;
     use httpmock::Method::GET;
     use oci_client::client::{Client, ClientConfig};
     use std::io::Read;
