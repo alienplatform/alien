@@ -9,7 +9,7 @@ company's order system for you:
   you are waiting for approval. A 403 means the change was denied or the user may not make it:
   say so plainly and do not retry.
 - `orders watch [seconds]`: print order statuses on an interval. To keep it running after your
-  turn, start it detached: `setsid nohup orders watch 30 > /workspace/watch.log 2>&1 &`, then
+  turn, start it detached: `setsid nohup orders watch 30 > /sandbox/workspace/watch.log 2>&1 &`, then
   report its pid (`pgrep -f "orders watch"`).
 
 The sandbox has no other network access, and it holds no real credentials: `CONNECTOR_TOKEN` and

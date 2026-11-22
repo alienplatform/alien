@@ -55,11 +55,30 @@ function optStr(input: Record<string, unknown>, name: string): string | undefine
   return typeof value === "string" && value !== "" ? value : undefined
 }
 
+// The image's root is read-only; a sandbox writes under /sandbox, the same on every platform.
+const WORKSPACE = "/sandbox/workspace"
+const HOME_DIR = "/sandbox/home"
+const TMP_DIR = "/sandbox/tmp"
+// A directory argument resolves against /sandbox, so the same place by its relative name.
+const WORKSPACE_DIR = "workspace"
+
+// Gives a new sandbox its working directory and its instructions file.
+async function prepareWorkspace(sandboxId: string) {
+  for await (const frame of agent.runCommand(sandboxId, "sh", {
+    args: ["-c", `mkdir -p ${WORKSPACE} ${HOME_DIR} ${TMP_DIR} && cp /opt/agent/CLAUDE.md ${WORKSPACE}/CLAUDE.md`],
+    timeoutMs: 30_000,
+  })) {
+    if (frame.kind === "exit" && frame.exitCode !== 0) throw new Error("preparing the workspace failed")
+  }
+}
+
 async function agentEnv(): Promise<Record<string, string>> {
   const modelUrl = await agent.linkUrl("model", 8080)
   const connectorUrl = await agent.linkUrl("connector", 8080)
   if (!modelUrl || !connectorUrl) throw new Error("the agent sandbox must link model and connector")
   return {
+    // Also passed with every command: a local sandbox takes its environment from the command.
+    ...PLACEHOLDER_ENV,
     ANTHROPIC_BASE_URL: modelUrl.replace(/\/$/, ""),
     CONNECTOR_URL: connectorUrl.replace(/\/$/, ""),
     ANTHROPIC_MODEL: MODEL,
@@ -67,6 +86,12 @@ async function agentEnv(): Promise<Record<string, string>> {
     ANTHROPIC_DEFAULT_HAIKU_MODEL: MODEL,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     DISABLE_AUTOUPDATER: "1",
+    HOME: HOME_DIR,
+    TMPDIR: TMP_DIR,
+    // Node's fetch (the `orders` command) sends through the sandbox's proxy only when asked.
+    NODE_USE_ENV_PROXY: "1",
+    NODE_NO_WARNINGS: "1",
+    CLAUDE_CODE_TMPDIR: TMP_DIR,
     BASH_DEFAULT_TIMEOUT_MS: BASH_TIMEOUT_MS,
     BASH_MAX_TIMEOUT_MS: BASH_TIMEOUT_MS,
   }
@@ -91,7 +116,7 @@ async function runTurn(t: ThreadEvents, sandboxId: string, sessionId: string | u
   try {
     const proc = await agent.runInteractive(sandboxId, "claude", {
       args,
-      cwd: "/workspace",
+      cwd: WORKSPACE_DIR,
       env: await agentEnv(),
       timeoutMs: TURN_TIMEOUT_MS,
     })
@@ -144,6 +169,7 @@ receiver.command("open", async input => {
     if (found && found.state !== "terminated") return { sandboxId: known, created: false, resumed: false }
   }
   const created = await agent.create({ env: PLACEHOLDER_ENV })
+  await prepareWorkspace(created.sandboxId)
   // A fresh sandbox starts a fresh conversation.
   thread(threadId).sessionId = undefined
   console.log(`thread ${threadId}: sandbox ${created.sandboxId}`)
@@ -210,7 +236,7 @@ receiver.command("exec", async input => {
   let exitCode: number | null = null
   for await (const frame of agent.runCommand(sandboxId, "sh", {
     args: ["-c", command],
-    cwd: "/workspace",
+    cwd: WORKSPACE_DIR,
     env: await agentEnv(),
     timeoutMs: 30_000,
   })) {
