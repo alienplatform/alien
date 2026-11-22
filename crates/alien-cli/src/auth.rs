@@ -756,25 +756,15 @@ mod oauth_flow {
             let _ = open::that(&auth_url_str);
         }
 
-        let spinner_frames = &['⠇', '⠏', '⠋', '⠙', '⠸', '⠴', '⠦', '⠇'];
-        let mut spinner_frame = 0;
-
-        let code = tokio::select! {
-            result = rx => result.into_alien_error().context(ErrorData::AuthenticationFailed {
+        // `Spinner` animates only in a terminal; elsewhere it prints its message once.
+        let spinner = crate::ui::Spinner::new("Waiting for authentication to be completed");
+        let code = rx.await;
+        spinner.finish_and_clear();
+        let code = code
+            .into_alien_error()
+            .context(ErrorData::AuthenticationFailed {
                 reason: "No auth code received".to_string(),
-            })?,
-            _ = async {
-                loop {
-                    print!("\r{} Waiting for authentication to be completed", spinner_frames[spinner_frame]);
-                    use std::io::{self, Write};
-                    io::stdout().flush().ok();
-                    spinner_frame = (spinner_frame + 1) % spinner_frames.len();
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-            } => unreachable!()
-        };
-
-        print!("\r                                                     \r");
+            })?;
 
         let token = exchange_code_with_pkce(base, &code, &redirect, pkce_verifier).await?;
         server_handle.abort();
