@@ -60,8 +60,8 @@ const agent = new alien.Sandbox("agent")
   .defaultPolicy({ allow: ["link:model", "link:connector"] })
   .link(model)
   .link(connector)
-  // No lifetime ceiling: local development has none to enforce, and the router pauses idle threads.
-  .lifecycle({})
+  // A thread's sandbox ends after 8 hours (the AWS ceiling); the router pauses it while idle.
+  .lifecycle({ maxLifetimeSeconds: 8 * 3600 })
   .build()
 
 const runner = new alien.Container("runner")
