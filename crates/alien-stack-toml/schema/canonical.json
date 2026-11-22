@@ -2517,6 +2517,12 @@
         "egress": {
           "$ref": "#/components/schemas/SandboxEgress"
         },
+        "gatewayLinks": {
+          "items": {
+            "$ref": "#/components/schemas/ResourceRef"
+          },
+          "type": "array"
+        },
         "id": {
           "type": "string"
         },

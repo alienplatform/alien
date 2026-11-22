@@ -1,0 +1,24 @@
+name = "acme-sandbox-links"
+platforms = ["aws", "kubernetes"]
+
+# Every sandbox of the runner reaches these services of the deployment through the egress
+# gateway, on their declared ports. Links keep the order they are written in.
+[sandbox.runner]
+lifecycle = "live"
+image = "s3://acme-bundles/runner/{region}/rootfs.tar"
+egress = "internet"
+default-policy = { allow = ["link:api"] }
+session = {}
+gateway-links = ["api", "tools"]
+
+[container.api]
+image = "ghcr.io/acme/api:1.0.0"
+cpu = 1
+memory = "1Gi"
+ports = [8080]
+
+[container.tools]
+image = "ghcr.io/acme/tools:1.0.0"
+cpu = 1
+memory = "1Gi"
+ports = [9090]
