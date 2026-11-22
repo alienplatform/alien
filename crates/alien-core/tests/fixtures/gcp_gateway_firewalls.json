@@ -1,0 +1,32 @@
+[
+  {
+    "suffix": "sbx-allow-proxy",
+    "priority": 900,
+    "action": "allow",
+    "protocol": "tcp",
+    "ports": ["22"],
+    "sources": ["attachment"],
+    "gateway_only": true,
+    "log": true
+  },
+  {
+    "suffix": "sbx-allow-admin",
+    "priority": 900,
+    "action": "allow",
+    "protocol": "tcp",
+    "ports": ["3129"],
+    "sources": ["gateway", "workload"],
+    "gateway_only": true,
+    "log": false
+  },
+  {
+    "suffix": "sbx-deny-attachment",
+    "priority": 1000,
+    "action": "deny",
+    "protocol": "all",
+    "ports": [],
+    "sources": ["attachment"],
+    "gateway_only": false,
+    "log": true
+  }
+]

@@ -374,7 +374,12 @@ mod tests {
             }
         });
 
-        let sdk_metadata: types::DeploymentDetailResponseRuntimeMetadata =
+        #[cfg(not(feature = "full-api"))]
+        type RuntimeMetadata = types::DeploymentDetailResponseRuntimeMetadata;
+        // The full SDK shares one generated type for runtime metadata.
+        #[cfg(feature = "full-api")]
+        type RuntimeMetadata = types::DeploymentStateRuntimeMetadata;
+        let sdk_metadata: RuntimeMetadata =
             serde_json::from_value(runtime_metadata).expect("runtime metadata should deserialize");
         let serialized =
             serde_json::to_value(sdk_metadata).expect("runtime metadata should serialize");

@@ -2629,6 +2629,7 @@ fn running_with_route(id: &str, expire_time: &str) -> SandboxEnvironment {
     sandbox.connection_info = Some(alien_gcp_clients::gcp::agent_platform::ConnectionInfo {
         load_balancer_hostname: Some("edge.example.test".to_string()),
         routing_token: Some("route-1".to_string()),
+        service_attachment: None,
     });
     sandbox
 }
@@ -4662,4 +4663,40 @@ async fn an_oversized_file_reply_names_paged_reads_not_the_output_budget() {
     let text = error.to_string();
     assert!(text.contains("paged reads"), "{text}");
     assert!(!text.contains("output budget"), "{text}");
+}
+
+// ---- Gateway egress ---------------------------------------------------------------------------
+
+#[test]
+fn the_proxy_variables_point_at_the_loopback_forwarder_with_the_sandbox_token() {
+    let env: std::collections::BTreeMap<_, _> = proxy_environment("tok").into_iter().collect();
+    for name in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] {
+        assert_eq!(env[name], "http://alien:tok@127.0.0.1:18128", "{name}");
+    }
+    assert_eq!(env["NO_PROXY"], "localhost,127.0.0.1");
+}
+
+#[test]
+fn the_replica_envelope_names_the_op_and_the_replicas_once() {
+    let envelope = egress_proxy_envelope(&["10.0.0.4:22".to_string(), "10.0.0.5:22".to_string()]);
+    assert_eq!(envelope["op"], "setEgressProxy");
+    assert_eq!(envelope["v"], AGENT_PROTOCOL_VERSION);
+    assert_eq!(envelope["replicas"], json!(["10.0.0.4:22", "10.0.0.5:22"]));
+}
+
+#[tokio::test]
+async fn without_a_gateway_a_command_gets_no_proxy_variables() {
+    // The fail-closed start: a provider with no gateway (egress none) adds nothing. One with a
+    // gateway adds the variables only after its own record and the agent's forwarder exist, which
+    // `create` does before it returns.
+    let provider = provider(MockAgentPlatformApi::new());
+    let request = RunCommandRequest {
+        command: "true".into(),
+        args: Vec::new(),
+        cwd: None,
+        env: BTreeMap::new(),
+        timeout: Duration::from_secs(5),
+    };
+    let out = provider.with_proxy_env("123", request).await.unwrap();
+    assert!(out.env.is_empty(), "{:?}", out.env);
 }

@@ -119,3 +119,9 @@ semantics.
 
 See [dead-letter queues](./QUEUE_DEAD_LETTER.md) for the `.deadLetter(queue, options)`
 API, the rules checked at build time, what each cloud does, and the delivery semantics.
+
+## Sandbox links
+
+See [sandbox links](./SANDBOX_LINKS.md) for `sandbox.link(service)`: how a sandbox reaches a
+service of its own deployment through the egress gateway, how runtime policies narrow links,
+the bindings commands receive, and what each platform supports.

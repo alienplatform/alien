@@ -29,6 +29,9 @@ pub mod azure;
 #[cfg(feature = "gcp")]
 pub mod gcp_agent_platform;
 
+#[cfg(feature = "gcp")]
+pub mod gcp_private_ingress;
+
 #[cfg(feature = "kubernetes")]
 pub mod kubernetes;
 
@@ -36,6 +39,7 @@ pub mod kubernetes;
 pub mod local;
 
 pub(crate) mod egress;
+pub mod links;
 #[cfg(any(feature = "aws", feature = "gcp"))]
 mod refusal;
 

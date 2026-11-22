@@ -1182,8 +1182,14 @@ pub fn gcp_bucket_name(facts: &ResourceFacts<'_>) -> String {
 }
 
 /// Check a write for a GCP resource: it must name the resource's own cloud name, and everything
-/// it grants must be what the signed stack declares.
-pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Result<()> {
+/// it grants must be what the signed stack declares. `project` and `region` are where this
+/// verifier sends the write.
+pub fn check_gcp_write(
+    facts: &ResourceFacts<'_>,
+    write: &ResourceWrite,
+    project: &str,
+    region: &str,
+) -> Result<()> {
     let own_bucket = |bucket: &str| -> Result<&Storage> {
         let storage = facts.storage()?;
         let own = gcp_bucket_name(facts);
@@ -1220,9 +1226,14 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
             }
             Ok(())
         }
-        ResourceWrite::CreateSandboxTemplate { engine, body } => {
-            check_sandbox_template(facts.sandbox()?, &facts.place.prefix, engine, body)
-        }
+        ResourceWrite::CreateSandboxTemplate { engine, body } => check_sandbox_template(
+            facts.sandbox()?,
+            &facts.place.prefix,
+            project,
+            region,
+            engine,
+            body,
+        ),
         ResourceWrite::CreateTopic { topic, body } => {
             facts.queue()?;
             own_topic(facts, topic, write.operation())?;
@@ -1412,9 +1423,17 @@ pub fn gcp_sandbox_engine_name(facts: &ResourceFacts<'_>) -> String {
 
 /// Check a sandbox template: the image is the signed sandbox's, the limits, egress and port are
 /// what the signed sandbox declares, and nothing else is set.
+///
+/// `project` and `region` are where this verifier creates the template. Only an `internet`
+/// sandbox names a network attachment, and then exactly the one setup creates for this install
+/// there, with the private ingress the API requires beside it; any other sandbox names none and
+/// keeps the default placement. An attachment anywhere else would send the sandbox's traffic
+/// into a network nobody signed.
 pub fn check_sandbox_template(
     sandbox: &alien_core::Sandbox,
     prefix: &str,
+    project: &str,
+    region: &str,
     engine: &str,
     body: &Value,
 ) -> Result<()> {
@@ -1456,6 +1475,37 @@ pub fn check_sandbox_template(
         return Err(refused(format!(
             "the template's egress is not the signed internetAccess {signed_egress}"
         )));
+    }
+    use alien_core::gcp_sandbox_gateway::{attachment_path, resource_name, suffix};
+    let gateway = sandbox.egress == alien_core::SandboxEgress::Internet;
+    let own_attachment = gateway
+        .then(|| attachment_path(project, region, &resource_name(prefix, suffix::ATTACHMENT)));
+    let sent_attachment = template
+        .egress_control_config
+        .as_ref()
+        .and_then(|egress| egress.network_attachment.clone());
+    if sent_attachment != own_attachment {
+        return Err(refused(match (&sent_attachment, &own_attachment) {
+            (Some(sent), None) => format!(
+                "the template names network attachment {sent}, but the signed sandbox's egress \
+                 is not internet"
+            ),
+            (_, Some(own)) => format!("the template's network attachment is not {own}"),
+            (None, None) => unreachable!("equal"),
+        }));
+    }
+    let private_ingress = template.ingress_control_config.as_ref().map(|ingress| {
+        (
+            ingress.enable_private_service_connect,
+            ingress.extra.is_empty(),
+        )
+    });
+    if private_ingress != gateway.then_some((Some(true), true)) {
+        return Err(refused(if gateway {
+            "the template's ingress is not the private ingress its network attachment needs"
+        } else {
+            "the template sets ingress, but the signed sandbox's egress is not internet"
+        }));
     }
     let environment = template
         .custom_container_environment

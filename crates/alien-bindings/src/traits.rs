@@ -1741,6 +1741,14 @@ pub trait Sandbox: Binding {
     /// that could not confirm the sandbox is gone fails with a retryable error and can be repeated.
     async fn terminate(&self, sandbox_id: &str) -> Result<()>;
 
+    /// Internal URL of linked service `id` on `port`, as the sandbox's commands reach it
+    /// through the egress gateway. `None` when this sandbox resource does not link `id` or the
+    /// service does not serve `port`. The same binding reaches every command as
+    /// `ALIEN_<ID>_BINDING`.
+    fn link_url(&self, _id: &str, _port: u16) -> Option<String> {
+        None
+    }
+
     /// Get a reference to this object as `Any` for dynamic casting
     fn as_any(&self) -> &dyn std::any::Any;
 }

@@ -47,6 +47,8 @@ pub struct SqliteDeploymentStore {
     /// Whether deployment routing (channels and pins) lives in this database,
     /// so a write can check it in the same statement.
     routing_in_db: bool,
+    /// See `DeploymentStore::enforces_endpoint_source_ranges`.
+    enforces_endpoint_source_ranges: bool,
 }
 
 /// A setup reservation whose installer has not registered yet. The manager has
@@ -265,7 +267,15 @@ impl SqliteDeploymentStore {
         Self {
             db,
             routing_in_db: false,
+            enforces_endpoint_source_ranges: false,
         }
+    }
+
+    /// Declare that the controllers running against this store enforce
+    /// `endpointSourceRanges`, so the manager accepts a non-empty list.
+    pub fn with_endpoint_source_ranges_enforced(mut self) -> Self {
+        self.enforces_endpoint_source_ranges = true;
+        self
     }
 
     /// Declare that the release channel store keeps routing in this database
@@ -798,6 +808,10 @@ mod tests {
 
 #[async_trait]
 impl DeploymentStore for SqliteDeploymentStore {
+    fn enforces_endpoint_source_ranges(&self) -> bool {
+        self.enforces_endpoint_source_ranges
+    }
+
     fn supports_acquire_exclusions(&self) -> bool {
         true
     }

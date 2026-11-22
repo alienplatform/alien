@@ -290,6 +290,7 @@ mod tests {
                 public_endpoints: None,
                 quota_warning_overrides: Vec::new(),
                 endpoint_access: alien_core::EndpointAccess::Internet,
+                endpoint_source_ranges: Vec::new(),
                 setup_management: alien_core::SetupManagement::Manual,
                 signing: None,
             }))
@@ -372,6 +373,7 @@ mod tests {
                 public_endpoints: None,
                 quota_warning_overrides: Vec::new(),
                 endpoint_access: alien_core::EndpointAccess::Internet,
+                endpoint_source_ranges: Vec::new(),
                 setup_management: alien_core::SetupManagement::Manual,
                 signing: None,
             }))
@@ -401,6 +403,7 @@ mod tests {
                 public_endpoints: None,
                 quota_warning_overrides: Vec::new(),
                 endpoint_access: alien_core::EndpointAccess::Internet,
+                endpoint_source_ranges: Vec::new(),
                 setup_management: alien_core::SetupManagement::Manual,
                 signing: None,
             }))
@@ -430,6 +433,7 @@ mod tests {
                 public_endpoints: None,
                 quota_warning_overrides: Vec::new(),
                 endpoint_access: alien_core::EndpointAccess::Internet,
+                endpoint_source_ranges: Vec::new(),
                 setup_management: alien_core::SetupManagement::Manual,
                 signing: None,
             }))

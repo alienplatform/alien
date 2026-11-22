@@ -612,6 +612,10 @@ impl AwsSandboxController {
                 .expect("key initialized above");
             self.egress = Some(alien_core::bindings::SandboxEgressBinding::Gateway(
                 alien_core::bindings::SandboxEgressGateway {
+                    links: alien_core::sandbox_links::cluster_link_bindings(
+                        ctx.desired_stack,
+                        config,
+                    ),
                     container: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
                     audience: format!("{}/{}", ctx.resource_prefix, config.id),
                     signing_key: alien_core::bindings::SandboxEgressSigningKey {
@@ -5651,6 +5655,141 @@ mod tests {
                 .collect();
             assert_eq!(audiences, ["agents", "other"]);
             assert_eq!(published["keys"][0]["kid"], "kid-test");
+            // A stack without links publishes no `links` field at all.
+            assert!(published.get("links").is_none());
+        }
+
+        /// The key owner publishes each sandbox's links by their overlay name inside the
+        /// cluster's overlay range, and the linking sandbox's binding carries the overlay URL.
+        #[tokio::test]
+        async fn the_key_owner_publishes_links_by_their_overlay_name() {
+            use crate::{LocalVaultController, LocalVaultState};
+            use alien_bindings::{providers::vault::LocalVault, Vault as _};
+            use alien_core::{Vault, SECRETS_VAULT_ID};
+
+            let directory = tempfile::tempdir().unwrap();
+            let mut microvms = MockLambdaMicrovmsApi::new();
+            microvms
+                .expect_get_microvm_image()
+                .returning(|_| Ok(served_image(IMAGE_ARN)));
+            microvms
+                .expect_list_microvm_image_versions()
+                .returning(|_| Ok(vec![]));
+            let microvms = Arc::new(microvms);
+            let ec2 = Arc::new(valid_sandbox_network_ec2());
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_microvms_client()
+                .returning(move |_| Ok(microvms.clone()));
+            provider
+                .expect_get_aws_ec2_client()
+                .returning(move |_| Ok(ec2.clone()));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource({
+                    let mut agents = internet_sandbox("agents");
+                    agents.gateway_links = vec![alien_core::ResourceRef::new(
+                        alien_core::Container::RESOURCE_TYPE,
+                        "api",
+                    )];
+                    agents
+                })
+                .controller(AwsSandboxController {
+                    // An update passes here, so adding a link rebuilds the binding.
+                    state: AwsSandboxState::InitializingEgressKey,
+                    egress_network_verified: false,
+                    ..running_internet_controller(IMAGE_ARN)
+                })
+                .platform(Platform::Aws)
+                .service_provider(Arc::new(provider))
+                .with_stack_resource(
+                    internet_sandbox("other"),
+                    alien_core::ResourceLifecycle::Live,
+                )
+                .with_stack_resource(
+                    alien_core::ComputeCluster::new("compute".into())
+                        .capacity_group(alien_core::CapacityGroup {
+                            group_id: "apps".into(),
+                            instance_type: Some("m7g.large".into()),
+                            profile: None,
+                            min_size: 1,
+                            max_size: 1,
+                            scale_policy: None,
+                            nested_virtualization: None,
+                            data_disk_gib_range: None,
+                        })
+                        .build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .with_stack_resource(
+                    {
+                        let mut api = gateway_container("example.invalid/api:1");
+                        api.id = "api".into();
+                        api.cluster = Some("compute".into());
+                        api.permissions = "api".into();
+                        api.ports = vec![alien_core::ContainerPort { port: 8080 }];
+                        api
+                    },
+                    alien_core::ResourceLifecycle::Live,
+                )
+                .with_dependency(sandbox_network(), sandbox_network_controller())
+                .with_dependency(
+                    Vault::new(SECRETS_VAULT_ID.into()).build(),
+                    LocalVaultController {
+                        state: LocalVaultState::Ready,
+                        vault_path: Some(directory.path().to_string_lossy().into_owned()),
+                        ..Default::default()
+                    },
+                )
+                .build()
+                .await
+                .unwrap();
+
+            run_gateway_on(&mut executor, EMBEDDING_GATEWAY);
+
+            for _ in 0..8 {
+                let state = executor
+                    .internal_state::<AwsSandboxController>()
+                    .unwrap()
+                    .state
+                    .clone();
+                if state == AwsSandboxState::Ready {
+                    break;
+                }
+                executor
+                    .step()
+                    .await
+                    .unwrap_or_else(|error| panic!("{state:?}: {error}"));
+            }
+            let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+            assert_eq!(controller.state, AwsSandboxState::Ready);
+
+            let vault = LocalVault::new("secrets".into(), directory.path().into());
+            let published: serde_json::Value = serde_json::from_str(
+                &vault
+                    .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
+                    .await
+                    .expect("the key owner published the gateway configuration"),
+            )
+            .unwrap();
+            let audiences: Vec<_> = published["audiences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|audience| audience.as_str().unwrap().rsplit('/').next().unwrap())
+                .collect();
+            assert_eq!(audiences, ["agents", "other"]);
+            let audience = published["audiences"][0].as_str().unwrap();
+            assert_eq!(
+                published["links"],
+                serde_json::json!({audience: [{
+                    "id": "api", "host": "api.svc", "ports": [8080], "ranges": ["10.244.0.0/16"]
+                }]})
+            );
+            let binding = controller.get_binding_params().unwrap().unwrap();
+            assert_eq!(
+                binding["egress"]["links"]["api"]["internalUrl"],
+                "http://api.svc:8080"
+            );
         }
 
         /// One refresh pass of internet sandbox `id` in a stack that also declares `others`,

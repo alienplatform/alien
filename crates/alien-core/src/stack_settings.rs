@@ -898,6 +898,13 @@ pub struct StackSettings {
     #[serde(default)]
     pub endpoint_access: EndpointAccess,
 
+    /// Source address ranges (IPv4 or IPv6 CIDR, in canonical network form) allowed to reach
+    /// the deployment's public endpoints, for example the ranges of a proxy in front of it.
+    /// Empty means anyone can connect. At most 25 entries; needs `endpoint_access: internet`.
+    /// Unlike `endpoint_access`, this can change on a running deployment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoint_source_ranges: Vec<String>,
+
     /// Network configuration for the stack (VPC/VNet settings).
     /// If `None`, an isolated VPC with NAT is auto-created when the stack has resources
     /// that require networking (e.g., containers). Set explicitly to customize:
@@ -983,6 +990,69 @@ pub struct StackSettings {
     /// them: changing this later does not change what an install already pinned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing: Option<StackSigning>,
+}
+
+/// Most entries `StackSettings::endpoint_source_ranges` accepts. A load balancer security group
+/// holds 60 inbound rules by default, and each range needs one rule for port 443 and one for 80.
+pub const MAX_ENDPOINT_SOURCE_RANGES: usize = 25;
+
+/// Checks a list of source address ranges. Each entry must be an IPv4 or IPv6 CIDR written in
+/// canonical network form (no host bits set, `/0` not allowed because an empty list already
+/// means anyone), without duplicates, and the list holds at most 25 entries.
+/// Errors name the offending entry.
+pub fn validate_endpoint_source_ranges(ranges: &[String]) -> std::result::Result<(), String> {
+    if ranges.len() > MAX_ENDPOINT_SOURCE_RANGES {
+        return Err(format!(
+            "{} source ranges were given; at most {MAX_ENDPOINT_SOURCE_RANGES} are allowed",
+            ranges.len()
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for entry in ranges {
+        let network: ipnet::IpNet = entry.parse().map_err(|_| {
+            format!(
+                "source range '{entry}' is not a valid IPv4 or IPv6 CIDR, such as 203.0.113.0/24"
+            )
+        })?;
+        if network.prefix_len() == 0 {
+            return Err(format!(
+                "source range '{entry}' allows every address; leave the list empty to allow anyone"
+            ));
+        }
+        if network.trunc() != network {
+            return Err(format!(
+                "source range '{entry}' has host bits set; write it as '{}'",
+                network.trunc()
+            ));
+        }
+        if network.to_string() != *entry {
+            return Err(format!(
+                "source range '{entry}' is not in canonical form; write it as '{network}'"
+            ));
+        }
+        if !seen.insert(network) {
+            return Err(format!("source range '{entry}' is listed more than once"));
+        }
+    }
+    Ok(())
+}
+
+impl StackSettings {
+    /// Checks `endpoint_source_ranges`: each entry (see [`validate_endpoint_source_ranges`])
+    /// and that the deployment's endpoints are reachable from the internet at all.
+    pub fn validate_endpoint_source_ranges(&self) -> std::result::Result<(), String> {
+        validate_endpoint_source_ranges(&self.endpoint_source_ranges)?;
+        if !self.endpoint_source_ranges.is_empty()
+            && self.endpoint_access == EndpointAccess::Private
+        {
+            return Err(format!(
+                "source range '{}' cannot be used with private endpoint access; \
+                 private endpoints are reachable only through the deployment network",
+                self.endpoint_source_ranges[0]
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// The 12-digit AWS account that publishes the machine images protected installs boot, if this
@@ -1344,5 +1414,125 @@ mod failure_domain_tests {
                 .expect("custom domain configuration should deserialize");
             assert_eq!(serde_json::to_value(parsed).unwrap(), config);
         }
+    }
+}
+
+#[cfg(test)]
+mod endpoint_source_range_tests {
+    use super::*;
+
+    fn ranges(entries: &[&str]) -> Vec<String> {
+        entries.iter().map(|entry| entry.to_string()).collect()
+    }
+
+    #[test]
+    fn empty_list_serializes_like_settings_without_the_field() {
+        // Written by a build before the field existed.
+        let before = r#"{"endpointAccess":"internet"}"#;
+        let settings: StackSettings = serde_json::from_str(before).unwrap();
+        assert!(settings.endpoint_source_ranges.is_empty());
+        assert_eq!(serde_json::to_string(&settings).unwrap(), before);
+        assert_eq!(
+            serde_json::to_value(StackSettings::default()).unwrap(),
+            serde_json::json!({ "endpointAccess": "internet" })
+        );
+    }
+
+    #[test]
+    fn list_round_trips_in_camel_case() {
+        let settings = StackSettings {
+            endpoint_source_ranges: ranges(&["203.0.113.0/24", "2001:db8::/32"]),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(
+            json["endpointSourceRanges"],
+            serde_json::json!(["203.0.113.0/24", "2001:db8::/32"])
+        );
+        assert_eq!(
+            serde_json::from_value::<StackSettings>(json).unwrap(),
+            settings
+        );
+        assert_eq!(settings.validate_endpoint_source_ranges(), Ok(()));
+    }
+
+    #[test]
+    fn invalid_entries_are_refused_and_named() {
+        let error =
+            validate_endpoint_source_ranges(&ranges(&["203.0.113.0/24", "nope"])).unwrap_err();
+        assert!(error.contains("'nope'"), "{error}");
+        let error = validate_endpoint_source_ranges(&ranges(&["203.0.113.0"])).unwrap_err();
+        assert!(error.contains("'203.0.113.0'"), "{error}");
+    }
+
+    #[test]
+    fn host_bits_are_refused_with_the_network_form() {
+        let error = validate_endpoint_source_ranges(&ranges(&["203.0.113.5/24"])).unwrap_err();
+        assert!(
+            error.contains("'203.0.113.5/24'") && error.contains("203.0.113.0/24"),
+            "{error}"
+        );
+        let error = validate_endpoint_source_ranges(&ranges(&["2001:db8::1/32"])).unwrap_err();
+        assert!(error.contains("'2001:db8::1/32'"), "{error}");
+    }
+
+    #[test]
+    fn non_canonical_text_is_refused() {
+        let error =
+            validate_endpoint_source_ranges(&ranges(&["2001:0DB8:0:0:0:0:0:0/32"])).unwrap_err();
+        assert!(
+            error.contains("canonical") && error.contains("2001:db8::/32"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn everything_ranges_are_refused() {
+        for entry in ["0.0.0.0/0", "::/0"] {
+            let error = validate_endpoint_source_ranges(&ranges(&[entry])).unwrap_err();
+            assert!(error.contains(entry), "{error}");
+        }
+    }
+
+    #[test]
+    fn duplicates_are_refused_and_named() {
+        let error =
+            validate_endpoint_source_ranges(&ranges(&["10.0.0.0/8", "192.0.2.0/24", "10.0.0.0/8"]))
+                .unwrap_err();
+        assert!(
+            error.contains("'10.0.0.0/8'") && error.contains("more than once"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn twenty_five_entries_pass_and_twenty_six_do_not() {
+        let list =
+            |count: u8| -> Vec<String> { (0..count).map(|i| format!("198.51.{i}.0/24")).collect() };
+        assert_eq!(validate_endpoint_source_ranges(&list(25)), Ok(()));
+        let error = validate_endpoint_source_ranges(&list(26)).unwrap_err();
+        assert!(error.contains("26") && error.contains("25"), "{error}");
+    }
+
+    #[test]
+    fn private_access_with_a_list_is_refused_and_names_the_entry() {
+        let settings = StackSettings {
+            endpoint_access: EndpointAccess::Private,
+            endpoint_source_ranges: ranges(&["203.0.113.0/24"]),
+            ..Default::default()
+        };
+        let error = settings.validate_endpoint_source_ranges().unwrap_err();
+        assert!(
+            error.contains("'203.0.113.0/24'") && error.contains("private"),
+            "{error}"
+        );
+        let private_without_list = StackSettings {
+            endpoint_access: EndpointAccess::Private,
+            ..Default::default()
+        };
+        assert_eq!(
+            private_without_list.validate_endpoint_source_ranges(),
+            Ok(())
+        );
     }
 }

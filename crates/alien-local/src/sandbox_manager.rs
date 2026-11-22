@@ -11,6 +11,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use alien_bindings::sandbox_egress_token::GeneratedSigningKey;
 
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::models::{ContainerCreateBody, HostConfig, NetworkCreateRequest, PortBinding};
@@ -23,12 +26,13 @@ use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
 
 use crate::error::{ErrorData, Result};
+use crate::sandbox_gateway::{LocalGateway, SessionEgress};
 use alien_error::{AlienError, Context, IntoAlienError};
 
 /// Label carrying the sandbox resource a container belongs to.
 const LABEL_SANDBOX: &str = "dev.alien.sandbox";
 /// Label carrying the session id within that sandbox.
-const LABEL_SESSION: &str = "dev.alien.sandbox.session";
+pub(crate) const LABEL_SESSION: &str = "dev.alien.sandbox.session";
 /// Label carrying the `uid:gid` every command in the session runs as. Set by the manager when it
 /// creates the container and fixed from then on: nothing inside the container can change it.
 const LABEL_EXEC_USER: &str = "dev.alien.sandbox.exec-user";
@@ -71,6 +75,21 @@ pub struct SandboxSessionConfig {
     pub preview_ports: Vec<u16>,
     /// Environment placed in the session
     pub env: HashMap<String, String>,
+    /// Services of the deployment the session reaches through the sandbox's egress gateway.
+    /// Empty, the session gets the sandbox's shared network as before. Otherwise (with
+    /// `Allow`) it sits alone on its own internal network with the gateway, which is its only
+    /// way out.
+    pub links: Vec<SandboxLink>,
+}
+
+/// A service a sandbox links: a container on `deployment-network`, by its resource id, on its
+/// declared ports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxLink {
+    /// Resource id; the service answers as `<id>.svc` on `deployment-network`.
+    pub id: String,
+    /// Declared ports; every other port stays refused.
+    pub ports: Vec<u16>,
 }
 
 /// A session the manager is tracking.
@@ -108,6 +127,14 @@ pub struct SandboxExecResult {
 pub struct LocalSandboxManager {
     docker: Docker,
     state_dir: PathBuf,
+    /// Signs this process's gateway tokens and policy writes. Generated per process: a restart
+    /// reaps every gateway and session.
+    gateway_key: GeneratedSigningKey,
+    /// Running gateways, by sandbox. Held across a gateway's create so two sessions do not
+    /// start two.
+    gateways: tokio::sync::Mutex<HashMap<String, Arc<LocalGateway>>>,
+    /// Image of the egress gateway a sandbox with links runs behind.
+    gateway_image: String,
 }
 
 impl LocalSandboxManager {
@@ -115,7 +142,20 @@ impl LocalSandboxManager {
     pub fn new(state_dir: PathBuf) -> Result<Self> {
         let docker = crate::connect_docker()?;
 
-        Ok(Self { docker, state_dir })
+        Ok(Self {
+            docker,
+            state_dir,
+            gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
+            gateways: Default::default(),
+            gateway_image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.to_string(),
+        })
+    }
+
+    /// Runs sandboxes with links behind this gateway image instead of the one this release
+    /// pins, such as a gateway built from source.
+    pub fn with_gateway_image(mut self, image: impl Into<String>) -> Self {
+        self.gateway_image = image.into();
+        self
     }
 
     /// Where this manager keeps its session state.
@@ -144,8 +184,6 @@ impl LocalSandboxManager {
         session_id: &str,
         config: &SandboxSessionConfig,
     ) -> Result<SandboxSessionHandle> {
-        let name = Self::container_name(sandbox, session_id);
-
         if let Some(reserved) = config
             .env
             .keys()
@@ -174,11 +212,59 @@ impl LocalSandboxManager {
         self.ensure_image(&config.image).await?;
         let image = crate::sandbox_identity::inspect(&self.docker, &config.image, sandbox).await?;
 
-        let network_mode = match config.egress {
+        let linked = config.egress == SandboxEgressMode::Allow && !config.links.is_empty();
+        let created = async {
+            let session_egress = if linked {
+                let gateway = self.gateway(sandbox, &config.links).await?;
+                Some(
+                    crate::sandbox_gateway::attach_session(
+                        &self.docker,
+                        &gateway,
+                        sandbox,
+                        session_id,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
+            self.create_session_container(sandbox, session_id, config, image, session_egress)
+                .await
+        }
+        .await;
+        if created.is_err() && linked {
+            // The container never ran; its network and policy go with it. The create error is
+            // what the caller needs, so a cleanup failure is only logged.
+            let gateway = self.gateways.lock().await.get(sandbox).cloned();
+            if let Err(error) = crate::sandbox_gateway::detach_session(
+                &self.docker,
+                gateway.as_deref(),
+                sandbox,
+                session_id,
+            )
+            .await
+            {
+                tracing::warn!(%error, session_id, "could not remove a failed session's network");
+            }
+        }
+        created
+    }
+
+    async fn create_session_container(
+        &self,
+        sandbox: &str,
+        session_id: &str,
+        config: &SandboxSessionConfig,
+        image: crate::sandbox_identity::SandboxImage,
+        session_egress: Option<SessionEgress>,
+    ) -> Result<SandboxSessionHandle> {
+        let name = Self::container_name(sandbox, session_id);
+        let network_mode = match (&session_egress, config.egress) {
+            (Some(egress), _) => egress.network.clone(),
             // "none" gives no interface at all, which is a stronger and simpler guarantee than
             // a private network with its gateway firewalled off.
-            SandboxEgressMode::Deny => "none".to_string(),
-            SandboxEgressMode::Allow => {
+            (None, SandboxEgressMode::Deny) => "none".to_string(),
+            (None, SandboxEgressMode::Allow) => {
                 let network = Self::network_name(sandbox);
                 self.ensure_egress_network(&network).await?;
                 network
@@ -195,6 +281,9 @@ impl LocalSandboxManager {
             format!("ALIEN_SANDBOX_EXEC_GID={}", image.identity.gid),
             format!("ALIEN_SANDBOX_ROOT={SESSION_ROOT}"),
         ]);
+        if let Some(egress) = session_egress {
+            env.extend(egress.env);
+        }
 
         let labels = HashMap::from([
             (LABEL_SANDBOX.to_string(), sandbox.to_string()),
@@ -320,6 +409,57 @@ impl LocalSandboxManager {
             container_id: created.id,
             running: true,
         })
+    }
+
+    /// The sandbox's gateway, started or replaced for these links.
+    async fn gateway(&self, sandbox: &str, links: &[SandboxLink]) -> Result<Arc<LocalGateway>> {
+        let mut gateways = self.gateways.lock().await;
+        self.ensure_gateway(&mut gateways, sandbox, links).await
+    }
+
+    /// Applies the sandbox's current links to its running gateway, if it has one: a link
+    /// added or removed in the stack takes effect for the sessions already running, not only
+    /// for the next one. With no links left, the gateway keeps proxying those sessions'
+    /// internet egress and reaches nothing private. A sandbox without a running gateway is
+    /// left alone; its next linked session starts one with these links.
+    pub async fn apply_links(&self, sandbox: &str, links: &[SandboxLink]) -> Result<()> {
+        let mut gateways = self.gateways.lock().await;
+        if !gateways.contains_key(sandbox) {
+            return Ok(());
+        }
+        self.ensure_gateway(&mut gateways, sandbox, links)
+            .await
+            .map(drop)
+    }
+
+    async fn ensure_gateway(
+        &self,
+        gateways: &mut HashMap<String, Arc<LocalGateway>>,
+        sandbox: &str,
+        links: &[SandboxLink],
+    ) -> Result<Arc<LocalGateway>> {
+        let range = crate::sandbox_gateway::deployment_network_range(&self.docker).await?;
+        let links: Vec<alien_core::sandbox_links::GatewayLink> = links
+            .iter()
+            .map(|link| alien_core::sandbox_links::GatewayLink {
+                id: link.id.clone(),
+                host: format!("{}.svc", link.id),
+                ports: link.ports.clone(),
+                ranges: vec![range],
+                addresses: Vec::new(),
+            })
+            .collect();
+        let gateway = crate::sandbox_gateway::ensure_gateway(
+            &self.docker,
+            &self.gateway_key,
+            sandbox,
+            &self.gateway_image,
+            &links,
+            gateways.get(sandbox).cloned(),
+        )
+        .await?;
+        gateways.insert(sandbox.to_string(), Arc::clone(&gateway));
+        Ok(gateway)
     }
 
     /// Pulls the sandbox image if the daemon does not already have it.
@@ -817,22 +957,32 @@ impl LocalSandboxManager {
             .await;
 
         match removed {
-            Ok(()) => Ok(()),
+            Ok(()) => {}
             // An already-gone session is the desired end state. Every other failure leaves the
             // container running, and terminate is the containment kill switch — reporting success
             // there tells the caller untrusted code has stopped when it has not.
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 404, ..
-            }) => Ok(()),
+            }) => {}
             Err(error) => {
-                Err(error)
+                return Err(error)
                     .into_alien_error()
                     .context(ErrorData::SandboxSessionFailed {
                         session_id: session_id.to_string(),
                         operation: format!("remove container '{name}'"),
-                    })?
+                    })
             }
         }
+        // A session of a sandbox with links had its own network; its policy and network go
+        // with it. Nothing to do for any other session.
+        let gateway = self.gateways.lock().await.get(sandbox).cloned();
+        crate::sandbox_gateway::detach_session(
+            &self.docker,
+            gateway.as_deref(),
+            sandbox,
+            session_id,
+        )
+        .await
     }
 
     /// Removes every session and temporary image inspection belonging to a sandbox.
@@ -860,10 +1010,20 @@ impl LocalSandboxManager {
             .remove_network(&Self::network_name(sandbox))
             .await;
 
+        // The sandbox's gateway and the session networks a previous run left behind.
+        let gateway = async {
+            self.gateways.lock().await.remove(sandbox);
+            crate::sandbox_gateway::remove_gateway(&self.docker, sandbox).await?;
+            crate::sandbox_gateway::sweep_session_networks(&self.docker, sandbox).await
+        }
+        .await;
+
         // Attempt every independent cleanup before reporting failure. Session errors take
         // precedence because they can mean untrusted commands are still running.
         let inspections = crate::sandbox_identity::reap(&self.docker, sandbox).await;
-        Ok(terminated? + inspections?)
+        let terminated = terminated?;
+        gateway?;
+        Ok(terminated + inspections?)
     }
 }
 
@@ -1033,6 +1193,9 @@ mod tests {
             docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
                 .unwrap(),
             state_dir: PathBuf::new(),
+            gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
+            gateways: Default::default(),
+            gateway_image: String::new(),
         };
         for name in [
             "ALIEN_SANDBOX_EXEC_UID",
@@ -1052,6 +1215,7 @@ mod tests {
                         egress: SandboxEgressMode::Deny,
                         preview_ports: Vec::new(),
                         env: HashMap::from([(name.to_string(), "0".to_string())]),
+                        links: Vec::new(),
                     },
                 )
                 .await
@@ -1105,6 +1269,9 @@ mod tests {
             docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
                 .unwrap(),
             state_dir: PathBuf::new(),
+            gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
+            gateways: Default::default(),
+            gateway_image: String::new(),
         };
 
         assert!(
@@ -1181,6 +1348,9 @@ mod tests {
                 )
                 .unwrap(),
                 state_dir: PathBuf::new(),
+                gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
+                gateways: Default::default(),
+                gateway_image: String::new(),
             };
 
             let error = manager

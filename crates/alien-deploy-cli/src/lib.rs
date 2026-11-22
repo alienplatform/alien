@@ -229,6 +229,7 @@ mod tests {
             token_env_var: None,
             name: Some("acmectl".to_string()),
             display_name: Some("Acme Deployment CLI".to_string()),
+            label_domain: None,
         };
 
         let branded = dir.path().join("acmectl");
@@ -290,6 +291,7 @@ mod tests {
             token_env_var: None,
             name: Some("acmectl".to_string()),
             display_name: Some("Acme Deployment CLI".to_string()),
+            label_domain: None,
         };
         let mut command = command_with_branding(Some(&config));
         assert_eq!(command.get_name(), "acmectl");
@@ -335,6 +337,7 @@ mod tests {
             token_env_var: None,
             name: Some("acmectl".to_string()),
             display_name: Some("Acme Deployment CLI".to_string()),
+            label_domain: None,
         };
         let mut command = command_with_branding(Some(&config));
         let mut texts = Vec::new();

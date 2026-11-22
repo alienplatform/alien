@@ -104,6 +104,11 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                     .expect("the bundle lives in the deployment's own bucket");
             }
         }
+        TestApp::SandboxInternet => {
+            panic!(
+                "sandbox-internet is driven by gcp_sandbox_internet_live, not a distribution test"
+            )
+        }
         TestApp::SandboxRemote => {
             common::sandbox::check_remote_interactive_command(&ctx.deployment, ctx.platform)
                 .await

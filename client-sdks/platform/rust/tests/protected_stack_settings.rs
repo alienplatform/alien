@@ -1,7 +1,11 @@
 // A manager decodes a deployment's stack settings with this SDK before it runs the
 // deployment. A protected deployment's signing settings must survive that, or the
 // manager prepares it as if it weren't protected.
+// The full SDK shares one generated type for every use of the stack settings schema.
+#[cfg(not(feature = "full-api"))]
 use alien_platform_api::types::DeploymentStackSettings as StackSettings;
+#[cfg(feature = "full-api")]
+use alien_platform_api::types::StackSettings;
 use serde_json::json;
 
 #[test]

@@ -35,10 +35,13 @@ from pathlib import PurePosixPath
 
 # Features the full workspace run enables; each applies only if its package is selected.
 # `no-retry-delay` keeps mocked tests from waiting between client retries.
+# `alien-preflights/runtime-checks`: its tests call the deployment-time checks; in the full run
+# the feature comes from the packages that depend on it, so a selection without them needs it.
 CI_FEATURES = [
     "alien-manager/openapi",
     "alien-bindings/platform-sdk",
     "alien-client-core/no-retry-delay",
+    "alien-preflights/runtime-checks",
 ]
 
 # Paths outside the packages that cannot change a Rust build or test.

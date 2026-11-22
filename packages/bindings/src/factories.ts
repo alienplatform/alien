@@ -424,6 +424,7 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
         }
       }),
     preview: (sandboxId, port) => guard(handle, raw => raw.preview(sandboxId, port)),
+    linkUrl: (id, port) => guard(handle, async raw => raw.linkUrl(id, port)),
     pause: sandboxId => guard(handle, raw => raw.pause(sandboxId)),
     resume: sandboxId => guard(handle, raw => raw.resume(sandboxId)),
     terminate: sandboxId => guard(handle, raw => raw.terminate(sandboxId)),

@@ -7,8 +7,8 @@ use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use std::collections::HashSet;
 
 use crate::core::{
-    azure_permissions_helper::AzurePermissionsHelper, GcpCustomRoleNaming,
-    ResourceControllerContext,
+    aws_role_owner::AwsServiceAccountRoleWrite, azure_permissions_helper::AzurePermissionsHelper,
+    GcpCustomRoleNaming, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::IamRoleWriter;
@@ -1819,12 +1819,10 @@ impl ResourcePermissionsHelper {
                 .collect();
             // Setup owns the management identity itself; it must remain unbounded.
             if !stale.is_empty() && management_role_name.as_deref() != Some(role_name.as_str()) {
-                match IamRoleWriter::new(
-                    iam.as_ref(),
-                    ctx.aws_permissions_boundary_arn()?.as_deref(),
-                )
-                .prepare_existing(&role_name, ctx.resource_prefix, &owner_resource_id)
-                .await
+                match AwsServiceAccountRoleWrite::for_service_account(ctx, &owner_resource_id)?
+                    .writer(iam.as_ref())
+                    .prepare_existing(&role_name, ctx.resource_prefix, &owner_resource_id)
+                    .await
                 {
                     Ok(()) => {}
                     Err(error)
@@ -2028,22 +2026,21 @@ impl ResourcePermissionsHelper {
         )?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         if !policies.is_empty() {
-            IamRoleWriter::new(
-                iam_client.as_ref(),
-                ctx.aws_permissions_boundary_arn()?.as_deref(),
-            )
-            .prepare_existing(
-                &service_account_role_name,
-                ctx.resource_prefix,
-                &format!("{profile_name}-sa"),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
+            let service_account_id = format!("{profile_name}-sa");
+            AwsServiceAccountRoleWrite::for_service_account(ctx, &service_account_id)?
+                .writer(iam_client.as_ref())
+                .prepare_existing(
+                    &service_account_role_name,
+                    ctx.resource_prefix,
+                    &service_account_id,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
                     "Failed to prepare IAM role '{service_account_role_name}' for resource grants"
                 ),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+                    resource_id: Some(resource_id.to_string()),
+                })?;
         }
         let existing =
             Self::aws_inline_policy_names(&iam_client, &service_account_role_name, resource_id)

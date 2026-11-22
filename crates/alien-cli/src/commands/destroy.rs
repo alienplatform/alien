@@ -625,6 +625,10 @@ async fn destroy_tracked_deployment(
         )?,
     };
 
+    // A delete acts in the namespace the record holds for the Helm release, not the shell's.
+    let client_config =
+        alien_deployment::delete_client_config::client_config_for_cli_delete(client_config, &current);
+
     // Deployer secrets were written by the deployer, not Alien, so deletion
     // keeps them. Name each one with the command that deletes it.
     let kept_deployer_secrets = kept_deployer_secrets(current.runtime_metadata.as_ref());

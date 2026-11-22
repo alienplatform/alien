@@ -39,10 +39,10 @@ jobs:
       matrix:
         pg_major: [15, 16, 17]
         target:
-          - { arch: x86_64, libc: gnu, runner: depot-ubuntu-24.04-16, image: "debian:12.4@sha256:79becb70a6247d277b59c09ca340bbe0349af6aacb5afa90ec349528b53ce2c9" }
-          - { arch: aarch64, libc: gnu, runner: depot-ubuntu-24.04-arm-16, image: "debian:12.4@sha256:79becb70a6247d277b59c09ca340bbe0349af6aacb5afa90ec349528b53ce2c9" }
-          - { arch: x86_64, libc: musl, runner: depot-ubuntu-24.04-16, image: "alpine:3.19.0@sha256:51b67269f354137895d43f3b3d810bfacd3945438e94dc5ac55fdac340352f48" }
-          - { arch: aarch64, libc: musl, runner: depot-ubuntu-24.04-arm-16, image: "alpine:3.19.0@sha256:51b67269f354137895d43f3b3d810bfacd3945438e94dc5ac55fdac340352f48" }
+          - { arch: x86_64, libc: gnu, runner: ubuntu-24.04, image: "debian:12.4@sha256:79becb70a6247d277b59c09ca340bbe0349af6aacb5afa90ec349528b53ce2c9" }
+          - { arch: aarch64, libc: gnu, runner: ubuntu-24.04-arm, image: "debian:12.4@sha256:79becb70a6247d277b59c09ca340bbe0349af6aacb5afa90ec349528b53ce2c9" }
+          - { arch: x86_64, libc: musl, runner: ubuntu-24.04, image: "alpine:3.19.0@sha256:51b67269f354137895d43f3b3d810bfacd3945438e94dc5ac55fdac340352f48" }
+          - { arch: aarch64, libc: musl, runner: ubuntu-24.04-arm, image: "alpine:3.19.0@sha256:51b67269f354137895d43f3b3d810bfacd3945438e94dc5ac55fdac340352f48" }
     runs-on: ${{ matrix.target.runner }}
     timeout-minutes: 30
     steps:
@@ -107,7 +107,7 @@ jobs:
       fail-fast: false
       matrix:
         pg_major: [15, 16, 17]
-    runs-on: depot-macos-15
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -167,7 +167,7 @@ jobs:
       fail-fast: false
       matrix:
         pg_major: [15, 16, 17]
-    runs-on: depot-windows-2025-16
+    runs-on: windows-2025
     timeout-minutes: 40
     steps:
       - name: Resolve embedded Postgres version
@@ -232,7 +232,7 @@ jobs:
   upload:
     needs: [build-linux, build-darwin, build-windows]
     if: ${{ !inputs.dry_run }}
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
       - name: Download all artifacts

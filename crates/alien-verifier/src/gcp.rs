@@ -934,7 +934,12 @@ impl Backend for GcpBackend {
         facts: &crate::cloud_write::resource::ResourceFacts<'_>,
         write: &crate::cloud_write::resource::ResourceWrite,
     ) -> Result<()> {
-        crate::cloud_write::resource::check_gcp_write(facts, write)
+        crate::cloud_write::resource::check_gcp_write(
+            facts,
+            write,
+            &self.0.project,
+            &self.0.region,
+        )
     }
 
     async fn check_resource_state(

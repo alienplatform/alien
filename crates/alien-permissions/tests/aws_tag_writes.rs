@@ -118,6 +118,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                             "arn:aws:iam::${awsAccountId}:instance-profile/",
                             "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/",
                             "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/",
+                            "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/",
                             "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:",
                             "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:",
                             "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:",
@@ -460,4 +461,112 @@ fn build_log_group_creation_comes_with_retention_on_the_deployment_groups() {
             "{binding:?}: another deployment's"
         );
     }
+}
+
+/// A vault value is marked with tags when it is created, and `PutParameter` with tags needs
+/// `ssm:AddTagsToResource`. The grant reaches the same parameters as the write, no more.
+#[test]
+fn vault_data_write_tags_exactly_the_parameters_it_writes() {
+    for target in [BindingTarget::Stack, BindingTarget::Resource] {
+        let policy = policy("vault/data-write", target);
+        let statement = |action: &str| {
+            let found = policy
+                .statement
+                .iter()
+                .filter(|statement| {
+                    statement.effect == "Allow" && statement.action.iter().any(|a| a == action)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(found.len(), 1, "{target}: {action}");
+            found[0]
+        };
+        let put = statement("ssm:PutParameter");
+        let tag = statement("ssm:AddTagsToResource");
+        assert_eq!(put.resource, tag.resource, "{target}");
+        assert_eq!(put.condition, tag.condition, "{target}");
+        assert!(!tag.resource.is_empty());
+    }
+}
+
+/// The parameter `AwsParameterStoreVault` creates for a value, built with the binding's own name code:
+/// the vault prefix is `{stack prefix}-{vault id}` and the parameter is `{vault prefix}-{secret}`.
+fn vault_parameter_arn(stack_prefix: &str, vault_id: &str, secret: &str) -> String {
+    let vault_prefix =
+        alien_permissions::aws_resource_policies::aws_prefixed_resource_name(stack_prefix, vault_id);
+    let name = alien_core::vault_naming::parameter_store_parameter_name(&vault_prefix, secret);
+    format!("arn:aws:ssm:us-west-2:123456789012:parameter/{name}")
+}
+
+fn assert_put_and_mark_allowed(policy: &AwsIamPolicy, arn: &str, what: &str) {
+    for action in ["ssm:PutParameter", "ssm:AddTagsToResource"] {
+        assert_eq!(
+            evaluate(&policy.statement, &Request::new(action, arn)),
+            Decision::Allowed,
+            "{what}: {action} on {arn}"
+        );
+    }
+    // Only this stack's parameters: a sibling stack's parameter is still out of reach.
+    let other = vault_parameter_arn("stack-b", "secrets", "api-key");
+    for action in ["ssm:PutParameter", "ssm:AddTagsToResource"] {
+        assert_eq!(
+            evaluate(&policy.statement, &Request::new(action, &other)),
+            Decision::NotAllowed,
+            "{what}: {action} on {other}"
+        );
+    }
+}
+
+#[test]
+fn vault_provision_can_create_and_mark_the_parameters_the_vault_binding_creates() {
+    let arn = vault_parameter_arn("stack-a", "secrets", "api-key");
+    // The vault controller passes the full vault prefix as the resource name.
+    let vault_prefix =
+        alien_permissions::aws_resource_policies::aws_prefixed_resource_name("stack-a", "secrets");
+    let context = context().with_resource_name(vault_prefix).with_resource_id("secrets");
+    for target in [BindingTarget::Stack, BindingTarget::Resource] {
+        let policy = AwsRuntimePermissionsGenerator::new()
+            .generate_policy(get_permission_set("vault/provision").unwrap(), target, &context)
+            .unwrap();
+        if target == BindingTarget::Resource {
+            // The resource binding renders the stack prefix twice, so it reaches no parameter
+            // today. Kept as is: widening it to the vault prefix alone also reaches vaults whose
+            // names extend this one.
+            for action in ["ssm:PutParameter", "ssm:AddTagsToResource"] {
+                assert_eq!(
+                    evaluate(&policy.statement, &Request::new(action, &arn)),
+                    Decision::NotAllowed,
+                    "{target}: {action}"
+                );
+            }
+            let sibling = vault_parameter_arn("stack-a", "other", "api-key");
+            assert_eq!(
+                evaluate(&policy.statement, &Request::new("ssm:AddTagsToResource", &sibling)),
+                Decision::NotAllowed
+            );
+        } else {
+            assert_put_and_mark_allowed(&policy, &arn, "vault/provision stack binding");
+        }
+    }
+}
+
+/// Kept as is: adding the action changes the inline management profile.
+const STACK_SECRETS_DATA_CAN_MARK: bool = false;
+
+#[test]
+fn stack_secrets_data_can_create_the_parameters_the_vault_binding_creates() {
+    let policy = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(
+            alien_permissions::generators::management_stack_secrets_data(),
+            BindingTarget::Stack,
+            &context().with_signing_protected(true),
+        )
+        .unwrap();
+    let arn = vault_parameter_arn("stack-a", "secrets", "api-key");
+    assert_eq!(
+        evaluate(&policy.statement, &Request::new("ssm:PutParameter", &arn)),
+        Decision::Allowed
+    );
+    let mark = evaluate(&policy.statement, &Request::new("ssm:AddTagsToResource", &arn));
+    let expected = if STACK_SECRETS_DATA_CAN_MARK { Decision::Allowed } else { Decision::NotAllowed };
+    assert_eq!(mark, expected);
 }

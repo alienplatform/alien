@@ -6,9 +6,9 @@
     "aws": [
       {
         "label": "write-ssm-parameters",
-        "description": "Create, update, and delete application-owned SSM Parameter Store values.",
+        "description": "Create, update, and delete application-owned SSM Parameter Store values. Adding tags covers the markers set when a value is created.",
         "grant": {
-          "actions": ["ssm:PutParameter", "ssm:DeleteParameter"]
+          "actions": ["ssm:PutParameter", "ssm:AddTagsToResource", "ssm:DeleteParameter"]
         },
         "binding": {
           "stack": {

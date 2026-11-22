@@ -270,6 +270,9 @@ fn to_manager_api_observed_inventory_batches(
 
 /// Maximum number of acquire attempts (60 × 2s = 2 minutes).
 const MAX_ACQUIRE_ATTEMPTS: usize = 60;
+/// Attempts when the lock may be a removed Operator's, which expires after five minutes
+/// (180 × 2s = 6 minutes).
+const MAX_LOCK_EXPIRY_WAIT_ATTEMPTS: usize = 180;
 /// Maximum number of setup delete handoff attempts (1,350 × 2s = 45 minutes): a cloud runtime
 /// cleanup can legitimately take that long.
 const MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS: usize = 1_350;
@@ -455,6 +458,8 @@ pub async fn acquire_runtime_delete_deployment(
     deployment_id: &str,
     session: &str,
     deployment_model: DeploymentModel,
+    setup_method: &str,
+    wait_for_lock_to_expire: bool,
 ) -> Result<AcquiredDeploymentPayload, AlienError> {
     acquire_deployment_with_statuses(
         client,
@@ -462,12 +467,18 @@ pub async fn acquire_runtime_delete_deployment(
         session,
         deployment_model,
         Some("runtime".to_string()),
-        Some("cli".to_string()),
+        Some(setup_method.to_string()),
         Some(vec![
             "delete-pending".to_string(),
             "deleting".to_string(),
             "delete-failed".to_string(),
         ]),
+        if wait_for_lock_to_expire {
+            // A removed Operator's session lock is not given back: it expires after five minutes.
+            MAX_LOCK_EXPIRY_WAIT_ATTEMPTS
+        } else {
+            MAX_ACQUIRE_ATTEMPTS
+        },
     )
     .await
 }
@@ -491,6 +502,7 @@ pub async fn acquire_deployment(
         None,
         None,
         None,
+        MAX_ACQUIRE_ATTEMPTS,
     )
     .await
 }
@@ -512,6 +524,7 @@ pub async fn acquire_deployment_with_payload(
         None,
         None,
         None,
+        MAX_ACQUIRE_ATTEMPTS,
     )
     .await
 }
@@ -535,6 +548,7 @@ pub async fn acquire_setup_run_deployment(
         Some("setup-run".to_string()),
         Some("cli".to_string()),
         Some(setup_run_acquire_statuses()),
+        MAX_ACQUIRE_ATTEMPTS,
     )
     .await
     {
@@ -636,6 +650,32 @@ pub async fn acquire_setup_delete_deployment(
     deployment_model: DeploymentModel,
     setup_method: &str,
     erase_data: bool,
+) -> Result<SetupDeleteAcquireOutcome, AlienError> {
+    acquire_setup_delete_deployment_naming(
+        client,
+        deletion_lookup,
+        deployment_id,
+        session,
+        deployment_model,
+        setup_method,
+        erase_data,
+        false,
+    )
+    .await
+}
+
+/// [`acquire_setup_delete_deployment`] for a command that has `--operator-removed`: its timeout
+/// message for a removed Operator names that flag. A command without the flag must not name it.
+#[allow(clippy::too_many_arguments)]
+pub async fn acquire_setup_delete_deployment_naming(
+    client: &ManagerClient,
+    deletion_lookup: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+    deployment_model: DeploymentModel,
+    setup_method: &str,
+    erase_data: bool,
+    command_has_operator_removed: bool,
 ) -> Result<SetupDeleteAcquireOutcome, AlienError> {
     let statuses = vec![
         "retention-required".to_string(),
@@ -854,8 +894,13 @@ pub async fn acquire_setup_delete_deployment(
                     deployment.status
                 )
             } else if kubernetes_pull {
+                let removed = if command_has_operator_removed {
+                    "run this command again with --operator-removed, which does the runtime cleanup from the command itself"
+                } else {
+                    "the deployment record stays as it is"
+                };
                 format!(
-                    "Timed out after {minutes} minutes waiting for runtime cleanup to reach the setup teardown handoff (deployment status: {}). The Operator has not finished its cleanup. Runtime cleanup is done by the deployment's Operator. The deletion cannot be finished from this command yet. If the Operator is still installed, leave it running and run destroy again. If it was already removed (for example the Helm release was uninstalled), the deployment record stays as it is.",
+                    "Timed out after {minutes} minutes waiting for runtime cleanup to reach the setup teardown handoff (deployment status: {}). The Operator has not finished its cleanup. Runtime cleanup is done by the deployment's Operator. The deletion cannot be finished from this command yet. If the Operator is still installed, leave it running and run destroy again. If it was already removed (for example the Helm release was uninstalled), {removed}.",
                     deployment.status
                 )
             } else {
@@ -885,8 +930,9 @@ async fn acquire_deployment_with_statuses(
     acquire_mode: Option<String>,
     setup_method: Option<String>,
     statuses: Option<Vec<String>>,
+    max_attempts: usize,
 ) -> Result<AcquiredDeploymentPayload, AlienError> {
-    for attempt in 1..=MAX_ACQUIRE_ATTEMPTS {
+    for attempt in 1..=max_attempts {
         let resp = client
             .acquire()
             .body(alien_manager_api::types::AcquireRequest {
@@ -925,7 +971,7 @@ async fn acquire_deployment_with_statuses(
 
         reject_non_retryable_acquire_reason(deployment_id, &response.not_acquired, false)?;
 
-        if attempt == MAX_ACQUIRE_ATTEMPTS {
+        if attempt == max_attempts {
             return Err(AlienError::new(alien_error::GenericError {
                 message: acquisition_timeout_message(deployment_id, &response.not_acquired),
             }));
@@ -933,7 +979,7 @@ async fn acquire_deployment_with_statuses(
 
         info!(
             attempt = attempt,
-            max = MAX_ACQUIRE_ATTEMPTS,
+            max = max_attempts,
             "Waiting for deployment lock"
         );
         tokio::time::sleep(ACQUIRE_RETRY_DELAY).await;
@@ -1593,7 +1639,7 @@ mod tests {
             manager_that_refuses_the_acquire(&server, "statusMismatch", "delete-pending", None)
                 .await;
         let client = ManagerClient::new(&server.base_url());
-        let error = acquire_setup_delete_deployment(
+        let error = acquire_setup_delete_deployment_naming(
             &client,
             &client,
             "deployment-1",
@@ -1601,6 +1647,7 @@ mod tests {
             DeploymentModel::Pull,
             "helm",
             false,
+            true,
         )
         .await
         .err()
@@ -1611,10 +1658,37 @@ mod tests {
             chain.contains("The Operator has not finished its cleanup"),
             "{chain}"
         );
+        assert!(chain.contains("run this command again with --operator-removed"), "{chain}");
         assert!(chain.contains("delete-pending"), "{chain}");
         assert!(chain.contains("leave it running and run destroy again"), "{chain}");
         assert!(!chain.contains("start it again"), "{chain}");
         acquire.assert_hits_async(450).await;
+    }
+
+    /// A command without `--operator-removed` (`alien destroy`) must not name it.
+    #[tokio::test]
+    async fn setup_delete_timeout_names_operator_removed_only_where_the_flag_exists() {
+        let server = MockServer::start_async().await;
+        let _acquire =
+            manager_that_refuses_the_acquire(&server, "statusMismatch", "delete-pending", None)
+                .await;
+        let client = ManagerClient::new(&server.base_url());
+        let error = acquire_setup_delete_deployment(
+            &client,
+            &client,
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Pull,
+            "cli",
+            false,
+        )
+        .await
+        .err()
+        .expect("the wait is bounded");
+        let chain = serde_json::to_string(&error).unwrap();
+        assert!(chain.contains("The Operator has not finished its cleanup"), "{chain}");
+        assert!(!chain.contains("--operator-removed"), "{chain}");
+        assert!(chain.contains("the deployment record stays as it is"), "{chain}");
     }
 
     /// A cloud runtime cleanup can legitimately take long: the push deployment's wait keeps its
@@ -1686,6 +1760,7 @@ mod tests {
         .expect("the wait is bounded");
         let chain = serde_json::to_string(&error).unwrap();
         assert!(chain.contains("15 minutes"), "{chain}");
+        assert!(chain.contains("The Operator has not finished its cleanup"), "{chain}");
         acquire.assert_hits_async(450).await;
     }
 

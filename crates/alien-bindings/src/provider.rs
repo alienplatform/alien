@@ -1146,8 +1146,11 @@ impl BindingsProviderApi for BindingsProvider {
                         "Failed to extract vault_prefix from ParameterStore binding",
                     ))?;
 
-                let vault: Arc<dyn Vault> =
-                    Arc::new(AwsParameterStoreVault::new(client, vault_prefix));
+                let vault: Arc<dyn Vault> = Arc::new(AwsParameterStoreVault::new(
+                    client,
+                    vault_prefix,
+                    binding_name.to_string(),
+                ));
                 Ok(vault)
             }
             #[cfg(not(feature = "aws"))]
@@ -1186,7 +1189,11 @@ impl BindingsProviderApi for BindingsProvider {
                 // Azure Key Vault URLs typically follow: https://{vault-name}.vault.azure.net/
                 let vault_base_url = format!("https://{}.vault.azure.net", vault_name);
 
-                let vault: Arc<dyn Vault> = Arc::new(AzureKeyVault::new(client, vault_base_url));
+                let vault: Arc<dyn Vault> = Arc::new(AzureKeyVault::new(
+                    client,
+                    vault_base_url,
+                    binding_name.to_string(),
+                ));
                 Ok(vault)
             }
             #[cfg(not(feature = "azure"))]
@@ -1224,6 +1231,7 @@ impl BindingsProviderApi for BindingsProvider {
                     client,
                     vault_prefix,
                     gcp_config.project_id.clone(),
+                    binding_name.to_string(),
                 ));
                 Ok(vault)
             }
@@ -2017,10 +2025,9 @@ impl BindingsProviderApi for BindingsProvider {
         let binding: SandboxBinding = self.parse_binding(binding_name, "sandbox")?;
 
         let gateway = binding.egress().and_then(|value| value.gateway());
-        // Google Cloud's `internet` is the platform's own open outbound, with no gateway of ours;
-        // AWS and Azure declare it only together with a gateway.
+        // `internet` is declared only together with a gateway, on every backend: a binding that
+        // names none was written by a setup that predates it, and never opens outbound instead.
         if gateway.is_none()
-            && !matches!(binding, SandboxBinding::GcpAgentPlatform(_))
             && binding
                 .egress()
                 .is_some_and(|egress| *egress.declaration() == alien_core::SandboxEgress::Internet)
@@ -2045,13 +2052,19 @@ impl BindingsProviderApi for BindingsProvider {
         if gateway.is_some()
             && !matches!(
                 &binding,
-                SandboxBinding::Aws(_) | SandboxBinding::Azure(_) | SandboxBinding::Kubernetes(_)
+                SandboxBinding::Aws(_)
+                    | SandboxBinding::Azure(_)
+                    | SandboxBinding::GcpAgentPlatform(_)
+                    | SandboxBinding::Kubernetes(_)
             )
         {
             return Err(crate::providers::sandbox::egress::unsupported(
                 "gateway-backed sandbox",
             ));
         }
+        // Owned copies, taken before the match below moves the binding apart.
+        let gateway_replicas = gateway.and_then(|config| config.replicas.clone());
+        let default_policy_owned = default_policy.cloned();
         let egress_manager = if let Some(config) = gateway {
             let container = self.load_container(&config.container).await.context(
                 ErrorData::SandboxEgressGatewayUnavailable {
@@ -2084,8 +2097,15 @@ impl BindingsProviderApi for BindingsProvider {
         } else {
             None
         };
+        // A local sandbox's gateway runs in the local manager, so its binding carries the links
+        // itself.
+        let links = match (&binding, gateway) {
+            (SandboxBinding::Local(local), _) => local.links.clone(),
+            (_, Some(config)) => config.links.clone(),
+            (_, None) => Default::default(),
+        };
 
-        match binding {
+        let sandbox = match binding {
             #[cfg(feature = "local")]
             SandboxBinding::Local(local_binding) => {
                 use crate::providers::sandbox::local::LocalSandbox;
@@ -2148,13 +2168,48 @@ impl BindingsProviderApi for BindingsProvider {
                 let mut config = gcp_config.clone();
                 config.region = region;
 
-                let iam_client = alien_gcp_clients::iam::IamClient::new(
-                    reqwest::Client::new(),
-                    gcp_config.clone(),
-                );
-                let client = AgentPlatformClient::new(reqwest::Client::new(), config);
+                let iam_client: Arc<dyn alien_gcp_clients::gcp::iam::IamApi> =
+                    Arc::new(alien_gcp_clients::iam::IamClient::new(
+                        reqwest::Client::new(),
+                        gcp_config.clone(),
+                    ));
+                let client: Arc<dyn alien_gcp_clients::gcp::agent_platform::AgentPlatformApi> =
+                    Arc::new(AgentPlatformClient::new(reqwest::Client::new(), config));
+                // A private-ingress template's sandboxes answer only through the PSC endpoint.
+                let client = match (&gcp_binding.private_endpoint, &gcp_binding.preview_service_account)
+                {
+                    (Some(endpoint), Some(account)) => {
+                        let account = account
+                            .clone()
+                            .into_value(binding_name, "previewServiceAccount")
+                            .context(ErrorData::config_invalid(
+                                binding_name,
+                                "Failed to resolve previewServiceAccount from the Agent Platform sandbox binding",
+                            ))?;
+                        Arc::new(
+                            crate::providers::sandbox::gcp_private_ingress::PrivateIngressClient::new(
+                                client,
+                                endpoint.clone(),
+                                alien_core::sandbox_image::GCP_AGENT_PLATFORM.port,
+                                Arc::new(
+                                    crate::providers::sandbox::gcp_agent_platform::IamEdgeTokenSigner::new(
+                                        iam_client.clone(),
+                                        account,
+                                    ),
+                                ),
+                            ),
+                        ) as Arc<dyn alien_gcp_clients::gcp::agent_platform::AgentPlatformApi>
+                    }
+                    (Some(_), None) => {
+                        return Err(AlienError::new(ErrorData::config_invalid(
+                            binding_name,
+                            "a private endpoint needs previewServiceAccount to sign the edge credential",
+                        )))
+                    }
+                    (None, _) => client,
+                };
                 let provider = GcpAgentPlatformSandbox::new(
-                    Arc::new(client),
+                    client,
                     engine,
                     template,
                     gcp_binding.max_lifetime_seconds,
@@ -2163,16 +2218,40 @@ impl BindingsProviderApi for BindingsProvider {
                     preview_ports,
                     preview_service_account,
                     binding_name,
-                    Arc::new(iam_client),
+                    iam_client,
                 )?;
-                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(
-                    provider.with_egress(
-                        gcp_binding
-                            .egress
-                            .as_ref()
-                            .map(|egress| egress.declaration().clone()),
-                    ),
+                let mut provider = provider.with_egress(
+                    gcp_binding
+                        .egress
+                        .as_ref()
+                        .map(|egress| egress.declaration().clone()),
                 );
+                if let Some(manager) = &egress_manager {
+                    // Setup records the port sandboxes dial; a binding without it or without the
+                    // replica addresses cannot route anything, so it is refused, never opened.
+                    let replicas = gateway_replicas
+                        .as_ref()
+                        .filter(|replicas| {
+                            replicas.proxy_port != 0 && !replicas.addresses.is_empty()
+                        })
+                        .ok_or_else(|| {
+                            AlienError::new(ErrorData::SandboxEgressGatewayUnavailable {
+                                reason: "the GCP gateway binding names no replica addresses or \
+                                         proxy port; re-run setup"
+                                    .to_string(),
+                            })
+                        })?;
+                    provider = provider.with_egress_gateway(
+                        manager.clone(),
+                        replicas
+                            .addresses
+                            .iter()
+                            .map(|address| format!("{address}:{}", replicas.proxy_port))
+                            .collect(),
+                        default_policy_owned.clone(),
+                    );
+                }
+                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(provider);
                 Ok(sandbox)
             }
             #[cfg(feature = "azure")]
@@ -2259,7 +2338,8 @@ impl BindingsProviderApi for BindingsProvider {
                     );
                 }
 
-                Ok(Arc::new(sandbox))
+                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(sandbox);
+                Ok(sandbox)
             }
             #[cfg(feature = "aws")]
             SandboxBinding::Aws(aws_binding) => {
@@ -2401,7 +2481,8 @@ impl BindingsProviderApi for BindingsProvider {
             SandboxBinding::Kubernetes(_) => Err(not_built("kubernetes")),
             #[cfg(not(feature = "local"))]
             SandboxBinding::Local(_) => Err(not_built("local")),
-        }
+        }?;
+        crate::providers::sandbox::links::with_links(sandbox, &links)
     }
 }
 
@@ -2710,13 +2791,13 @@ mod tests {
     /// with its own code, not the gateway-outage one.
     #[cfg(feature = "gcp")]
     #[tokio::test]
-    async fn a_gcp_internet_binding_without_a_gateway_loads() {
+    async fn a_gcp_internet_binding_without_a_gateway_is_refused_never_opened() {
         let mut binding = alien_core::SandboxBinding::gcp_agent_platform(
             "projects/example/locations/us-central1/reasoningEngines/1",
             "projects/example/locations/us-central1/sandboxEnvironmentTemplates/1",
             "us-central1",
             None,
-            true,
+            false,
         );
         let alien_core::SandboxBinding::GcpAgentPlatform(inner) = &mut binding else {
             unreachable!()
@@ -2735,24 +2816,12 @@ mod tests {
             HashMap::from([("box".into(), serde_json::to_value(binding).unwrap())]),
         )
         .unwrap();
-        let sandbox = provider
-            .load_sandbox("box")
-            .await
-            .expect("an internet-declared Google Cloud binding loads");
-        let error = sandbox
-            .update_egress(
-                "existing",
-                alien_core::EgressPolicy::Allow {
-                    allow: vec!["api.example.com".into()],
-                },
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, "SANDBOX_EGRESS_ALLOWLIST_UNSUPPORTED");
-        sandbox
-            .update_egress("existing", alien_core::EgressPolicy::Internet)
-            .await
-            .expect("internet equals the declaration");
+        // A binding written by a setup that predates the gateway names none. It is refused, so
+        // an internet sandbox can never fall back to Google's open outbound.
+        assert!(
+            provider.load_sandbox("box").await.is_err(),
+            "an internet binding with no gateway must not load"
+        );
     }
 
     /// The image in the binding has to be the image the provider uses.

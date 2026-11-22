@@ -185,3 +185,71 @@ mod tests {
         }
     }
 }
+
+/// The cluster's IPv4 Service ranges from the ServiceCIDR API, or `None` when the API server
+/// does not serve it.
+pub(crate) async fn listed_service_ranges(
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<Option<Vec<ipnet::Ipv4Net>>> {
+    match ctx
+        .service_provider
+        .get_kubernetes_node_client(ctx.get_kubernetes_config()?)
+        .await?
+        .list_service_cidrs()
+        .await
+    {
+        Ok(list) => Ok(Some(
+            list.items
+                .into_iter()
+                .filter_map(|range| range.spec)
+                .flat_map(|spec| spec.cidrs.unwrap_or_default())
+                .filter_map(|cidr| cidr.parse::<ipnet::Ipv4Net>().ok())
+                .collect(),
+        )),
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+            message: "Failed to list Service address ranges".into(),
+            resource_id: Some(ctx.desired_config.id().into()),
+        }),
+    }
+}
+
+/// The ClusterIP of Service `name` in `namespace`, or `None` while the Service does not exist
+/// or has no IPv4 ClusterIP.
+pub(crate) async fn service_cluster_ip(
+    ctx: &ResourceControllerContext<'_>,
+    namespace: &str,
+    name: &str,
+) -> Result<Option<std::net::Ipv4Addr>> {
+    match ctx
+        .service_provider
+        .get_kubernetes_service_client(ctx.get_kubernetes_config()?)
+        .await?
+        .get_service(namespace, name)
+        .await
+    {
+        Ok(service) => Ok(service
+            .spec
+            .and_then(|spec| spec.cluster_ip)
+            .and_then(|address| address.parse().ok())),
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to read Service '{name}'"),
+            resource_id: Some(ctx.desired_config.id().into()),
+        }),
+    }
+}

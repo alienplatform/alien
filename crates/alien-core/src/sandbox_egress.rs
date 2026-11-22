@@ -44,6 +44,27 @@ pub const NO_CONFIG_FILE_GATEWAY_DIGESTS: &[&str] =
 pub const NO_ADMIN_PROTOCOL_GATEWAY_DIGESTS: &[&str] =
     &["sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1"];
 
+/// Gateway images pinned before gateways read `links`. Their configuration refuses unknown
+/// fields, so one of them refuses a configuration with links as a whole rather than ignoring
+/// them. Planning refuses a sandbox link while the planned gateway is one of these. The list
+/// never grows.
+pub const NO_LINKS_GATEWAY_DIGESTS: &[&str] = &[
+    "sha256:dbac794afe2185a8ce025d92ec05a5878d6367ae9380eccc2c3dfc4d55f1c59c",
+    "sha256:1dc14128e34426b84c7a02228a6de790ea092b156776c3f2688b9843b26fc924",
+    "sha256:7a3a66b0894c05fca445cbf5fd71e351cd8a9a98c40744acad4496b59574bdbd",
+    "sha256:f0e47d06eea327bc27fdc1238dae6a8938572db0c1d139495d00dd5623b657dd",
+    "sha256:b252a1b423b95385e5df0c57a37daae6937daa274e3c7783c71704584b18483d",
+    "sha256:8538880f99141888e54bedc7d290194dfee5bfe11910266b309dde53de2601b0",
+    "sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1",
+    // The published v3.3.71 image, released before gateways read `links`.
+    "sha256:69d97f5aceb41f5bc8eee09e497cd967f04ef19b649150a472607153446ef7d8",
+];
+
+/// Whether a gateway running `image` enforces sandbox links.
+pub fn gateway_image_serves_links(image: &str) -> bool {
+    !is_pinned_to(image, NO_LINKS_GATEWAY_DIGESTS)
+}
+
 fn is_pinned_to(image: &str, digests: &[&str]) -> bool {
     digests
         .iter()
@@ -69,7 +90,7 @@ pub fn gateway_image_serves_admin_protocol(image: &str) -> bool {
 }
 
 /// The gateway image this release installs for an internet sandbox.
-pub const SANDBOX_EGRESS_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1";
+pub const SANDBOX_EGRESS_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037";
 
 /// The refusal for an Azure internet sandbox while the installed gateway image predates the
 /// admin protocol. Build, template and deployment checks all give this text.
@@ -88,7 +109,13 @@ pub fn planned_gateway_image(stack: &Stack) -> &str {
             crate::ContainerCode::Image { image } => Some(image.as_str()),
             _ => None,
         })
-        .unwrap_or(SANDBOX_EGRESS_GATEWAY_IMAGE)
+        .unwrap_or(installed_gateway_image())
+}
+
+/// The gateway image preparation installs: [`SANDBOX_EGRESS_GATEWAY_IMAGE`], unless a test
+/// turned on the Google Cloud flip with its own image (dev-only feature).
+pub fn installed_gateway_image() -> &'static str {
+    crate::gcp_sandbox_gateway::gateway_image_override().unwrap_or(SANDBOX_EGRESS_GATEWAY_IMAGE)
 }
 
 /// Whether preflight installed the managed gateway for this deployment.
@@ -415,6 +442,19 @@ mod tests {
         assert!(gateway_image_serves_admin_protocol(
             "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000000"
         ));
+    }
+
+    #[test]
+    fn the_v3_3_71_gateway_image_does_not_serve_links() {
+        assert!(!gateway_image_serves_links(
+            "ghcr.io/alienplatform/alien-egress-gateway@sha256:69d97f5aceb41f5bc8eee09e497cd967f04ef19b649150a472607153446ef7d8"
+        ));
+    }
+
+    /// The gateway this release installs reads `links`, so planning accepts sandbox links.
+    #[test]
+    fn the_pinned_gateway_image_serves_links() {
+        assert!(gateway_image_serves_links(SANDBOX_EGRESS_GATEWAY_IMAGE));
     }
 
     use crate::{ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};

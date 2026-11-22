@@ -501,6 +501,111 @@ pub(crate) async fn set_compute_task(
 }
 
 // ---------------------------------------------------------------------------
+// Endpoint source ranges
+// ---------------------------------------------------------------------------
+
+/// What an older platform, which has no such operation, answers: its router's plain 404, which
+/// the SDK reports as an unparsable or unexpected response. A platform that knows the operation
+/// answers a missing deployment with a coded error instead.
+fn platform_lacks_endpoint_source_ranges(error: &AlienError<alien_error::GenericError>) -> bool {
+    match error.code.as_str() {
+        "UNEXPECTED_RESPONSE" => error.http_status_code == Some(404),
+        // The body is the router's default text, not an API error.
+        "INVALID_RESPONSE_PAYLOAD" => {
+            error
+                .context
+                .as_ref()
+                .and_then(|context| context.get("responseBody"))
+                .and_then(Value::as_str)
+                == Some("404 Not Found")
+        }
+        _ => false,
+    }
+}
+
+pub(crate) async fn set_endpoint_source_ranges_task(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    ranges: Vec<String>,
+    json: bool,
+) -> Result<()> {
+    alien_core::validate_endpoint_source_ranges(&ranges).map_err(|message| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "range".to_string(),
+            message,
+        })
+    })?;
+    let response = match client
+        .update_deployment_endpoint_source_ranges()
+        .id(deployment_id)
+        .workspace(workspace)
+        .body(
+            alien_platform_api::types::UpdateDeploymentEndpointSourceRangesBody {
+                ranges: ranges.clone(),
+            },
+        )
+        .send()
+        .await
+        .into_sdk_error()
+    {
+        Ok(response) => response.into_inner(),
+        Err(error) if platform_lacks_endpoint_source_ranges(&error) => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "command".to_string(),
+                message:
+                    "This platform does not support limiting endpoints to source ranges yet. \
+                          Upgrade the platform, or leave the deployment's endpoints open to anyone."
+                        .to_string(),
+            }));
+        }
+        Err(error) => {
+            return Err::<(), _>(error).context(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "updating endpoint source ranges for deployment '{deployment_id}'"
+                ),
+                url: None,
+            });
+        }
+    };
+    if json {
+        return print_json(&response);
+    }
+    let response =
+        serde_json::to_value(&response)
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "serialize".to_string(),
+                reason: "the endpoint source ranges response".to_string(),
+            })?;
+    if response.get("outcome").and_then(Value::as_str) == Some("unchanged") {
+        println!("Endpoint source ranges are already set to this. Nothing to update.");
+        return Ok(());
+    }
+    println!(
+        "{}",
+        success_line("Endpoint source ranges update requested.")
+    );
+    let value = if ranges.is_empty() {
+        "anyone".to_string()
+    } else {
+        ranges.join(", ")
+    };
+    println!("{} {value}", dim_label("Allowed sources"));
+    if let Some(operation_id) = response.pointer("/operation/id").and_then(Value::as_str) {
+        println!("{} {operation_id}", dim_label("Operation"));
+    }
+    println!(
+        "{} {}",
+        dim_label("Next"),
+        command(&format!(
+            "alien deployments wait {deployment_id} --for terminal"
+        ))
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Environment variables
 // ---------------------------------------------------------------------------
 
@@ -1917,6 +2022,138 @@ mod tests {
         let unchanged = serde_json::to_value(compute_request(None, None).expect("empty body"))
             .expect("serialize request");
         assert_eq!(unchanged, serde_json::json!({}));
+    }
+
+    const SOURCE_RANGES_DEPLOYMENT: &str = "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f";
+
+    #[tokio::test]
+    async fn setting_and_clearing_source_ranges_send_the_list_and_an_empty_list() {
+        let server = httpmock::MockServer::start_async().await;
+        let path = format!("/v1/deployments/{SOURCE_RANGES_DEPLOYMENT}/endpoint-source-ranges");
+        let set = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PATCH)
+                    .path(path.as_str())
+                    .query_param("workspace", "my-workspace")
+                    .json_body(serde_json::json!({"ranges": ["203.0.113.0/24", "2001:db8::/32"]}));
+                then.status(200)
+                    .json_body(serde_json::json!({"outcome": "unchanged", "operation": null}));
+            })
+            .await;
+        let clear = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PATCH)
+                    .path(path.as_str())
+                    .json_body(serde_json::json!({"ranges": []}));
+                then.status(200)
+                    .json_body(serde_json::json!({"outcome": "unchanged", "operation": null}));
+            })
+            .await;
+        let client = alien_platform_api::Client::new(&server.base_url());
+        let deployment = SOURCE_RANGES_DEPLOYMENT;
+        set_endpoint_source_ranges_task(
+            &client,
+            "my-workspace",
+            deployment,
+            vec!["203.0.113.0/24".into(), "2001:db8::/32".into()],
+            true,
+        )
+        .await
+        .expect("set");
+        set.assert_async().await;
+        set_endpoint_source_ranges_task(&client, "my-workspace", deployment, Vec::new(), true)
+            .await
+            .expect("clear");
+        clear.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn invalid_ranges_are_refused_before_any_request() {
+        let server = httpmock::MockServer::start_async().await;
+        let any = server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200);
+            })
+            .await;
+        let client = alien_platform_api::Client::new(&server.base_url());
+        let error = set_endpoint_source_ranges_task(
+            &client,
+            "my-workspace",
+            SOURCE_RANGES_DEPLOYMENT,
+            vec!["203.0.113.5/24".into()],
+            true,
+        )
+        .await
+        .expect_err("host bits are refused");
+        assert!(
+            error.message.contains("203.0.113.5/24"),
+            "{}",
+            error.message
+        );
+        assert_eq!(any.hits_async().await, 0);
+    }
+
+    #[tokio::test]
+    async fn an_older_platform_without_the_operation_gets_a_clear_message() {
+        let server = httpmock::MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PATCH);
+                // The router's default answer for a path it has no route for.
+                then.status(404).body("404 Not Found");
+            })
+            .await;
+        let client = alien_platform_api::Client::new(&server.base_url());
+        let error = set_endpoint_source_ranges_task(
+            &client,
+            "my-workspace",
+            SOURCE_RANGES_DEPLOYMENT,
+            vec!["203.0.113.0/24".into()],
+            true,
+        )
+        .await
+        .expect_err("an old platform has no such route");
+        assert!(
+            error
+                .message
+                .contains("does not support limiting endpoints to source ranges"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_deployment_is_not_mistaken_for_an_older_platform() {
+        let server = httpmock::MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PATCH);
+                then.status(404).json_body(serde_json::json!({
+                    "code": "DEPLOYMENT_NOT_FOUND",
+                    "message": "Deployment not found",
+                    "retryable": false,
+                    "internal": false,
+                    "httpStatusCode": 404
+                }));
+            })
+            .await;
+        let client = alien_platform_api::Client::new(&server.base_url());
+        let error = set_endpoint_source_ranges_task(
+            &client,
+            "my-workspace",
+            SOURCE_RANGES_DEPLOYMENT,
+            Vec::new(),
+            true,
+        )
+        .await
+        .expect_err("deployment is missing");
+        assert!(
+            !error.message.contains("does not support"),
+            "{}",
+            error.message
+        );
+        assert_eq!(error.http_status_code, Some(404));
     }
 
     #[test]

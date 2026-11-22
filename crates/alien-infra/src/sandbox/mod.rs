@@ -3,6 +3,7 @@
 #[cfg(any(
     feature = "aws",
     feature = "azure",
+    feature = "gcp",
     feature = "local",
     feature = "kubernetes"
 ))]
@@ -82,6 +83,12 @@ pub(crate) mod grant_fingerprint;
 
 #[cfg(feature = "gcp")]
 mod gcp_agent_platform_template;
+#[cfg(feature = "gcp")]
+mod gcp_egress;
+#[cfg(feature = "gcp")]
+mod gcp_placement;
+#[cfg(feature = "gcp")]
+mod gcp_private_endpoint;
 #[cfg(feature = "gcp")]
 pub use gcp_agent_platform_template::*;
 

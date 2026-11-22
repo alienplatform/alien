@@ -57,6 +57,24 @@ pub struct DeployCliConfig {
     /// Human-friendly display name (e.g., "Acme Deploy CLI").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    /// Branded Kubernetes label domain (e.g., "acme.dev") the installs of this package carry on
+    /// their objects. A delete run from this binary uses it to recognise those objects.
+    /// An empty value reads as none, so every user of it (the runtime cleanup and the listing
+    /// of what it left) agrees on the default domain.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_empty_text"
+    )]
+    pub label_domain: Option<String>,
+}
+
+fn non_empty_text<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<String> = serde::Deserialize::deserialize(deserializer)?;
+    Ok(value.filter(|text| !text.trim().is_empty()))
 }
 
 /// Configuration embedded in alien-operator binaries.
@@ -226,6 +244,7 @@ mod tests {
             token_env_var: Some("EXAMPLE_TOKEN".into()),
             name: Some("example-deploy".into()),
             display_name: Some("Example Deploy".into()),
+            label_domain: Some("example.dev".into()),
         };
         let binary = b"an existing executable";
 
@@ -241,6 +260,29 @@ mod tests {
         assert_eq!(loaded.deployment_group_id, config.deployment_group_id);
         assert_eq!(loaded.setup_revision, config.setup_revision);
         assert_eq!(loaded.name, config.name);
+        assert_eq!(loaded.label_domain.as_deref(), Some("example.dev"));
+    }
+
+    /// An empty label domain is none, not a domain of its own.
+    #[test]
+    fn an_empty_label_domain_reads_as_none() {
+        for json in [
+            r#"{"labelDomain":""}"#,
+            r#"{"labelDomain":"  "}"#,
+            r#"{"labelDomain":null}"#,
+        ] {
+            let loaded: DeployCliConfig = serde_json::from_str(json).unwrap();
+            assert_eq!(loaded.label_domain, None, "{json}");
+        }
+        let loaded: DeployCliConfig = serde_json::from_str(r#"{"labelDomain":"acme.dev"}"#).unwrap();
+        assert_eq!(loaded.label_domain.as_deref(), Some("acme.dev"));
+    }
+
+    /// A package built before the label domain was embedded still loads, with none.
+    #[test]
+    fn a_deploy_cli_config_without_a_label_domain_still_loads() {
+        let loaded: DeployCliConfig = serde_json::from_str(r#"{"name":"example-deploy"}"#).unwrap();
+        assert_eq!(loaded.label_domain, None);
     }
 
     #[test]
@@ -259,6 +301,7 @@ mod tests {
             setup_revision: Some("build-123".into()),
             token_env_var: Some("ACME_DEPLOYMENT_TOKEN".into()),
             name: Some("acme-deploy".into()),
+            label_domain: None,
         };
 
         let binary = b"fake binary content";

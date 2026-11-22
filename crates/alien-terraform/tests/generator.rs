@@ -49,6 +49,7 @@ mod generator {
     pub mod gcp_data_layer_tests;
     pub mod gcp_full_stack_tests;
     pub mod gcp_identity_tests;
+    pub mod gcp_internet_gateway_tests;
     pub mod gcp_protected_verifier_tests;
     pub mod k8s_overlay_tests;
     pub mod management_url_tests;

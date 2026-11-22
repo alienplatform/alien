@@ -708,6 +708,7 @@ impl Ec2Client {
             | "NatGatewayLimitExceeded"
             | "SubnetLimitExceeded"
             | "SecurityGroupLimitExceeded"
+            | "RulesPerSecurityGroupLimitExceeded"
             | "AddressLimitExceeded" => ErrorData::QuotaExceeded { message },
             "InvalidVpcState"
             | "InvalidSubnetID.DuplicateSubnet"
@@ -2580,8 +2581,8 @@ impl Ec2Client {
     ///
     /// Currently only emits `NestedVirtualization` when set. AWS validates
     /// support at launch time and rejects unsupported instance types with a
-    /// clear error (nested virt is only available on 8th-gen Intel: c8i/m8i/r8i
-    /// and their flex variants), so no client-side allowlist is needed.
+    /// clear error (`describe-instance-types` lists the types that support
+    /// it), so no client-side allowlist is needed.
     fn add_cpu_options(
         form_data: &mut HashMap<String, String>,
         cpu_options: Option<&LaunchTemplateCpuOptions>,
@@ -4565,11 +4566,11 @@ pub struct LaunchTemplateInstanceMetadataOptions {
 
 /// CPU options for launch template.
 ///
-/// AWS only accepts `nested_virtualization = "enabled"` on 8th-generation
-/// Intel instance types (c8i, m8i, r8i, and their flex variants). Other
-/// instance types will reject the launch with a clear error — we let AWS
-/// be the authority on supported types rather than maintaining our own
-/// allowlist.
+/// AWS only accepts `nested_virtualization = "enabled"` on the instance types
+/// whose `describe-instance-types` output lists `nested-virtualization` (such
+/// as c8i and m8i; never bare metal). Other types reject the launch with a
+/// clear error, so AWS stays the authority on supported types rather than an
+/// allowlist here.
 ///
 /// See: https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_LaunchTemplateCpuOptionsRequest.html
 #[derive(Debug, Clone, Serialize, Builder, Default)]
@@ -4721,6 +4722,14 @@ mod error_mapping_tests {
                 matches!(mapped(code), Some(ErrorData::QuotaExceeded { message }) if message == "m")
             );
         }
+    }
+
+    #[test]
+    fn the_security_group_rule_limit_decodes_as_a_quota() {
+        assert!(matches!(
+            mapped("RulesPerSecurityGroupLimitExceeded"),
+            Some(ErrorData::QuotaExceeded { message }) if message == "m"
+        ));
     }
 
     #[test]

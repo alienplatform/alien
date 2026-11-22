@@ -25,9 +25,12 @@ pub enum EgressPolicy {
     Internet,
     /// Explicit destinations; unspecified ports exclude 25, 465 and 587.
     /// Wildcards include the apex. An explicit port can allow a mail destination.
+    /// `link:<resource-id>` names a service the stack links to the sandbox; nothing else
+    /// reaches a link, so `allow: []` refuses links too.
     #[serde(untagged)]
     Allow {
-        /// Hostnames, wildcard hostnames, IPv4 literals or IPv4 CIDRs, optionally with a port.
+        /// Hostnames, wildcard hostnames, IPv4 literals, IPv4 CIDRs (optionally with a port),
+        /// or `link:<resource-id>`.
         allow: Vec<String>,
     },
 }
@@ -128,9 +131,40 @@ impl EgressPolicy {
         ))
     }
 
+    /// Whether this policy lets the sandbox reach the service its stack links as `resource_id`.
+    ///
+    /// The stack's links are the ceiling; this only narrows them. `internet` keeps every
+    /// declared link, an allowlist keeps the links it names as `link:<resource-id>`, and an
+    /// empty allowlist keeps none. A name the stack does not link matches nothing here, and the
+    /// gateway answers only for declared links.
+    pub fn allows_link(&self, resource_id: &str) -> bool {
+        match self {
+            Self::Internet => true,
+            Self::Allow { allow } => allow.iter().any(|entry| {
+                Target::parse(entry)
+                    .is_ok_and(|target| matches!(&target.host, Host::Link(id) if id == resource_id))
+            }),
+        }
+    }
+
+    /// Whether this policy has a `link:<resource-id>` entry, which releases before links cannot
+    /// read.
+    pub fn names_links(&self) -> bool {
+        match self {
+            Self::Internet => false,
+            Self::Allow { allow } => allow
+                .iter()
+                .any(|entry| entry.starts_with(LINK_TARGET_PREFIX)),
+        }
+    }
+
     /// Whether a concrete public destination and port match this policy.
     pub fn allows(&self, host: &str, port: u16) -> Result<bool> {
-        let target = Target::parse(&format!("{host}:{port}"))?;
+        let destination = format!("{host}:{port}");
+        let target = Target::parse(&destination)?;
+        if matches!(target.host, Host::Link(_)) {
+            return Err(invalid(&destination, "a link is not a destination"));
+        }
         // Sandboxes share one outbound IP: unsolicited mail can get that IP blocklisted
         // for every tenant. Explicit destination:port grants retain legitimate mail use.
         let mail = matches!(port, 25 | 465 | 587);
@@ -178,9 +212,18 @@ struct Target {
 
 #[derive(Debug)]
 enum Host {
-    Name { name: String, wildcard: bool },
+    Name {
+        name: String,
+        wildcard: bool,
+    },
     Network(Ipv4Net),
+    /// A service the stack links to the sandbox, by resource id. It never matches a host or
+    /// an address: only the gateway's declared links resolve it.
+    Link(String),
 }
+
+/// Prefix of a policy entry naming a linked service rather than a destination.
+pub const LINK_TARGET_PREFIX: &str = "link:";
 
 fn invalid(target: &str, reason: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::SandboxEgressInvalid {
@@ -191,6 +234,19 @@ fn invalid(target: &str, reason: &str) -> AlienError<ErrorData> {
 
 impl Target {
     fn parse(target: &str) -> Result<Self> {
+        if let Some(id) = target.strip_prefix(LINK_TARGET_PREFIX) {
+            // The ports are the link's declared ports; a policy cannot name others.
+            crate::stack_authoring::validate_resource_id(id).map_err(|reason| {
+                invalid(
+                    target,
+                    &format!("expected link:<resource-id> with no port; the resource id {reason}"),
+                )
+            })?;
+            return Ok(Self {
+                host: Host::Link(id.to_string()),
+                port: None,
+            });
+        }
         let (host, port) = match target.rsplit_once(':') {
             Some((host, port)) => {
                 if port.is_empty() || !port.bytes().all(|c| c.is_ascii_digit()) {
@@ -292,6 +348,7 @@ impl Target {
             Host::Name { name, wildcard } => format!("{}{name}", if *wildcard { "*." } else { "" }),
             Host::Network(network) if network.prefix_len() == 32 => network.addr().to_string(),
             Host::Network(network) => network.to_string(),
+            Host::Link(id) => return format!("{LINK_TARGET_PREFIX}{id}"),
         };
         match self.port {
             Some(port) => format!("{host}:{port}"),

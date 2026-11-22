@@ -6,7 +6,8 @@
     "aws": [
       {
         "grant": {
-          "actions": ["ssm:PutParameter", "ssm:DeleteParameter"]
+          // Adding tags covers the markers set when a value is created.
+          "actions": ["ssm:PutParameter", "ssm:AddTagsToResource", "ssm:DeleteParameter"]
         },
         "binding": {
           "stack": {
