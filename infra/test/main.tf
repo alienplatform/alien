@@ -120,8 +120,8 @@ resource "google_iam_deny_policy" "ci_identity_guard" {
         "iam.googleapis.com/workloadIdentityPoolProviders.update",
         "iam.googleapis.com/workloadIdentityPoolProviders.delete",
         "iam.googleapis.com/workloadIdentityPoolProviders.undelete",
+        # serviceAccountKeys.upload can't be denied (not on Google's supported list).
         "iam.googleapis.com/serviceAccountKeys.create",
-        "iam.googleapis.com/serviceAccountKeys.upload",
       ]
     }
   }
