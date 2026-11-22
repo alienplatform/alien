@@ -401,7 +401,7 @@ mod oauth_flow {
         }
 
         // The old session stays during the browser wait, so a failed or interrupted login
-        // leaves the user signed in. The login response replaces the saved session as it came.
+        // leaves the user signed in.
         let store = TokenStore::new()?;
         let tokens = login_with_ui(&base_url, opts.no_browser).await?;
         replace_session(&store, &cfg_path(), &tokens)?;
@@ -416,10 +416,10 @@ mod oauth_flow {
         remove_profile(&cfg_path())
     }
 
-    /// Replace the saved session with a fresh login. The order matters: if the profile cannot
-    /// be removed nothing has changed yet, so the reported failure is true; the old credentials
-    /// file is deleted before the new one is written, so the new file is created fresh with
-    /// mode 0600; and a new session is never on disk next to an older workspace profile.
+    /// The replacement `alien login` does: remove the workspace profile, delete the old
+    /// credentials file, write the new one. A failure to remove the profile changes nothing;
+    /// a later failure leaves the old session or no session, never a new session next to an
+    /// older workspace profile. Deleting before writing makes the file new, with mode 0600.
     fn replace_session(store: &TokenStore, profile: &Path, tokens: &TokenResponse) -> Result<()> {
         remove_profile(profile)?;
         store.clear()?;
@@ -934,23 +934,47 @@ mod oauth_flow {
         }
 
         #[test]
-        fn save_login_overwrites_corrupt_file() {
+        fn save_login_drops_old_refresh_token_without_clearing_first() {
             let (_dir, store) = temp_store();
-            fs::write(&store.path, "not-json{{{").expect("write corrupt file");
+            store
+                .save(&StoredTokens {
+                    access_token: "old-access".to_string(),
+                    refresh_token: Some("old-refresh".to_string()),
+                })
+                .expect("seed session");
 
             store
                 .save_login(&TokenResponse {
-                    access_token: "access-1".to_string(),
-                    refresh_token: Some("refresh-1".to_string()),
+                    access_token: "new-access".to_string(),
+                    refresh_token: None,
                     expires_in: Some(3600),
                 })
-                .expect("login must overwrite a corrupt session file");
+                .expect("save_login should succeed");
 
-            let loaded = store
-                .load()
-                .expect("load should succeed")
-                .expect("session should exist");
-            assert_eq!(loaded.access_token, "access-1");
+            let loaded = store.load().expect("load").expect("session should exist");
+            assert_eq!(loaded.access_token, "new-access");
+            assert_eq!(loaded.refresh_token, None);
+        }
+
+        #[test]
+        fn replace_session_recovers_from_corrupt_credentials_file() {
+            let (dir, store) = temp_store();
+            fs::write(&store.path, "not-json{{{").expect("write corrupt file");
+
+            replace_session(
+                &store,
+                &dir.path().join("profile.json"),
+                &TokenResponse {
+                    access_token: "new-access".to_string(),
+                    refresh_token: Some("new-refresh".to_string()),
+                    expires_in: Some(3600),
+                },
+            )
+            .expect("login must replace a corrupt session file");
+
+            let loaded = store.load().expect("load").expect("session should exist");
+            assert_eq!(loaded.access_token, "new-access");
+            assert_eq!(loaded.refresh_token.as_deref(), Some("new-refresh"));
         }
 
         #[test]
@@ -966,7 +990,7 @@ mod oauth_flow {
             let profile = dir.path().join("profile.json");
             fs::create_dir_all(profile.join("inner")).expect("make blocking directory");
 
-            let result = replace_session(
+            let error = replace_session(
                 &store,
                 &profile,
                 &TokenResponse {
@@ -974,9 +998,20 @@ mod oauth_flow {
                     refresh_token: None,
                     expires_in: Some(3600),
                 },
-            );
+            )
+            .expect_err("profile removal must fail");
 
-            assert!(result.is_err());
+            match error.error {
+                Some(ErrorData::FileOperationFailed {
+                    operation,
+                    file_path,
+                    ..
+                }) => {
+                    assert_eq!(operation, "delete");
+                    assert_eq!(file_path, profile.display().to_string());
+                }
+                other => panic!("expected the profile delete failure, got {:?}", other),
+            }
             let loaded = store.load().expect("load").expect("session should exist");
             assert_eq!(loaded.access_token, "old-access");
             assert_eq!(loaded.refresh_token.as_deref(), Some("old-refresh"));
