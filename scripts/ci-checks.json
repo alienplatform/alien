@@ -3,7 +3,14 @@
   "repo_wide": [
     {
       "name": "install-wait scan and probe script tests",
-      "run": ["python3", "-m", "unittest", "discover", "-p", "test_*.py"],
+      "run": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-p",
+        "test_*.py"
+      ],
       "cwd": "crates/alien-helm/tests/cni_probe",
       "why": "test_budget.py lists every tracked file (git ls-files) and fails when any file installs a chart without the install wait. A new file in any package can break it, so it runs on every pull request. It is the Python half of `cargo test -p alien-helm --test cni_probe`, run directly so no Rust build is needed."
     },
@@ -20,25 +27,15 @@
     },
     {
       "name": "selection script tests",
-      "run": ["python3", "scripts/affected-rust-packages.test.py"],
+      "run": [
+        "python3",
+        "scripts/affected-rust-packages.test.py"
+      ],
       "cwd": ".",
       "why": "The script decides what pull requests test, and this keeps every entry of this file pointing at something that exists. Cheap, and it reads the crates' manifests and test directories."
     }
   ],
   "dependents": {
-    "alien-core": [
-      {
-        "package": "alien-stack-toml",
-        "filter": "binary(schema) | binary(differential)",
-        "why": "schema/ holds the alien.toml schemas generated from alien-core's types, and the differential test resolves the checked-in fixtures into alien_core::Stack. A change to a core type makes them stale."
-      },
-      {
-        "package": "alien-platform-api",
-        "dir": "client-sdks/platform/rust",
-        "filter": "binary(runtime_metadata_round_trip) | binary(automatic_setup) | binary(event_state) | binary(observed_inventory) | binary(protected_stack_settings) | binary(quota_settings) | binary(stored_secret_presence)",
-        "why": "These send alien-core values through the client generated from the checked-in openapi.json. A core field the spec lacks is dropped, so a core change without a regenerated spec fails here."
-      }
-    ],
     "alien-permissions": [
       {
         "package": "alien-preflights",
@@ -74,17 +71,27 @@
     },
     "extra_inputs": {
       "@alienplatform/core": {
-        "paths": ["client-sdks/"],
-        "suffixes": ["openapi.json"],
+        "paths": [
+          "client-sdks/"
+        ],
+        "suffixes": [
+          "openapi.json"
+        ],
         "why": "packages/core/src/__tests__/platform-binding-serialization.test.ts imports the generated platform client by relative path, and core's generated schemas come from the OpenAPI specs."
       },
       "@alienplatform/permissions": {
-        "paths": ["crates/alien-permissions/"],
+        "paths": [
+          "crates/alien-permissions/"
+        ],
         "why": "packages/permissions/test.mjs reads the operation catalog in crates/alien-permissions and runs its operation-permission-compiler, so a change to the crate changes what the package tests check."
       }
     },
     "every_package_inputs": {
-      "paths": ["pnpm-lock.yaml", "pnpm-workspace.yaml", "package.json"],
+      "paths": [
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "package.json"
+      ],
       "why": "The lockfile, the workspace list and the root manifest decide which dependencies every package installs, so a change to any of them selects every test package."
     }
   }
