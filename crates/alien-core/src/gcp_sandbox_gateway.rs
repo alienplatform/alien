@@ -57,10 +57,10 @@ mod test_switch {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::OnceLock;
 
-    /// The released public gateway image the flip pins (v3.3.72, by digest). It serves the admin
+    /// The released public gateway image the flip pins (v3.3.73, by digest). It serves the admin
     /// protocol the sandbox binding requires and reads sandbox links, and it is what the live
     /// test runs.
-    pub const FLIPPED_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037";
+    pub const FLIPPED_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:3cb7a6935faab449cb1d754edbfd711b330318ecaf2eb54f7135ee16550c4e8d";
 
     thread_local! {
         static FORCED: Cell<bool> = const { Cell::new(false) };

@@ -90,7 +90,7 @@ pub fn gateway_image_serves_admin_protocol(image: &str) -> bool {
 }
 
 /// The gateway image this release installs for an internet sandbox.
-pub const SANDBOX_EGRESS_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037";
+pub const SANDBOX_EGRESS_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:3cb7a6935faab449cb1d754edbfd711b330318ecaf2eb54f7135ee16550c4e8d";
 
 /// The refusal for an Azure internet sandbox while the installed gateway image predates the
 /// admin protocol. Build, template and deployment checks all give this text.
@@ -455,6 +455,19 @@ mod tests {
     #[test]
     fn the_pinned_gateway_image_serves_links() {
         assert!(gateway_image_serves_links(SANDBOX_EGRESS_GATEWAY_IMAGE));
+    }
+
+    /// The published v3.3.72 gateway refuses WebSocket and other non-HTTP traffic to a link.
+    /// Neither the pin nor the Google Cloud flip image may stay on it. The digest is split so a
+    /// pin move cannot rewrite it.
+    #[test]
+    fn the_pinned_gateway_images_relay_link_traffic() {
+        let v3_3_72 = concat!(
+            "@sha256:40a22a2aebf068da82d4310043875b38",
+            "3cdeba9cfa0aa90a649d67f70398a037"
+        );
+        assert!(!SANDBOX_EGRESS_GATEWAY_IMAGE.ends_with(v3_3_72));
+        assert!(!crate::gcp_sandbox_gateway::FLIPPED_GATEWAY_IMAGE.ends_with(v3_3_72));
     }
 
     use crate::{ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
