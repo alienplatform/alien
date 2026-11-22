@@ -11,61 +11,59 @@ terraform {
   }
 }
 
+# Terraform in this directory is applied by a person signed in with `az login`,
+# `aws sso login` and `gcloud auth application-default login`; no provider
+# carries a static credential.
 provider "azuread" {
-  tenant_id     = var.azure_management_tenant_id
-  client_id     = var.azure_management_client_id
-  client_secret = var.azure_management_client_secret
+  tenant_id = var.azure_management_tenant_id
+}
+
+provider "azuread" {
+  alias     = "target"
+  tenant_id = var.azure_target_tenant_id
 }
 
 provider "aws" {
-  alias      = "management"
-  access_key = var.aws_management_access_key_id
-  secret_key = var.aws_management_secret_access_key
-  region     = var.aws_management_region
+  alias   = "management"
+  profile = "alien-test-mgmt"
+  region  = var.aws_management_region
 }
 
 provider "aws" {
-  alias      = "target"
-  access_key = var.aws_target_access_key_id
-  secret_key = var.aws_target_secret_access_key
-  region     = var.aws_target_region
+  alias   = "target"
+  profile = "alien-test-target"
+  region  = var.aws_target_region
 }
 
 
 provider "google" {
-  alias       = "management"
-  credentials = var.google_management_service_account_key
-  project     = var.google_management_project_id
-  region      = var.google_management_region
+  alias   = "management"
+  project = var.google_management_project_id
+  region  = var.google_management_region
 }
 
 provider "google" {
-  alias       = "target"
-  credentials = var.google_target_service_account_key
-  project     = var.google_target_project_id
-  region      = var.google_target_region
+  alias   = "target"
+  project = var.google_target_project_id
+  region  = var.google_target_region
 }
 
 provider "google" {
-  alias       = "target_1"
-  credentials = var.google_target_1_service_account_key
-  project     = var.google_target_1_project_id
-  region      = var.google_target_1_region
+  alias   = "target_1"
+  project = var.google_target_1_project_id
+  region  = var.google_target_1_region
 }
 
 provider "google" {
-  alias       = "target_3"
-  credentials = var.google_target_3_service_account_key
-  project     = var.google_target_3_project_id
-  region      = var.google_target_3_region
+  alias   = "target_3"
+  project = var.google_target_3_project_id
+  region  = var.google_target_3_region
 }
 
 provider "azurerm" {
   alias           = "management"
   subscription_id = var.azure_management_subscription_id
   tenant_id       = var.azure_management_tenant_id
-  client_id       = var.azure_management_client_id
-  client_secret   = var.azure_management_client_secret
   features {}
 }
 
@@ -73,8 +71,6 @@ provider "azurerm" {
   alias           = "target"
   subscription_id = var.azure_target_subscription_id
   tenant_id       = var.azure_target_tenant_id
-  client_id       = var.azure_target_client_id
-  client_secret   = var.azure_target_client_secret
   features {}
 }
 
@@ -82,6 +78,4 @@ provider "azapi" {
   alias           = "target"
   subscription_id = var.azure_target_subscription_id
   tenant_id       = var.azure_target_tenant_id
-  client_id       = var.azure_target_client_id
-  client_secret   = var.azure_target_client_secret
 }

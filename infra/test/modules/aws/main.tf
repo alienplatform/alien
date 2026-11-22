@@ -429,14 +429,14 @@ resource "aws_eks_addon" "e2e_ebs_csi" {
 resource "aws_eks_access_entry" "e2e_target" {
   provider      = aws.target
   cluster_name  = aws_eks_cluster.e2e.name
-  principal_arn = aws_iam_user.target.arn
+  principal_arn = aws_iam_role.target_ci.arn
   type          = "STANDARD"
 }
 
 resource "aws_eks_access_policy_association" "e2e_target_admin" {
   provider      = aws.target
   cluster_name  = aws_eks_cluster.e2e.name
-  principal_arn = aws_iam_user.target.arn
+  principal_arn = aws_iam_role.target_ci.arn
   policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
 
   access_scope {
@@ -446,18 +446,153 @@ resource "aws_eks_access_policy_association" "e2e_target_admin" {
   depends_on = [aws_eks_access_entry.e2e_target]
 }
 
-# ── Management: IAM user ──────────────────────────────────────────────────────
+# ── CI identities ─────────────────────────────────────────────────────────────
+# Cloud tests sign in from GitHub Actions with a short-lived OIDC token; no IAM
+# user or access key exists. Each account has one role that only a job running in
+# the `cloud-tests` environment of this repository can assume. Terraform for this
+# directory is applied by a person, never by these roles: the deny statements
+# below keep a test job from changing the provider, the CI roles or their trust.
+
+locals {
+  github_oidc_url  = "token.actions.githubusercontent.com"
+  github_oidc_sub  = "repo:alienplatform/alien:environment:cloud-tests"
+  github_thumbs    = ["6938fd4d98bab03faadb97b34396831e3780aea1", "1c58a3a8518e8759bf075b76b750d4f2df264fcd"]
+  ci_max_session_s = 14400
+}
+
+resource "aws_iam_openid_connect_provider" "github_management" {
+  provider        = aws.management
+  url             = "https://${local.github_oidc_url}"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = local.github_thumbs
+}
+
+resource "aws_iam_openid_connect_provider" "github_target" {
+  provider        = aws.target
+  url             = "https://${local.github_oidc_url}"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = local.github_thumbs
+}
+
+resource "aws_iam_role" "manager_ci" {
+  provider             = aws.management
+  name                 = "alien-test-manager-ci"
+  max_session_duration = local.ci_max_session_s
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = aws_iam_openid_connect_provider.github_management.arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${local.github_oidc_url}:aud" = "sts.amazonaws.com"
+          "${local.github_oidc_url}:sub" = local.github_oidc_sub
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role" "target_ci" {
+  provider             = aws.target
+  name                 = "alien-test-target-ci"
+  max_session_duration = local.ci_max_session_s
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = aws_iam_openid_connect_provider.github_target.arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${local.github_oidc_url}:aud" = "sts.amazonaws.com"
+          "${local.github_oidc_url}:sub" = local.github_oidc_sub
+        }
+      }
+    }]
+  })
+}
+
+# Explicit denies win over the broad allows below. They cover the OIDC
+# provider, both CI roles, and long-lived credentials (users, access keys).
+data "aws_iam_policy_document" "ci_guard_management" {
+  statement {
+    sid       = "NoCiIdentityChanges"
+    effect    = "Deny"
+    actions   = ["iam:*OpenIDConnectProvider*"]
+    resources = [aws_iam_openid_connect_provider.github_management.arn]
+  }
+  statement {
+    sid    = "NoCiRoleChanges"
+    effect = "Deny"
+    actions = [
+      "iam:UpdateAssumeRolePolicy", "iam:UpdateRole", "iam:UpdateRoleDescription",
+      "iam:DeleteRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy",
+      "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+      "iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary",
+    ]
+    resources = [aws_iam_role.manager_ci.arn]
+  }
+  statement {
+    sid    = "NoLongLivedCredentials"
+    effect = "Deny"
+    actions = [
+      "iam:CreateUser", "iam:CreateAccessKey", "iam:CreateLoginProfile",
+      "iam:UpdateLoginProfile", "iam:CreateOpenIDConnectProvider",
+      "iam:CreateSAMLProvider", "iam:UpdateSAMLProvider",
+    ]
+    resources = ["*"]
+  }
+}
+
+data "aws_iam_policy_document" "ci_guard_target" {
+  statement {
+    sid       = "NoCiIdentityChanges"
+    effect    = "Deny"
+    actions   = ["iam:*OpenIDConnectProvider*"]
+    resources = [aws_iam_openid_connect_provider.github_target.arn]
+  }
+  statement {
+    sid    = "NoCiRoleChanges"
+    effect = "Deny"
+    actions = [
+      "iam:UpdateAssumeRolePolicy", "iam:UpdateRole", "iam:UpdateRoleDescription",
+      "iam:DeleteRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy",
+      "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+      "iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary",
+    ]
+    resources = [aws_iam_role.target_ci.arn]
+  }
+  statement {
+    sid    = "NoLongLivedCredentials"
+    effect = "Deny"
+    actions = [
+      "iam:CreateUser", "iam:CreateAccessKey", "iam:CreateLoginProfile",
+      "iam:UpdateLoginProfile", "iam:CreateSAMLProvider", "iam:UpdateSAMLProvider",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "manager_ci_guard" {
+  provider = aws.management
+  name     = "ci-guard"
+  role     = aws_iam_role.manager_ci.id
+  policy   = data.aws_iam_policy_document.ci_guard_management.json
+}
+
+resource "aws_iam_role_policy" "target_ci_guard" {
+  provider = aws.target
+  name     = "ci-guard"
+  role     = aws_iam_role.target_ci.id
+  policy   = data.aws_iam_policy_document.ci_guard_target.json
+}
+
+# ── Management: CI role permissions ───────────────────────────────────────────
 # Scoped to the services the manager actually provisions, not AdministratorAccess.
-
-resource "aws_iam_user" "manager" {
-  provider = aws.management
-  name     = "alien-test-manager"
-}
-
-resource "aws_iam_access_key" "manager" {
-  provider = aws.management
-  user     = aws_iam_user.manager.name
-}
 
 resource "aws_iam_policy" "manager" {
   provider = aws.management
@@ -531,14 +666,14 @@ resource "aws_iam_policy" "manager" {
   })
 }
 
-resource "aws_iam_user_policy_attachment" "manager" {
+resource "aws_iam_role_policy_attachment" "manager_ci" {
   provider   = aws.management
-  user       = aws_iam_user.manager.name
+  role       = aws_iam_role.manager_ci.name
   policy_arn = aws_iam_policy.manager.arn
 }
 
 # ── Management: IAM role for SA impersonation ────────────────────────────────
-# The management IAM user assumes this role via STS AssumeRole to get short-lived
+# The management CI role assumes this role via STS AssumeRole to get short-lived
 # credentials. Matches the production model: scoped to STS + resource management.
 
 resource "aws_iam_role" "management" {
@@ -549,7 +684,7 @@ resource "aws_iam_role" "management" {
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { AWS = aws_iam_user.manager.arn }
+      Principal = { AWS = aws_iam_role.manager_ci.arn }
       Action    = "sts:AssumeRole"
     }]
   })
@@ -797,7 +932,7 @@ resource "aws_iam_role" "ecr_push" {
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { AWS = aws_iam_user.manager.arn }
+      Principal = { AWS = aws_iam_role.manager_ci.arn }
       Action    = "sts:AssumeRole"
     }]
   })
@@ -839,7 +974,7 @@ resource "aws_iam_role" "ecr_pull" {
     Statement = [
       {
         Effect    = "Allow"
-        Principal = { AWS = aws_iam_user.manager.arn }
+        Principal = { AWS = aws_iam_role.manager_ci.arn }
         Action    = "sts:AssumeRole"
       },
       {
@@ -889,259 +1024,16 @@ resource "aws_iam_role_policy" "ecr_pull" {
   })
 }
 
-# ── Target: IAM user ──────────────────────────────────────────────────────────
-# Scoped to the services the deployment steps actually provision.
-
-resource "aws_iam_user" "target" {
-  provider = aws.target
-  name     = "alien-test-target"
-}
-
-resource "aws_iam_access_key" "target" {
-  provider = aws.target
-  user     = aws_iam_user.target.name
-}
-
-# Target user gets AdministratorAccess — simulating a real customer admin.
-# In the real flow, the admin has broad permissions in their own account.
-# The E2E test will create a scoped-down role with auto-generated permissions
-# (from alien-permissions) and impersonate it during push_initial_setup,
-# validating that the auto-generated permissions are sufficient.
-resource "aws_iam_user_policy_attachment" "target_admin" {
+# ── Target: CI role permissions ───────────────────────────────────────────────
+# The target CI role gets AdministratorAccess in the target test account only,
+# simulating a real customer admin. The tests create a scoped-down role with
+# permissions generated from alien-permissions and impersonate it, validating
+# that those permissions are sufficient. The ci-guard policy above still denies
+# changes to the CI identity itself.
+resource "aws_iam_role_policy_attachment" "target_ci_admin" {
   provider   = aws.target
-  user       = aws_iam_user.target.name
+  role       = aws_iam_role.target_ci.name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
-}
-
-# Legacy policy — superseded by AdministratorAccess (target_admin attachment above).
-# Kept to avoid Terraform state churn. The E2E tests now create scoped roles
-# with auto-generated permissions from alien-permissions instead.
-resource "aws_iam_policy" "target" {
-  provider = aws.target
-  name     = "alien-target-policy"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "Lambda"
-        Effect = "Allow"
-        Action = [
-          "lambda:CreateFunction",
-          "lambda:DeleteFunction",
-          "lambda:GetFunction",
-          "lambda:GetFunctionConfiguration",
-          "lambda:UpdateFunctionCode",
-          "lambda:UpdateFunctionConfiguration",
-          "lambda:InvokeFunction",
-          "lambda:AddPermission",
-          "lambda:RemovePermission",
-          "lambda:GetPolicy",
-          "lambda:ListVersionsByFunction",
-          "lambda:PublishVersion",
-          "lambda:CreateAlias",
-          "lambda:UpdateAlias",
-          "lambda:DeleteAlias",
-          "lambda:CreateEventSourceMapping",
-          "lambda:DeleteEventSourceMapping",
-          "lambda:GetEventSourceMapping",
-          "lambda:ListEventSourceMappings",
-          "lambda:UpdateEventSourceMapping",
-          "lambda:TagResource",
-          "lambda:ListTags",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "IAM"
-        Effect = "Allow"
-        Action = [
-          "iam:CreateRole",
-          "iam:DeleteRole",
-          "iam:GetRole",
-          "iam:UpdateRole",
-          "iam:PassRole",
-          "iam:AttachRolePolicy",
-          "iam:DetachRolePolicy",
-          "iam:PutRolePolicy",
-          "iam:DeleteRolePolicy",
-          "iam:GetRolePolicy",
-          "iam:ListRolePolicies",
-          "iam:ListAttachedRolePolicies",
-          "iam:TagRole",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "SQS"
-        Effect = "Allow"
-        Action = [
-          "sqs:CreateQueue",
-          "sqs:DeleteQueue",
-          "sqs:GetQueueAttributes",
-          "sqs:GetQueueUrl",
-          "sqs:SetQueueAttributes",
-          "sqs:SendMessage",
-          "sqs:ReceiveMessage",
-          "sqs:DeleteMessage",
-          "sqs:TagQueue",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "DynamoDB"
-        Effect = "Allow"
-        Action = [
-          "dynamodb:CreateTable",
-          "dynamodb:DeleteTable",
-          "dynamodb:DescribeTable",
-          "dynamodb:UpdateTable",
-          "dynamodb:GetItem",
-          "dynamodb:PutItem",
-          "dynamodb:DeleteItem",
-          "dynamodb:Query",
-          "dynamodb:BatchGetItem",
-          "dynamodb:BatchWriteItem",
-          "dynamodb:UpdateTimeToLive",
-          "dynamodb:DescribeTimeToLive",
-          "dynamodb:TagResource",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "S3"
-        Effect = "Allow"
-        Action = [
-          "s3:CreateBucket",
-          "s3:DeleteBucket",
-          "s3:GetBucketLocation",
-          "s3:ListBucket",
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:PutBucketPolicy",
-          "s3:GetBucketPolicy",
-          "s3:PutBucketVersioning",
-          "s3:GetBucketVersioning",
-          "s3:PutPublicAccessBlock",
-          "s3:GetPublicAccessBlock",
-          "s3:PutBucketTagging",
-          "s3:GetBucketTagging",
-          "s3:PutBucketNotification",
-          "s3:GetBucketNotification",
-          "s3:PutLifecycleConfiguration",
-          "s3:GetLifecycleConfiguration",
-          "s3:DeleteLifecycleConfiguration",
-          "s3:ListBucketVersions",
-          "s3:DeleteObjectVersion",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "SecretsManager"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:CreateSecret",
-          "secretsmanager:DeleteSecret",
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:PutSecretValue",
-          "secretsmanager:UpdateSecret",
-          "secretsmanager:DescribeSecret",
-          "secretsmanager:TagResource",
-          "secretsmanager:UntagResource",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "EventBridge"
-        Effect = "Allow"
-        Action = [
-          "events:PutRule",
-          "events:DeleteRule",
-          "events:DescribeRule",
-          "events:PutTargets",
-          "events:RemoveTargets",
-          "events:ListTargetsByRule",
-          "events:TagResource",
-          "events:UntagResource",
-          "scheduler:CreateSchedule",
-          "scheduler:DeleteSchedule",
-          "scheduler:GetSchedule",
-          "scheduler:UpdateSchedule",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "CloudWatch"
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:DeleteLogGroup",
-          "logs:PutRetentionPolicy",
-          "logs:TagResource",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid      = "ECR"
-        Effect   = "Allow"
-        Action   = "ecr:GetAuthorizationToken"
-        Resource = "*"
-      },
-      {
-        # Lambda CreateFunction with a cross-account ECR image requires the
-        # calling principal to have identity-based ECR permissions on the
-        # source repo. Lambda invokes BatchGetImage on behalf of the caller
-        # (verified via CloudTrail: invokedBy=lambda.amazonaws.com).
-        Sid    = "ECRCrossAccountAccess"
-        Effect = "Allow"
-        Action = [
-          "ecr:BatchGetImage",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:GetRepositoryPolicy",
-          "ecr:SetRepositoryPolicy",
-        ]
-        Resource = "arn:aws:ecr:*:${data.aws_caller_identity.management.account_id}:repository/alien-e2e*"
-      },
-      {
-        Sid    = "CodeBuild"
-        Effect = "Allow"
-        Action = [
-          "codebuild:CreateProject",
-          "codebuild:DeleteProject",
-          "codebuild:UpdateProject",
-          "codebuild:BatchGetProjects",
-          "codebuild:StartBuild",
-          "codebuild:BatchGetBuilds",
-          "codebuild:StopBuild",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "SNS"
-        Effect = "Allow"
-        Action = [
-          "sns:CreateTopic",
-          "sns:DeleteTopic",
-          "sns:GetTopicAttributes",
-          "sns:SetTopicAttributes",
-          "sns:Subscribe",
-          "sns:Unsubscribe",
-          "sns:Publish",
-          "sns:TagResource",
-          "sns:UntagResource",
-        ]
-        Resource = "*"
-      },
-    ]
-  })
-}
-
-# Legacy attachment — kept for Terraform state compatibility.
-resource "aws_iam_user_policy_attachment" "target" {
-  provider   = aws.target
-  user       = aws_iam_user.target.name
-  policy_arn = aws_iam_policy.target.arn
 }
 
 data "aws_caller_identity" "target" {
@@ -1162,7 +1054,7 @@ resource "aws_iam_role" "e2e_ar_push" {
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { AWS = aws_iam_user.manager.arn }
+      Principal = { AWS = aws_iam_role.manager_ci.arn }
       Action    = "sts:AssumeRole"
     }]
   })
@@ -1213,7 +1105,7 @@ resource "aws_iam_role" "e2e_ar_pull" {
     Statement = [
       {
         Effect    = "Allow"
-        Principal = { AWS = aws_iam_user.manager.arn }
+        Principal = { AWS = aws_iam_role.manager_ci.arn }
         Action    = "sts:AssumeRole"
       },
       {

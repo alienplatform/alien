@@ -10,16 +10,6 @@ output "management_aws_region" {
   sensitive = true
 }
 
-output "management_aws_access_key_id" {
-  value     = module.aws.management_access_key_id
-  sensitive = true
-}
-
-output "management_aws_secret_access_key" {
-  value     = module.aws.management_secret_access_key
-  sensitive = true
-}
-
 output "management_aws_account_id" {
   value     = data.aws_caller_identity.management.account_id
   sensitive = true
@@ -38,16 +28,6 @@ output "management_aws_role_name" {
 # AWS - Target
 output "target_aws_region" {
   value     = var.aws_target_region
-  sensitive = true
-}
-
-output "target_aws_access_key_id" {
-  value     = module.aws.target_access_key_id
-  sensitive = true
-}
-
-output "target_aws_secret_access_key" {
-  value     = module.aws.target_secret_access_key
   sensitive = true
 }
 
@@ -122,8 +102,7 @@ output "aws_target_options" {
   value = {
     aws-target-1 = {
       AWS_TARGET_REGION                        = var.aws_target_region
-      AWS_TARGET_ACCESS_KEY_ID                 = module.aws.target_access_key_id
-      AWS_TARGET_SECRET_ACCESS_KEY             = module.aws.target_secret_access_key
+      AWS_TARGET_ROLE_ARN                      = module.aws.target_ci_role_arn
       AWS_TARGET_ACCOUNT_ID                    = module.aws.target_account_id
       ALIEN_E2E_AWS_VPC_ID                     = module.aws.e2e_vpc_id
       ALIEN_E2E_AWS_PUBLIC_SUBNET_IDS          = module.aws.e2e_public_subnet_ids
@@ -153,11 +132,6 @@ output "aws_target_options" {
   sensitive = true
 }
 
-output "e2e_eks_kubeconfig" {
-  value     = module.aws.e2e_eks_kubeconfig
-  sensitive = true
-}
-
 output "e2e_eks_cluster_name" {
   value     = module.aws.e2e_eks_cluster_name
   sensitive = true
@@ -174,11 +148,6 @@ output "e2e_eks_public_host_suffix" {
 }
 
 # GCP - Management
-output "management_gcp_service_account_key" {
-  value     = module.gcp.management_service_account_key
-  sensitive = true
-}
-
 output "management_gcp_project_id" {
   value     = var.google_management_project_id
   sensitive = true
@@ -190,11 +159,6 @@ output "management_gcp_region" {
 }
 
 # GCP - Target
-output "target_gcp_service_account_key" {
-  value     = module.gcp.target_service_account_key
-  sensitive = true
-}
-
 output "target_gcp_project_id" {
   value     = var.google_target_project_id
   sensitive = true
@@ -260,14 +224,14 @@ output "e2e_gcp_ar_push_sa_email" {
 output "gcp_target_options" {
   value = {
     gcp-target-1 = {
-      GOOGLE_TARGET_SERVICE_ACCOUNT_KEY = module.gcp_target_1.target_service_account_key
-      GOOGLE_TARGET_PROJECT_ID          = module.gcp_target_1.target_project_id
-      GOOGLE_TARGET_REGION              = module.gcp_target_1.target_region
-      ALIEN_E2E_GCP_NETWORK_NAME        = module.gcp_target_1.e2e_network_name
-      ALIEN_E2E_GCP_SUBNET_NAME         = module.gcp_target_1.e2e_subnet_name
-      ALIEN_E2E_GCP_REGION              = module.gcp_target_1.e2e_network_region
-      ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
-      ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL = module.gcp_target_1.target_service_account_email
+      GOOGLE_TARGET_PROJECT_ID            = module.gcp_target_1.target_project_id
+      GOOGLE_TARGET_REGION                = module.gcp_target_1.target_region
+      ALIEN_E2E_GCP_NETWORK_NAME          = module.gcp_target_1.e2e_network_name
+      ALIEN_E2E_GCP_SUBNET_NAME           = module.gcp_target_1.e2e_subnet_name
+      ALIEN_E2E_GCP_REGION                = module.gcp_target_1.e2e_network_region
+      ALIEN_TEST_K8S_NAMESPACE_PREFIX     = var.e2e_k8s_namespace_prefix
+      ALIEN_TEST_K8S_INGRESS_CLASS        = var.e2e_k8s_ingress_class
       ALIEN_TEST_K8S_INGRESS_ANNOTATIONS = jsonencode({
         "kubernetes.io/ingress.class"                 = "gce"
         "kubernetes.io/ingress.global-static-ip-name" = module.gcp_target_1.e2e_ingress_ip_name
@@ -286,14 +250,14 @@ output "gcp_target_options" {
       ALIEN_TEST_GKE_KUBE_CONTEXT       = var.e2e_gke_kube_context != "" ? var.e2e_gke_kube_context : module.gcp_target_1.e2e_gke_kube_context
     }
     gcp-target-2 = {
-      GOOGLE_TARGET_SERVICE_ACCOUNT_KEY = module.gcp.target_service_account_key
-      GOOGLE_TARGET_PROJECT_ID          = var.google_target_project_id
-      GOOGLE_TARGET_REGION              = var.google_target_region
-      ALIEN_E2E_GCP_NETWORK_NAME        = module.gcp.e2e_network_name
-      ALIEN_E2E_GCP_SUBNET_NAME         = module.gcp.e2e_subnet_name
-      ALIEN_E2E_GCP_REGION              = module.gcp.e2e_network_region
-      ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
-      ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL = module.gcp.target_service_account_email
+      GOOGLE_TARGET_PROJECT_ID            = var.google_target_project_id
+      GOOGLE_TARGET_REGION                = var.google_target_region
+      ALIEN_E2E_GCP_NETWORK_NAME          = module.gcp.e2e_network_name
+      ALIEN_E2E_GCP_SUBNET_NAME           = module.gcp.e2e_subnet_name
+      ALIEN_E2E_GCP_REGION                = module.gcp.e2e_network_region
+      ALIEN_TEST_K8S_NAMESPACE_PREFIX     = var.e2e_k8s_namespace_prefix
+      ALIEN_TEST_K8S_INGRESS_CLASS        = var.e2e_k8s_ingress_class
       ALIEN_TEST_K8S_INGRESS_ANNOTATIONS = jsonencode({
         "kubernetes.io/ingress.class"                 = "gce"
         "kubernetes.io/ingress.global-static-ip-name" = module.gcp.e2e_ingress_ip_name
@@ -312,14 +276,14 @@ output "gcp_target_options" {
       ALIEN_TEST_GKE_KUBE_CONTEXT       = var.e2e_gke_kube_context != "" ? var.e2e_gke_kube_context : module.gcp.e2e_gke_kube_context
     }
     gcp-target-3 = {
-      GOOGLE_TARGET_SERVICE_ACCOUNT_KEY = module.gcp_target_3.target_service_account_key
-      GOOGLE_TARGET_PROJECT_ID          = module.gcp_target_3.target_project_id
-      GOOGLE_TARGET_REGION              = module.gcp_target_3.target_region
-      ALIEN_E2E_GCP_NETWORK_NAME        = module.gcp_target_3.e2e_network_name
-      ALIEN_E2E_GCP_SUBNET_NAME         = module.gcp_target_3.e2e_subnet_name
-      ALIEN_E2E_GCP_REGION              = module.gcp_target_3.e2e_network_region
-      ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
-      ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL = module.gcp_target_3.target_service_account_email
+      GOOGLE_TARGET_PROJECT_ID            = module.gcp_target_3.target_project_id
+      GOOGLE_TARGET_REGION                = module.gcp_target_3.target_region
+      ALIEN_E2E_GCP_NETWORK_NAME          = module.gcp_target_3.e2e_network_name
+      ALIEN_E2E_GCP_SUBNET_NAME           = module.gcp_target_3.e2e_subnet_name
+      ALIEN_E2E_GCP_REGION                = module.gcp_target_3.e2e_network_region
+      ALIEN_TEST_K8S_NAMESPACE_PREFIX     = var.e2e_k8s_namespace_prefix
+      ALIEN_TEST_K8S_INGRESS_CLASS        = var.e2e_k8s_ingress_class
       ALIEN_TEST_K8S_INGRESS_ANNOTATIONS = jsonencode({
         "kubernetes.io/ingress.class"                 = "gce"
         "kubernetes.io/ingress.global-static-ip-name" = module.gcp_target_3.e2e_ingress_ip_name
@@ -338,26 +302,6 @@ output "gcp_target_options" {
       ALIEN_TEST_GKE_KUBE_CONTEXT       = var.e2e_gke_kube_context != "" ? var.e2e_gke_kube_context : module.gcp_target_3.e2e_gke_kube_context
     }
   }
-  sensitive = true
-}
-
-output "e2e_gke_kubeconfig" {
-  value     = module.gcp_target_3.e2e_gke_kubeconfig
-  sensitive = true
-}
-
-output "e2e_gke_target_1_kubeconfig" {
-  value     = module.gcp_target_1.e2e_gke_kubeconfig
-  sensitive = true
-}
-
-output "e2e_gke_target_2_kubeconfig" {
-  value     = module.gcp.e2e_gke_kubeconfig
-  sensitive = true
-}
-
-output "e2e_gke_target_3_kubeconfig" {
-  value     = module.gcp_target_3.e2e_gke_kubeconfig
   sensitive = true
 }
 
@@ -402,11 +346,6 @@ output "management_azure_principal_id" {
   sensitive = true
 }
 
-output "management_azure_client_secret" {
-  value     = var.azure_management_client_secret
-  sensitive = true
-}
-
 output "management_azure_region" {
   value     = var.azure_management_region
   sensitive = true
@@ -430,11 +369,6 @@ output "target_azure_client_id" {
 
 output "target_azure_principal_id" {
   value     = module.azure.target_principal_id
-  sensitive = true
-}
-
-output "target_azure_client_secret" {
-  value     = module.azure.target_client_secret
   sensitive = true
 }
 
@@ -534,14 +468,12 @@ output "azure_target_options" {
       AZURE_TARGET_TENANT_ID                    = var.azure_target_tenant_id
       AZURE_TARGET_CLIENT_ID                    = module.azure.target_client_id
       AZURE_TARGET_PRINCIPAL_ID                 = module.azure.target_principal_id
-      AZURE_TARGET_CLIENT_SECRET                = module.azure.target_client_secret
       AZURE_TARGET_REGION                       = var.azure_management_region
       AZURE_TARGET_RESOURCE_GROUP               = module.azure.shared_container_env_resource_group
       AZURE_REGION                              = var.azure_management_region
       ARM_SUBSCRIPTION_ID                       = var.azure_target_subscription_id
       ARM_TENANT_ID                             = var.azure_target_tenant_id
       ARM_CLIENT_ID                             = module.azure.target_client_id
-      ARM_CLIENT_SECRET                         = module.azure.target_client_secret
       ALIEN_TEST_AZURE_RESOURCE_GROUP           = module.azure.resource_group
       ALIEN_TEST_AZURE_STORAGE_ACCOUNT          = module.azure.storage_account
       ALIEN_TEST_AZURE_TEST_BLOB_CONTAINER      = module.azure.blob_container
@@ -572,11 +504,6 @@ output "azure_target_options" {
       ALIEN_TEST_AKS_PUBLIC_HOST_SUFFIX         = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.azure.e2e_k8s_public_host_suffix
     }
   }
-  sensitive = true
-}
-
-output "e2e_aks_kubeconfig" {
-  value     = module.azure.e2e_aks_kubeconfig
   sensitive = true
 }
 
@@ -637,5 +564,30 @@ output "e2e_gke_target_3_ingress_ip_address" {
 
 output "e2e_gke_target_3_ingress_ip_name" {
   value     = module.gcp_target_3.e2e_ingress_ip_name
+  sensitive = true
+}
+
+# CI identities (config only; credentials come from GitHub OIDC or SSO)
+output "ci_aws_management_role_arn" {
+  value     = module.aws.manager_ci_role_arn
+  sensitive = true
+}
+
+output "ci_aws_target_role_arn" {
+  value     = module.aws.target_ci_role_arn
+  sensitive = true
+}
+
+output "ci_gcp_workload_identity_provider" {
+  value = module.gcp.ci_workload_identity_provider
+}
+
+output "management_gcp_service_account_email" {
+  value     = module.gcp.manager_service_account_email
+  sensitive = true
+}
+
+output "target_gcp_service_account_email" {
+  value     = module.gcp.target_service_account_email
   sensitive = true
 }

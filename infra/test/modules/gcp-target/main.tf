@@ -119,11 +119,6 @@ resource "google_service_account" "target" {
   display_name = "Alien Test Target ${random_id.suffix.hex}"
 }
 
-resource "google_service_account_key" "target" {
-  provider           = google.target
-  service_account_id = google_service_account.target.name
-}
-
 locals {
   target_roles = [
     "roles/run.admin",
@@ -131,7 +126,6 @@ locals {
     "roles/pubsub.admin",
     "roles/storage.admin",
     "roles/iam.serviceAccountAdmin",
-    "roles/iam.serviceAccountKeyAdmin",
     "roles/iam.serviceAccountUser",
     "roles/iam.roleAdmin",
     "roles/iam.workloadIdentityPoolAdmin", # GCP setup creates the deployment's own identity pool and provider
@@ -163,25 +157,15 @@ resource "google_project_iam_member" "target_roles" {
   member   = "serviceAccount:${google_service_account.target.email}"
 }
 
-resource "google_project_iam_member" "target_provider_container_admin" {
-  provider = google.target
-  for_each = var.target_provider_email != "" && var.target_provider_email != google_service_account.target.email ? toset([var.target_provider_email]) : toset([])
-  project  = var.target_project_id
-  role     = "roles/container.admin"
-  member   = "serviceAccount:${each.value}"
-}
-
 resource "time_sleep" "target_role_propagation" {
   create_duration = "90s"
 
   triggers = {
-    target_provider_email = var.target_provider_email
-    target_roles          = sha1(jsonencode(sort(local.target_roles)))
+    target_roles = sha1(jsonencode(sort(local.target_roles)))
   }
 
   depends_on = [
     google_project_iam_member.target_roles,
-    google_project_iam_member.target_provider_container_admin,
   ]
 }
 
@@ -191,4 +175,11 @@ resource "google_project_iam_member" "target_management_access" {
   project  = var.management_project_id
   role     = each.value
   member   = "serviceAccount:${google_service_account.target.email}"
+}
+
+resource "google_service_account_iam_member" "ci_impersonates_target" {
+  provider           = google.target
+  service_account_id = google_service_account.target.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = var.ci_principal_set
 }

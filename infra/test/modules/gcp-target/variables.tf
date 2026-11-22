@@ -10,8 +10,9 @@ variable "target_region" {
   type = string
 }
 
-variable "target_provider_email" {
-  type = string
+variable "ci_principal_set" {
+  description = "Workload identity principal set of the CI pool; may impersonate the target service account."
+  type        = string
 }
 
 variable "e2e_gke_cluster_name" {
