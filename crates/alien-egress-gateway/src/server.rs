@@ -93,9 +93,30 @@ impl Gateway {
             .resolve_now(&record.aud, &record.sub)
             .is_none()
         {
-            return Err(denied("policy missing or deleted"));
+            return Err(alien_error::AlienError::new(
+                crate::error::ErrorData::PolicyMissing,
+            ));
         }
         self.sandbox_credentials.apply(record).map(|_| ())
+    }
+
+    /// Store a credential set, catching up from the peers once when this replica does not hold
+    /// the sandbox's policy yet: a new grant counts once one replica holds it, so another can
+    /// lag until its next anti-entropy pass. A sandbox no replica knows stays refused.
+    pub async fn apply_credentials_caught_up(
+        &self,
+        live: &crate::runtime::LiveGateway,
+        record: crate::sandbox_credentials::CredentialRecord,
+    ) -> Result<()> {
+        match self.apply_credentials(record.clone()) {
+            Err(error)
+                if error.code == "SANDBOX_EGRESS_POLICY_MISSING" && self.replication.enabled() =>
+            {
+                self.replication.catch_up(live).await?;
+                self.apply_credentials(record)
+            }
+            result => result,
+        }
     }
 
     /// Authorize the authenticated identity against its currently stored policy. Returns the

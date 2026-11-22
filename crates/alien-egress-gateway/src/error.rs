@@ -91,6 +91,15 @@ pub enum ErrorData {
         http_status_code = 503
     )]
     GatewayUnavailable,
+    /// A credential write for a sandbox this replica holds no live policy for.
+    #[error(
+        code = "SANDBOX_EGRESS_POLICY_MISSING",
+        message = "The sandbox has no egress policy on this gateway replica",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    PolicyMissing,
     /// A required network or storage operation failed.
     #[error(
         code = "EGRESS_UNAVAILABLE",

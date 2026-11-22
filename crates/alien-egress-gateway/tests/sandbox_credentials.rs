@@ -596,6 +596,33 @@ async fn a_write_is_acknowledged_only_once_every_replica_holds_it() {
     );
     assert_eq!(version(second_admin, &key, "box").await[0], base);
 
+    // A new grant counts once one replica holds it. A write for that sandbox to the replica
+    // that has not caught up yet takes the grant from its peer first, then applies.
+    apply_policy(
+        &first.live.snapshot().unwrap(),
+        &key,
+        "fresh",
+        Some(&Policy::Internet),
+        now_ms(),
+    );
+    assert!(second
+        .live
+        .snapshot()
+        .unwrap()
+        .policies
+        .resolve_now(AUD, "fresh")
+        .is_none());
+    let fresh = credential_record(&key, "fresh", now_ms(), rules.clone());
+    let (status, body) = put_credentials(second_admin, &grant(&key, "fresh", "PUT"), &fresh).await;
+    assert_eq!(status, 204, "{body}");
+    assert!(version(first_admin, &key, "fresh").await[0].is_u64());
+    // A sandbox no replica knows stays refused.
+    let unknown = credential_record(&key, "unknown", now_ms(), rules.clone());
+    let (status, body) =
+        put_credentials(second_admin, &grant(&key, "unknown", "PUT"), &unknown).await;
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("SANDBOX_EGRESS_POLICY_MISSING"), "{body}");
+
     // A restarted replica starts empty and takes the sets from its peer before it is ready.
     let third_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let third_admin = third_listener.local_addr().unwrap();

@@ -272,7 +272,7 @@ async fn exchange(
                 return StatusCode::BAD_REQUEST.into_response();
             };
             match gateway.verify_credentials(mutation.record) {
-                Ok(record) => match gateway.apply_credentials(record) {
+                Ok(record) => match gateway.apply_credentials_caught_up(&live, record).await {
                     Ok(()) => StatusCode::NO_CONTENT.into_response(),
                     Err(error) => failure(error),
                 },
@@ -408,7 +408,11 @@ async fn update_credentials(
             crate::error::ErrorData::GatewayUnavailable,
         ));
     }
-    if let Err(error) = admin.gateway.apply_credentials(record.clone()) {
+    if let Err(error) = admin
+        .gateway
+        .apply_credentials_caught_up(&live, record.clone())
+        .await
+    {
         return failure(error);
     }
     match admin.gateway.replication.fanout_credentials(&record).await {
