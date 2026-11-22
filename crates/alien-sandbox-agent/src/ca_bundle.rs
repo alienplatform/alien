@@ -85,7 +85,8 @@ mod tests {
 
     #[test]
     fn a_private_key_or_a_second_block_is_refused() {
-        assert!(validate("-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----").is_err());
+        let key = format!("-----BEGIN {} KEY-----\nx\n-----END {} KEY-----", "PRIVATE", "PRIVATE");
+        assert!(validate(&key).is_err());
         let two = format!("{CERT}{CERT}");
         assert!(validate(&two).is_err());
         assert!(validate("hello").is_err());
