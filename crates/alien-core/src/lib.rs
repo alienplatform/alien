@@ -182,3 +182,5 @@ mod setup_package;
 pub use setup_package::*;
 pub mod gar_repository;
 pub mod hooks;
+
+// CI timing probe: a comment-only change to measure the pull request tier. Not for merge.
