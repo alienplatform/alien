@@ -103,7 +103,19 @@ fn http_service(id: &str, port: u16) -> Container {
         .command(vec![
             "sh".to_string(),
             "-c".to_string(),
-            format!("mkdir -p /tmp/www && echo {id} > /tmp/www/index.html && exec httpd -f -p {port} -h /tmp/www"),
+            if id == "api" {
+                // `/` answers the Container's name; `/echo` answers the request's header lines,
+                // so the test can read what reached the service.
+                format!(
+                    "printf '%s\\n' '#!/bin/sh' 'IFS= read -r first' 'req=\"$first\"' \
+                     'while IFS= read -r line; do line=$(printf %s \"$line\" | tr -d \"\\r\"); [ -z \"$line\" ] && break; req=\"$req\n$line\"; done' \
+                     'case \"$first\" in *\" /echo \"*) body=$(printf \"$req\");; *) body={id};; esac' \
+                     'printf \"HTTP/1.1 200 OK\\r\\nConnection: close\\r\\n\\r\\n%s\\n\" \"$body\"' > /tmp/serve.sh && \
+                     chmod +x /tmp/serve.sh && exec nc -ll -p {port} -e /tmp/serve.sh"
+                )
+            } else {
+                format!("mkdir -p /tmp/www && echo {id} > /tmp/www/index.html && exec httpd -f -p {port} -h /tmp/www")
+            },
         ])
         .cpu(ResourceSpec {
             min: "0.05".to_string(),
@@ -621,6 +633,90 @@ async fn a_linked_kubernetes_sandbox_reaches_its_link_through_the_gateway_and_no
             "allow {allow:?}: {result:?}"
         );
     }
+    // Per-sandbox credential rules: the session sends a placeholder, the service sees the real
+    // value, and each replacement or removal applies to the very next request.
+    let echo_url = format!("{}/echo", api_url.trim_end_matches('/'));
+    let echoed = |header: Option<&str>| {
+        let mut arguments = vec!["-x", proxy.as_str()];
+        if let Some(header) = header {
+            arguments.extend(["-H", header]);
+        }
+        arguments.push(echo_url.as_str());
+        let result = curl_in(&namespace, &session_pod, &arguments);
+        assert_eq!(result.0, 0, "echo request failed: {result:?}");
+        result.1
+    };
+    const FIRST: &str = "kind-first-turn-4c1e07";
+    const SECOND: &str = "kind-second-turn-b72d95";
+    let set = |value: Option<&str>| {
+        let rules: Vec<alien_core::SandboxCredentialRule> = match value {
+            None => Vec::new(),
+            Some(value) => serde_json::from_value(serde_json::json!([
+                {"link":"api","header":"Authorization","valuePrefix":"Bearer ","value":value}
+            ]))
+            .unwrap(),
+        };
+        rules
+    };
+    let placeholder = "Authorization: Bearer placeholder";
+    let before = echoed(Some(placeholder));
+    println!("CREDENTIALS no rules -> {before:?}");
+    assert!(before.contains("authorization: Bearer placeholder"), "{before}");
+    egress
+        .update_credentials(SESSION, &set(Some(FIRST)))
+        .await
+        .expect("credential rules acknowledged");
+    let first = echoed(Some(placeholder));
+    println!("CREDENTIALS first -> {}", first.replace(FIRST, "<FIRST>"));
+    assert!(first.contains(&format!("authorization: Bearer {FIRST}")), "{first}");
+    assert!(!first.contains("placeholder"), "{first}");
+    // Another session of the same Sandbox keeps its own header.
+    let other_token = egress
+        .mint_identity("kind-links-named", now + 3600)
+        .await
+        .expect("a session token");
+    let other_proxy = format!("http://alien:{other_token}@{gateway_ip}:3128");
+    let other = curl_in(
+        &namespace,
+        &session_pod,
+        &["-x", &other_proxy, "-H", placeholder, &echo_url],
+    );
+    println!("CREDENTIALS other session -> {other:?}");
+    assert!(
+        other.1.contains("Bearer placeholder") && !other.1.contains(FIRST),
+        "{other:?}"
+    );
+    egress
+        .update_credentials(SESSION, &set(Some(SECOND)))
+        .await
+        .expect("replacement acknowledged");
+    let second = echoed(Some(placeholder));
+    assert!(second.contains(&format!("Bearer {SECOND}")), "{second}");
+    assert!(!second.contains(FIRST), "{second}");
+    egress
+        .update_credentials(SESSION, &set(None))
+        .await
+        .expect("removal acknowledged");
+    let removed = echoed(Some(placeholder));
+    println!("CREDENTIALS empty -> {removed:?}");
+    assert!(
+        removed.contains("Bearer placeholder") && !removed.contains(SECOND),
+        "{removed}"
+    );
+    let none_sent = echoed(None);
+    assert!(!none_sent.to_ascii_lowercase().contains("authorization"), "{none_sent}");
+    // The session pod never holds a value.
+    egress
+        .update_credentials(SESSION, &set(Some(FIRST)))
+        .await
+        .expect("acknowledged");
+    let env_dump = run(
+        "kubectl",
+        &["-n", &namespace, "exec", &session_pod, "--", "sh", "-c", "env; cat /etc/ssl/certs/* 2>/dev/null | head -c 0"],
+    );
+    assert!(!env_dump.contains(FIRST) && !env_dump.contains(SECOND));
+    println!("CREDENTIALS_KIND_OK env of the session pod holds neither value");
+
     // Without the gateway the session pod reaches nothing.
     let direct = curl_in(&namespace, &session_pod, &["--noproxy", "*", &api_url]);
     println!("DIRECT {api_url} -> {direct:?}");
@@ -648,6 +744,10 @@ async fn a_linked_kubernetes_sandbox_reaches_its_link_through_the_gateway_and_no
         ],
     );
     println!("GATEWAY_LOGS\n{logs}");
+    assert!(
+        !logs.contains(FIRST) && !logs.contains(SECOND),
+        "gateway logs hold a credential value"
+    );
     println!("LINKS_KIND_PASSED namespace={namespace}");
 }
 
