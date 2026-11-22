@@ -2535,10 +2535,6 @@ async fn get_deployment_task(
             traffic_records: details
                 .as_ref()
                 .and_then(|detail| detail.get("trafficRecords")),
-            recommended_setup_reasons: details
-                .as_ref()
-                .and_then(|detail| detail.get("recommendedSetupReasons"))
-                .filter(|reasons| reasons.as_array().is_some_and(|list| !list.is_empty())),
         });
     }
 
@@ -2642,16 +2638,6 @@ async fn get_deployment_task(
     if let Some(update_state) = platform_detail.and_then(|detail| detail.update_state.as_ref()) {
         print_deployment_update_state(update_state);
     }
-    let recommended = details
-        .as_ref()
-        .map(recommended_setup_messages)
-        .unwrap_or_default();
-    if !recommended.is_empty() {
-        println!("{}", heading("Setup recommended"));
-        for message in recommended {
-            println!("  {message}");
-        }
-    }
 
     if let Some(stack_state) = &deployment.stack_state {
         let stack_state: alien_core::StackState = serde_json::from_value(stack_state.clone())
@@ -2690,20 +2676,6 @@ struct DeploymentDetailOutput<'a> {
     certificates: Option<&'a serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     traffic_records: Option<&'a serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    recommended_setup_reasons: Option<&'a serde_json::Value>,
-}
-
-/// The sentences of the setup changes the platform recommends, such as an alarm the setup role
-/// could not create. Setup grants them when it runs again.
-fn recommended_setup_messages(details: &serde_json::Value) -> Vec<String> {
-    details
-        .get("recommendedSetupReasons")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|reason| reason.get("message")?.as_str().map(str::to_string))
-        .collect()
 }
 
 fn print_deployment_update_state(update_state: &DeploymentDetailResponseUpdateState) {
@@ -4965,23 +4937,6 @@ fn parse_targeted_env_var(input: &str) -> Option<(String, String, Vec<String>)> 
     }
 
     Some((key, value, patterns))
-}
-
-#[cfg(test)]
-mod recommended_setup_tests {
-    use super::recommended_setup_messages;
-
-    #[test]
-    fn lists_the_message_of_each_recommended_reason() {
-        let details = serde_json::json!({
-            "recommendedSetupReasons": [
-                { "code": "grantDenied", "resource": "compute", "message": "first" },
-                { "code": "grantDenied", "resource": "gateway", "message": "second" },
-            ]
-        });
-        assert_eq!(recommended_setup_messages(&details), ["first", "second"]);
-        assert!(recommended_setup_messages(&serde_json::json!({})).is_empty());
-    }
 }
 
 #[cfg(test)]
