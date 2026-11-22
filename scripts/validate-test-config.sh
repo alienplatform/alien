@@ -24,15 +24,23 @@ if [ ! -f "$ENV_PATH" ]; then
   exit 1
 fi
 
-# Source .env.test so AWS credentials are available for the manager process.
+# Source .env.test (configuration only: ids, ARNs, names). Credentials are not in it; they come
+# from the environment: CI exports AWS_MANAGEMENT_* session credentials, a laptop can run
+#   eval "$(aws configure export-credentials --profile alien-test-mgmt --format env)"
+# or set AWS_PROFILE=alien-test-mgmt.
 set -a
 # shellcheck disable=SC1090
 source "$ENV_PATH"
 set +a
 
 # Export AWS credentials the manager expects (management account).
-export AWS_ACCESS_KEY_ID="$AWS_MANAGEMENT_ACCESS_KEY_ID"
-export AWS_SECRET_ACCESS_KEY="$AWS_MANAGEMENT_SECRET_ACCESS_KEY"
+if [ -n "${AWS_MANAGEMENT_ACCESS_KEY_ID:-}" ]; then
+  export AWS_ACCESS_KEY_ID="$AWS_MANAGEMENT_ACCESS_KEY_ID"
+  export AWS_SECRET_ACCESS_KEY="$AWS_MANAGEMENT_SECRET_ACCESS_KEY"
+  export AWS_SESSION_TOKEN="${AWS_MANAGEMENT_SESSION_TOKEN:-}"
+else
+  export AWS_PROFILE="${AWS_PROFILE:-alien-test-mgmt}"
+fi
 export AWS_REGION="$AWS_MANAGEMENT_REGION"
 
 # ── Start alien-manager ─────────────────────────────────────────────────────

@@ -553,7 +553,7 @@ fn build_gcp_target_config(config: &TestConfig) -> anyhow::Result<ClientConfig> 
         .as_ref()
         .context("Missing GCP target credentials")?;
     let credentials = target.credentials().context(
-        "GCP target credentials need GOOGLE_TARGET_ACCESS_TOKEN or GOOGLE_TARGET_SERVICE_ACCOUNT_KEY",
+        "GCP target credentials need GOOGLE_TARGET_ACCESS_TOKEN (a short-lived token)",
     )?;
     Ok(ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
         project_id: target.project_id.clone(),

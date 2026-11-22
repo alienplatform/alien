@@ -22,7 +22,7 @@
 //! ```text
 //! GOOGLE_TARGET_PROJECT_ID=... \
 //! GOOGLE_TARGET_REGION=us-central1 \
-//! GOOGLE_TARGET_SERVICE_ACCOUNT_KEY="$(cat key.json)" \
+//! GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL=... (gcloud auth application-default login) \
 //! ALIEN_TEST_GCP_AGENT_IMAGE=<region>-docker.pkg.dev/<project>/<repo>/agent:<tag> \
 //! ALIEN_TEST_GIT_TOKEN=<pat> \
 //! ALIEN_TEST_PRIVATE_REPO=<owner>/<repo> \
@@ -79,7 +79,7 @@ fn display_prefix() -> String {
 struct LiveConfig {
     project_id: String,
     region: String,
-    credentials_json: String,
+    credentials: GcpCredentials,
 }
 
 fn require_env(key: &str) -> String {
@@ -99,11 +99,14 @@ fn agent_image() -> String {
 impl LiveConfig {
     /// Fails loudly on a missing variable rather than skipping: a live test that quietly passes
     /// with nothing set is the false PASS this suite exists to rule out.
-    fn from_env() -> Self {
+    async fn from_env() -> Self {
+        // Federation file in CI, Application Default Credentials plus impersonation of
+        // `GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL` on a laptop; no key file.
+        let base = alien_gcp_clients::live_test::live_test_config("TARGET").await;
         LiveConfig {
             project_id: require_env("GOOGLE_TARGET_PROJECT_ID"),
             region: require_env("GOOGLE_TARGET_REGION"),
-            credentials_json: require_env("GOOGLE_TARGET_SERVICE_ACCOUNT_KEY"),
+            credentials: base.credentials,
         }
     }
 
@@ -111,9 +114,7 @@ impl LiveConfig {
         let config = GcpClientConfig {
             project_id: self.project_id.clone(),
             region: self.region.clone(),
-            credentials: GcpCredentials::ServiceAccountKey {
-                json: self.credentials_json.clone(),
-            },
+            credentials: self.credentials.clone(),
             service_overrides: None,
             project_number: None,
         };
@@ -347,7 +348,7 @@ async fn shell(provider: &GcpAgentPlatformSandbox, session: &str, script: &str) 
 #[tokio::test]
 #[ignore = "requires a real GCP project; see module docs"]
 async fn create_exec_reconnect_private_clone_terminate() {
-    let config = LiveConfig::from_env();
+    let config = LiveConfig::from_env().await;
     // Required before any provisioning, so the run fails on setup rather than after a live engine
     // exists: the private clone is part of this flow, not an optional extra.
     let git_token = require_env("ALIEN_TEST_GIT_TOKEN");
@@ -513,7 +514,7 @@ async fn reconnect_reader_child() {
     let proof_path = handoff["proofPath"].as_str().expect("proof path");
 
     // A fresh client built from the environment, not handed across from process one.
-    let client = LiveConfig::from_env().client();
+    let client = LiveConfig::from_env().await.client();
     let provider = provider(&client, engine, template);
 
     let session = provider
@@ -575,7 +576,7 @@ async fn reconnect_reader_child() {
 #[tokio::test]
 #[ignore = "requires a real GCP project; spends ~40s of wall-clock against the proxy cap"]
 async fn a_command_past_the_proxy_cap_completes_detached() {
-    let config = LiveConfig::from_env();
+    let config = LiveConfig::from_env().await;
     let client = config.client();
     let engine = provision_engine(&client).await;
     record_engine(&engine);
@@ -623,7 +624,7 @@ async fn a_command_past_the_proxy_cap_completes_detached() {
 #[tokio::test]
 #[ignore = "requires a real GCP project; see module docs"]
 async fn written_files_read_back() {
-    let config = LiveConfig::from_env();
+    let config = LiveConfig::from_env().await;
     let client = config.client();
     let engine = provision_engine(&client).await;
     record_engine(&engine);
@@ -668,7 +669,7 @@ async fn written_files_read_back() {
 #[tokio::test]
 #[ignore = "requires a real GCP project; see module docs"]
 async fn egress_deny_blocks_the_network_including_dns() {
-    let config = LiveConfig::from_env();
+    let config = LiveConfig::from_env().await;
     let client = config.client();
     let engine = provision_engine(&client).await;
     record_engine(&engine);
@@ -839,7 +840,7 @@ async fn reach_rows(
 #[tokio::test]
 #[ignore = "requires a real GCP project on default placement; see module docs"]
 async fn reach_matrix_for_both_egress_switches() {
-    let config = LiveConfig::from_env();
+    let config = LiveConfig::from_env().await;
     let client = config.client();
     let engine = provision_engine(&client).await;
     record_engine(&engine);
@@ -894,7 +895,7 @@ async fn reach_through_a_manager_deployed_binding() {
     use alien_bindings::traits::BindingsProviderApi;
     use alien_core::bindings::{BindingValue, SandboxBinding};
 
-    let config = LiveConfig::from_env();
+    let config = LiveConfig::from_env().await;
     let resource = require_env("ALIEN_TEST_SANDBOX_RESOURCE");
     let url = format!(
         "{}/v1/deployments/{}",
@@ -948,19 +949,16 @@ async fn reach_through_a_manager_deployed_binding() {
         value.egress = Some(alien_core::SandboxEgress::Internet.into());
     }
 
-    let env = HashMap::from([
+    let mut env = alien_gcp_clients::live_test::live_test_provider_env("TARGET");
+    env.extend(HashMap::from([
         ("ALIEN_DEPLOYMENT_TYPE".to_string(), "gcp".to_string()),
         ("GCP_PROJECT_ID".to_string(), config.project_id.clone()),
         ("GCP_REGION".to_string(), config.region.clone()),
         (
-            "GOOGLE_SERVICE_ACCOUNT_KEY".to_string(),
-            config.credentials_json.clone(),
-        ),
-        (
             "ALIEN_BOX_BINDING".to_string(),
             serde_json::to_string(&binding).unwrap(),
         ),
-    ]);
+    ]));
     let bindings = alien_bindings::BindingsProvider::from_env(env)
         .await
         .expect("the provider builds from the environment");
@@ -1088,7 +1086,7 @@ async fn boot_records(provider: &GcpAgentPlatformSandbox, session: &str) -> Stri
 #[tokio::test]
 #[ignore = "requires a real GCP project; spends minutes of wall-clock per cycle"]
 async fn pause_and_resume_keep_memory() {
-    let config = LiveConfig::from_env();
+    let config = LiveConfig::from_env().await;
     let pauses: Vec<u64> = std::env::var("ALIEN_TEST_GCP_PAUSE_SECONDS")
         .unwrap_or_else(|_| "120".to_string())
         .split(',')
@@ -1263,7 +1261,7 @@ fn record_engine(engine: &str) {
 #[tokio::test]
 #[ignore = "requires a real GCP project; reaps engines recorded by failed live runs"]
 async fn sweep_orphaned_engines() {
-    let client = LiveConfig::from_env().client();
+    let client = LiveConfig::from_env().await.client();
     let recorded = std::fs::read_to_string(sweep_log()).unwrap_or_default();
 
     // Two sources, deduped: engines a failed run recorded, and engines the API still lists under
@@ -1355,7 +1353,7 @@ const FIVE_MIB_OF_LINES: &str = "awk 'BEGIN{for(i=0;i<81920;i++)printf \"%063d\\
 async fn output_past_the_reply_limit_is_capped_and_truncated() {
     use alien_bindings::providers::sandbox::gcp_agent_platform::GCP_STREAM_REPLY_BUDGET;
 
-    let config = LiveConfig::from_env();
+    let config = LiveConfig::from_env().await;
     let client = config.client();
     let engine = provision_engine(&client).await;
     record_engine(&engine);
@@ -1433,7 +1431,7 @@ async fn output_past_the_reply_limit_is_capped_and_truncated() {
 #[tokio::test]
 #[ignore = "requires a real GCP project; see module docs"]
 async fn a_file_past_the_reply_limit_reads_back_in_pages() {
-    let config = LiveConfig::from_env();
+    let config = LiveConfig::from_env().await;
     let client = config.client();
     let engine = provision_engine(&client).await;
     record_engine(&engine);

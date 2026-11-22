@@ -30,6 +30,14 @@ pub fn live_test_config(identity: &str) -> AzureClientConfig {
     let tenant_id = var("TENANT_ID");
 
     let credentials = match std::env::var(format!("AZURE_{id}_FEDERATED_TOKEN_FILE")) {
+        // A caller that already holds short-lived tokens (a job running inside Azure, started by
+        // a script that signed in with `az login`) hands them over as a JSON object, scope to token.
+        Err(_) if std::env::var(format!("AZURE_{id}_SCOPED_TOKENS")).is_ok() => {
+            AzureCredentials::ScopedAccessTokens {
+                tokens: serde_json::from_str(&var("SCOPED_TOKENS"))
+                    .unwrap_or_else(|e| panic!("AZURE_{id}_SCOPED_TOKENS is not a JSON object: {e}")),
+            }
+        }
         Ok(federated_token_file) => AzureCredentials::WorkloadIdentity {
             client_id: var("CLIENT_ID"),
             tenant_id: tenant_id.clone(),
