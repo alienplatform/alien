@@ -267,6 +267,33 @@ async fn delete_schedule_rule(
     }
 }
 
+/// How long to wait after API Gateway throttles CreateDomainName. The per-account limit is one
+/// request every 30 seconds, so a shorter retry is refused again.
+const DOMAIN_CREATE_THROTTLE_DELAY: Duration = Duration::from_secs(30);
+
+fn is_remote_rate_limited(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RateLimitExceeded { .. })
+    )
+}
+
+/// CreateDomainName was refused. The management role needs `apigateway:AddCertificateToDomain` on
+/// the ACM certificate as well as the create on the domain, and only a setup run grants it, so the
+/// failure is final instead of retried.
+fn domain_create_denied(
+    error: AlienError<CloudClientErrorData>,
+    fqdn: &str,
+    worker_id: &str,
+) -> AlienError<ErrorData> {
+    error.context(ErrorData::ManagementPermissionMissing {
+        resource_id: worker_id.to_string(),
+        operation: format!("create API Gateway domain '{fqdn}'"),
+        action: "apigateway:AddCertificateToDomain on the ACM certificate (and apigateway:POST on the domain name)"
+            .to_string(),
+    })
+}
+
 fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
         &error.error,
@@ -1822,6 +1849,16 @@ impl AwsWorkerController {
                     }
                 }
             }
+            Err(error) if is_remote_rate_limited(&error) => {
+                warn!(worker=%worker_config.id, domain=%fqdn, "CreateDomainName is rate limited; trying again later");
+                return Ok(HandlerAction::Continue {
+                    state: CreatingApiDomain,
+                    suggested_delay: Some(DOMAIN_CREATE_THROTTLE_DELAY),
+                });
+            }
+            Err(error) if is_remote_access_denied(&error) => {
+                return Err(domain_create_denied(error, &fqdn, &worker_config.id));
+            }
             Err(error) => {
                 return Err(error.context(ErrorData::CloudPlatformError {
                     message: "Failed to create API domain name".to_string(),
@@ -2307,6 +2344,16 @@ impl AwsWorkerController {
                         }))
                     }
                 }
+            }
+            Err(error) if is_remote_rate_limited(&error) => {
+                warn!(worker=%worker_config.id, domain=%fqdn, "CreateDomainName is rate limited; trying again later");
+                return Ok(HandlerAction::Continue {
+                    state: CreatingRestDomain,
+                    suggested_delay: Some(DOMAIN_CREATE_THROTTLE_DELAY),
+                });
+            }
+            Err(error) if is_remote_access_denied(&error) => {
+                return Err(domain_create_denied(error, &fqdn, &worker_config.id));
             }
             Err(error) => {
                 return Err(error.context(ErrorData::CloudPlatformError {
@@ -10200,6 +10247,73 @@ mod tests {
                 "DeleteCertificate"
             ]
         );
+    }
+
+    /// A controller parked at CreatingApiDomain whose CreateDomainName answers `refusal`.
+    async fn executor_whose_domain_create_is_refused(
+        refusal: fn() -> AlienError<CloudClientErrorData>,
+        calls: &Calls,
+    ) -> SingleControllerExecutor {
+        let lambda = MockLambdaApi::new();
+        let acm = MockAcmApi::new();
+        let mut apigw = MockApiGatewayV2Api::new();
+        let recorded = calls.clone();
+        apigw.expect_create_domain_name().returning(move |_| {
+            record(&recorded, "CreateDomainName");
+            Err(refusal())
+        });
+        let mut controller = failed_at_creating_api_domain();
+        controller.state = AwsWorkerState::CreatingApiDomain;
+        SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider(lambda, acm, apigw))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    /// A refused CreateDomainName is a missing management grant that only setup adds: the step
+    /// fails with a final error that names the permission, and is not tried again.
+    #[tokio::test]
+    async fn refused_domain_create_is_final_and_names_the_missing_permission() {
+        let calls = Calls::default();
+        let mut executor = executor_whose_domain_create_is_refused(access_denied, &calls).await;
+
+        executor.step().await.expect("records the create token");
+        let error = executor
+            .step()
+            .await
+            .expect_err("the domain create is refused");
+        assert!(!error.retryable, "{error:?}");
+        assert!(crate::requires_setup_rerun(&error), "{error:?}");
+        assert!(
+            error.message.contains("apigateway:AddCertificateToDomain"),
+            "{}",
+            error.message
+        );
+        assert_eq!(*calls.lock().unwrap(), ["CreateDomainName"]);
+    }
+
+    /// A throttled CreateDomainName is tried again no sooner than the 30 second account limit,
+    /// not after the executor's few-second default.
+    #[tokio::test]
+    async fn throttled_domain_create_waits_for_the_account_limit() {
+        fn throttled() -> AlienError<CloudClientErrorData> {
+            AlienError::new(CloudClientErrorData::RateLimitExceeded {
+                message: "Too Many Requests".to_string(),
+            })
+        }
+        let calls = Calls::default();
+        let mut executor = executor_whose_domain_create_is_refused(throttled, &calls).await;
+
+        executor.step().await.expect("records the create token");
+        for _ in 0..2 {
+            let step = executor.step().await.expect("a throttled create is retried");
+            assert_eq!(step.suggested_delay, Some(std::time::Duration::from_secs(30)));
+        }
+        assert_eq!(*calls.lock().unwrap(), ["CreateDomainName", "CreateDomainName"]);
     }
 
     /// Runs the API Gateway delete step for a basic worker whose domain name was recorded but
