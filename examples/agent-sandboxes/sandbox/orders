@@ -1,0 +1,57 @@
+#!/usr/bin/env node
+// orders: the agent's tool for the company's order system, through the connector.
+//
+//   orders list
+//   orders get <id>
+//   orders update <id> --status <status>      waits until someone approves it
+//   orders watch [seconds]                    prints the order statuses every few seconds
+//
+// It sends `Authorization: Bearer $CONNECTOR_TOKEN`. In the sandbox that is a placeholder;
+// the gateway replaces it with the current turn's token on the way to the connector.
+
+const base = process.env.CONNECTOR_URL
+if (!base) {
+  console.error("CONNECTOR_URL is not set")
+  process.exit(2)
+}
+const headers = { authorization: `Bearer ${process.env.CONNECTOR_TOKEN ?? ""}` }
+
+async function call(method, path, body) {
+  const response = await fetch(`${base}${path}`, {
+    method,
+    headers: body ? { ...headers, "content-type": "application/json" } : headers,
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  const text = await response.text()
+  if (!response.ok) {
+    console.error(`${response.status}: ${text}`)
+    process.exit(1)
+  }
+  return JSON.parse(text)
+}
+
+const [command, id, flag, value] = process.argv.slice(2)
+const usage = "usage: orders list | get <id> | update <id> --status <status> | watch [seconds]"
+
+if (command === "list") {
+  console.log(JSON.stringify(await call("GET", "/orders"), null, 2))
+} else if (command === "get" && id) {
+  console.log(JSON.stringify(await call("GET", `/orders/${encodeURIComponent(id)}`), null, 2))
+} else if (command === "update" && id && flag === "--status" && value) {
+  console.error("waiting for approval...")
+  console.log(JSON.stringify(await call("PATCH", `/orders/${encodeURIComponent(id)}`, { status: value }), null, 2))
+} else if (command === "watch") {
+  const every = Number(id ?? 30) * 1000
+  for (;;) {
+    try {
+      const { orders } = await call("GET", "/orders")
+      console.log(new Date().toISOString(), orders.map(o => `${o.id}:${o.status}`).join(" "))
+    } catch (error) {
+      console.log(new Date().toISOString(), `error: ${error}`)
+    }
+    await new Promise(resolve => setTimeout(resolve, every))
+  }
+} else {
+  console.error(usage)
+  process.exit(2)
+}
