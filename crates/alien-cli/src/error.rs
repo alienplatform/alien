@@ -258,7 +258,7 @@ pub enum ErrorData {
     #[error(
         code = "WORKSPACE_SELECTION_REQUIRED",
         message = "Several workspaces are available; selecting one needs an interactive terminal",
-        hint = "Your workspaces: {workspaces:?}. Choose one with `alien workspaces set <name>` (or pass `--workspace <name>`).",
+        hint = "Run `alien workspaces ls` to see them, then `alien workspaces set <name>` (or pass `--workspace <name>`).",
         retryable = "false",
         internal = "false"
     )]

@@ -73,11 +73,9 @@ pub async fn login_task(_args: LoginArgs, ctx: ExecutionMode) -> Result<()> {
             Ok(workspace) => workspace,
             Err(error) => {
                 // The sign-in worked; say so before reporting that no workspace was chosen.
-                if matches!(
-                    error.error,
-                    Some(ErrorData::WorkspaceSelectionRequired { .. })
-                ) {
+                if let Some(ErrorData::WorkspaceSelectionRequired { workspaces }) = &error.error {
                     println!("{}", success_line("Logged in."));
+                    println!("Your workspaces: {}", workspaces.join(", "));
                 }
                 return Err(error);
             }
