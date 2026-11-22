@@ -467,11 +467,11 @@ resource "aws_iam_openid_connect_provider" "github_management" {
   thumbprint_list = local.github_thumbs
 }
 
-resource "aws_iam_openid_connect_provider" "github_target" {
-  provider        = aws.target
-  url             = "https://${local.github_oidc_url}"
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = local.github_thumbs
+# The target account already has GitHub's provider, created and owned by another
+# repository's Terraform. Read it instead of creating a second owner.
+data "aws_iam_openid_connect_provider" "github_target" {
+  provider = aws.target
+  url      = "https://${local.github_oidc_url}"
 }
 
 resource "aws_iam_role" "manager_ci" {
@@ -504,7 +504,7 @@ resource "aws_iam_role" "target_ci" {
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { Federated = aws_iam_openid_connect_provider.github_target.arn }
+      Principal = { Federated = data.aws_iam_openid_connect_provider.github_target.arn }
       Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
@@ -558,7 +558,7 @@ data "aws_iam_policy_document" "ci_guard_target" {
     sid       = "NoCiIdentityChanges"
     effect    = "Deny"
     actions   = ["iam:*OpenIDConnectProvider*"]
-    resources = [aws_iam_openid_connect_provider.github_target.arn]
+    resources = [data.aws_iam_openid_connect_provider.github_target.arn]
   }
   statement {
     sid    = "NoCiRoleChanges"
