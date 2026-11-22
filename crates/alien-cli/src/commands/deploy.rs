@@ -3905,8 +3905,30 @@ async fn open_setup_update_operation(
             message: format!("opening a setup update for deployment {deployment_id}"),
             url: None,
         })?;
+    if response.status() == reqwest::StatusCode::CONFLICT {
+        let body = response.text().await.unwrap_or_default();
+        if setup_update_busy(&body) {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: SETUP_UPDATE_BUSY_MESSAGE.to_string(),
+            }));
+        }
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Failed to open the setup update (HTTP 409): {body}"),
+        }));
+    }
     parse_api_response::<serde_json::Value>(response, "Failed to open the setup update").await?;
     Ok(())
+}
+
+const SETUP_UPDATE_BUSY_MESSAGE: &str =
+    "A release update is in progress; run `alien deploy` again when it finishes.";
+
+/// True when the platform refused to open a setup update because another update is active.
+fn setup_update_busy(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("code").and_then(|code| code.as_str().map(str::to_owned)))
+        .is_some_and(|code| code == "SETUP_UPDATE_BUSY")
 }
 
 /// A platform user session able to mint a first-party deployment group
@@ -5160,6 +5182,15 @@ mod tests {
     /// A running deployment whose setup is behind is offered the setup update, on the platform
     /// and on a standalone manager; with nothing behind, "Nothing to do" stays. Anything that
     /// is not running, or has an update waiting, is unchanged by drift.
+    #[test]
+    fn a_busy_refusal_is_recognised_by_its_code_only() {
+        assert!(setup_update_busy(
+            r#"{"code":"SETUP_UPDATE_BUSY","message":"Another update is in progress."}"#
+        ));
+        assert!(!setup_update_busy(r#"{"code":"OTHER"}"#));
+        assert!(!setup_update_busy("not json"));
+    }
+
     #[test]
     fn a_running_deployment_with_setup_drift_is_offered_a_setup_update() {
         use ExistingDeploymentPlan::*;
