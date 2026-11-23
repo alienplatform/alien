@@ -727,7 +727,7 @@ mod tests {
                 image: "s3://alien-bundles/sandbox/bundle.zip".to_string(),
                 bundled_from: None,
             })
-            .egress(crate::SandboxEgress::Allow)
+            .egress(crate::SandboxEgress::Removed(crate::RemovedSandboxEgress::Allow))
             .lifecycle(crate::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1171,7 +1171,7 @@ mod tests {
             Self {
                 image: "s3://bucket/sandbox-bundle/v1/bundle.zip",
                 private_base_image: Some(BASE_A),
-                egress: crate::SandboxEgress::Allow,
+                egress: crate::SandboxEgress::Removed(crate::RemovedSandboxEgress::Allow),
                 network_id: "net-a",
                 remote_access: false,
             }

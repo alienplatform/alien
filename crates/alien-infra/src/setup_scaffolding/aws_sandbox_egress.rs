@@ -2419,46 +2419,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn allow_creates_no_egress_objects() {
-        let mut provider = MockPlatformServiceProvider::new();
-        let cloud = Shared::default();
-        let iam = Arc::new(iam(&cloud));
-        provider
-            .expect_get_aws_iam_client()
-            .returning(move |_| Ok(iam.clone()));
-        provider.expect_get_aws_ec2_client().times(0);
-        provider.expect_get_aws_cloudcontrol_client().times(0);
-        let client_config = client_config();
-        let ctx = SetupScaffoldingContext {
-            client_config: &client_config,
-            service_provider: &provider,
-            resource_prefix: PREFIX,
-        };
-        let stack = stack(SandboxEgress::Allow, None);
-        let state = stack_state(None);
-        let mut records = BTreeMap::new();
-
-        for _ in 0..2 {
-            reconcile_all(&ctx, &stack, &state, &mut records, &mut BTreeMap::new())
-                .await
-                .unwrap();
-        }
-
-        assert_eq!(
-            records,
-            BTreeMap::from([(
-                "agents".to_string(),
-                SetupScaffolding::AwsSandbox {
-                    build_role_name: BUILD_ROLE.to_string(),
-                    egress: None,
-                    image_arn: None,
-                }
-            )])
-        );
-        assert_eq!(cloud.lock().unwrap().roles.len(), 1, "the build role only");
-    }
-
-    #[tokio::test]
     async fn deny_waits_for_its_network_without_creating_egress_objects() {
         let cloud = Shared::default();
         let stack = stack(SandboxEgress::None, created_network());
@@ -3823,38 +3783,6 @@ mod tests {
         assert_eq!(served.build_policy, frozen_policy);
     }
 
-    #[tokio::test]
-    async fn an_allow_sandbox_seeded_by_direct_setup_serves_a_binding_the_runtime_loads() {
-        let sandbox = Sandbox {
-            preview_ports: vec![3000, 8080],
-            code: SandboxCode::Image {
-                image: REGIONAL_BUNDLE.to_string(),
-                bundled_from: None,
-            },
-            ..sandbox(SandboxEgress::Allow)
-        };
-        let served = serve_from_seed(sandbox, None).await;
-
-        load(&served.binding).await.unwrap_or_else(|error| {
-            panic!("the allow binding must load: {error}\n{}", served.binding)
-        });
-        assert_eq!(
-            egress_facts(&served.binding),
-            (true, vec![], vec![3000, 8080])
-        );
-        // The seed resolves the region token as the controller does, so the bundle it records
-        // is the one the image is built from and no roll is mistaken for a change.
-        assert_eq!(
-            served.bundle_uri,
-            "s3://acme-artifacts-us-east-1/sandbox-bundle/f00dcafe/bundle.zip"
-        );
-        assert_eq!(seed_field(&served, "bundleUri"), &json!(served.bundle_uri));
-        assert_eq!(
-            seed_field(&served, "buildRoleArn"),
-            &json!(served.build_role_arn)
-        );
-    }
-
     /// A serving deny sandbox that setup runs over again keeps its image and version and starts
     /// its sessions on the connector setup recorded, not on the empty list it was serving with.
     #[tokio::test]
@@ -4073,80 +4001,6 @@ mod tests {
             1,
             "the untagged connector is not setup's"
         );
-    }
-
-    /// A serving sandbox's egress mode changes only through setup running again. Each run leaves
-    /// a binding the runtime loads with the declared mode, and the egress objects a switch to
-    /// allow leaves unused stay recorded, so teardown still removes them.
-    #[tokio::test]
-    async fn setup_run_again_switches_a_serving_sandbox_between_allow_and_deny() {
-        let cloud = Shared::default();
-        let allow = stack(SandboxEgress::Allow, created_network());
-        let deny = stack(SandboxEgress::None, created_network());
-        let mut state = stack_state(Some(ResourceStatus::Running));
-        let mut records = BTreeMap::new();
-        converge(&cloud, &allow, &state, &mut records).await;
-        let settings = alien_core::StackSettings::default();
-        let mut serving = crate::ImporterRegistry::built_in()
-            .run(
-                &Sandbox::RESOURCE_TYPE,
-                Platform::Aws,
-                json!({
-                    "imageIdentifier": SERVING_IMAGE_ARN,
-                    "imageArn": SERVING_IMAGE_ARN,
-                    "imageVersion": "1.0",
-                    "allowEgress": true,
-                }),
-                &ImportContext {
-                    resource_id: "agents",
-                    platform: Platform::Aws,
-                    region: "us-east-1",
-                    stack_settings: &settings,
-                    management_config: None,
-                    resource: &allow.resources["agents"],
-                },
-            )
-            .unwrap();
-        serving.controller_platform = Some(Platform::Aws);
-        state.resources.insert("agents".to_string(), serving);
-
-        let binding = |state: &StackState| {
-            AwsSandboxController::from_persisted(
-                state.resources["agents"].internal_state.clone().unwrap(),
-            )
-            .unwrap()
-            .get_binding_params()
-            .unwrap()
-            .expect("a serving sandbox keeps its binding")
-        };
-
-        converge(&cloud, &deny, &state, &mut records).await;
-        seed_again(&cloud, &deny, &mut state, &records).unwrap();
-        let connector_arn = cloud.lock().unwrap().connectors[0].0.clone();
-        let denied = binding(&state);
-        assert_eq!(
-            egress_facts(&denied),
-            (false, vec![connector_arn.clone()], vec![])
-        );
-        load(&denied).await.unwrap();
-
-        converge(&cloud, &allow, &state, &mut records).await;
-        seed_again(&cloud, &allow, &mut state, &records).unwrap();
-        let allowed = binding(&state);
-        assert_eq!(egress_facts(&allowed), (true, vec![], vec![]));
-        load(&allowed).await.unwrap();
-        assert_eq!(
-            records["agents"],
-            full_record("sg-1", &connector_arn),
-            "the unused egress objects stay recorded for teardown"
-        );
-
-        let mut calls = 0;
-        while tear_down(&cloud, &mut records).await.unwrap().0 != ScaffoldingProgress::Done {
-            bounded(&mut calls);
-        }
-        let cloud = cloud.lock().unwrap();
-        assert!(cloud.roles.is_empty() && cloud.groups.is_empty() && cloud.connectors.is_empty());
     }
 
     const SERVING_IMAGE_ARN: &str =

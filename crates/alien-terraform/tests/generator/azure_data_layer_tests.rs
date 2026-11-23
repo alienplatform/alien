@@ -768,7 +768,7 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
             image: "ubuntu".to_string(),
             bundled_from: None,
         })
-        .egress(SandboxEgress::Allow)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -914,7 +914,7 @@ fn azure_sandbox_image_grant_reaches_the_manager_on_its_own_group_only() {
             image: "docker.io/library/python:3.14-slim".to_string(),
             bundled_from: None,
         })
-        .egress(SandboxEgress::Allow)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -1029,7 +1029,7 @@ fn frozen_sandbox(id: &str) -> Sandbox {
             image: "ubuntu".to_string(),
             bundled_from: None,
         })
-        .egress(SandboxEgress::Allow)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -1667,7 +1667,7 @@ fn an_aks_package_is_not_told_about_a_sandbox_group_it_does_not_get() {
             image: "ubuntu".to_string(),
             bundled_from: None,
         })
-        .egress(SandboxEgress::Allow)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -1722,7 +1722,7 @@ fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
             image: "ubuntu".to_string(),
             bundled_from: None,
         })
-        .egress(SandboxEgress::Allow)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,

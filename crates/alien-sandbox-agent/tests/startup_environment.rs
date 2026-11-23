@@ -6,12 +6,21 @@ use alien_core::{
 };
 
 #[test]
-fn released_supervisor_policies_keep_their_startup_meaning() {
+fn the_removed_startup_policies_are_not_recognized() {
     for encoded in [
-        r#"{"mode":"deny"}"#,
         r#"{"mode":"allow"}"#,
         r#"{"mode":"allowDomains","domains":["api.example.com"]}"#,
     ] {
+        assert!(
+            serde_json::from_str::<alien_sandbox_agent::egress::LegacyEgress>(encoded).is_err(),
+            "the agent refuses to start under a removed policy"
+        );
+    }
+}
+
+#[test]
+fn released_supervisor_policies_keep_their_startup_meaning() {
+    for encoded in [r#"{"mode":"deny"}"#] {
         let expected: SandboxEgress = serde_json::from_str(encoded).unwrap();
         let mut sandbox = Sandbox::new("legacy".into())
             .code(SandboxCode::Image {

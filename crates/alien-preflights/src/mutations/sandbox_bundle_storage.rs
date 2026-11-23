@@ -199,7 +199,7 @@ mod tests {
         };
         let sandbox = Sandbox::new("agents".to_string())
             .code(code)
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

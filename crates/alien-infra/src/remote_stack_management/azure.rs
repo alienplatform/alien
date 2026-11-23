@@ -1903,7 +1903,7 @@ mod tests {
                 image: "ubuntu".to_string(),
                 bundled_from: None,
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::None)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1936,7 +1936,7 @@ mod tests {
                         image: "ubuntu".to_string(),
                         bundled_from: None,
                     })
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::None)
                     .lifecycle(alien_core::SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,

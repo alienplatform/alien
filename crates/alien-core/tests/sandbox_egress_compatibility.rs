@@ -1,6 +1,7 @@
 //! Fixtures emitted by the published @alienplatform/core@3.3.34 builders.
-//! Legacy declarations must retain their backend path, setup inputs and supervisor contract.
-use alien_core::{EgressPolicy, Sandbox, SandboxEgress, Stack};
+//! Declarations of the removed egress modes must still read, round-trip and keep their setup
+//! inputs and supervisor contract, and every build or update that would apply one is refused.
+use alien_core::{EgressPolicy, RemovedSandboxEgress, Sandbox, SandboxEgress, Stack};
 
 #[test]
 fn released_stack_preserves_legacy_modes_and_supervisor() {
@@ -18,7 +19,10 @@ fn released_stack_preserves_legacy_modes_and_supervisor() {
             .downcast_ref::<Sandbox>()
             .unwrap();
         assert!(sandbox.default_policy.is_none());
-        assert_eq!(sandbox.cloud_egress(), &SandboxEgress::Allow);
+        assert!(matches!(sandbox.egress, SandboxEgress::Removed(_)));
+        assert_eq!(sandbox.cloud_route(), alien_core::CloudEgressRoute::Direct);
+        let refusal = sandbox.ensure_egress_supported().unwrap_err();
+        assert_eq!(refusal.code, "SANDBOX_EGRESS_MODE_REMOVED");
         assert_eq!(
             sandbox.supervisor_environment()["ALIEN_SANDBOX_EGRESS"],
             serde_json::to_string(&sandbox.egress).unwrap()
@@ -51,8 +55,18 @@ fn released_plans_and_frozen_setup_digest_are_identical() {
     let live = stack.setup_owned_digest();
     let plans: std::collections::BTreeMap<_, _> = stack.resources.iter().map(|(id, entry)| {
         let sandbox = entry.config.downcast_ref::<Sandbox>().unwrap();
-        sandbox.validate_for_platform(alien_core::Platform::Aws).unwrap();
-        (id.clone(), serde_json::json!({"cloudEgress":sandbox.cloud_egress(), "environment":sandbox.supervisor_environment(),
+        if matches!(sandbox.egress, SandboxEgress::Removed(_)) {
+            assert_eq!(
+                sandbox
+                    .validate_for_platform(alien_core::Platform::Aws)
+                    .unwrap_err()
+                    .code,
+                "SANDBOX_EGRESS_MODE_REMOVED"
+            );
+        } else {
+            sandbox.validate_for_platform(alien_core::Platform::Aws).unwrap();
+        }
+        (id.clone(), serde_json::json!({"cloudRoute":sandbox.cloud_route(), "environment":sandbox.supervisor_environment(),
             "dependencies":entry.combined_dependencies(),
             "setupInputs":alien_core::sandbox_setup_inputs::aws_sandbox_setup_inputs(&stack, sandbox, entry.lifecycle,
                 alien_core::sandbox_setup_inputs::SETUP_INPUTS_COMPARISON_ACCOUNT).unwrap()}))
@@ -86,20 +100,27 @@ fn only_new_internet_accepts_runtime_defaults() {
         .unwrap()
         .clone();
     sandbox.default_policy = Some(EgressPolicy::Allow { allow: vec![] });
+    sandbox.egress = SandboxEgress::None;
+    assert_eq!(
+        sandbox
+            .validate_for_platform(alien_core::Platform::Aws)
+            .unwrap_err()
+            .code,
+        "SANDBOX_EGRESS_INVALID"
+    );
     for declaration in [
-        SandboxEgress::None,
-        SandboxEgress::Allow,
-        SandboxEgress::AllowDomains {
+        RemovedSandboxEgress::Allow,
+        RemovedSandboxEgress::AllowDomains {
             domains: vec!["example.com".into()],
         },
     ] {
-        sandbox.egress = declaration;
+        sandbox.egress = SandboxEgress::Removed(declaration);
         assert_eq!(
             sandbox
                 .validate_for_platform(alien_core::Platform::Aws)
                 .unwrap_err()
                 .code,
-            "SANDBOX_EGRESS_INVALID"
+            "SANDBOX_EGRESS_MODE_REMOVED"
         );
     }
     sandbox.egress = SandboxEgress::Internet;

@@ -751,7 +751,7 @@ async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_azure_provi
     assert_eq!(binding.disk_image, value("ubuntu"));
     assert_eq!(
         binding.egress.declaration(),
-        &alien_core::SandboxEgress::Allow
+        &alien_core::SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow)
     );
     let provider = crate::BindingsProvider::new(
         alien_core::ClientConfig::Azure(client_config.clone()),

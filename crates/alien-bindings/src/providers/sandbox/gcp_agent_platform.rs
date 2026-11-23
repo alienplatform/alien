@@ -174,31 +174,26 @@ const NO_GENERATION: u64 = 0;
 /// this task exists to prevent — where too loose only delays an already-broken sandbox.
 const AGENT_PROBE_BUDGET: Duration = Duration::from_secs(60);
 
-/// Maps a declared egress mode onto the template's `egressControlConfig`, or refuses one the API
-/// cannot express.
-///
-/// `internetAccess` is a single boolean, so `AllowDomains` has no representation and is refused
-/// rather than approximated into `allow` (which would open more than was asked) or `deny` (which
-/// would close a caller out of hosts it named). Not called by the runtime verbs — the template is
-/// pre-created — but this is the mapping the template controller uses, kept beside the provider so
-/// the two agree on what a mode means. `sandbox_label` names the offending sandbox in the refusal.
+/// The template's `egressControlConfig`: Agent Platform's own internet switch stays closed for
+/// every mode, because `internet` leaves only through the network attachment into the
+/// deployment's VPC, where the egress gateway applies the rules. A removed mode is refused.
+/// Not called by the runtime verbs — the template is pre-created — but this is the mapping the
+/// template controller uses, kept beside the provider so the two agree. `sandbox_label` names the
+/// offending sandbox in the refusal.
 pub fn egress_control_config(
     sandbox_label: &str,
     egress: &SandboxEgress,
 ) -> Result<EgressControlConfig> {
-    let Some(internet_access) = egress.internet_access_switch() else {
-        return Err(AlienError::new(ErrorData::InvalidInput {
+    egress.ensure_supported(sandbox_label).map_err(|error| {
+        AlienError::new(ErrorData::InvalidInput {
             operation_context: "sandbox.template".to_string(),
-            details: format!(
-                "sandbox '{sandbox_label}' asked for domain-scoped egress, which Agent \
-                 Platform cannot express; it offers only 'allow' (open) and 'deny' (closed)"
-            ),
+            details: error.message,
             field_name: Some("egress".to_string()),
-        }));
-    };
+        })
+    })?;
 
     Ok(EgressControlConfig {
-        internet_access: Some(internet_access),
+        internet_access: Some(false),
         network_attachment: None,
         extra: Default::default(),
     })

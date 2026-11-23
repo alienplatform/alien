@@ -71,6 +71,16 @@ pub enum ErrorData {
     )]
     SandboxEgressInvalid { target: String, reason: String },
 
+    /// A sandbox declares an egress mode that reached the internet directly.
+    #[error(
+        code = "SANDBOX_EGRESS_MODE_REMOVED",
+        message = "Sandbox '{resource_id}' declares egress mode '{mode}', which was removed because it bypassed the egress gateway. Use egress: \"internet\" to send outbound traffic through the egress gateway (fixed outbound IP, connection log, per-sandbox rules), and set a default policy or call update_egress for host rules. Use egress: \"none\" to block all outbound traffic.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressModeRemoved { resource_id: String, mode: String },
+
     /// An AWS internet sandbox reached template rendering without the egress gateway.
     #[error(
         code = "SANDBOX_INTERNET_GATEWAY_MISSING",

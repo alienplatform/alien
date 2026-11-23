@@ -4463,12 +4463,6 @@ sandbox:
   # except on Google Kubernetes Engine, where a managed `kube-system` can refuse it; `true` and `false`
   # force it. With no Role the gateway keeps the cluster's resolver and still deploys.
   readClusterDNS: auto
-  # The nameserver address(es) pods get in /etc/resolv.conf (the kubelet's clusterDNS). Required
-  # when a sandbox uses `allow` egress: the sandbox policy admits UDP and TCP port 53 to exactly
-  # these addresses and nothing else on private ranges. Find it with:
-  #   kubectl run dns-probe --rm -i --restart=Never --image=busybox -- grep nameserver /etc/resolv.conf
-  # (The .10 address of the cluster's service range, e.g. 10.100.0.10 or 172.20.0.10; EKS Auto Mode has no kube-dns Service.)
-  clusterDNS: []
 "#,
         );
     }
@@ -5000,8 +4994,9 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "cniProbeImage": { "type": "string" },
             "readClusterDNS": { "enum": ["auto", true, false] },
             "clusterDNS": {
+                "description": "Ignored. Released charts read it for the removed allow egress mode, and a values file that still sets it stays valid.",
                 "type": "array",
-                "items": { "type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}$" }
+                "items": { "type": "string" }
             }
         }
     });
@@ -7264,10 +7259,6 @@ fn deployment_tpl(sandbox_broker: bool) -> String {
         alien_core::ENV_ALIEN_SANDBOX_TOLERATIONS,
         alien_core::ENV_ALIEN_SANDBOX_WARM_POOL_SIZE
     );
-    let dns = format!(
-        "            - name: {}\n              value: {{{{ join \",\" (default list (dig \"clusterDNS\" (list) (default dict .Values.sandbox))) | quote }}}}\n",
-        alien_core::ENV_ALIEN_SANDBOX_CLUSTER_DNS
-    );
     // The Operator's own Service: a sandbox pod proves its NetworkPolicy is enforced by finding
     // the Service's ClusterIP unreachable. The ClusterIP is read from the Service by the Operator
     // (a chart cannot know it at render time, and Argo CD renders without lookups), and stays
@@ -7282,7 +7273,7 @@ fn deployment_tpl(sandbox_broker: bool) -> String {
         "{{{{- $sandboxNamespace := dig \"namespace\" \"\" (default dict .Values.sandbox) }}}}\n{{{{- if $sandboxNamespace }}}}\n            - name: {}\n              value: {{{{ $sandboxNamespace | quote }}}}\n{{{{- end }}}}\n",
         alien_core::ENV_ALIEN_SANDBOX_NAMESPACE
     );
-    let broker = format!("{broker}{placement}{dns}{operator_address}{sandbox_namespace}");
+    let broker = format!("{broker}{placement}{operator_address}{sandbox_namespace}");
     assert!(
         template.contains(anchor),
         "the operator Deployment template sets OTLP_HOST"

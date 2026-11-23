@@ -33,23 +33,6 @@ use hcl::expr::Expression;
 /// the provider deserializes.
 const AGENT_PLATFORM_SERVICE: &str = "sandbox-gcp-agent-platform";
 
-/// Refuses domain-scoped egress, which Agent Platform's single internet-access switch cannot carry.
-///
-/// The switch semantics live in `SandboxEgress::internet_access_switch`, so this and the provider's
-/// template mapping cannot drift on which modes are expressible. Names the sandbox and both
-/// accepted modes.
-fn refuse_domain_egress(sandbox: &Sandbox) -> Result<()> {
-    if sandbox.egress.internet_access_switch().is_some() {
-        return Ok(());
-    }
-    Err(AlienError::new(ErrorData::OperationNotSupported {
-        operation: format!("terraform emit sandbox '{}'", sandbox.id()),
-        reason: "Agent Platform egress is a single internet-access switch, so a hostname list has \
-                 nothing to render into. Declare egress: deny or egress: allow"
-            .to_string(),
-    }))
-}
-
 /// Terraform label of the engine this sandbox's sessions hang under.
 fn engine_label<'a>(ctx: &'a EmitContext<'_>) -> Result<&'a str> {
     let engine_id = GcpAgentPlatformEngine::id_for_sandbox(ctx.resource_id);
@@ -104,12 +87,9 @@ fn agent_platform_fields(
             expr::template(format!("{engine}/sandboxEnvironmentTemplates/{label}")),
         ),
         ("region", expr::raw("var.gcp_region")),
-        (
-            "allowEgress",
-            // The switch the serving template carries. `internet` goes through the gateway path and
-            // keeps the switch closed; the controller reports the same.
-            Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
-        ),
+        // Every template this version creates has its own internet switch closed: `internet`
+        // leaves only through the gateway.
+        ("allowEgress", Expression::Bool(false)),
     ];
     if let Some(seconds) = sandbox.lifecycle.max_lifetime_seconds {
         fields.push((
@@ -150,7 +130,7 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
-        refuse_domain_egress(sandbox)?;
+        sandbox.ensure_egress_supported()?;
         // The engine id is not here: it is server-assigned, and the engine registers its own.
         let mut fields = vec![("region", expr::raw("var.gcp_region"))];
         // The template controller builds the binding a workload reads, so the signing identity
@@ -171,7 +151,7 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let label = required_label(ctx)?;
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
-        refuse_domain_egress(sandbox)?;
+        sandbox.ensure_egress_supported()?;
         let mut fields = agent_platform_fields(ctx, sandbox, label)?;
         if has_preview_signer(ctx, sandbox) {
             fields.push((
@@ -802,7 +782,7 @@ mod tests {
         /// would hold no session access at all while `PERMISSIONS.md` still advertised the grant.
         #[test]
         fn the_engine_grant_references_the_created_engine() {
-            let stack = stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Frozen, true);
+            let stack = stack_with(SandboxEgress::None, None, ResourceLifecycle::Frozen, true);
             let fragment = with_context(&stack, |ctx| {
                 GcpAgentPlatformSandboxEmitter
                     .emit(ctx)
@@ -835,7 +815,7 @@ mod tests {
 
             // A sandbox nobody published gets no engine grant, whatever else the stack declares.
             let unpublished =
-                stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Frozen, false);
+                stack_with(SandboxEgress::None, None, ResourceLifecycle::Frozen, false);
             let fragment = with_context(&unpublished, |ctx| {
                 GcpAgentPlatformSandboxEmitter.emit(ctx).expect("renders")
             });
@@ -1038,7 +1018,7 @@ mod tests {
                         image: "ubuntu".to_string(),
                         bundled_from: None,
                     })
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::None)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -1182,7 +1162,7 @@ mod tests {
                         image: "ubuntu".to_string(),
                         bundled_from: None,
                     })
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::None)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -1321,7 +1301,7 @@ mod tests {
                     image: "ubuntu".to_string(),
                     bundled_from: None,
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -1436,7 +1416,7 @@ mod tests {
                     );
                 let builder = if remote_access {
                     builder.add_with_remote_access(
-                        base.egress(SandboxEgress::Allow).build(),
+                        base.egress(SandboxEgress::None).build(),
                         ResourceLifecycle::Frozen,
                     )
                 } else {
@@ -1538,7 +1518,7 @@ mod tests {
         /// template never renders.
         #[test]
         fn a_live_remote_sandbox_is_refused_naming_the_lifecycle() {
-            let stack = stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Live, true);
+            let stack = stack_with(SandboxEgress::None, None, ResourceLifecycle::Live, true);
             let error = with_context(&stack, |ctx| {
                 GcpAgentPlatformSandboxEmitter
                     .emit(ctx)
@@ -1559,7 +1539,7 @@ mod tests {
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
             assert!(object_keys(&emitted).contains("previewServiceAccount"));
-            let open = emit_binding(SandboxEgress::Allow, Some(3600))
+            let open = emit_binding(SandboxEgress::None, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
             assert!(!object_keys(&open).contains("previewServiceAccount"));
@@ -1570,7 +1550,7 @@ mod tests {
         /// set on both sides so the key sets are comparable whole.
         #[test]
         fn emitted_binding_keys_match_the_binding_type() {
-            let emitted = emit_binding(SandboxEgress::Allow, Some(3600))
+            let emitted = emit_binding(SandboxEgress::None, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
 
@@ -1579,7 +1559,6 @@ mod tests {
                 "t",
                 "us-central1",
                 Some(3600),
-                true,
             ))
             .expect("the binding type serializes");
             let type_keys: BTreeSet<String> = type_json
@@ -1594,37 +1573,6 @@ mod tests {
                 type_keys,
                 "emitted keys must track the binding type"
             );
-        }
-
-        /// The binding is where a workload reads whether the sandbox is isolated, so each mode must
-        /// render its own value, not only a key of the right name.
-        #[test]
-        fn allow_egress_renders_the_declared_mode() {
-            for (egress, expected) in [
-                (SandboxEgress::None, false),
-                // `internet` goes through the gateway: the template's own switch stays closed.
-                (SandboxEgress::Internet, false),
-                (SandboxEgress::Allow, true),
-            ] {
-                let emitted = emit_binding(egress.clone(), None)
-                    .expect("the binding renders")
-                    .expect("an Agent Platform sandbox has a binding");
-                let Expression::Object(map) = &emitted else {
-                    panic!("expected an object, got {emitted:?}");
-                };
-                let value = map
-                    .iter()
-                    .find_map(|(key, value)| {
-                        let name = match key {
-                            hcl::expr::ObjectKey::Identifier(id) => id.as_str(),
-                            hcl::expr::ObjectKey::Expression(Expression::String(s)) => s.as_str(),
-                            _ => return None,
-                        };
-                        (name == "allowEgress").then_some(value)
-                    })
-                    .expect("allowEgress is emitted");
-                assert_eq!(value, &Expression::Bool(expected), "{egress:?}");
-            }
         }
 
         /// A declared lifetime reaches the binding under the name the type reads, and an absent

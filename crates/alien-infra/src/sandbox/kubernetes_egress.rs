@@ -1079,7 +1079,10 @@ mod tests {
     fn the_public_probe_is_set_only_where_direct_public_egress_is_dropped() {
         assert!(public_probe_environment(&SandboxEgress::None).is_some());
         assert!(public_probe_environment(&SandboxEgress::Internet).is_some());
-        assert!(public_probe_environment(&SandboxEgress::Allow).is_none());
+        assert!(public_probe_environment(&SandboxEgress::Removed(
+            alien_core::RemovedSandboxEgress::Allow
+        ))
+        .is_none());
     }
 
     /// A gateway image that mounts its configuration and replica secret.
@@ -1601,22 +1604,12 @@ mod tests {
         assert!(resolve_operator_address(&ctx, &sandbox).await.is_err());
         headless.delete_async().await;
 
-        // A publicly numbered Service address cannot be blocked by the direct-egress policy.
         let mut public = server
             .mock_async(|when, then| {
                 when.method(GET).path(path);
                 then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"acme"},"spec":{"clusterIP":"34.118.0.9"}}));
             })
             .await;
-        let mut direct = sandbox.clone();
-        direct.egress = alien_core::SandboxEgress::Allow;
-        let refused = resolve_operator_address(&ctx, &direct).await.unwrap_err();
-        assert!(
-            refused.message.contains("publicly numbered"),
-            "{}",
-            refused.message
-        );
-        assert!(kubernetes_spec::operator_address().is_none());
         // The gateway policy admits only the gateway, so the same address is a valid canary.
         resolve_operator_address(&ctx, &sandbox).await.unwrap();
         kubernetes_spec::forget_operator_address();

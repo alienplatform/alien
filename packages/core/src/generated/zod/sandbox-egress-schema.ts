@@ -5,13 +5,8 @@
 
 import * as z from "zod";
 
-export const SandboxEgressSchema = z.union([z.union([z.object({
+export const SandboxEgressSchema = z.union([z.object({
     "mode": z.enum(["deny"])
-    }), z.object({
-    "mode": z.enum(["allow"])
-    }), z.object({
-    "domains": z.array(z.string()),
-"mode": z.enum(["allowDomains"])
-    })]), z.enum(["none", "internet"])])
+    }), z.enum(["none", "internet"])])
 
 export type SandboxEgress = z.infer<typeof SandboxEgressSchema>

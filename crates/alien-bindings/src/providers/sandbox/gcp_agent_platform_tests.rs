@@ -2964,7 +2964,6 @@ async fn a_controller_binding_mints_a_grant() {
         ),
         BindingValue::value("us-central1".to_string()),
         None,
-        false,
     );
     if let SandboxBinding::GcpAgentPlatform(value) = &mut binding {
         value.preview_ports = vec![8080, 8081];

@@ -550,11 +550,6 @@ mod tests {
 
     #[test]
     fn a_connection_needs_a_connector_and_a_network_setup_creates() {
-        let direct = sandbox(SandboxEgress::Allow, designed());
-        let error =
-            validate_connections(&stack(created(), true, direct.clone()), &direct).unwrap_err();
-        assert!(error.to_string().contains("connector"), "{error}");
-
         let declared = sandbox(SandboxEgress::None, designed());
         let byo = NetworkSettings::ByoVpcAws {
             vpc_id: "vpc-1".into(),

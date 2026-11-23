@@ -65,9 +65,7 @@ pub const DEFAULT_MEMORY: &str = "2048Mi";
 ///
 /// `Full` inspection is what makes a `Deny` default mean no outbound access: under `Partial`,
 /// `Legacy` and `None`, non-HTTP traffic is allowed through whatever the default action says, so
-/// the sandbox would carry a `deny` label and a live network. `allow` sends no policy at all —
-/// the data plane's default is already open, and `Full` there would block the non-HTTP traffic
-/// `allow` promises.
+/// the sandbox would carry a `deny` label and a live network. `internet` sends no policy at all: the gateway applies the rules.
 pub fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
     let bounded = |host_rules| {
         Some(EgressPolicy {
@@ -80,24 +78,16 @@ pub fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
     };
 
     match egress {
-        SandboxEgress::Allow | SandboxEgress::Internet => None,
+        SandboxEgress::Internet => None,
         // Written as a rule as well as a default, because Microsoft documents `Partial`
         // inspection as evaluating only traffic a rule matches and never states that `Full`
         // differs. A policy holding no rule at all is the one shape where "deny" could mean
         // nothing, and this is one rule to be out of it.
-        SandboxEgress::None => bounded(vec![EgressHostRule {
+        // A removed mode is refused before any policy is built; if one ever got here, deny.
+        SandboxEgress::None | SandboxEgress::Removed(_) => bounded(vec![EgressHostRule {
             pattern: EVERY_HOST.to_string(),
             action: DENY.to_string(),
         }]),
-        SandboxEgress::AllowDomains { domains } => bounded(
-            domains
-                .iter()
-                .map(|domain| EgressHostRule {
-                    pattern: domain.clone(),
-                    action: ALLOW.to_string(),
-                })
-                .collect(),
-        ),
     }
 }
 

@@ -405,6 +405,20 @@ fn refuse_endpoint_host_label_conflicts(
     Ok(())
 }
 
+/// Only new releases are refused: a stored release that declares a removed sandbox egress mode
+/// stays readable, and a deployment of it fails to update with the same message.
+fn refuse_removed_sandbox_egress(
+    stacks: &HashMap<Platform, Stack>,
+) -> std::result::Result<(), alien_error::AlienError<ErrorData>> {
+    let mut platforms: Vec<&Platform> = stacks.keys().collect();
+    platforms.sort_by_key(|platform| platform.as_str());
+    for platform in platforms {
+        alien_core::sandbox_egress::refuse_removed_sandbox_egress(&stacks[platform])
+            .map_err(|error| ErrorData::bad_request(format!("Invalid stack for {platform}: {}", error.message)))?;
+    }
+    Ok(())
+}
+
 /// Refuse setup template bytes that aren't exactly the ones the signed
 /// statements digest: every template a statement names must be sent, each
 /// must hash to its signed digest, and nothing else may be sent. Installs of
@@ -527,6 +541,9 @@ async fn create_release(
         Err(e) => return e.into_response(),
     };
     if let Err(e) = refuse_endpoint_host_label_conflicts(&stacks) {
+        return e.into_response();
+    }
+    if let Err(e) = refuse_removed_sandbox_egress(&stacks) {
         return e.into_response();
     }
     if let Err(e) =

@@ -796,7 +796,7 @@ mod tests {
                 bundled_from: None,
             })
             .egress(if remote {
-                SandboxEgress::Allow
+                SandboxEgress::None
             } else {
                 SandboxEgress::None
             })

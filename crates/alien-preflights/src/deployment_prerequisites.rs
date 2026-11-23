@@ -1841,10 +1841,7 @@ mod tests {
             refused.errors,
             vec![alien_core::gcp_sandbox_gateway::INTERNET_SANDBOX_UNAVAILABLE.to_string()]
         );
-        for egress in [
-            alien_core::SandboxEgress::None,
-            alien_core::SandboxEgress::Allow,
-        ] {
+        for egress in [alien_core::SandboxEgress::None] {
             let stack = prepared(sandbox_stack(egress), Platform::Gcp).await;
             assert!(!check.should_run(&stack, &gcp, &config));
         }
@@ -1927,10 +1924,7 @@ mod tests {
 
     #[tokio::test]
     async fn azure_sandboxes_without_internet_egress_are_not_refused() {
-        for egress in [
-            alien_core::SandboxEgress::None,
-            alien_core::SandboxEgress::Allow,
-        ] {
+        for egress in [alien_core::SandboxEgress::None] {
             let stack = prepared(sandbox_stack(egress), Platform::Azure).await;
             assert!(azure_protocol_check(&stack, Platform::Azure)
                 .await

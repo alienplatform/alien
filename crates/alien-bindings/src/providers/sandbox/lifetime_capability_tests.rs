@@ -227,13 +227,8 @@ async fn azure_stamps_the_requested_lifetime_as_the_label_the_reaper_keys_on() {
                 Ok(Record {
                     id: "s1".into(),
                     labels: request.labels,
-                    vnet_connection_name: None,
-                    egress_policy: Some(
-                        serde_json::from_value(
-                            json!({ "defaultAction": "Allow", "trafficInspection": "Full" }),
-                        )
-                        .unwrap(),
-                    ),
+                    vnet_connection_name: Some("default".into()),
+                    egress_policy: None,
                     state: Some("Running".into()),
                 })
             });
@@ -241,13 +236,8 @@ async fn azure_stamps_the_requested_lifetime_as_the_label_the_reaper_keys_on() {
             Ok(Record {
                 id: id.into(),
                 labels: Default::default(),
-                vnet_connection_name: None,
-                egress_policy: Some(
-                    serde_json::from_value(
-                        json!({ "defaultAction": "Allow", "trafficInspection": "Full" }),
-                    )
-                    .unwrap(),
-                ),
+                vnet_connection_name: Some("default".into()),
+                egress_policy: None,
                 state: Some("Running".into()),
             })
         });
@@ -255,7 +245,7 @@ async fn azure_stamps_the_requested_lifetime_as_the_label_the_reaper_keys_on() {
             Arc::new(client),
             "group".to_string(),
             "ubuntu".to_string(),
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             None,
             "1".to_string(),
             "2Gi".to_string(),

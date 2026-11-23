@@ -142,14 +142,14 @@ pub fn remote_binding_undeliverable_reason(entry: &ResourceEntry) -> Option<&'st
         return Some("a remotely published sandbox cannot carry defaultPolicy; use an ordinary workload binding that supports gateway policies");
     }
 
-    if matches!(sandbox.egress, SandboxEgress::Internet) {
-        return Some("internet sandboxes cannot publish remoteAccess because the gateway admin endpoint is internal; use an in-deployment workload binding or retain legacy egress {mode:allow}");
-    }
-    if !matches!(sandbox.egress, SandboxEgress::Allow) {
+    if !matches!(
+        sandbox.egress,
+        SandboxEgress::Removed(crate::RemovedSandboxEgress::Allow)
+    ) {
         return Some(
-            "a remotely published sandbox must declare egress 'allow'; the remote grant either \
-             cannot pass a declared connector or lets its holder create sandboxes that ignore the \
-             declared policy, so the declaration would not bound the remote caller",
+            "a sandbox cannot be published through a remote binding yet: the remote grant lets \
+             its holder create sandboxes that bypass the egress gateway, and the gateway's admin \
+             endpoint is internal to the deployment; use an ordinary workload binding",
         );
     }
 
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn a_remote_grant_cannot_bypass_supervision_through_a_retained_version() {
-        for egress in [SandboxEgress::Allow, SandboxEgress::None] {
+        for egress in [SandboxEgress::Removed(crate::RemovedSandboxEgress::Allow), SandboxEgress::None] {
             let mut entry = remote_sandbox(egress, vec![]);
             let mut sandbox = entry
                 .config
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn a_remote_sandbox_declaring_no_ports_is_deliverable() {
         assert!(remote_binding_is_deliverable(&remote_sandbox(
-            SandboxEgress::Allow,
+            SandboxEgress::Removed(crate::RemovedSandboxEgress::Allow),
             Vec::new()
         )));
     }
@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn a_remote_sandbox_declaring_ports_is_refused() {
         let reason =
-            remote_binding_undeliverable_reason(&remote_sandbox(SandboxEgress::Allow, vec![8080]))
+            remote_binding_undeliverable_reason(&remote_sandbox(SandboxEgress::Removed(crate::RemovedSandboxEgress::Allow), vec![8080]))
                 .expect("a declared port list is not deliverable to a remote caller");
 
         assert!(
@@ -281,7 +281,7 @@ mod tests {
     /// sandbox is not this problem, and refusing it would be a false positive.
     #[test]
     fn a_sandbox_with_no_remote_binding_may_declare_ports() {
-        let mut entry = remote_sandbox(SandboxEgress::Allow, vec![8080]);
+        let mut entry = remote_sandbox(SandboxEgress::Removed(crate::RemovedSandboxEgress::Allow), vec![8080]);
         entry.remote_access = false;
 
         assert_eq!(remote_binding_undeliverable_reason(&entry), None);
@@ -296,7 +296,7 @@ mod tests {
             remote_binding_undeliverable_reason(&remote_sandbox(SandboxEgress::None, Vec::new()))
                 .expect("a restricted egress is not deliverable");
         let ports =
-            remote_binding_undeliverable_reason(&remote_sandbox(SandboxEgress::Allow, vec![8080]))
+            remote_binding_undeliverable_reason(&remote_sandbox(SandboxEgress::Removed(crate::RemovedSandboxEgress::Allow), vec![8080]))
                 .expect("a declared port list is not deliverable");
 
         assert_ne!(egress, ports, "one reason cannot stand in for the other");

@@ -1862,20 +1862,6 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn legacy_direct_setup_update_keeps_existing_scaffolding() {
-            let installed = prepared(sandbox(SandboxEgress::Allow, BUNDLE, None)).await;
-            let updated = update_with_saved_stack(
-                InitialSetupAuthority::DirectSetup,
-                installed.clone(),
-                installed,
-                false,
-            )
-            .await
-            .expect("existing scaffolding needs no new setup without a prepared stack");
-            assert_eq!(updated.state.status, DeploymentStatus::Updating);
-        }
-
-        #[tokio::test]
         async fn legacy_update_still_refuses_frozen_resource_changes() {
             let installed = Stack::new("legacy".into())
                 .add(
@@ -1932,44 +1918,24 @@ mod tests {
             assert_eq!(updated.state.status, DeploymentStatus::Updating);
         }
 
-        #[tokio::test]
-        async fn a_sandbox_switched_to_deny_waits_for_setup_to_build_its_connector() {
-            assert_setup_required(
-                sandbox(SandboxEgress::Allow, BUNDLE, None),
-                sandbox(SandboxEgress::None, BUNDLE, None),
-                None,
-            )
-            .await;
-        }
-
-        #[tokio::test]
-        async fn a_sandbox_switched_to_allow_waits_for_setup_to_reseed_it() {
-            assert_setup_required(
-                sandbox(SandboxEgress::None, BUNDLE, None),
-                sandbox(SandboxEgress::Allow, BUNDLE, None),
-                None,
-            )
-            .await;
-        }
-
         /// The runtime reads each release's bundle key from the bucket setup granted, so a release
         /// naming another bucket rolls without setup. A key outside the granted prefix still waits.
         #[tokio::test]
         async fn a_bundle_in_another_bucket_rolls_but_another_prefix_waits_for_setup() {
             assert_updates(
                 InitialSetupAuthority::DirectSetup,
-                sandbox(SandboxEgress::Allow, BUNDLE, None),
+                sandbox(SandboxEgress::None, BUNDLE, None),
                 sandbox(
-                    SandboxEgress::Allow,
+                    SandboxEgress::None,
                     "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
                     None,
                 ),
             )
             .await;
             assert_setup_required(
-                sandbox(SandboxEgress::Allow, BUNDLE, None),
+                sandbox(SandboxEgress::None, BUNDLE, None),
                 sandbox(
-                    SandboxEgress::Allow,
+                    SandboxEgress::None,
                     "s3://acme-artifacts/other-prefix/f00dcafe/bundle.zip",
                     None,
                 ),
@@ -1980,7 +1946,7 @@ mod tests {
 
         #[tokio::test]
         async fn a_sandbox_added_by_an_update_waits_for_setup_to_create_its_build_role() {
-            assert_setup_required(empty(), sandbox(SandboxEgress::Allow, BUNDLE, None), None).await;
+            assert_setup_required(empty(), sandbox(SandboxEgress::None, BUNDLE, None), None).await;
         }
 
         /// Every release publishes its bundle under a new version segment of the same prefix,
@@ -2002,7 +1968,7 @@ mod tests {
         /// With nothing installed to compare against, the sandbox is treated as new, not skipped.
         #[tokio::test]
         async fn an_update_with_no_installed_stack_waits_for_setup() {
-            let target = sandbox(SandboxEgress::Allow, BUNDLE, None);
+            let target = sandbox(SandboxEgress::None, BUNDLE, None);
             let state = DeploymentState {
                 status: DeploymentStatus::UpdatePending,
                 platform: Platform::Aws,
@@ -2047,8 +2013,8 @@ mod tests {
             ] {
                 assert_updates(
                     InitialSetupAuthority::ImportedHandoff,
-                    sandbox(SandboxEgress::Allow, BUNDLE, None),
-                    sandbox(SandboxEgress::Allow, image, None),
+                    sandbox(SandboxEgress::None, BUNDLE, None),
+                    sandbox(SandboxEgress::None, image, None),
                 )
                 .await;
             }

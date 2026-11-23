@@ -3,9 +3,7 @@
   "liveDigest": "56ef32098efd1c19c6b8f33efb33c373bb2855f078043d955bd1cdf678a0ee58",
   "plans": {
     "denied": {
-      "cloudEgress": {
-        "mode": "allow"
-      },
+      "cloudRoute": "direct",
       "dependencies": [],
       "environment": {
         "ALIEN_SANDBOX_EGRESS": "{\"mode\":\"deny\"}",
@@ -37,9 +35,7 @@
       ]
     },
     "direct": {
-      "cloudEgress": {
-        "mode": "allow"
-      },
+      "cloudRoute": "direct",
       "dependencies": [],
       "environment": {},
       "setupInputs": [
@@ -68,9 +64,7 @@
       ]
     },
     "domains": {
-      "cloudEgress": {
-        "mode": "allow"
-      },
+      "cloudRoute": "direct",
       "dependencies": [],
       "environment": {
         "ALIEN_SANDBOX_EGRESS": "{\"mode\":\"allowDomains\",\"domains\":[\"api.example.com\"]}",

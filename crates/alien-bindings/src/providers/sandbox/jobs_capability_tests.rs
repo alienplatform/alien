@@ -236,20 +236,15 @@ async fn azure_legacy_sessions_have_no_job_host_after_transport_lookup() {
             id: id.into(),
             labels: Default::default(),
             state: Some("Running".into()),
-            vnet_connection_name: None,
-            egress_policy: Some(
-                serde_json::from_value(
-                    json!({ "defaultAction": "Allow", "trafficInspection": "Full" }),
-                )
-                .unwrap(),
-            ),
+            vnet_connection_name: Some("default".into()),
+            egress_policy: None,
         })
     });
     let sandbox = AzureSandbox::new(
         Arc::new(client),
         "group".to_string(),
         "ubuntu".to_string(),
-        SandboxEgress::Allow,
+        SandboxEgress::Internet,
         None,
         "1".to_string(),
         "2Gi".to_string(),

@@ -2053,7 +2053,6 @@ mod tests {
             for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
                 for egress in [
                     SandboxEgress::None,
-                    SandboxEgress::Allow,
                     SandboxEgress::Internet,
                 ] {
                     let sandbox = Sandbox::new("agents".into())

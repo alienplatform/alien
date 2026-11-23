@@ -1633,9 +1633,7 @@ mod tests {
         };
         let digest = format!("sha256:{}", "a".repeat(64));
         let signed = format!("registry.example.com/vendor/sandbox@{digest}");
-        let egress = alien_core::SandboxEgress::AllowDomains {
-            domains: vec!["api.example.com".to_string()],
-        };
+        let egress = alien_core::SandboxEgress::None;
         let sandbox = alien_core::Sandbox::new("agent".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: signed.clone(),
@@ -1781,9 +1779,10 @@ mod tests {
                 group.clone(),
                 signed.clone(),
                 request(&|r| {
-                    r.egress = egress_policy(&alien_core::SandboxEgress::AllowDomains {
-                        domains: vec!["evil.example".to_string()],
-                    })
+                    r.egress
+                        .as_mut()
+                        .expect("a closed sandbox is created with a policy")
+                        .default_action = "Allow".to_string()
                 }),
                 None,
             ),

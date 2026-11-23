@@ -2083,10 +2083,6 @@ mod tests {
     async fn released_native_sandboxes_need_no_new_vnet_attachment() {
         for declaration in [
             SandboxEgress::None,
-            SandboxEgress::Allow,
-            SandboxEgress::AllowDomains {
-                domains: vec!["api.example.com".into()],
-            },
         ] {
             let mut client = MockSandboxDataPlaneApi::new();
             let policy = egress_policy(&declaration);
@@ -2106,36 +2102,6 @@ mod tests {
             assert_eq!(sandbox.sandbox_id, "0abc981b-08a9-5ab4-90c8-c00a33e9ef97");
             assert_eq!(sandbox.state, SandboxState::Running);
         }
-    }
-
-    #[tokio::test]
-    async fn legacy_reconnect_preserves_native_policy_and_refuses_runtime_policy() {
-        let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_get_sandbox()
-            .times(2)
-            .returning(|_, id| Ok(running(id, None)));
-        let sandbox = sandbox_denying(client, SandboxEgress::Allow);
-        let error = sandbox
-            .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("30d94857-032c-55f2-8955-b92c759bc22e".into()),
-                egress: Some(alien_core::EgressPolicy::Internet),
-                ..Default::default()
-            })
-            .await
-            .expect_err("legacy declarations refuse runtime policies");
-        assert_eq!(error.code, "SANDBOX_EGRESS_REQUIRES_INTERNET");
-        let found = sandbox
-            .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("30d94857-032c-55f2-8955-b92c759bc22e".into()),
-                ..Default::default()
-            })
-            .await
-            .expect("ordinary legacy reconnect remains usable");
-        assert_eq!(
-            found.sandbox.sandbox_id,
-            "30d94857-032c-55f2-8955-b92c759bc22e"
-        );
     }
 
     /// The declared image has to reach the create call, not a default chosen here.
@@ -2222,7 +2188,7 @@ mod tests {
             std::sync::Arc::new(direct),
             "grp".to_string(),
             "ubuntu".to_string(),
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             Some(300),
             "1000m".to_string(),
             "2048Mi".to_string(),
@@ -2254,7 +2220,7 @@ mod tests {
             std::sync::Arc::new(routed_client),
             "grp".to_string(),
             "ubuntu".to_string(),
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             None,
             "1000m".to_string(),
             "2048Mi".to_string(),
@@ -2284,7 +2250,7 @@ mod tests {
             std::sync::Arc::new(client),
             "grp".to_string(),
             "ubuntu".to_string(),
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             None,
             "1000m".to_string(),
             "2048Mi".to_string(),
@@ -2318,7 +2284,7 @@ mod tests {
             std::sync::Arc::new(MockSandboxDataPlaneApi::new()),
             "grp".to_string(),
             "ubuntu".to_string(),
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             None,
             "1000m".to_string(),
             "2048Mi".to_string(),
@@ -3962,8 +3928,8 @@ mod tests {
     ///
     /// The inspection mode is the half that is easy to leave out and impossible to notice: under
     /// anything but `Full` a `Deny` default still lets every non-HTTP protocol out, so a sandbox
-    /// would carry the label and none of the containment. `allow` must send no policy, because
-    /// `Full` would block the traffic `allow` promises.
+    /// would carry the label and none of the containment. `internet` must send no policy, because
+    /// `Full` would block the traffic `internet` promises.
     #[tokio::test]
     async fn each_declared_mode_is_created_with_the_policy_that_realises_it() {
         let mut client = MockSandboxDataPlaneApi::new();
@@ -4016,62 +3982,22 @@ mod tests {
             .expect_create_sandbox()
             .times(1)
             .returning(|_, request| {
-                assert!(request.customer_vnet_connection_name.is_none());
-                let policy = request.egress.expect("allowDomains must send a policy");
-                assert_eq!(policy.default_action, "Deny", "anything unlisted is denied");
-                assert_eq!(policy.traffic_inspection.as_deref(), Some("Full"));
                 assert_eq!(
-                    policy.host_rules,
-                    vec![EgressHostRule {
-                        pattern: "api.example.com".to_string(),
-                        action: "Allow".to_string(),
-                    }]
+                    request.customer_vnet_connection_name.as_deref(),
+                    Some("default"),
+                    "an internet sandbox is attached to the gateway's network"
                 );
-                Ok(running(
-                    "80b3969a-1016-5a27-86d1-a7bce44ced9b",
-                    Some(policy),
-                ))
-            });
-        settles_running(
-            &mut client,
-            Some(EgressPolicy {
-                default_action: "Deny".to_string(),
-                host_rules: vec![EgressHostRule {
-                    pattern: "api.example.com".to_string(),
-                    action: "Allow".to_string(),
-                }],
-                rules: Vec::new(),
-                unmodelled: Default::default(),
-                traffic_inspection: Some("Full".to_string()),
-            }),
-        );
-        sandbox_denying(
-            client,
-            SandboxEgress::AllowDomains {
-                domains: vec!["api.example.com".to_string()],
-            },
-        )
-        .create(CreateSandboxRequest::default())
-        .await
-        .expect("allowDomains should create");
-
-        let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_create_sandbox()
-            .times(1)
-            .returning(|_, request| {
-                assert!(request.customer_vnet_connection_name.is_none());
                 assert!(
                     request.egress.is_none(),
-                    "an open sandbox sends no policy: Full inspection would block non-HTTP traffic"
+                    "an internet sandbox sends no policy: Full inspection would block non-HTTP traffic"
                 );
                 Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", None))
             });
         settles_running(&mut client, None);
-        sandbox_denying(client, SandboxEgress::Allow)
+        sandbox_denying(client, SandboxEgress::Internet)
             .create(CreateSandboxRequest::default())
             .await
-            .expect("allow should create");
+            .expect("internet should create");
     }
 
     /// A restriction that did not take effect is the failure this whole path exists to prevent,
