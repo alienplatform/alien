@@ -16,6 +16,7 @@ mod emitter;
 mod emitters;
 mod generator;
 mod objects;
+mod operator_chart;
 mod package;
 mod postgres;
 mod registry;
@@ -37,6 +38,10 @@ pub use generator::{
 pub use objects::{
     compare_extension_objects, extension_subchart, post_rendered_objects, refuse_repeated_objects,
     rendered_objects, RenderedObject,
+};
+pub use operator_chart::{
+    generate_operator_chart, OperatorChartOptions, OperatorChartPlugin, DEFAULT_EXCLUDED_NAMESPACES,
+    OPERATOR_CHART_OTLP_PORT,
 };
 pub use package::{
     apply_package_defaults, package_chart, LogCollectorDefault, OperatorImageDefault,

@@ -105,6 +105,11 @@ pub struct Args {
     #[arg(long, env = "COLLECTOR_TOKEN_FILE")]
     pub collector_token_file: Option<PathBuf>,
 
+    /// Most bytes of telemetry that may wait to be sent while connected. Unset
+    /// leaves the queue unbounded.
+    #[arg(long, env = "OPERATOR_OTLP_MAX_QUEUED_BYTES")]
+    pub otlp_max_queued_bytes: Option<i64>,
+
     #[arg(long, env = "DEPLOYMENT_ID")]
     pub deployment_id: Option<String>,
 
@@ -598,6 +603,7 @@ async fn run_operator_cli(
         }
     };
     let db = std::sync::Arc::new(db);
+    db.set_telemetry_queue_cap(args.otlp_max_queued_bytes);
     // The manager an Operator talks to is fixed by its installation. A Secret that
     // names another one, or one that is not HTTPS, is refused before anything is sent.
     if args.identity_secret.is_some() {

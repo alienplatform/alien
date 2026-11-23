@@ -40,6 +40,8 @@ NO_SETUP_CHECK = {
     "crates/alien-helm/tests/product_remote_operator_lifecycle.rs": "chart without sandbox or container egress: no setup check",
     "crates/alien-helm/tests/runtime_identity_lifecycle.rs": "chart without sandbox or container egress: no setup check",
     "crates/alien-helm/tests/signing_kind.rs": "chart without sandbox or container egress: no setup check",
+    "crates/alien-helm/src/operator_chart.rs": "the Operator chart's README text; the chart has no setup check",
+    "crates/alien-helm/tests/operator_chart.rs": "helm template and lint only, no install",
     "crates/alien-infra/src/service_account/kubernetes.rs": "comment",
     "crates/alien-infra/tests/kubernetes_service_account_refresh_kind.rs": "comment",
     "crates/alien-manager/src/routes/charts.rs": "serves the chart",
