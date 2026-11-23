@@ -797,6 +797,20 @@ mod tests {
                 .unwrap_or_else(|| panic!("the block carries no '{key}': {block:?}"))
         }
 
+        /// Engine grants that are not the edge signer's. Every sandbox now has a signer, which
+        /// holds the execute verb on the engine, so "no engine grant" means no other member.
+        fn engine_grants_besides_the_signer(fragment: &TfFragment) -> Vec<&hcl::structure::Block> {
+            fragment
+                .resource_blocks
+                .iter()
+                .filter(|block| {
+                    block.labels.first().map(|l| l.as_str())
+                        == Some("google_vertex_ai_reasoning_engine_iam_member")
+                })
+                .filter(|block| !attribute(block, "member").contains("_preview"))
+                .collect()
+        }
+
         /// The grant names the engine by reading the created block's server-assigned `name` — a
         /// name derived from the setup label would be a scope no engine answers to, so the caller
         /// would hold no session access at all while `PERMISSIONS.md` still advertised the grant.
@@ -840,10 +854,7 @@ mod tests {
                 GcpAgentPlatformSandboxEmitter.emit(ctx).expect("renders")
             });
             assert!(
-                !fragment.resource_blocks.iter().any(|block| {
-                    block.labels.first().map(|l| l.as_str())
-                        == Some("google_vertex_ai_reasoning_engine_iam_member")
-                }),
+                engine_grants_besides_the_signer(&fragment).is_empty(),
                 "{fragment:?}"
             );
         }
@@ -1110,19 +1121,9 @@ mod tests {
                 }));
 
             let fragment = granted(true, false);
-            let members: Vec<_> = fragment
-                .resource_blocks
-                .iter()
-                .filter(|block| {
-                    block.labels.first().map(|label| label.as_str())
-                        == Some("google_vertex_ai_reasoning_engine_iam_member")
-                })
-                .collect();
+            let members = engine_grants_besides_the_signer(&fragment);
             assert_eq!(members.len(), 1, "{fragment:?}");
-            assert!(!granted(false, false).resource_blocks.iter().any(|block| {
-                block.labels.first().map(|l| l.as_str())
-                    == Some("google_vertex_ai_reasoning_engine_iam_member")
-            }));
+            assert!(engine_grants_besides_the_signer(&granted(false, false)).is_empty());
 
             // On a protected install the verifier creates the template, so it reads the image
             // repository too: one reader member on that repository, none without a verifier.
@@ -1236,14 +1237,19 @@ mod tests {
                     .collect()
             };
 
+            // No preview ports still gets the identity: interactive commands reach the agent
+            // through the edge on every GCP sandbox.
             let (none, binding, none_import) = render(vec![], true);
             assert_eq!(
-                kinds(&none),
-                vec!["google_artifact_registry_repository".to_string()],
-                "no preview ports, no identity, and no manager to grant: {none:?}"
+                kinds(&none)
+                    .iter()
+                    .filter(|k| k.as_str() == "google_service_account")
+                    .count(),
+                1,
+                "{none:?}"
             );
-            assert!(!object_keys(&binding).contains("previewServiceAccount"));
-            assert!(!object_keys(&none_import).contains("previewServiceAccount"));
+            assert!(object_keys(&binding).contains("previewServiceAccount"));
+            assert!(object_keys(&none_import).contains("previewServiceAccount"));
 
             let (fragment, binding, import_ref) = render(vec![8080, 8081], true);
             let all = kinds(&fragment);
@@ -1559,10 +1565,11 @@ mod tests {
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
             assert!(object_keys(&emitted).contains("previewServiceAccount"));
+            // Every other sandbox has it too: interactive commands go through the same edge.
             let open = emit_binding(SandboxEgress::Allow, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
-            assert!(!object_keys(&open).contains("previewServiceAccount"));
+            assert!(object_keys(&open).contains("previewServiceAccount"));
         }
 
         /// The emitted keys are read against the binding type, not a second hand-typed list, so
@@ -1574,14 +1581,14 @@ mod tests {
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
 
-            let type_json = serde_json::to_value(SandboxBinding::gcp_agent_platform(
-                "e",
-                "t",
-                "us-central1",
-                Some(3600),
-                true,
-            ))
-            .expect("the binding type serializes");
+            // Every sandbox's setup creates the edge signer, so the binding names it.
+            let mut binding =
+                SandboxBinding::gcp_agent_platform("e", "t", "us-central1", Some(3600), true);
+            if let SandboxBinding::GcpAgentPlatform(inner) = &mut binding {
+                inner.preview_service_account =
+                    Some("signer@p.iam.gserviceaccount.com".to_string().into());
+            }
+            let type_json = serde_json::to_value(binding).expect("the binding type serializes");
             let type_keys: BTreeSet<String> = type_json
                 .as_object()
                 .expect("the binding serializes as an object")

@@ -2223,6 +2223,10 @@ impl BindingsProviderApi for BindingsProvider {
                     binding_name,
                     iam_client,
                 )?;
+                let provider = match &gcp_binding.private_endpoint {
+                    Some(endpoint) => provider.with_private_endpoint(endpoint.clone()),
+                    None => provider,
+                };
                 let mut provider = provider.with_egress(
                     gcp_binding
                         .egress

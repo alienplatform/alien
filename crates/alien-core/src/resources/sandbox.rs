@@ -559,9 +559,11 @@ impl SandboxCapabilities {
             // replaced under a stable sandbox name rather than reconnecting to a blank one.
             reconnect: true,
             jobs: true,
-            // `:execute` is one request with one answer, capped at about 30 seconds. Input
-            // cannot reach a command after its call has answered, so there is no stream to drive.
-            interactive_commands: false,
+            // `:execute` is one request with one answer, capped at about 30 seconds, so it cannot
+            // carry input. Interactive commands go through the sandbox edge to the agent's own
+            // `/v1/interactive` instead, with the edge credential every sandbox's setup creates.
+            // A binding without that signing identity narrows this to false.
+            interactive_commands: true,
             // Owner access only: the edge credential reaches the whole sandbox and is accepted for
             // `:execute` too, so preview here is command access, never a port-scoped credential.
             // The agent's declared port serves the request to the workload's port, HTTP and
@@ -805,11 +807,11 @@ pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
 }
 
 impl Sandbox {
-    /// Whether a Google Cloud deployment of this sandbox needs the edge-signing identity: the
-    /// edge checks a credential it signs on every call through a preview port, and on every call
-    /// at all to an `internet` sandbox, whose private ingress answers only to that credential.
+    /// Whether a Google Cloud deployment of this sandbox needs the edge-signing identity. Every
+    /// one does: interactive commands, preview ports and an `internet` sandbox's private ingress
+    /// all reach the agent through the edge, which checks a credential this identity signs.
     pub fn needs_gcp_edge_signer(&self) -> bool {
-        !self.preview_ports.is_empty() || self.egress == SandboxEgress::Internet
+        true
     }
 
     pub(crate) fn setup_digest_value(&self) -> serde_json::Value {
