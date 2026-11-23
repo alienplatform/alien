@@ -99,13 +99,29 @@ fn operation() -> KubernetesOperationPermissions {
 /// template that fails when applied is switched on by `--set broken=true`: it sorts after the
 /// policy objects, so the release fails after they were applied.
 fn write_chart(directory: &Path, with_operation: bool, scope: OperatorScope) {
+    write_chart_with_image(directory, with_operation, scope, &operator_image());
+}
+
+/// The Operator image the chart's verification Job runs: an image of this checkout's
+/// `alien-operator`, loaded into the cluster, named by `ALIEN_WORKLOAD_RESTART_OPERATOR_IMAGE`.
+fn operator_image() -> String {
+    std::env::var("ALIEN_WORKLOAD_RESTART_OPERATOR_IMAGE")
+        .unwrap_or_else(|_| "registry.example.com/operator:test".to_owned())
+}
+
+fn write_chart_with_image(
+    directory: &Path,
+    with_operation: bool,
+    scope: OperatorScope,
+    image: &str,
+) {
     let operations = [operation()];
     let template = generate_operator_manifest(OperatorManifestOptions {
         custom_operation_permissions: if with_operation { &operations } else { &[] },
         manager_url: "https://manager.example.com",
         group_token: "test-token",
         encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        image: "registry.example.com/operator:test",
+        image,
         log_collector: None,
         stack_settings: None,
         project_name: "my-saas",
@@ -790,9 +806,10 @@ impl Seen {
         );
     }
 
-    /// The policy was new: the API server needs a moment to start enforcing it, and patches the
-    /// grant admits in that moment are not limited. It must be short and end in the refusal.
-    fn assert_only_the_start_up_of_a_new_policy(&self, when: &str) {
+    /// The grant appears only after the policy refused a probe patch: the first answer after
+    /// "no permission" is the policy's refusal, and no patch is ever admitted.
+    fn assert_refused_from_the_first_grant(&self, when: &str) {
+        self.assert_never_admitted(when);
         assert_eq!(
             self.statuses.first(),
             Some(&403),
@@ -810,15 +827,7 @@ impl Seen {
             "{when}: admitted again after refusing: {:?}",
             self.statuses
         );
-        assert!(
-            self.admitted_ms.unwrap_or(0) < 3000,
-            "{when}: the unenforced window is {:?} ms",
-            self.admitted_ms
-        );
-        println!(
-            "{when}: patches were admitted for {:?} ms after the grant appeared (the API server starting to enforce the new policy)",
-            self.admitted_ms
-        );
+        println!("{when}: no patch was admitted before the policy refused one");
     }
 }
 
@@ -883,7 +892,7 @@ fn the_grant_never_exists_without_an_enforcing_policy() {
     std::thread::sleep(std::time::Duration::from_secs(3));
     let seen = probe.finish();
     assert!(can_patch_workloads(&context));
-    seen.assert_only_the_start_up_of_a_new_policy("install");
+    seen.assert_refused_from_the_first_grant("install");
     // Hook objects stay out of the release's manifest.
     let (_, manifest) = run(
         "helm",
@@ -899,7 +908,8 @@ fn the_grant_never_exists_without_an_enforcing_policy() {
         None,
     );
     assert!(manifest.contains("ValidatingAdmissionPolicy"));
-    assert!(!manifest.contains("verbs: ['patch']") && !manifest.contains("- patch"));
+    // The Role is part of the release; the probe objects and the binding are not.
+    assert!(!manifest.contains("kind: Job"), "hook objects are not in the manifest");
 
     // Uninstall: the pre-delete hook removes the grant before the policy goes.
     let probe = Probe::start(&context, OPERATOR);
@@ -955,7 +965,7 @@ fn the_grant_never_exists_without_an_enforcing_policy() {
     std::thread::sleep(std::time::Duration::from_secs(3));
     let seen = probe.finish();
     assert!(can_patch_workloads(&context));
-    seen.assert_only_the_start_up_of_a_new_policy("upgrade from a chart without the feature");
+    seen.assert_refused_from_the_first_grant("upgrade from a chart without the feature");
 
     // A second upgrade replaces the grant (the hook deletes it before it creates it again) and
     // never leaves it without the policy.
@@ -1034,10 +1044,53 @@ fn the_grant_never_exists_without_an_enforcing_policy() {
         None,
     );
     assert!(ok);
-    println!(
-        "after a rollback to a chart without the feature: grant present = {}",
-        can_patch_workloads(&context)
+    assert!(
+        !can_patch_workloads(&context),
+        "a rollback to a chart without the feature leaves the Operator with a workload patch"
     );
+    println!("after a rollback to a chart without the feature: no grant is left");
+}
+
+/// A probe that fails fails the release, and the Operator is never bound to the patch rule.
+#[test]
+#[ignore = "requires a disposable cluster (Kubernetes 1.30 or later) named by ALIEN_WORKLOAD_RESTART_KIND_CONTEXT and the images named by ALIEN_WORKLOAD_RESTART_OPERATOR_IMAGE and ALIEN_WORKLOAD_RESTART_FAILING_IMAGE"]
+fn a_failed_probe_fails_the_release_and_leaves_no_grant() {
+    let context = std::env::var("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT")
+        .expect("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT names the cluster");
+    // An image whose entry point exits 1 stands for a cluster that does not enforce the policy.
+    let failing = std::env::var("ALIEN_WORKLOAD_RESTART_FAILING_IMAGE")
+        .expect("ALIEN_WORKLOAD_RESTART_FAILING_IMAGE names an image that fails when run");
+    let _cleanup = Cleanup(&context);
+    let before = tempfile::tempdir().unwrap();
+    let broken = tempfile::tempdir().unwrap();
+    write_chart(before.path(), false, OperatorScope::Namespace);
+    write_chart_with_image(broken.path(), true, OperatorScope::Namespace, &failing);
+    install_namespace_and_workloads(&context);
+    assert!(helm_chart(&context, "install", before.path(), &[]).0);
+
+    let probe = Probe::start(&context, OPERATOR);
+    let (ok, text) = helm_chart(&context, "upgrade", broken.path(), &[]);
+    assert!(!ok, "the upgrade must fail when the probe fails: {text}");
+    let seen = probe.finish();
+    seen.assert_never_admitted("while the probe failed");
+    assert_eq!(seen.statuses, [403], "the Operator never got the rule");
+    assert!(!can_patch_workloads(&context));
+    // The Job stays for its log. Helm removes only the failed hook itself, so the probe's account
+    // objects stay too (they can patch one Deployment with zero replicas) until the next
+    // successful release removes them.
+    let (_, jobs) = kubectl(&context, &["get", "job", "-n", NAMESPACE, "-o", "name"], None);
+    assert!(jobs.contains("-probe"), "the failed Job is kept: {jobs}");
+    // Fixing the cause and upgrading again completes the grant and cleans up the probe.
+    let good = tempfile::tempdir().unwrap();
+    write_chart(good.path(), true, OperatorScope::Namespace);
+    assert!(helm_chart(&context, "upgrade", good.path(), &[]).0);
+    assert!(can_patch_workloads(&context));
+    let (_, left) = kubectl(
+        &context,
+        &["get", "serviceaccount,role,rolebinding,deployment,job", "-n", NAMESPACE, "-o", "name"],
+        None,
+    );
+    assert!(!left.contains("-probe"), "the probe left objects: {left}");
 }
 
 /// A cluster-wide install patches in any namespace; its policy has no namespace selector.

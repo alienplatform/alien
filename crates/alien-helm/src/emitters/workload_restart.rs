@@ -19,11 +19,24 @@
 //! release therefore creates no binding newer than the policy, and a rollback
 //! to a chart from before this feature removes the Role (the binding left
 //! behind grants nothing).
-//! Limits: the API server needs a moment (measured on Kubernetes 1.31: about a
-//! quarter to half a second) to start enforcing a NEW policy, during which the
-//! rule admits unlimited patches; a cluster that serves the policy API with the
-//! admission plugin disabled and a policy deleted by hand leave the rule
-//! unconfined.
+//!
+//! A new policy is not enforced by the API server for a moment (measured on
+//! Kubernetes 1.31: a quarter to half a second), and a rule bound in that
+//! moment would admit any patch. Before the binding hook, therefore, hook
+//! objects run `alien-operator verify-workload-patch-policy` as a throwaway
+//! ServiceAccount that the policy treats like the Operator's and that may patch
+//! one named Deployment with zero replicas. The command patches a field a
+//! restart never changes until the policy refuses it, then checks that a
+//! restart is admitted. Helm waits for that Job, so a cluster that does not
+//! enforce the policy fails the release before the Operator can patch anything.
+//! The probe objects are removed when the release succeeds; after a failed
+//! release the Job (and its log) and the probe's own objects stay until the next
+//! successful release, and none of them can patch anything but the probe
+//! Deployment.
+//!
+//! Limits: a cluster that serves the policy API with the admission plugin
+//! disabled passes no probe (the release fails); a policy deleted by hand
+//! leaves the rule unconfined.
 //!
 //! A product chart's Operator also manages dynamic workloads in the release
 //! namespace (its Role already allows create/update/delete of Deployments
