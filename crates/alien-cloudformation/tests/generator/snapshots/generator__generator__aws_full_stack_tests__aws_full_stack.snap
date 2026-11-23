@@ -1224,8 +1224,6 @@ Resources:
         - Action:
           - ecr:BatchGetImage
           - ecr:GetDownloadUrlForLayer
-          - ecr:GetRepositoryPolicy
-          - ecr:SetRepositoryPolicy
           Effect: Allow
           Resource:
           - Fn::Sub:
