@@ -136,10 +136,7 @@
           "type": "image"
         },
         "egress": {
-          "domains": [
-            "mirror.acme.example"
-          ],
-          "mode": "allowDomains"
+          "mode": "deny"
         },
         "lifecycle": {}
       },

@@ -2922,63 +2922,20 @@
           "type": "string"
         },
         {
-          "anyOf": [
-            {
-              "additionalProperties": false,
-              "description": "Deprecated alias of \"none\".",
-              "properties": {
-                "mode": {
-                  "enum": [
-                    "deny"
-                  ],
-                  "type": "string"
-                }
-              },
-              "required": [
-                "mode"
+          "additionalProperties": false,
+          "description": "Deprecated object declaration kept for released stacks.",
+          "properties": {
+            "mode": {
+              "enum": [
+                "deny"
               ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "description": "Deprecated direct backend access. Use \"internet\" to opt into the gateway,\nfixed outbound IP, connection logs and per-sandbox runtime policies.",
-              "properties": {
-                "mode": {
-                  "enum": [
-                    "allow"
-                  ],
-                  "type": "string"
-                }
-              },
-              "required": [
-                "mode"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "description": "Deprecated backend hostname rules. Use \"internet\" and runtime policies\nto opt into gateway enforcement instead.",
-              "properties": {
-                "domains": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                "mode": {
-                  "enum": [
-                    "allow-domains"
-                  ],
-                  "type": "string"
-                }
-              },
-              "required": [
-                "mode"
-              ],
-              "type": "object"
+              "type": "string"
             }
+          },
+          "required": [
+            "mode"
           ],
-          "description": "Deprecated object declarations preserve their released backend behavior."
+          "type": "object"
         }
       ]
     },

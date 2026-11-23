@@ -2648,41 +2648,6 @@
                 "mode"
               ],
               "type": "object"
-            },
-            {
-              "properties": {
-                "mode": {
-                  "enum": [
-                    "allow"
-                  ],
-                  "type": "string"
-                }
-              },
-              "required": [
-                "mode"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "domains": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                "mode": {
-                  "enum": [
-                    "allowDomains"
-                  ],
-                  "type": "string"
-                }
-              },
-              "required": [
-                "domains",
-                "mode"
-              ],
-              "type": "object"
             }
           ]
         }

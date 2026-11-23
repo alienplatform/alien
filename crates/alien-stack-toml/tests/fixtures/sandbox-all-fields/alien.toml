@@ -27,7 +27,7 @@ image-permissions = { mounts = [{ type = "nfs", path = "/workspace" }, { type = 
 
 [sandbox.mirror]
 image = "s3://acme-bundles/mirror/{region}/rootfs.tar"
-egress = { mode = "allow-domains", domains = ["mirror.acme.example"] }
+egress = { mode = "deny" }
 session = {}
 
 [input.runner_enabled]
