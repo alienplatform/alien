@@ -459,6 +459,17 @@ pub fn cli_main_with_all_loops(
         std::process::exit(crate::setup_credential::main(std::env::args_os().skip(2)));
     }
 
+    // `verify-workload-patch-policy` is the chart's install-time check; it needs
+    // no state, lock or tracing.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "verify-workload-patch-policy")
+    {
+        std::process::exit(crate::workload_patch_probe::main(
+            std::env::args_os().skip(2),
+        ));
+    }
+
     let OperatorCliArgs {
         args,
         operator_image,

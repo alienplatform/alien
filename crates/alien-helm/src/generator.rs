@@ -2205,6 +2205,7 @@ fn generate_operator_manifest_inner(
             options.format,
         ),
         dynamic_containers,
+        options.image,
     );
     docs.extend(policy_docs);
     // Dynamic workloads need write access in this deployment namespace only.
@@ -3043,6 +3044,7 @@ fn workload_restart_policy_docs(
     labels: &BTreeMap<String, String>,
     grants: &RestartGrants,
     dynamic_containers: bool,
+    image: &str,
 ) -> (Vec<String>, Vec<String>) {
     let resources: BTreeSet<&str> = grants.0.keys().map(|grant| grant.resource).collect();
     if resources.is_empty() {
@@ -3062,16 +3064,25 @@ fn workload_restart_policy_docs(
     let object_name = format!(
         "{{{{ printf \"%s-restart-%s\" {name_expression} (sha256sum (printf \"%s/%s\" .Release.Namespace .Release.Name) | trunc 8) }}}}"
     );
+    // The probe account (see `workload_restart::probe`) is named from the
+    // policy's name, cut short so the Job's pod label stays valid.
+    let probe_name_expression = format!(
+        "(printf \"%s-restart-%s-probe\" ({name_expression} | trunc 24) (sha256sum (printf \"%s/%s\" .Release.Namespace .Release.Name) | trunc 8))"
+    );
+    let probe_name = format!("{{{{ {probe_name_expression} }}}}");
     let mut metadata = String::from("metadata:\n");
     metadata.push_str(&format!("  name: {object_name}\n  labels:\n"));
     append_operator_labels(&mut metadata, labels, 4);
-    let resource_list = resources
+    // The probe patches a Deployment, so the policy always covers Deployments.
+    let mut policy_resources = resources.clone();
+    policy_resources.insert("deployments");
+    let resource_list = policy_resources
         .iter()
         .map(|resource| yaml_string(resource))
         .collect::<Vec<_>>()
         .join(", ");
     let mut policy = format!(
-        "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\n{metadata}spec:\n  failurePolicy: Fail\n  matchConstraints:\n    resourceRules:\n      - apiGroups: ['apps']\n        apiVersions: ['v1']\n        operations: ['UPDATE']\n        resources: [{resource_list}]\n  matchConditions:\n    - name: operator-account\n      expression: {{{{ printf \"request.userInfo.username == 'system:serviceaccount:%s:%s'\" .Release.Namespace {name_expression} | quote }}}}\n"
+        "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\n{metadata}spec:\n  failurePolicy: Fail\n  matchConstraints:\n    resourceRules:\n      - apiGroups: ['apps']\n        apiVersions: ['v1']\n        operations: ['UPDATE']\n        resources: [{resource_list}]\n  matchConditions:\n    - name: operator-account\n      expression: {{{{ printf \"request.userInfo.username in ['system:serviceaccount:%s:%s', 'system:serviceaccount:%s:%s']\" .Release.Namespace {name_expression} .Release.Namespace {probe_name_expression} | quote }}}}\n"
     );
     if dynamic_containers {
         // A product chart's Operator also creates, updates and deletes the
@@ -3155,10 +3166,17 @@ fn workload_restart_policy_docs(
     // it when a rollback goes to a chart that has none. Only the binding, which
     // gives the Operator the rule, is a hook.
     let role = format!("{}{rules}", object_metadata(role_kind, ""));
-    let hooks = [
+    let mut hooks = restart_probe_docs(
+        &probe_name,
+        &object_name,
+        namespace,
+        labels,
+        image,
+    );
+    hooks.extend([
         format!("{}{subjects}", object_metadata(binding_kind, install_hook)),
         format!("{}{subjects}", object_metadata(binding_kind, delete_hook)),
-    ];
+    ]);
     let guard = |doc: String| {
         format!(
             "{{{{- if {} }}}}\n{doc}{{{{- end }}}}\n",
@@ -3169,6 +3187,60 @@ fn workload_restart_policy_docs(
         [policy, binding, role].into_iter().map(guard).collect(),
         hooks.into_iter().map(guard).collect(),
     )
+}
+
+/// The hooks that prove the cluster enforces the restart policy before the
+/// Operator gets its `patch` permission (see
+/// `alien-operator`'s `verify-workload-patch-policy`): a throwaway account that
+/// the policy treats like the Operator, allowed to patch one Deployment with
+/// zero replicas, and a Job that runs the check as that account. They run
+/// before the binding hook (weight 0) and are removed when they succeed or fail
+/// (the Job stays after a failure, so its log can be read, and expires on its
+/// own).
+fn restart_probe_docs(
+    probe_name: &str,
+    policy_name: &str,
+    namespace: &str,
+    labels: &BTreeMap<String, String>,
+    image: &str,
+) -> Vec<String> {
+    let metadata = |kind: &str, api: &str, weight: i32, delete: &str| {
+        let mut yaml = format!("apiVersion: {api}\nkind: {kind}\nmetadata:\n  name: {probe_name}\n  namespace: {}\n  labels:\n", yaml_string(namespace));
+        append_operator_labels(&mut yaml, labels, 4);
+        yaml.push_str(&format!(
+            "  annotations:\n    helm.sh/hook: post-install,post-upgrade,post-rollback\n    helm.sh/hook-weight: \"{weight}\"\n    helm.sh/hook-delete-policy: {delete}\n"
+        ));
+        yaml
+    };
+    let all = "before-hook-creation,hook-succeeded,hook-failed";
+    let account = metadata("ServiceAccount", "v1", -40, all);
+    let role = format!(
+        "{}rules:\n  - apiGroups: ['apps']\n    resources: ['deployments']\n    resourceNames: [\"{probe_name}\"]\n    verbs: ['patch']\n",
+        metadata("Role", "rbac.authorization.k8s.io/v1", -40, all)
+    );
+    let binding = format!(
+        "{}subjects:\n  - kind: ServiceAccount\n    name: \"{probe_name}\"\n    namespace: {}\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name: \"{probe_name}\"\n",
+        metadata("RoleBinding", "rbac.authorization.k8s.io/v1", -40, all),
+        yaml_string(namespace)
+    );
+    let pod_security = "runAsNonRoot: true\n        runAsUser: 1000\n        runAsGroup: 1000\n        seccompProfile:\n          type: RuntimeDefault\n";
+    let container_security = "allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true\n            capabilities:\n              drop: [\"ALL\"]\n";
+    let selector = format!(
+        "selector:\n    matchLabels:\n      alien.dev/restart-probe: \"{probe_name}\"\n"
+    );
+    let deployment = format!(
+        "{}spec:\n  replicas: 0\n  {selector}  template:\n    metadata:\n      labels:\n        alien.dev/restart-probe: \"{probe_name}\"\n    spec:\n      automountServiceAccountToken: false\n      securityContext:\n        {pod_security}      containers:\n        - name: probe\n          image: {}\n          imagePullPolicy: IfNotPresent\n          securityContext:\n            {container_security}",
+        metadata("Deployment", "apps/v1", -30, all),
+        yaml_string(image)
+    );
+    // The Job stays after a failure: its log says why.
+    let job = format!(
+        "{}spec:\n  backoffLimit: 0\n  activeDeadlineSeconds: 180\n  ttlSecondsAfterFinished: 3600\n  template:\n    spec:\n      restartPolicy: Never\n      serviceAccountName: \"{probe_name}\"\n      securityContext:\n        {pod_security}      containers:\n        - name: verify\n          image: {}\n          imagePullPolicy: IfNotPresent\n          args:\n            - verify-workload-patch-policy\n            - {}\n            - \"--deployment={probe_name}\"\n            - \"--policy={policy_name}\"\n          securityContext:\n            {container_security}",
+        metadata("Job", "batch/v1", -20, "before-hook-creation,hook-succeeded"),
+        yaml_string(image),
+        yaml_string(&format!("--namespace={namespace}"))
+    );
+    vec![account, role, binding, deployment, job]
 }
 
 /// The access-request `CustomResourceDefinition`, white-labeled from `names`.
