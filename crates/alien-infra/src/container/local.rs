@@ -386,7 +386,11 @@ impl LocalContainerController {
                     })
                 })?;
             let entry = bindings_provider
-                .resolve_runtime_only_binding_env(&binding_ref.name, &binding_ref.resource_type)
+                .resolve_runtime_only_binding_env(
+                    &binding_ref.name,
+                    &binding_ref.resource_type,
+                    &env_vars,
+                )
                 .await
                 .context(ErrorData::ResourceControllerConfigError {
                     resource_id: binding_ref.name.clone(),

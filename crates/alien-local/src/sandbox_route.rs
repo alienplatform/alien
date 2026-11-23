@@ -398,6 +398,7 @@ impl SandboxRoute {
         };
 
         let template = Arc::new(Mutex::new(template));
+        let expiry = end_expired_sessions(Arc::clone(&manager), sandbox.to_string());
         let state = RouteState {
             manager,
             sandbox: sandbox.to_string(),
@@ -451,8 +452,14 @@ impl SandboxRoute {
                 // Either an explicit stop or the sender being dropped ends the wait.
                 let _ = stop.await;
             });
-            if let Err(error) = serve.await {
-                tracing::error!("local sandbox route stopped: {error}");
+            // The expiry loop never ends on its own; it is dropped when the route stops.
+            tokio::select! {
+                result = serve => {
+                    if let Err(error) = result {
+                        tracing::error!("local sandbox route stopped: {error}");
+                    }
+                }
+                () = expiry => {}
             }
         });
 
@@ -638,10 +645,6 @@ async fn create_session(
         .await
         .map_err(failed)?;
 
-    if let Some(lifetime) = lifetime {
-        end_after(state.manager.clone(), state.sandbox.clone(), lifetime);
-    }
-
     Ok(Json(SessionBody {
         session_id: handle.session_id,
         container_id: handle.container_id,
@@ -660,31 +663,19 @@ fn session_lifetime(
     }
 }
 
-/// Ends sessions at their deadline, as a cloud backend's deadline does. The deadline itself is
-/// a label on the container, compared with the wall clock: the timer only wakes up to check, in
-/// short steps so a machine's sleep does not slide it, and retries when the check fails. The
-/// controller's tick enforces the same labels after a restart.
-fn end_after(manager: Arc<LocalSandboxManager>, sandbox: String, lifetime: std::time::Duration) {
-    const STEP: std::time::Duration = std::time::Duration::from_secs(15);
-    tokio::spawn(async move {
-        let due = std::time::SystemTime::now() + lifetime;
-        loop {
-            let remaining = due
-                .duration_since(std::time::SystemTime::now())
-                .unwrap_or_default();
-            if remaining.is_zero() {
-                match manager.end_expired(&sandbox).await {
-                    Ok(_) => return,
-                    Err(error) => {
-                        tracing::warn!(%sandbox, %error, "could not end sandboxes at their lifetime; retrying")
-                    }
-                }
-                tokio::time::sleep(STEP).await;
-            } else {
-                tokio::time::sleep(remaining.min(STEP)).await;
-            }
+/// Ends sessions at their deadline, as a cloud backend's deadline does, for one sandbox's route.
+/// The deadline itself is a label on each container, compared with the wall clock: this loop only
+/// wakes up to check, in short steps so a machine's sleep does not slide it, and checks again
+/// when a check fails. It lives as long as the route: it is part of the route's serving task, so
+/// it stops with it, and it sees sessions that were created before a restart as well.
+async fn end_expired_sessions(manager: Arc<LocalSandboxManager>, sandbox: String) {
+    const STEP: std::time::Duration = std::time::Duration::from_secs(5);
+    loop {
+        tokio::time::sleep(STEP).await;
+        if let Err(error) = manager.end_expired(&sandbox).await {
+            tracing::warn!(%sandbox, %error, "could not end sandboxes at their lifetime; retrying");
         }
-    });
+    }
 }
 
 async fn list_sessions(

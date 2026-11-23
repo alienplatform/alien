@@ -349,6 +349,7 @@ impl LocalBindingsProvider {
         &self,
         binding_name: &str,
         resource_type: &str,
+        workload_env: &std::collections::HashMap<String, String>,
     ) -> alien_bindings::error::Result<Option<std::collections::HashMap<String, String>>> {
         if resource_type == alien_core::Queue::RESOURCE_TYPE.0 {
             let binding = self.queue_manager.runtime_binding(binding_name).context(
@@ -408,7 +409,7 @@ impl LocalBindingsProvider {
                 })?
             {
                 return Ok(Some(
-                    local_bedrock_binding_env(binding_name, &region).await?,
+                    local_bedrock_binding_env(binding_name, &region, workload_env).await?,
                 ));
             }
             let api_key = std::env::var(alien_core::bindings::AiBinding::LOCAL_API_KEY_ENV)
@@ -448,6 +449,7 @@ impl LocalBindingsProvider {
 async fn local_bedrock_binding_env(
     binding_name: &str,
     region: &str,
+    workload_env: &std::collections::HashMap<String, String>,
 ) -> alien_bindings::error::Result<std::collections::HashMap<String, String>> {
     use aws_credential_types::provider::ProvideCredentials;
 
@@ -457,6 +459,12 @@ async fn local_bedrock_binding_env(
             binding_name,
             "Failed to serialize local Bedrock binding",
         ))?;
+
+    // A workload that sets its own AWS credentials keeps them: the developer's chain is not
+    // resolved at all, so an empty chain is not an error for it.
+    if has_own_aws_credentials(workload_env) {
+        return Ok(env);
+    }
 
     let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(aws_config::Region::new(region.to_string()))
@@ -494,6 +502,12 @@ const AWS_CREDENTIAL_VARS: [&str; 4] = [
     "AWS_PROFILE",
 ];
 
+fn has_own_aws_credentials(env: &std::collections::HashMap<String, String>) -> bool {
+    AWS_CREDENTIAL_VARS
+        .iter()
+        .any(|name| env.contains_key(*name))
+}
+
 /// Adds a runtime-only entry to a workload's environment. AWS credentials the deployment's
 /// environment already sets win over the developer's resolved ones: when any of them is set, the
 /// resolved keys are dropped as a group, so the two never mix into one half-and-half identity.
@@ -501,9 +515,7 @@ pub fn merge_runtime_only_env(
     env: &mut std::collections::HashMap<String, String>,
     entry: std::collections::HashMap<String, String>,
 ) {
-    let own_credentials = AWS_CREDENTIAL_VARS
-        .iter()
-        .any(|name| env.contains_key(*name));
+    let own_credentials = has_own_aws_credentials(env);
     for (name, value) in entry {
         if own_credentials && AWS_CREDENTIAL_VARS.contains(&name.as_str()) {
             continue;
@@ -552,10 +564,16 @@ impl BindingsProviderApi for LocalBindingsProvider {
         &self,
         binding_name: &str,
         resource_type: &str,
+        workload_env: &std::collections::HashMap<String, String>,
     ) -> alien_bindings::error::Result<Option<std::collections::HashMap<String, String>>> {
         // The inherent method shadows this trait method on the concrete type.
-        LocalBindingsProvider::resolve_runtime_only_binding_env(self, binding_name, resource_type)
-            .await
+        LocalBindingsProvider::resolve_runtime_only_binding_env(
+            self,
+            binding_name,
+            resource_type,
+            workload_env,
+        )
+        .await
     }
 
     async fn load_storage(
@@ -905,7 +923,7 @@ mod tests {
         std::env::set_var("AWS_CONFIG_FILE", "/nonexistent/config");
         std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent/credentials");
 
-        let error = local_bedrock_binding_env("llm", "us-east-1")
+        let error = local_bedrock_binding_env("llm", "us-east-1", &Default::default())
             .await
             .expect_err("no credentials resolve");
         let message = error.to_string();
@@ -914,10 +932,21 @@ mod tests {
             "the error names the fix: {message}"
         );
 
+        // The workload's own keys: the empty chain is not consulted, so this is not an error.
+        let own = std::collections::HashMap::from([(
+            "AWS_ACCESS_KEY_ID".to_string(),
+            "AKIDOWN".to_string(),
+        )]);
+        let env = local_bedrock_binding_env("llm", "us-east-1", &own)
+            .await
+            .expect("own keys need no chain");
+        assert!(!env.contains_key("AWS_ACCESS_KEY_ID"));
+        assert!(env.contains_key("ALIEN_LLM_BINDING"));
+
         std::env::set_var("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE");
         std::env::set_var("AWS_SECRET_ACCESS_KEY", "secret-example");
         std::env::set_var("AWS_SESSION_TOKEN", "token-example");
-        let env = local_bedrock_binding_env("llm", "us-east-1")
+        let env = local_bedrock_binding_env("llm", "us-east-1", &Default::default())
             .await
             .expect("keys resolve");
         let binding: serde_json::Value =

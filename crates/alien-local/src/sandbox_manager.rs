@@ -148,9 +148,22 @@ pub struct LocalSandboxManager {
     /// Seeds the session CAs of every gateway. Per process, like `gateway_key`, so a gateway
     /// recreated for changed links keeps issuing the CA its sessions already trust.
     gateway_secret: String,
+    /// One lock per session container name. Create, terminate and the expiry cleanup of the
+    /// same session id run one at a time, so a late cleanup cannot remove what a newer create
+    /// of the same id just set up.
+    session_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl LocalSandboxManager {
+    fn session_lock(&self, name: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.session_locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(name.to_string())
+            .or_default()
+            .clone()
+    }
+
     /// Connects to the local Docker daemon.
     pub fn new(state_dir: PathBuf) -> Result<Self> {
         let (docker, docker_host) = crate::docker_connection::connect_docker_with_host()?;
@@ -163,6 +176,7 @@ impl LocalSandboxManager {
             gateways: Default::default(),
             gateway_image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.to_string(),
             gateway_secret: new_gateway_secret(),
+            session_locks: Default::default(),
         })
     }
 
@@ -194,6 +208,18 @@ impl LocalSandboxManager {
 
     /// Creates a session and leaves it running until terminated.
     pub async fn create_session(
+        &self,
+        sandbox: &str,
+        session_id: &str,
+        config: &SandboxSessionConfig,
+    ) -> Result<SandboxSessionHandle> {
+        let lock = self.session_lock(&Self::container_name(sandbox, session_id));
+        let _guard = lock.lock().await;
+        self.create_session_locked(sandbox, session_id, config)
+            .await
+    }
+
+    async fn create_session_locked(
         &self,
         sandbox: &str,
         session_id: &str,
@@ -1242,6 +1268,8 @@ impl LocalSandboxManager {
     /// Removes the session's container named by `target` (its name or its id).
     async fn terminate_target(&self, sandbox: &str, session_id: &str, target: &str) -> Result<()> {
         let name = Self::container_name(sandbox, session_id);
+        let lock = self.session_lock(&name);
+        let _guard = lock.lock().await;
 
         let removed = self
             .docker
@@ -1262,7 +1290,14 @@ impl LocalSandboxManager {
             // there tells the caller untrusted code has stopped when it has not.
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 404, ..
-            }) => {}
+            }) => {
+                // Targeted by the id of a container that is already gone: whoever removed it
+                // cleaned up, and a session created again under this id owns the gateway
+                // policy, CA and relays now.
+                if target != name {
+                    return Ok(());
+                }
+            }
             Err(error) => {
                 return Err(error)
                     .into_alien_error()
@@ -1548,6 +1583,7 @@ mod tests {
             gateways: Default::default(),
             gateway_image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.to_string(),
             gateway_secret: new_gateway_secret(),
+            session_locks: Default::default(),
         };
         let manager = manager.with_gateway_image(
             "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037",
@@ -1582,6 +1618,7 @@ mod tests {
             gateways: Default::default(),
             gateway_image: String::new(),
             gateway_secret: new_gateway_secret(),
+            session_locks: Default::default(),
         };
         for name in [
             "ALIEN_SANDBOX_EXEC_UID",
@@ -1611,6 +1648,44 @@ mod tests {
             assert!(error.to_string().contains("is reserved"), "{error}");
         }
         any.assert_hits_async(0).await;
+    }
+
+    /// An expiry cleanup that targets a container id a newer session of the same id has
+    /// replaced finds nothing to remove and leaves the new session's gateway state alone.
+    #[tokio::test]
+    async fn a_stale_expiry_removal_does_not_clean_up_a_recreated_session() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(DELETE)
+                    .path_contains("/containers/old-container-id");
+                then.status(404)
+                    .json_body(serde_json::json!({"message":"no such container"}));
+            })
+            .await;
+        let anything_else = server
+            .mock_async(|when, then| {
+                when.any_request()
+                    .matches(|req| !req.path.contains("/containers/old-container-id"));
+                then.status(500);
+            })
+            .await;
+        let manager = LocalSandboxManager {
+            docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
+                .unwrap(),
+            state_dir: PathBuf::new(),
+            docker_host: String::new(),
+            gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
+            gateways: Default::default(),
+            gateway_image: String::new(),
+            gateway_secret: new_gateway_secret(),
+            session_locks: Default::default(),
+        };
+        manager
+            .terminate_target("box", "s1", "old-container-id")
+            .await
+            .expect("a stale removal is not an error");
+        anything_else.assert_hits_async(0).await;
     }
 
     #[tokio::test]
@@ -1662,6 +1737,7 @@ mod tests {
             gateways: Default::default(),
             gateway_image: String::new(),
             gateway_secret: new_gateway_secret(),
+            session_locks: Default::default(),
         };
 
         assert!(
@@ -1743,6 +1819,7 @@ mod tests {
                 gateways: Default::default(),
                 gateway_image: String::new(),
                 gateway_secret: new_gateway_secret(),
+                session_locks: Default::default(),
             };
 
             let error = manager
