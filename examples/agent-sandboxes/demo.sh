@@ -12,6 +12,15 @@ json() { python3 -c 'import json,sys; print(json.dumps(dict(zip(sys.argv[1::2], 
 post() { curl -fsS -X POST "$CP$1" -H 'content-type: application/json' --data "$2"; echo; }
 say() { printf '\n== %s\n' "$*"; }
 
+# Sends a message; a thread answers 409 while its previous turn is still ending, so retry briefly.
+say_to() {
+  for _ in $(seq 30); do
+    curl -fsS -X POST "$CP/api/threads/$1/messages" -H 'content-type: application/json' --data "$(json user "$2" text "$3")" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  echo "could not send: $3" >&2; return 1
+}
+
 # Prints the thread's events from the start; stops after $2 seconds.
 events() { curl -sN -m "$2" "$CP/api/threads/$1/events" || true; }
 # Waits until the thread's history contains $2 (a fixed string), for at most $3 seconds.
@@ -36,12 +45,12 @@ exec_in "$THREAD" "curl -sS -m 8 -w ' [%{http_code}]' https://example.com; curl 
 [ "${WITH_MODEL:-1}" = 1 ] || { echo; echo "WITH_MODEL=0: skipping the agent moments"; exit 0; }
 
 say "2b. The same data through the connector, asked of the agent"
-post "/api/threads/$THREAD/messages" "$(json user alice text 'List the orders.')" >/dev/null
+say_to "$THREAD" alice 'List the orders.'
 wait_for "$THREAD" '"type":"result"' 120
 last_result "$THREAD"
 
 say "3. A write waits for approval"
-post "/api/threads/$THREAD/messages" "$(json user alice text 'Refund order 1003.')" >/dev/null
+say_to "$THREAD" alice 'Refund order 1003.'
 wait_for "$THREAD" '"pending":[{' 120
 echo "(the UI shows Approve / Deny for this held write; approving through the API)"
 APPROVAL=$(events "$THREAD" 1 | grep '"pending":\[{' | tail -1 | sed -E 's/^data: //' | python3 -c 'import json,sys; p=json.load(sys.stdin)["pending"][0]; print(p["id"]); print(p["method"], p["path"], p["body"], file=sys.stderr)')
@@ -54,14 +63,14 @@ say "4. Switch the user mid-thread"
 sleep 20
 echo "a process alice's session leaves running:"
 exec_in "$THREAD" 'nohup sleep 600 >/dev/null 2>&1 & echo started'
-post "/api/threads/$THREAD/messages" "$(json user bob text 'Cancel order 1004.')" >/dev/null
+say_to "$THREAD" bob 'Cancel order 1004.'
 sleep 40
 events "$THREAD" 1 | grep -E 'user switched|bob|ended' | tail -5
 echo "alice's leftover process is gone:"
-exec_in "$THREAD" 'pgrep -x sleep || echo "none running"'
+exec_in "$THREAD" 'pgrep -fx "sleep 600" || echo "none running"'
 
 say "5. A key the sandbox never holds"
-post "/api/threads/$THREAD/messages" "$(json user alice text 'List the scanner findings.')" >/dev/null
+say_to "$THREAD" alice 'List the scanner findings.'
 sleep 40
 last_result "$THREAD"
 echo "the sandbox's environment has no scanner key:"
@@ -71,10 +80,10 @@ echo "and the scanner is not reachable from it:"
 exec_in "$THREAD" "curl -sS -m 8 -w ' [%{http_code}]' http://$SCANNER:8081/findings"
 
 say "6. Idle, pause, resume with the agent process alive"
-post "/api/threads/$THREAD/messages" "$(json user alice text 'Start `orders watch` in the background and tell me its pid.')" >/dev/null
+say_to "$THREAD" alice 'Start `orders watch` in the background and tell me its pid.'
 sleep 40
 echo "waiting $IDLE_WAIT s for the thread to pause"; sleep "$IDLE_WAIT"
 curl -fsS "$CP/api/threads" | python3 -c 'import json,sys; [print(t["id"], t["state"]) for t in json.load(sys.stdin)["threads"]]'
-post "/api/threads/$THREAD/messages" "$(json user alice text 'Is the orders watch still running? Check with pgrep and give the pid.')" >/dev/null
+say_to "$THREAD" alice 'Is the orders watch still running? Check with pgrep and give the pid.'
 sleep 40
 last_result "$THREAD"
