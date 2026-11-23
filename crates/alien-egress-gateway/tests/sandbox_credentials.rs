@@ -563,6 +563,130 @@ async fn a_link_rule_injects_over_plain_http_for_its_sandbox_only_and_is_replace
     }
 }
 
+/// An origin that keeps each connection open and answers every request with 200, sending back
+/// the request head it received.
+async fn keep_alive_origin(
+    ip: std::net::Ipv4Addr,
+) -> (u16, tokio::sync::mpsc::UnboundedReceiver<String>) {
+    let listener = TcpListener::bind((ip, 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            let sender = sender.clone();
+            tokio::spawn(async move {
+                let mut socket = BufReader::new(socket);
+                loop {
+                    let mut head = String::new();
+                    loop {
+                        let mut line = String::new();
+                        if socket.read_line(&mut line).await.unwrap_or(0) == 0 {
+                            return;
+                        }
+                        head.push_str(&line);
+                        if line == "\r\n" {
+                            break;
+                        }
+                    }
+                    let _ = sender.send(head.to_ascii_lowercase());
+                    if socket
+                        .get_mut()
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    (port, receiver)
+}
+
+/// Open a CONNECT tunnel to the link and send one request through it.
+async fn open_tunnel(proxy: SocketAddr, port: u16, token: &str) -> TcpStream {
+    let mut stream = TcpStream::connect(proxy).await.unwrap();
+    stream
+        .write_all(
+            format!("CONNECT connector.svc:{port} HTTP/1.1\r\nHost: connector.svc:{port}\r\nProxy-Authorization: Bearer {token}\r\n\r\n")
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut established = [0u8; 39];
+    stream.read_exact(&mut established).await.unwrap();
+    assert!(established.starts_with(b"HTTP/1.1 200"));
+    stream
+}
+
+async fn request_in(stream: &mut TcpStream, port: u16) -> bool {
+    let request = format!("GET /turn HTTP/1.1\r\nHost: connector.svc:{port}\r\nAuthorization: placeholder\r\n\r\n");
+    if stream.write_all(request.as_bytes()).await.is_err() {
+        return false;
+    }
+    let mut answer = [0u8; 64];
+    matches!(
+        tokio::time::timeout(Duration::from_secs(5), stream.read(&mut answer)).await,
+        Ok(Ok(n)) if n > 0
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rule_added_ends_the_sandbox_tunnels_that_would_skip_it() {
+    let Some(ip) = link_ip() else {
+        eprintln!("no link-space address on this host; skipped");
+        return;
+    };
+    let key = key();
+    let (port, mut origin) = keep_alive_origin(ip).await;
+    let admin_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let links = json!([{"id":"connector","host":"connector.svc","ports":[port],
+        "ranges":[format!("{ip}/32")],"addresses":[ip.to_string()]}]);
+    let running = start(
+        config(&key, links, admin_listener.local_addr().unwrap()),
+        admin_listener,
+    )
+    .await;
+    let gateway = running.live.snapshot().unwrap();
+    let policy = Policy::Allow {
+        allow: vec!["link:connector".into()],
+    };
+    for sub in ["box", "other"] {
+        apply_policy(&gateway, &key, sub, Some(&policy), now_ms());
+    }
+    let (token, other_token) = (proxy_token(&key, "box"), proxy_token(&key, "other"));
+
+    // Both sandboxes hold a tunnel to the link that was opened before any rule existed.
+    let mut tunnel = open_tunnel(running.proxy, port, &token).await;
+    let mut other_tunnel = open_tunnel(running.proxy, port, &other_token).await;
+    assert!(request_in(&mut tunnel, port).await);
+    assert!(next(&mut origin).await.contains("authorization: placeholder"));
+    assert!(request_in(&mut other_tunnel, port).await);
+    next(&mut origin).await;
+
+    // The rule is acknowledged: the old tunnel is already closed, the other sandbox's is not.
+    let rules = json!([{"link":"connector","header":"Authorization","value":FIRST}]);
+    let (status, body) = put_credentials(
+        running.admin,
+        &grant(&key, "box", "PUT"),
+        &credential_record(&key, "box", now_ms(), rules),
+    )
+    .await;
+    assert_eq!(status, 204, "{body}");
+    assert!(!request_in(&mut tunnel, port).await, "old tunnel survived");
+    assert!(request_in(&mut other_tunnel, port).await);
+    assert!(next(&mut origin).await.contains("authorization: placeholder"));
+
+    // Reconnecting goes through the inspected path and carries the value.
+    let mut again = open_tunnel(running.proxy, port, &token).await;
+    assert!(request_in(&mut again, port).await);
+    let head = next(&mut origin).await;
+    assert!(head.contains(&format!("authorization: {FIRST}")), "{head}");
+    assert!(!head.contains("placeholder"), "{head}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_write_is_acknowledged_only_once_every_replica_holds_it() {
     logs();

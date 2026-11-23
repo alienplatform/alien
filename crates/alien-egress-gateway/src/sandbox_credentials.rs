@@ -103,7 +103,7 @@ impl fmt::Debug for Rule {
     }
 }
 impl Rule {
-    fn applies_to(&self, target: &RuleTarget, port: u16) -> bool {
+    pub fn applies_to(&self, target: &RuleTarget, port: u16) -> bool {
         self.target == *target && self.port.is_none_or(|own| own == port)
     }
     /// Whether this rule scopes a request with this method and (already unambiguous) path.

@@ -10,6 +10,7 @@ use std::{
 };
 
 use alien_error::AlienError;
+use crate::sandbox_credentials::{Rule, RuleTarget};
 use tokio::sync::{watch, Semaphore};
 
 use crate::{
@@ -81,6 +82,8 @@ struct Session {
     counters: Arc<Counters>,
     opened: tokio::time::Instant,
     cancel: watch::Sender<Option<&'static str>>,
+    /// The destination this connection relays without reading its requests, if it does.
+    uninspected: Arc<Mutex<Option<(RuleTarget, u16)>>>,
 }
 pub struct SourcePermit {
     registry: Arc<Connections>,
@@ -91,6 +94,7 @@ pub struct IdentityPermit {
     identity: Identity,
     id: u64,
     pub dns: Arc<Semaphore>,
+    uninspected: Arc<Mutex<Option<(RuleTarget, u16)>>>,
 }
 pub fn capacity() -> AlienError<ErrorData> {
     AlienError::new(ErrorData::Capacity)
@@ -155,6 +159,7 @@ impl Connections {
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (cancel, receiver) = watch::channel(None);
+        let uninspected = Arc::new(Mutex::new(None));
         group.sessions.insert(
             id,
             Session {
@@ -165,6 +170,7 @@ impl Connections {
                 counters,
                 opened: tokio::time::Instant::now(),
                 cancel,
+                uninspected: uninspected.clone(),
             },
         );
         self.active.fetch_add(1, Ordering::Relaxed);
@@ -174,6 +180,7 @@ impl Connections {
                 identity,
                 id,
                 dns: group.dns.clone(),
+                uninspected,
             },
             receiver,
         ))
@@ -205,6 +212,32 @@ impl Connections {
             };
             if let Some(reason) = reason {
                 session.cancel.send_replace(Some(reason));
+            }
+        }
+    }
+
+    /// A sandbox's credential rules changed: end its connections that relay to a destination
+    /// the new rules cover without reading requests, so the client reconnects through the
+    /// inspected path and every request after the change carries the rules. Other sandboxes'
+    /// connections, and connections whose requests are read one by one, are left alone.
+    pub fn close_uninspected(&self, aud: &str, sub: &str, rules: &[Rule]) {
+        let Ok(identities) = self.identities.lock() else {
+            return;
+        };
+        let Some(group) = identities.get(&(aud.to_string(), sub.to_string())) else {
+            return;
+        };
+        for session in group.sessions.values() {
+            let covered = session
+                .uninspected
+                .lock()
+                .ok()
+                .and_then(|slot| slot.clone())
+                .is_some_and(|(target, port)| {
+                    rules.iter().any(|rule| rule.applies_to(&target, port))
+                });
+            if covered {
+                session.cancel.send_replace(Some("credential rules changed"));
             }
         }
     }
@@ -297,6 +330,15 @@ impl Connections {
     }
 }
 impl IdentityPermit {
+    /// Mark this connection as relaying `target:port` unread (before the rules are looked up,
+    /// so a concurrent rule change either shows in the lookup or finds the mark), or clear the
+    /// mark once its requests are read one by one.
+    pub fn set_uninspected(&self, destination: Option<(RuleTarget, u16)>) {
+        if let Ok(mut slot) = self.uninspected.lock() {
+            *slot = destination;
+        }
+    }
+
     /// Retain the actual checked peer for live address-range revocation, including named targets.
     pub fn record_peer(&self, address: IpAddr, link: Option<String>) -> Result<()> {
         let mut identities = self

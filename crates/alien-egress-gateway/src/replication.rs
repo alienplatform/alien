@@ -443,7 +443,7 @@ impl Replication {
                     .policies
                     .resolve_now(&record.aud, &record.sub)
                     .is_some()
-                    && gateway.sandbox_credentials.apply(record)?
+                    && gateway.apply_credential_record(record)?
                 {
                     applied += 1;
                 }

@@ -97,7 +97,22 @@ impl Gateway {
                 crate::error::ErrorData::PolicyMissing,
             ));
         }
-        self.sandbox_credentials.apply(record).map(|_| ())
+        self.apply_credential_record(record).map(|_| ())
+    }
+
+    /// Store a verified set. When it changes the sandbox's rules, the sandbox's connections that
+    /// relay a covered destination unread end before this returns, so the write's
+    /// acknowledgement means every later request is read and carries the rules.
+    pub fn apply_credential_record(
+        &self,
+        record: crate::sandbox_credentials::CredentialRecord,
+    ) -> Result<bool> {
+        let (aud, sub, rules) = (record.aud.clone(), record.sub.clone(), record.rules.clone());
+        let applied = self.sandbox_credentials.apply(record)?;
+        if applied {
+            self.connections.close_uninspected(&aud, &sub, &rules);
+        }
+        Ok(applied)
     }
 
     /// Store a credential set, catching up from the peers once when this replica does not hold
@@ -459,6 +474,9 @@ async fn authorized_proxy(
         },
         port: target.port,
     };
+    // Mark before reading the rules: a rule change after this point either shows in the
+    // lookup or finds the mark and ends the connection.
+    identity.set_uninspected(Some((injection.target.clone(), injection.port)));
     let raw = raw_link_relay(link.as_ref(), injection.current().is_empty());
     if raw {
         crate::tunnel::keep_alive(&stream.inner);
@@ -486,6 +504,7 @@ async fn authorized_proxy(
         audit.allowed = true;
         log_open(audit);
         let Some(head) = websocket else {
+            identity.set_uninspected(None);
             return crate::http_proxy::forward(
                 Prefixed::new(input, stream),
                 upstream,
@@ -521,6 +540,7 @@ async fn authorized_proxy(
         link.is_some(),
         &injection,
         &gateway.credentials,
+        identity,
     )
     .await
 }
@@ -710,6 +730,7 @@ async fn tunnel(
     link: bool,
     injection: &crate::credentials::Injection,
     credentials: &crate::credentials::Credentials,
+    identity: &IdentityPermit,
 ) -> Result<()> {
     if raw || target.host.parse::<std::net::Ipv4Addr>().is_ok() {
         // Explicit IP/CIDR rules and declared links are the only grants for opaque, including
@@ -734,6 +755,7 @@ async fn tunnel(
     let mut guest = Prefixed::new(vec![first], guest);
     if first != 22 {
         // HTTP parsing enforces Host on every port; arbitrary protocols need an IP/CIDR rule.
+        identity.set_uninspected(None);
         if link {
             return crate::http_proxy::forward(guest, upstream, target, Some(injection)).await;
         }
@@ -751,6 +773,7 @@ async fn tunnel(
         if link {
             return Err(denied("credential link requires plain HTTP"));
         }
+        identity.set_uninspected(None);
         return credentials
             .forward(Prefixed::new(hello, guest), upstream, target, injection)
             .await;
@@ -1122,6 +1145,21 @@ mod link_relay_tests {
         };
         sandbox.write_all(payload).await.unwrap();
         let target = Target::parse(&format!("{host}:6379"), None).unwrap();
+        let registry = Arc::new(Connections::default());
+        let now = chrono::Utc::now().timestamp() as u64;
+        let (identity, _cancel) = registry
+            .register(
+                Claims {
+                    iss: "alien-sandbox".into(),
+                    aud: "p/r".into(),
+                    sub: "s".into(),
+                    iat: now,
+                    exp: now + 600,
+                },
+                None,
+                guest.counters.clone(),
+            )
+            .unwrap();
         let relay = tunnel(
             Prefixed::new(Vec::new(), &mut guest),
             upstream,
@@ -1130,6 +1168,7 @@ mod link_relay_tests {
             true,
             &injection,
             &credentials,
+            &identity,
         );
         let receive = async {
             let mut received = Vec::new();
