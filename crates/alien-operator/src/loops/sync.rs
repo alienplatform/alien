@@ -121,7 +121,12 @@ pub(super) fn sanitize_identity_config(
         ));
     }
     config.deployment_token = None;
-    config.runtime_identity_audience = Some(audience.to_owned());
+    // The manager's own audience wins: it is what its workload receivers check.
+    // The stored one (the manager URL for a join-token enrollment) only fills
+    // a config that carries none.
+    if config.runtime_identity_audience.is_none() {
+        config.runtime_identity_audience = Some(audience.to_owned());
+    }
     let manager = reqwest::Url::parse(manager_url).map_err(|_| {
         alien_error::AlienError::new(crate::error::ErrorData::ConfigurationError {
             message: "Invalid identity manager URL".into(),
@@ -263,6 +268,26 @@ pub(super) async fn refresh_running_secrets(
         *current = latest;
     }
     Ok(())
+}
+
+/// Save the target bundle set from a sync response. When it differs from the stored one, wake
+/// the sync loop at once: the bundles load (and are reported as loaded) in the next sync, not
+/// after a full sync interval.
+pub(crate) async fn store_target_bundle_set(
+    db: &crate::db::OperatorDb,
+    target: &alien_core::sync::TargetOperationsBundleSet,
+) {
+    let changed = match db.get_target_operations_bundle_set().await {
+        Ok(previous) => previous.as_ref() != Some(target),
+        Err(_) => true,
+    };
+    if let Err(e) = db.set_target_operations_bundle_set(target).await {
+        error!(error = %e, "Failed to persist target_operations_bundle_set");
+        return;
+    }
+    if changed {
+        db.request_sync();
+    }
 }
 
 async fn sync_with_manager(
@@ -582,13 +607,7 @@ async fn sync_with_manager(
     // extra tick — the sync_bundles() call above (built from THIS response,
     // used on the NEXT request) reads it back via get_target_operations_bundle_set.
     if let Some(ref target_bundle_set) = sync_response.target_operations_bundle_set {
-        if let Err(e) = state
-            .db
-            .set_target_operations_bundle_set(target_bundle_set)
-            .await
-        {
-            error!(error = %e, "Failed to persist target_operations_bundle_set");
-        }
+        store_target_bundle_set(&state.db, target_bundle_set).await;
     }
     if let Some(ref targets) = sync_response.target_dynamic_containers {
         if !state.config.is_protected() {
@@ -1919,6 +1938,70 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 
 #[cfg(test)]
 mod tests {
+    async fn woken(db: &crate::db::OperatorDb) -> bool {
+        tokio::time::timeout(std::time::Duration::from_millis(200), db.wait_for_sync())
+            .await
+            .is_ok()
+    }
+
+    /// A changed target bundle set wakes the sync loop at once, so the bundles are loaded and
+    /// reported in the next sync instead of after a full sync interval; the same set again does not.
+    #[tokio::test]
+    async fn a_changed_target_bundle_set_requests_a_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "0".repeat(64);
+        let db = crate::db::OperatorDb::new(dir.path().to_str().unwrap(), &key)
+            .await
+            .unwrap();
+        let set = |hash: &str| alien_core::sync::TargetOperationsBundleSet {
+            hash: hash.to_string(),
+            bundles: Vec::new(),
+        };
+        super::store_target_bundle_set(&db, &set("one")).await;
+        assert!(woken(&db).await, "a first set must request a sync");
+        super::store_target_bundle_set(&db, &set("one")).await;
+        assert!(!woken(&db).await, "the same set must not request a sync");
+        super::store_target_bundle_set(&db, &set("two")).await;
+        assert!(woken(&db).await, "a different set must request a sync");
+    }
+
+    /// A manager that sends its own audience keeps it; the stored one (the
+    /// manager URL after a join-token enrollment) only fills a config without
+    /// one. An old-style enrollment, where both agree, is unchanged.
+    #[test]
+    fn manager_sent_audience_wins_over_the_stored_one() {
+        let config = |audience: Option<&str>| {
+            let mut config = alien_core::DeploymentConfig::builder()
+                .base_platform(Platform::Aws)
+                .stack_settings(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .build();
+            config.runtime_identity_audience = audience.map(str::to_string);
+            config
+        };
+        let url = "https://manager.example.com";
+        let mut sent = config(Some("manager-audience"));
+        super::sanitize_identity_config(&mut sent, url, url).unwrap();
+        assert_eq!(
+            sent.runtime_identity_audience.as_deref(),
+            Some("manager-audience")
+        );
+        let mut absent = config(None);
+        super::sanitize_identity_config(&mut absent, url, url).unwrap();
+        assert_eq!(absent.runtime_identity_audience.as_deref(), Some(url));
+        let mut old_way = config(Some("manager-one"));
+        super::sanitize_identity_config(&mut old_way, url, "manager-one").unwrap();
+        assert_eq!(
+            old_way.runtime_identity_audience.as_deref(),
+            Some("manager-one")
+        );
+    }
 
     // --- recorded cluster namespace repair ---
 
@@ -4019,6 +4102,7 @@ mod tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
         })
         .await
         .unwrap();
@@ -4259,6 +4343,7 @@ mod tests {
                 enrolled_code_hash: None,
                 pending_enrollment: None,
                 previous: None,
+                store_version: Default::default(),
             })
             .await
             .unwrap();
@@ -4405,6 +4490,7 @@ mod tests {
                 enrolled_code_hash: None,
                 pending_enrollment: None,
                 previous: None,
+                store_version: Default::default(),
             })
             .await
             .unwrap();
@@ -6425,6 +6511,7 @@ mod tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
         })
         .await
         .unwrap();

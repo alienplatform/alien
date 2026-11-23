@@ -244,6 +244,7 @@ pub async fn run_operator_with_cancel_and_loops(
         operations_sync_handler,
         cancel,
         runtime_options,
+        None,
     )
     .await
 }
@@ -259,6 +260,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     operations_sync_handler: Option<Arc<dyn loops::operations_exec::OperationsSyncHandler>>,
     cancel: CancellationToken,
     runtime_options: OperatorRuntimeOptions,
+    opened_db: Option<Arc<db::OperatorDb>>,
 ) -> error::Result<()> {
     info!(
         sync_configured = config.sync.is_some(),
@@ -320,8 +322,13 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         .as_ref()
         .and_then(|provider| provider.get_local_bindings_provider());
 
-    // Initialize encrypted database
-    let db = Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?);
+    // Initialize encrypted database. An Operator that keeps its identity outside the database
+    // hands over the one it already opened, so every loop reads and writes the identity there
+    // instead of an empty cache with no identity.
+    let db = match opened_db {
+        Some(db) => db,
+        None => Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?),
+    };
     // The digest key is kept in the database, so the checksums saved in the
     // deployment's state still match after a restart. A key the embedder
     // already set wins.
@@ -615,6 +622,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     // shutdown.
     let access_request_handle = if !config.is_airgapped()
         && !config.is_protected()
+        && access_requests_enabled()
         && matches!(config.platform, Platform::Kubernetes)
     {
         let loop_impl: Arc<dyn loops::access_requests::AccessRequestSyncLoop> = access_request_loop
@@ -1130,6 +1138,7 @@ mod tests {
                 runtime_deployment_scope: None,
                 pod_log_collection: None,
             },
+            None,
         ));
         tokio::time::sleep(Duration::from_secs(2)).await;
         assert!(
@@ -1276,6 +1285,7 @@ mod tests {
                     runtime_deployment_scope: None,
                     pod_log_collection: None,
                 },
+                None,
             ),
         )
         .await
@@ -1757,7 +1767,33 @@ impl alien_infra::BrokerAuthorizationProvider for OperatorBrokerAuthorization {
     }
 }
 
+/// `OPERATOR_ACCESS_REQUESTS=false` stops the in-cluster approval loop. Unset
+/// or any other value keeps it running, as before.
+fn access_requests_enabled() -> bool {
+    access_requests_setting_enabled(std::env::var("OPERATOR_ACCESS_REQUESTS").ok().as_deref())
+}
+
+fn access_requests_setting_enabled(value: Option<&str>) -> bool {
+    !value.is_some_and(|value| value.trim().eq_ignore_ascii_case("false"))
+}
+
+#[cfg(test)]
+mod access_requests_switch_tests {
+    use super::access_requests_setting_enabled;
+
+    #[test]
+    fn only_an_explicit_false_stops_the_approval_loop() {
+        assert!(access_requests_setting_enabled(None));
+        assert!(access_requests_setting_enabled(Some("true")));
+        assert!(access_requests_setting_enabled(Some("")));
+        assert!(!access_requests_setting_enabled(Some("false")));
+        assert!(!access_requests_setting_enabled(Some(" FALSE ")));
+    }
+}
+
 mod daily_identity;
+mod enrollment_token;
+mod identity_store;
 
 /// Whether this Operator has finished enrolling and so holds a daily key.
 ///
@@ -1787,6 +1823,7 @@ pub async fn save_enrolled_identity_for_tests(
         pending_started_at: None,
         expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
         enrolled_code_hash: None,
+        store_version: Default::default(),
         pending_enrollment: None,
         previous: None,
     })
