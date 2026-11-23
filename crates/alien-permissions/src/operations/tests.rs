@@ -219,9 +219,27 @@ fn runtime_task_returns_the_complete_serialized_contract() {
     }
 }
 
+const ECS_CLUSTER: &str = "arn:aws:ecs:us-east-1:123456789012:cluster/edge";
+
+fn compile_ecs(actions: &[&str], ecs_cluster_arn: Option<&str>) -> Value {
+    run(json!({"task":"compileAws",
+        "statements":[aws_statement(actions, &["arn:aws:ecs:*:*:*"])],
+        "ceilings":{"s3BucketArns":[],"sqsQueueArns":[],"ecsClusterArn":ecs_cluster_arn}}))
+}
+
 #[test]
-fn container_service_actions_are_reviewed_but_have_no_wildcard_ceiling() {
-    // The reviewed actions compile on an exact resource ...
+fn container_service_actions_without_a_cluster_ceiling_are_refused() {
+    // The catalog placeholder never reaches a policy: without the installer's
+    // cluster there is nothing to limit it to.
+    for action in ["ecs:StopTask", "ecs:UpdateService", "ecs:ListTasks"] {
+        let result = compile_ecs(&[action], None);
+        assert_eq!(result["ok"], false, "{action}");
+        assert!(result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("ecsClusterArn"));
+    }
+    // The reviewed actions still compile on an exact resource.
     let exact = aws_statement(
         &["ecs:DescribeServices", "ecs:UpdateService", "ecs:StopTask"],
         &["arn:aws:ecs:us-east-1:123456789012:service/cluster/web"],
@@ -230,19 +248,53 @@ fn container_service_actions_are_reviewed_but_have_no_wildcard_ceiling() {
         json!({"task":"compileAws","statements":[exact],"ceilings":{"s3BucketArns":[],"sqsQueueArns":[]}}),
     );
     assert_eq!(result["ok"], true);
-    // ... and the placeholder resource of the catalog never reaches a policy.
-    let placeholder = aws_statement(&["ecs:StopTask"], &["arn:aws:ecs:*:*:*"]);
-    let result = run(
-        json!({"task":"compileAws","statements":[placeholder],"ceilings":{"s3BucketArns":[],"sqsQueueArns":[]}}),
-    );
+    // An action outside the reviewed list is refused, ceiling or not.
+    let result = compile_ecs(&["ecs:DeleteService"], Some(ECS_CLUSTER));
     assert_eq!(result["ok"], false);
-    // An action outside the reviewed list is refused.
-    let unreviewed = aws_statement(
-        &["ecs:DeleteService"],
-        &["arn:aws:ecs:us-east-1:123456789012:service/c/web"],
+}
+
+#[test]
+fn cluster_level_actions_are_limited_to_the_cluster() {
+    let result = compile_ecs(&["ecs:ListServices", "ecs:ListTasks"], Some(ECS_CLUSTER));
+    assert_eq!(result["ok"], true);
+    for statement in result["value"].as_array().unwrap() {
+        assert_eq!(statement["resources"], json!([ECS_CLUSTER]));
+    }
+}
+
+#[test]
+fn service_actions_are_limited_to_the_clusters_services() {
+    let result = compile_ecs(
+        &["ecs:DescribeServices", "ecs:UpdateService"],
+        Some(ECS_CLUSTER),
     );
-    let result = run(
-        json!({"task":"compileAws","statements":[unreviewed],"ceilings":{"s3BucketArns":[],"sqsQueueArns":[]}}),
+    assert_eq!(result["ok"], true);
+    assert_eq!(
+        result["value"][0]["resources"],
+        json!(["arn:aws:ecs:us-east-1:123456789012:service/edge/*"])
     );
-    assert_eq!(result["ok"], false);
+}
+
+#[test]
+fn task_actions_are_limited_to_the_clusters_tasks() {
+    let result = compile_ecs(&["ecs:DescribeTasks", "ecs:StopTask"], Some(ECS_CLUSTER));
+    assert_eq!(result["ok"], true);
+    assert_eq!(
+        result["value"][0]["resources"],
+        json!(["arn:aws:ecs:us-east-1:123456789012:task/edge/*"])
+    );
+}
+
+#[test]
+fn a_cluster_ceiling_must_be_an_exact_cluster_arn() {
+    for bad in [
+        "arn:aws:ecs:*:123456789012:cluster/edge",
+        "arn:aws:ecs:us-east-1:123456789012:cluster/*",
+        "arn:aws:ecs:us-east-1:123456789012:service/edge/web",
+        "arn:aws:ecs:us-east-1:123456789012:cluster/a/b",
+        "arn:aws:s3:::edge",
+    ] {
+        let result = compile_ecs(&["ecs:ListTasks"], Some(bad));
+        assert_eq!(result["ok"], false, "{bad}");
+    }
 }
