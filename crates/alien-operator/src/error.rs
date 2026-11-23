@@ -50,6 +50,17 @@ pub enum ErrorData {
     )]
     ConfigurationError { message: String },
 
+    /// The identity Secret changed since it was last read, so the write was
+    /// refused. Another operator or an earlier run saved first.
+    #[error(
+        code = "IDENTITY_CONFLICT",
+        message = "The operator identity was changed by another writer",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 409
+    )]
+    IdentityConflict,
+
     #[error(
         code = "DATABASE_ERROR",
         message = "Database error: {message}",
