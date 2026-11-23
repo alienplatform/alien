@@ -32,6 +32,13 @@ pub trait SecretsManagerApi: Send + Sync + std::fmt::Debug {
         &self,
         request: PutSecretValueRequest,
     ) -> Result<PutSecretValueResponse>;
+    /// Move a staging label between versions. With `remove_from_version_id`
+    /// set, Secrets Manager refuses the move when the label is no longer on
+    /// that version, which makes it a compare-and-swap on the label.
+    async fn update_secret_version_stage(
+        &self,
+        request: UpdateSecretVersionStageRequest,
+    ) -> Result<UpdateSecretVersionStageResponse>;
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +378,27 @@ impl SecretsManagerApi for SecretsManagerClient {
         )
         .await
     }
+
+    async fn update_secret_version_stage(
+        &self,
+        request: UpdateSecretVersionStageRequest,
+    ) -> Result<UpdateSecretVersionStageResponse> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize UpdateSecretVersionStageRequest for secret '{}'",
+                    request.secret_id
+                ),
+            },
+        )?;
+        self.send_json(
+            "secretsmanager.UpdateSecretVersionStage",
+            body,
+            "UpdateSecretVersionStage",
+            &request.secret_id,
+        )
+        .await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -531,6 +559,25 @@ pub struct PutSecretValueRequest {
     pub version_stages: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_request_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct UpdateSecretVersionStageRequest {
+    pub secret_id: String,
+    pub version_stage: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remove_from_version_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub move_to_version_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct UpdateSecretVersionStageResponse {
+    #[serde(rename = "ARN")]
+    pub arn: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -77,6 +77,9 @@ pub(crate) enum PutOutcome {
 pub(crate) trait SecretBackend: Send + Sync {
     async fn get(&self) -> Result<Option<Secret>>;
     async fn put(&self, secret: &Secret) -> Result<PutOutcome>;
+    /// What a person does when the secret is missing or cannot be used: where it
+    /// lives, how it is recreated, and which permissions the operator needs on it.
+    fn restore_hint(&self, name: &str) -> String;
 }
 
 pub(crate) struct KubernetesSecret {
@@ -118,6 +121,9 @@ impl KubernetesSecret {
 
 #[async_trait]
 impl SecretBackend for KubernetesSecret {
+    fn restore_hint(&self, name: &str) -> String {
+        kubernetes_restore_hint(name)
+    }
     async fn get(&self) -> Result<Option<Secret>> {
         match self.client.get_secret(&self.namespace, &self.name).await {
             Ok(secret) => Ok(Some(secret)),
@@ -218,6 +224,13 @@ impl StoreVersion {
     }
 }
 
+fn kubernetes_restore_hint(name: &str) -> String {
+    format!(
+        "Restore the Secret '{name}' (an empty Secret of that name in the release namespace; `helm upgrade` recreates it) \
+         and allow the operator `get` and `update` on it."
+    )
+}
+
 /// The outcome of writing a known identity back into a Secret that lost it.
 enum Restore {
     Done(Secret),
@@ -241,9 +254,8 @@ impl SecretIdentityStore {
     fn fix(&self, what: &str) -> String {
         format!(
             "{what}. The operator keeps running on its current key and will not rotate it. \
-             Restore the Secret '{}' (an empty Secret of that name in the release namespace; `helm upgrade` recreates it) \
-             and allow the operator `get` and `update` on it.",
-            self.name
+             {}",
+            self.backend.restore_hint(&self.name)
         )
     }
 
@@ -534,7 +546,7 @@ fn secret_text(secret: &Secret, key: &str) -> Option<String> {
 fn parse_identity(secret: &Secret) -> Result<Option<DailyIdentityState>> {
     let unreadable = || {
         AlienError::new(ErrorData::ConfigurationError {
-            message: "The saved operator identity in the Secret cannot be read. Delete the identity Secret (`helm upgrade` creates it again empty) and install with a newly issued token.".into(),
+            message: "The saved operator identity in the Secret cannot be read. Replace the identity secret with an empty one (the install that created it makes it again) and install with a newly issued token.".into(),
         })
     };
     let Some(bytes) = secret.data.as_ref().and_then(|data| data.get(IDENTITY_KEY)) else {
@@ -784,6 +796,9 @@ mod tests {
 
     #[async_trait]
     impl SecretBackend for Fake {
+        fn restore_hint(&self, name: &str) -> String {
+            super::kubernetes_restore_hint(name)
+        }
         async fn get(&self) -> Result<Option<Secret>> {
             self.gets.fetch_add(1, Ordering::Relaxed);
             if self.refuse_reads.load(Ordering::Relaxed) {
@@ -1207,7 +1222,7 @@ mod tests {
             };
             let message = error.to_string();
             assert!(
-                message.contains("Delete the identity Secret") && message.contains("new"),
+                message.contains("Replace the identity secret") && message.contains("new"),
                 "{message}"
             );
             // Writing over it with an enrolled identity is how the operator repairs itself.

@@ -218,3 +218,31 @@ fn runtime_task_returns_the_complete_serialized_contract() {
         assert_eq!(rule.as_object().unwrap().len(), 5);
     }
 }
+
+#[test]
+fn container_service_actions_are_reviewed_but_have_no_wildcard_ceiling() {
+    // The reviewed actions compile on an exact resource ...
+    let exact = aws_statement(
+        &["ecs:DescribeServices", "ecs:UpdateService", "ecs:StopTask"],
+        &["arn:aws:ecs:us-east-1:123456789012:service/cluster/web"],
+    );
+    let result = run(
+        json!({"task":"compileAws","statements":[exact],"ceilings":{"s3BucketArns":[],"sqsQueueArns":[]}}),
+    );
+    assert_eq!(result["ok"], true);
+    // ... and the placeholder resource of the catalog never reaches a policy.
+    let placeholder = aws_statement(&["ecs:StopTask"], &["arn:aws:ecs:*:*:*"]);
+    let result = run(
+        json!({"task":"compileAws","statements":[placeholder],"ceilings":{"s3BucketArns":[],"sqsQueueArns":[]}}),
+    );
+    assert_eq!(result["ok"], false);
+    // An action outside the reviewed list is refused.
+    let unreviewed = aws_statement(
+        &["ecs:DeleteService"],
+        &["arn:aws:ecs:us-east-1:123456789012:service/c/web"],
+    );
+    let result = run(
+        json!({"task":"compileAws","statements":[unreviewed],"ceilings":{"s3BucketArns":[],"sqsQueueArns":[]}}),
+    );
+    assert_eq!(result["ok"], false);
+}
