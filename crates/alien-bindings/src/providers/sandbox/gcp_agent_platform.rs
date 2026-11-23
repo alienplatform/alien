@@ -1549,8 +1549,7 @@ fn ca_environment(bundle_path: &str) -> Vec<(String, String)> {
 }
 
 /// Message for host rules on a sandbox whose agent cannot install the CA.
-const AGENT_WITHOUT_CA: &str =
-    "this sandbox's agent predates trust-bundle delivery, so credential \
+const AGENT_WITHOUT_CA: &str = "this sandbox's agent predates trust-bundle delivery, so credential \
 rules for an internet host cannot be served (HTTPS to the host could not be verified); rules for \
 a link work. Create the sandbox again with an agent image from the current release";
 

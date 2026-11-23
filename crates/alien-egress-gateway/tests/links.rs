@@ -452,24 +452,22 @@ async fn a_link_carries_websocket_and_other_protocols_and_nothing_else_does() {
     // A runtime credential rule on the second link keeps it on the inspected path.
     gateway
         .sandbox_credentials
-        .apply(
-            alien_egress_gateway::sandbox_credentials::CredentialRecord {
-                signed: String::new(),
-                aud: AUD.into(),
-                sub: "open".into(),
-                ver: (1, String::new()),
-                rules: Arc::new(vec![alien_egress_gateway::sandbox_credentials::Rule {
-                    target: alien_egress_gateway::sandbox_credentials::RuleTarget::Link(
-                        "vendor".into(),
-                    ),
-                    port: Some(9002),
-                    method: None,
-                    path: "/".into(),
-                    header: http::HeaderName::from_static("authorization"),
-                    value: http::HeaderValue::from_static("Bearer real"),
-                }]),
-            },
-        )
+        .apply(alien_egress_gateway::sandbox_credentials::CredentialRecord {
+            signed: String::new(),
+            aud: AUD.into(),
+            sub: "open".into(),
+            ver: (1, String::new()),
+            rules: Arc::new(vec![alien_egress_gateway::sandbox_credentials::Rule {
+                target: alien_egress_gateway::sandbox_credentials::RuleTarget::Link(
+                    "vendor".into(),
+                ),
+                port: Some(9002),
+                method: None,
+                path: "/".into(),
+                header: http::HeaderName::from_static("authorization"),
+                value: http::HeaderValue::from_static("Bearer real"),
+            }]),
+        })
         .unwrap();
     // Short limits for connections that are not links, so a quiet link tunnel can be shown to
     // outlive them.
