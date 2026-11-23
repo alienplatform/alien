@@ -24,6 +24,21 @@ pub(crate) const SANDBOX_WITHOUT_CA: &str = "this sandbox was created without th
 cannot be served (HTTPS to the host could not be verified); rules for a link work. Create the \
 sandbox again";
 
+/// Refuse host rules for a sandbox known not to hold the CA (a platform with no agent health
+/// endpoint to ask). Link rules are never refused.
+pub(crate) fn require_known_ca_for_host_rules(
+    rules: &[alien_core::SandboxCredentialRule],
+    has_ca: bool,
+) -> Result<()> {
+    if has_ca || rules.iter().all(|rule| rule.host.is_none()) {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::OperationNotSupported {
+        operation: "sandbox.updateCredentials".to_string(),
+        reason: SANDBOX_WITHOUT_CA.to_string(),
+    }))
+}
+
 /// Refuse host rules for a sandbox whose agent reports no installed CA. `health` is the agent's
 /// health request. Link rules need no CA and are never refused here.
 pub(crate) async fn require_ca_for_host_rules(
@@ -106,6 +121,17 @@ mod ca_gate_tests {
             "header": "Authorization", "value": "v"
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn host_rules_need_a_known_ca_where_the_agent_cannot_be_asked() {
+        let host = [rule(Some("api.example.com"))];
+        let link = [rule(None)];
+        let error = require_known_ca_for_host_rules(&host, false).unwrap_err();
+        assert!(error.message.contains("created without the gateway's CA"));
+        assert!(require_known_ca_for_host_rules(&host, true).is_ok());
+        assert!(require_known_ca_for_host_rules(&link, false).is_ok());
+        assert!(require_known_ca_for_host_rules(&[], false).is_ok());
     }
 
     async fn agent(body: &'static str) -> String {

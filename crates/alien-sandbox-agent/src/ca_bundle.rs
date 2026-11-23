@@ -37,6 +37,54 @@ pub fn installed_path() -> Option<String> {
     INSTALLED.lock().ok().and_then(|path| path.clone())
 }
 
+/// The variables the common clients read for their trust roots.
+pub const TRUST_VARIABLES: [&str; 4] = [
+    "SSL_CERT_FILE",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+];
+
+/// Point every trust variable of a command's environment at the installed bundle, if any.
+pub fn command_environment(env: &mut std::collections::BTreeMap<String, String>) {
+    if let Some(path) = installed_path() {
+        trust_environment(&path, env);
+    }
+}
+
+fn trust_environment(path: &str, env: &mut std::collections::BTreeMap<String, String>) {
+    for key in TRUST_VARIABLES {
+        env.insert(key.into(), path.to_string());
+    }
+}
+
+/// Install the CA a platform handed over in `ALIEN_SANDBOX_EGRESS_CA`, for an agent that has no
+/// gateway egress mode of its own to do it (Azure). Nothing happens without the variable.
+pub fn install_from_environment() -> Result<(), String> {
+    let Ok(certificate) = std::env::var("ALIEN_SANDBOX_EGRESS_CA") else {
+        return Ok(());
+    };
+    install(
+        &certificate,
+        &SYSTEM_ROOTS.map(Path::new),
+        Path::new(BUNDLE_PATH),
+    )
+    .map(|_| ())
+}
+
+/// Install a handed-over CA, when there is one, at `destination`. A refused certificate is an
+/// error, so an agent never starts believing it trusts a CA it does not.
+#[cfg(test)]
+fn install_handed_over(
+    certificate: Option<&str>,
+    roots: &[&Path],
+    destination: &Path,
+) -> Result<Option<PathBuf>, String> {
+    certificate
+        .map(|certificate| install(certificate, roots, destination))
+        .transpose()
+}
+
 const MAX_CERTIFICATE_BYTES: usize = 16 * 1024;
 
 /// Checks that `certificate` is a single public PEM certificate.
@@ -133,6 +181,22 @@ mod tests {
             1
         );
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn a_handed_over_ca_is_installed_and_every_trust_variable_points_at_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("bundle.pem");
+        let installed = install_handed_over(Some(CERT), &[], &bundle).unwrap().unwrap();
+        assert!(std::fs::read_to_string(&installed).unwrap().contains("BEGIN CERTIFICATE"));
+        let mut env = std::collections::BTreeMap::new();
+        trust_environment(installed.to_str().unwrap(), &mut env);
+        for key in TRUST_VARIABLES {
+            assert_eq!(env[key], bundle.to_str().unwrap());
+        }
+        // No CA handed over: nothing is installed. A refused one is an error, not a skip.
+        assert!(install_handed_over(None, &[], &bundle).unwrap().is_none());
+        assert!(install_handed_over(Some("nope"), &[], &bundle).is_err());
     }
 
     #[test]

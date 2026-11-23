@@ -861,8 +861,10 @@ impl SandboxEgressManager {
         // The CA derives from the deployment's shared secret, so every replica issues the same
         // one: ask each in turn, so one replica being away never blocks a sandbox's creation.
         let mut targets = self.resolved_targets().await.unwrap_or_default();
-        if targets.is_empty() {
-            targets.push(self.admin_url.as_str().trim_end_matches('/').to_string());
+        // The configured admin address is the last resort, whatever the lookup returned.
+        let admin = self.admin_url.as_str().trim_end_matches('/').to_string();
+        if !targets.contains(&admin) {
+            targets.push(admin);
         }
         let mut last = unavailable("gateway did not issue the sandbox CA");
         for target in targets {

@@ -1087,6 +1087,7 @@ impl Sandbox for AzureSandbox {
                     reason: "sandbox no longer exists".into(),
                 })
             })?;
+        super::egress::require_known_ca_for_host_rules(&rules, gateway::has_ca(&sandbox))?;
         manager
             .update_credentials(gateway::identity(&sandbox)?, &rules)
             .await

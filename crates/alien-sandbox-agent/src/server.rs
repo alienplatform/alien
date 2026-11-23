@@ -146,6 +146,21 @@ impl AgentState {
         }
         #[cfg(not(unix))]
         let _ = env;
+        // An agent without a gateway egress mode of its own (Azure) still trusts the CA the
+        // platform handed over; the gateway egress mode sets the same variables itself.
+        #[cfg(unix)]
+        if self.gateway_egress_absent() {
+            crate::ca_bundle::command_environment(env);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn gateway_egress_absent(&self) -> bool {
+        self.gateway_egress.is_none()
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    fn gateway_egress_absent(&self) -> bool {
+        true
     }
 
     /// Called only after network checks, before accepting any session operation.

@@ -875,9 +875,6 @@ async fn the_sandbox_ca_is_taken_from_the_next_replica_when_the_first_is_away() 
     let ca = manager.sandbox_ca("box-1").await.unwrap();
     assert!(ca.is_some_and(|pem| pem.contains("BEGIN CERTIFICATE")));
 
-    // Every replica away: the call fails instead of returning no CA.
-    manager.replica_addresses = Some(vec![away]);
-    assert!(manager.sandbox_ca("box-1").await.is_err());
     server.abort();
 }
 
