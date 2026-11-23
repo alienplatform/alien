@@ -146,6 +146,16 @@ pub enum ErrorData {
     )]
     CollectorTelemetryInvalid { message: String },
 
+    /// Telemetry waiting to be sent reached its limit; exporters retry.
+    #[error(
+        code = "TELEMETRY_BUFFER_FULL",
+        message = "Telemetry queue reached its {limit_bytes}-byte limit",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    TelemetryBufferFull { limit_bytes: i64 },
+
     /// The bounded local Pod-log queue must drain before reading more logs.
     #[error(
         code = "POD_LOG_BUFFER_FULL",
