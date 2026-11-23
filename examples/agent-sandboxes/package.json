@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "alien dev",
-    "build": "alien build --platform local",
+    "dev": "cd data-plane && alien dev",
+    "build": "cd data-plane && alien build --platform local",
     "control-plane": "pnpm --filter @agent-sandboxes/control-plane start",
     "test": "vitest run",
-    "test:ts": "pnpm -r --filter './services/*' --filter './control-plane' test:ts"
+    "test:ts": "pnpm -r --filter './data-plane/*' --filter './control-plane' test:ts"
   },
   "devDependencies": {
     "@alienplatform/core": "^3.3.72",

@@ -20,7 +20,7 @@ packages:
   - command-routing-ts
   - command-routing-ts/services/*
   - agent-sandboxes
-  - agent-sandboxes/services/*
+  - agent-sandboxes/data-plane/*
   - agent-sandboxes/control-plane
   - github-agent/packages/remote-agent
   - dataplane-with-extension

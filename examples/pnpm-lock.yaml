@@ -48,7 +48,7 @@ importers:
         specifier: ^5.7.3
         version: 5.8.3
 
-  agent-sandboxes/services/connector:
+  agent-sandboxes/data-plane/connector:
     dependencies:
       '@alienplatform/commands':
         specifier: file:../../../../packages/commands
@@ -64,7 +64,7 @@ importers:
         specifier: ^5.7.3
         version: 5.8.3
 
-  agent-sandboxes/services/model:
+  agent-sandboxes/data-plane/model:
     dependencies:
       '@alienplatform/sdk':
         specifier: file:../../../../packages/sdk
@@ -80,7 +80,7 @@ importers:
         specifier: ^5.7.3
         version: 5.8.3
 
-  agent-sandboxes/services/runner:
+  agent-sandboxes/data-plane/runner:
     dependencies:
       '@alienplatform/bindings':
         specifier: file:../../../../packages/bindings

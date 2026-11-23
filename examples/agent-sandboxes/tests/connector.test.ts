@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { allowed } from "../services/connector/src/access"
-import { Approvals } from "../services/connector/src/approvals"
-import { TurnTokens } from "../services/connector/src/tokens"
+import { allowed } from "../data-plane/connector/src/access"
+import { Approvals } from "../data-plane/connector/src/approvals"
+import { TurnTokens } from "../data-plane/connector/src/tokens"
 
 describe("turn tokens", () => {
   it("refuses the sandbox's placeholder and a missing header", () => {

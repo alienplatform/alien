@@ -3,7 +3,7 @@
 # http://internal-api:8080; a sandbox cannot reach it at all.
 services:
   internal-api:
-    build: ../../internal-api
+    build: ../internal-api
     container_name: internal-api
     networks: [deployment-network]
 

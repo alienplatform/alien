@@ -29,7 +29,7 @@ const llm = new alien.AI("llm").build()
 
 // Serves the Anthropic Messages API to the sandboxes, backed by the AI binding.
 const model = new alien.Container("model")
-  .code({ type: "source", src: "./services/model", toolchain: { type: "typescript" } })
+  .code({ type: "source", src: "./model", toolchain: { type: "typescript" } })
   .port(8080)
   .cpu(0.25)
   .memory("256Mi")
@@ -39,7 +39,7 @@ const model = new alien.Container("model")
 
 // The sandboxes' only way to the internal API. No public endpoint.
 const connector = new alien.Container("connector")
-  .code({ type: "source", src: "./services/connector", toolchain: { type: "typescript" } })
+  .code({ type: "source", src: "./connector", toolchain: { type: "typescript" } })
   .port(8080)
   .cpu(0.25)
   .memory("256Mi")
@@ -65,7 +65,7 @@ const agent = new alien.Sandbox("agent")
   .build()
 
 const runner = new alien.Container("runner")
-  .code({ type: "source", src: "./services/runner", toolchain: { type: "typescript" } })
+  .code({ type: "source", src: "./runner", toolchain: { type: "typescript" } })
   .cpu(0.5)
   .memory("512Mi")
   .replicas(1)

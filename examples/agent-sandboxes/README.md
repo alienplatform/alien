@@ -2,23 +2,35 @@
 
 An agent product that runs one sandbox per conversation inside each customer's cloud. The agent (Claude Code) works with the customer's internal API, but it never holds a real credential and it can reach nothing except the model and one connector the customer reviews. Every change it asks for waits until a person approves it.
 
+The directories match the diagram: `control-plane/` is your SaaS, `data-plane/` is the Alien stack, and `customer-network/` stands in for what the customer already has.
+
 The control plane is your SaaS: a chat UI and a thread router. It talks to each customer's deployment only through Alien commands, so it needs no network path into their cloud.
 
 ```
-  Your SaaS                     Customer's AWS account (their VPC)
- ┌────────────────┐            ┌──────────────────────────────────────────────────────────┐
- │ control-plane/ │  commands  │  runner ─(sandbox binding)─▶ agent sandbox, per thread   │
- │  chat UI       ├───────────▶│                               Claude Code                │
- │  thread router │            │                               placeholder keys           │
- │  bindTurn()    │  commands  │                                     │                    │
- │  Approve/Deny  ├───────────▶│  connector                    egress gateway ─╳ internet │
- └────────────────┘            │   ▲   │                        │        │                │
-                               │   │   │      link:connector    │        │ link:model     │
-                               │   └───┼──── + turn token ──────┘        ▼                │
-                               │       │                               model ──▶ Bedrock  │
-                               │       ▼                                                  │
-                               │  internal API (private address, outside the stack)       │
-                               └──────────────────────────────────────────────────────────┘
+┌─ Your SaaS ──────────┐            ╔═ Customer's AWS account ═════════════════════════════════════╗
+│                      │            ║                                                              ║
+│ control-plane/       │            ║  ┌─ data-plane/ · the Alien stack ────────────────────────┐  ║
+│                      │            ║  │                                                        │  ║
+│ chat UI, threads     │  commands  ║  │  ┏━━━━━━━━━━┓             ┏━━━━━━━━━━━━━━━━━━━━━━━━━┓  │  ║
+│ binds each turn to   │────────────╫──┼─▶┃ runner   ┃─ one turn ▶ ┃ Sandbox, per thread     ┃  │  ║
+│ the user asking      │            ║  │  ┗━━━━━━━━━━┛             ┃ Claude Code             ┃  │  ║
+│ approve / deny       │            ║  │                           ┃ no internet             ┃  │  ║
+│                      │            ║  │                           ┃ placeholder keys        ┃  │  ║
+│                      │            ║  │                           ┗━━━┯━━━━━━┯━━━━━━━━━━━━━━┛  │  ║
+│                      │            ║  │  link:connector               │      │ link:model      │  ║
+│                      │            ║  │  + turn token                 │      ▼                 │  ║
+│                      │  commands  ║  │  ┏━━━━━━━━━━━━━┓              │  ┏━━━━━━━┓             │  ║
+│                      │────────────╫──┼─▶┃ connector   ┃◀─────────────┘  ┃ model ┃──▶ Bedrock  │  ║
+│                      │            ║  │  ┃ reads pass  ┃                 ┗━━━━━━━┛             │  ║
+└──────────────────────┘            ║  │  ┃ writes wait ┃                                       │  ║
+                                    ║  │  ┗━━━━━━┯━━━━━━┛                                       │  ║
+                                    ║  └─────────┼──────────────────────────────────────────────┘  ║
+                                    ║            │                                                 ║
+                                    ║            ▼                                                 ║
+                                    ║  ┌─ customer-network/ · already there ────────────────────┐  ║
+                                    ║  │ internal API on a private address                      │  ║
+                                    ║  └────────────────────────────────────────────────────────┘  ║
+                                    ╚══════════════════════════════════════════════════════════════╝
 ```
 
 ## What's in the stack
@@ -31,7 +43,7 @@ The control plane is your SaaS: a chat UI and a thread router. It talks to each 
 | `connector` | Container, commands | The only way to the internal API. No public endpoint; a sandbox reaches it only through its link. It checks the per-turn token on every request, lets reads through and holds writes until they are approved. |
 | `llm` | AI | The deployment's own model service. |
 
-Outside the stack, the customer's network: [`infra/`](./infra) creates a VPC with private subnets behind a NAT gateway and a small orders API ([`internal-api/`](./internal-api)) on a private address. The stack is deployed into that VPC.
+Outside the stack, the customer's network: [`customer-network/terraform/`](./customer-network/terraform) creates a VPC with private subnets behind a NAT gateway and a small orders API ([`customer-network/internal-api/`](./customer-network/internal-api)) on a private address. The stack is deployed into that VPC.
 
 ## A turn, step by step
 
@@ -49,15 +61,15 @@ Requires Docker.
 ```bash
 pnpm install
 
-# The sandbox image. Locally the stack uses it by tag; in the cloud it is built from sandbox/.
-docker build -t agent-sandboxes-sandbox:dev sandbox/
+# The sandbox image. Locally the stack uses it by tag; in the cloud it is built from data-plane/sandbox/.
+docker build -t agent-sandboxes-sandbox:dev data-plane/sandbox/
 
-# The data plane.
-SANDBOX_IMAGE=agent-sandboxes-sandbox:dev ALIEN_AI_LOCAL_BEDROCK_REGION=us-east-1 \
-  alien dev --input internalApiUrl=http://internal-api:8080
+# The data plane (`alien` commands run in data-plane/, where alien.ts is).
+(cd data-plane && SANDBOX_IMAGE=agent-sandboxes-sandbox:dev ALIEN_AI_LOCAL_BEDROCK_REGION=us-east-1 \
+  alien dev --input internalApiUrl=http://internal-api:8080)
 
 # The internal API, on the local deployment network, outside the stack.
-docker compose -f infra/local/compose.yml up -d --build
+docker compose -f customer-network/local/compose.yml up -d --build
 
 # The control plane, with the values `alien dev` prints.
 ALIEN_MANAGER_URL=<commands url> ALIEN_DEPLOYMENT_ID=<deployment id> ALIEN_TOKEN=<token> \
@@ -73,7 +85,7 @@ Open http://localhost:3000, start a thread and send a message.
 1. Create the customer's network and internal API:
 
    ```bash
-   cd infra
+   cd customer-network/terraform
    terraform init && terraform apply
    terraform output
    ```
@@ -84,6 +96,7 @@ Open http://localhost:3000, start a thread and send a message.
 
    ```bash
    # The AWS build runs on arm64 and a sandbox is a live resource there.
+   cd data-plane
    SANDBOX_LIFECYCLE=live alien release
 
    alien deploy --token <deployment group token> --platform aws --name agent-sandboxes \
@@ -99,7 +112,7 @@ Open http://localhost:3000, start a thread and send a message.
 
 The model id is `claude-sonnet-4-6` by default; set `MODEL` when you release to use another model your account can invoke on Bedrock.
 
-To remove everything: destroy the deployment, then `terraform destroy` in `infra/`.
+To remove everything: destroy the deployment, then `terraform destroy` in `customer-network/terraform/`.
 
 ## Demo walkthrough
 
@@ -110,7 +123,7 @@ Start a thread as `alice`. The **Run in sandbox** box runs a shell command in th
 3. **Writes wait for approval.** Ask: *refund order 1003*. The agent runs `orders update 1003 --status refunded`, says it is waiting, and an Approve / Deny bar appears. Approve, and the agent reports the refund.
 4. **Switch the user mid-thread.** Pick `bob` and ask: *cancel order 1004*. Before the turn starts, the sandbox is bound to `bob`; `bob` may read orders but not change them, so the connector answers 403 and the agent says so. Reads still work.
 5. **Idle threads pause and resume.** Ask the agent to *keep an orders watch running in the background*. It starts `orders watch` detached and reports its pid. Leave the thread idle until it shows *paused*, then send another message: it resumes, `pgrep -f "orders watch"` shows the same pid, and the agent remembers the earlier turns. Local sandboxes do not pause, so this one shows on AWS.
-6. **Another account.** Apply `infra/` and deploy the same release into a second AWS account. Everything above works the same.
+6. **Another account.** Apply `customer-network/terraform/` and deploy the same release into a second AWS account. Everything above works the same.
 
 ### What you should see
 
@@ -146,8 +159,8 @@ Moments 1 and 2 need no model. Set `WITH_MODEL=0` to run only those; the rest go
 
 ## Make it yours
 
-- **Your internal systems:** replace `internal-api/` and the routes in [`services/connector/src/index.ts`](./services/connector/src/index.ts), and give the agent its own tool in place of [`sandbox/orders`](./sandbox/orders).
-- **Who may do what:** [`services/connector/src/access.ts`](./services/connector/src/access.ts) maps users to actions; read it from your own user store.
+- **Your internal systems:** replace `customer-network/internal-api/` and the routes in [`data-plane/connector/src/index.ts`](./data-plane/connector/src/index.ts), and give the agent its own tool in place of [`data-plane/sandbox/orders`](./data-plane/sandbox/orders).
+- **Who may do what:** [`data-plane/connector/src/access.ts`](./data-plane/connector/src/access.ts) maps users to actions; read it from your own user store.
 - **What needs approval:** the connector holds every write. Hold only some, or none.
 - **The model:** `MODEL`, and any model the deployment's AI service offers.
 
