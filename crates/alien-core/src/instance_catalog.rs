@@ -151,6 +151,10 @@ pub struct InstanceTypeSpec {
     /// machine to the catalog never changes what an existing stack gets; any other machine is
     /// used only when someone chooses it.
     pub auto_select: bool,
+    /// Whether the machine picker lists the series first: on AWS the current plain, `d` and `-flex`
+    /// families of the newest generation those reach in their category and processor, their bare
+    /// metal, and every GPU series; every GCP and Azure series.
+    pub primary: bool,
 }
 
 impl InstanceTypeSpec {
@@ -1897,23 +1901,61 @@ mod tests {
     }
 
     #[test]
-    fn bare_metal_rows_run_vms_and_are_never_picked_automatically() {
-        let metal: Vec<_> = CATALOG.iter().filter(|spec| spec.bare_metal).collect();
-        assert_eq!(
-            metal.iter().map(|spec| spec.name).collect::<Vec<_>>(),
-            [
-                "m8id.metal-48xl",
-                "m8id.metal-96xl",
-                "c8id.metal-48xl",
-                "c8id.metal-96xl",
-                "c5.metal",
-            ]
-        );
+    fn bare_metal_rows_are_never_picked_automatically_and_nest_only_on_x86() {
+        let c5 = find_instance_type(Platform::Aws, "c5.metal").expect("c5.metal is listed");
+        assert!(c5.bare_metal && c5.architecture == Architecture::X86_64 && c5.nested_virt);
+        let m8g =
+            find_instance_type(Platform::Aws, "m8g.metal-24xl").expect("m8g.metal-24xl is listed");
+        assert!(m8g.bare_metal && m8g.architecture == Architecture::Arm64 && !m8g.nested_virt);
         for spec in CATALOG {
             assert_eq!(spec.bare_metal, spec.name.contains(".metal"), "{}", spec.name);
+            if spec.bare_metal {
+                assert!(!spec.auto_select, "{}", spec.name);
+                assert_eq!(
+                    spec.nested_virt,
+                    spec.architecture == Architecture::X86_64,
+                    "{}",
+                    spec.name
+                );
+            }
         }
-        for spec in metal {
-            assert!(spec.nested_virt && !spec.auto_select, "{}", spec.name);
+    }
+
+    #[test]
+    fn primary_series_are_the_newest_plain_families_of_each_category_and_processor() {
+        for name in ["m8i.large", "c8i.large", "r8a.large", "m9g.large", "i7i.large", "g5.xlarge"] {
+            let spec = find_instance_type(Platform::Aws, name).expect(name);
+            assert!(spec.primary, "{name} is not primary");
+        }
+        // An older generation, and newest-generation families with other options.
+        for name in ["c5.large", "m7i.large", "c7g.large", "c8in.large", "i8ge.large"] {
+            let spec = find_instance_type(Platform::Aws, name).expect(name);
+            assert!(!spec.primary, "{name} is primary");
+        }
+        for spec in CATALOG {
+            if spec.platform != Platform::Aws {
+                assert!(spec.primary, "{} is not primary", spec.name);
+            }
+            let series_primary = CATALOG
+                .iter()
+                .filter(|other| other.platform == spec.platform && other.series == spec.series)
+                .all(|other| other.primary == spec.primary);
+            assert!(series_primary, "series {} mixes primary rows", spec.series);
+        }
+        // The label names the processor; each one keeps a primary series in every category.
+        let processor = |spec: &InstanceTypeSpec| {
+            ["Graviton", "AMD", "Intel"].into_iter().find(|word| spec.label.contains(word))
+        };
+        for spec in CATALOG.iter().filter(|spec| spec.platform == Platform::Aws) {
+            assert!(
+                CATALOG.iter().any(|other| other.platform == Platform::Aws
+                    && other.family == spec.family
+                    && processor(other) == processor(spec)
+                    && other.primary),
+                "no primary AWS series for {:?} {:?}",
+                spec.family,
+                processor(spec)
+            );
         }
     }
 
