@@ -624,23 +624,22 @@ async fn create_session(
         template.egress_policy = Some(policy);
     }
 
+    // The effective lifetime goes on the container as a wall-clock deadline, which the manager
+    // enforces from the labels: after a restart and across a machine's sleep as well.
+    let lifetime = session_lifetime(
+        template.max_lifetime,
+        body.timeout_ms.map(std::time::Duration::from_millis),
+    );
+    template.max_lifetime = lifetime;
+
     let handle = state
         .manager
         .create_session(&state.sandbox, &body.session_id, &template)
         .await
         .map_err(failed)?;
 
-    if let Some(lifetime) = session_lifetime(
-        template.max_lifetime,
-        body.timeout_ms.map(std::time::Duration::from_millis),
-    ) {
-        end_after(
-            state.manager.clone(),
-            state.sandbox.clone(),
-            handle.session_id.clone(),
-            handle.container_id.clone(),
-            lifetime,
-        );
+    if let Some(lifetime) = lifetime {
+        end_after(state.manager.clone(), state.sandbox.clone(), lifetime);
     }
 
     Ok(Json(SessionBody {
@@ -661,33 +660,29 @@ fn session_lifetime(
     }
 }
 
-/// Ends the session after `lifetime`, as a cloud backend's deadline does. Only the container this
-/// create made: a session terminated and created again under the same id keeps its own deadline.
-/// The timer lives in this process, like the sessions themselves, which a restart removes.
-fn end_after(
-    manager: Arc<LocalSandboxManager>,
-    sandbox: String,
-    session_id: String,
-    container_id: String,
-    lifetime: std::time::Duration,
-) {
+/// Ends sessions at their deadline, as a cloud backend's deadline does. The deadline itself is
+/// a label on the container, compared with the wall clock: the timer only wakes up to check, in
+/// short steps so a machine's sleep does not slide it, and retries when the check fails. The
+/// controller's tick enforces the same labels after a restart.
+fn end_after(manager: Arc<LocalSandboxManager>, sandbox: String, lifetime: std::time::Duration) {
+    const STEP: std::time::Duration = std::time::Duration::from_secs(15);
     tokio::spawn(async move {
-        tokio::time::sleep(lifetime).await;
-        let still_ours = match manager.list_sessions(&sandbox).await {
-            Ok(sessions) => sessions
-                .iter()
-                .any(|s| s.session_id == session_id && s.container_id == container_id),
-            Err(error) => {
-                tracing::warn!(%sandbox, %session_id, %error, "could not list sessions at the lifetime deadline; ending the session anyway");
-                true
+        let due = std::time::SystemTime::now() + lifetime;
+        loop {
+            let remaining = due
+                .duration_since(std::time::SystemTime::now())
+                .unwrap_or_default();
+            if remaining.is_zero() {
+                match manager.end_expired(&sandbox).await {
+                    Ok(_) => return,
+                    Err(error) => {
+                        tracing::warn!(%sandbox, %error, "could not end sandboxes at their lifetime; retrying")
+                    }
+                }
+                tokio::time::sleep(STEP).await;
+            } else {
+                tokio::time::sleep(remaining.min(STEP)).await;
             }
-        };
-        if !still_ours {
-            return;
-        }
-        tracing::info!(%sandbox, %session_id, lifetime_secs = lifetime.as_secs(), "sandbox reached its lifetime; terminating");
-        if let Err(error) = manager.terminate(&sandbox, &session_id).await {
-            tracing::warn!(%sandbox, %session_id, %error, "could not end a sandbox at its lifetime");
         }
     });
 }

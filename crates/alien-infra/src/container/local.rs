@@ -404,7 +404,7 @@ impl LocalContainerController {
                         ),
                     })
                 })?;
-            env_vars.extend(entry);
+            alien_local::merge_runtime_only_env(&mut env_vars, entry);
         }
 
         // A linked Local sandbox is reached over the host gateway with a mounted token file

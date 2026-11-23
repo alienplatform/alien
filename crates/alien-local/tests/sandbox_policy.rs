@@ -217,3 +217,50 @@ async fn a_sandbox_declared_none_stays_closed() {
     assert_ne!(code, 0, "no interface, no way out: {body}");
     manager.reap(sandbox).await.unwrap();
 }
+
+/// A gateway that predates admin protocol 2 cannot enforce a policy; the session is refused
+/// rather than started on the open bridge.
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_gateway_that_cannot_enforce_the_policy_refuses_the_session() {
+    let dir = TempDir::new().unwrap();
+    let sandbox = "policy-old-gateway";
+    // The published v3.3.72 image: pinned by digest, listed as predating protocol 2.
+    let old = "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037";
+    let manager = LocalSandboxManager::new(dir.path().to_path_buf())
+        .expect("Docker must be reachable")
+        .with_gateway_image(old);
+    manager.reap(sandbox).await.expect("clean slate");
+
+    let refused = manager
+        .create_session(
+            sandbox,
+            "s1",
+            &config(SandboxEgressMode::Allow, allow(&["example.com"]), vec![]),
+        )
+        .await
+        .expect_err("an allowlist cannot be enforced by this gateway");
+    assert!(
+        refused.to_string().contains("admin protocol 2"),
+        "the error names what is needed: {refused}"
+    );
+    assert!(
+        manager.list_sessions(sandbox).await.unwrap().is_empty(),
+        "nothing started"
+    );
+
+    // Full internet needs no enforcement.
+    manager
+        .create_session(
+            sandbox,
+            "s2",
+            &config(
+                SandboxEgressMode::Allow,
+                Some(EgressPolicy::Internet),
+                vec![],
+            ),
+        )
+        .await
+        .expect("an open policy runs on the plain bridge");
+    manager.reap(sandbox).await.unwrap();
+}

@@ -34,6 +34,48 @@ pub struct LocalAiController {
     pub(crate) region: Option<String>,
 }
 
+impl LocalAiController {
+    /// Picks Bedrock or the BYO-key provider from the developer's environment. Run on create
+    /// and on update, so the binding and heartbeat agree with what the runtime resolves at
+    /// each start (it reads the same variable every time).
+    fn resolve_provider(&mut self, id: &str) -> Result<()> {
+        // Bedrock in the developer's own account needs no provider key: the linked workload
+        // signs with the AWS credentials `alien dev` resolves for it at start.
+        let bedrock_region = AiBinding::local_bedrock_region().map_err(|message| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(id.to_string()),
+                message,
+            })
+        })?;
+        if let Some(region) = bedrock_region {
+            self.provider = Some(AiBinding::LOCAL_BEDROCK_PROVIDER.to_string());
+            self.region = Some(region.clone());
+            info!(id=%id, %region, "Local AI controller: Bedrock with the developer's AWS credentials");
+        } else {
+            // Fail loud if the developer hasn't supplied a key: local AI has no ambient
+            // identity to fall back on, so this is a required, actionable precondition.
+            if std::env::var(API_KEY_ENV)
+                .map(|k| k.is_empty())
+                .unwrap_or(true)
+            {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    resource_id: Some(id.to_string()),
+                    message: format!(
+                        "local AI resource '{}' needs a provider API key: set {API_KEY_ENV} \
+                         before `alien dev`, or set {} to use Bedrock with your AWS credentials",
+                        id,
+                        AiBinding::LOCAL_BEDROCK_REGION_ENV
+                    ),
+                }));
+            }
+            self.provider = Some(DEFAULT_PROVIDER.to_string());
+            self.region = None;
+            info!(id=%id, provider=DEFAULT_PROVIDER, "Local AI (BYO-key) controller: no resource to create");
+        }
+        Ok(())
+    }
+}
+
 #[controller]
 impl LocalAiController {
     // ─────────────── CREATE FLOW ──────────────────────────────
@@ -47,39 +89,7 @@ impl LocalAiController {
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Ai>()?;
 
-        // Bedrock in the developer's own account needs no provider key: the linked workload
-        // signs with the AWS credentials `alien dev` resolves for it at start.
-        let bedrock_region = AiBinding::local_bedrock_region().map_err(|message| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                resource_id: Some(config.id.clone()),
-                message,
-            })
-        })?;
-        if let Some(region) = bedrock_region {
-            self.provider = Some(AiBinding::LOCAL_BEDROCK_PROVIDER.to_string());
-            self.region = Some(region.clone());
-            info!(id=%config.id, %region, "Local AI controller: Bedrock with the developer's AWS credentials");
-        } else {
-            // Fail loud if the developer hasn't supplied a key: local AI has no ambient
-            // identity to fall back on, so this is a required, actionable precondition.
-            if std::env::var(API_KEY_ENV)
-                .map(|k| k.is_empty())
-                .unwrap_or(true)
-            {
-                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                    resource_id: Some(config.id.clone()),
-                    message: format!(
-                        "local AI resource '{}' needs a provider API key: set {API_KEY_ENV} \
-                         before `alien dev`, or set {} to use Bedrock with your AWS credentials",
-                        config.id,
-                        AiBinding::LOCAL_BEDROCK_REGION_ENV
-                    ),
-                }));
-            }
-            self.provider = Some(DEFAULT_PROVIDER.to_string());
-            self.region = None;
-            info!(id=%config.id, provider=DEFAULT_PROVIDER, "Local AI (BYO-key) controller: no resource to create");
-        }
+        self.resolve_provider(&config.id)?;
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -124,7 +134,7 @@ impl LocalAiController {
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────
-    // Ai has no mutable fields -- update is a no-op that also recovers RefreshFailed.
+    // Ai has no mutable fields; update resolves the provider again and recovers RefreshFailed.
 
     #[flow_entry(Update, from = [Ready, RefreshFailed])]
     #[handler(
@@ -134,7 +144,8 @@ impl LocalAiController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Ai>()?;
-        info!(id=%config.id, "Local AI update (no-op -- no mutable fields)");
+        self.resolve_provider(&config.id)?;
+        info!(id=%config.id, "Local AI update: provider resolved again");
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,

@@ -245,7 +245,9 @@ impl AiBinding {
     /// The BYO-key provider assumed on the Local platform.
     pub const LOCAL_DEFAULT_PROVIDER: &'static str = "openai";
     /// When set on the `alien dev` process, local AI runs on Bedrock in this region with the
-    /// developer's own AWS credentials instead of a bring-your-own provider key.
+    /// developer's own AWS credentials (the default chain's, with the developer's full identity;
+    /// not refreshed, so restart `alien dev` after an SSO session expires) instead of a
+    /// bring-your-own provider key.
     pub const LOCAL_BEDROCK_REGION_ENV: &'static str = "ALIEN_AI_LOCAL_BEDROCK_REGION";
     /// The provider name the local controller reports when it serves Bedrock.
     pub const LOCAL_BEDROCK_PROVIDER: &'static str = "bedrock";

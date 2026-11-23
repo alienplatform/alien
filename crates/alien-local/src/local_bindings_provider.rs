@@ -438,10 +438,13 @@ impl LocalBindingsProvider {
 /// binding and the AWS credentials the developer's default chain (environment, profile, SSO,
 /// credential process) resolves now.
 ///
-/// These are temporary keys, passed once at start through the runtime-only channel, so they
-/// never enter deployment state. They are visible to everything in the workload's container,
-/// and they are not refreshed: when the session behind them expires, Bedrock calls fail until
-/// `alien dev` is restarted.
+/// These are the developer's own credentials, whatever the chain holds: long-lived keys or an
+/// SSO session's keys, with the developer's full identity and permissions, not a role scoped to
+/// Bedrock. They are passed once at start through the runtime-only channel, so they never enter
+/// deployment state, but they are visible to everything in the workload's container (a local
+/// Container's are also in `docker inspect`). They are not refreshed: when an SSO session behind
+/// them expires, Bedrock calls fail until `alien dev` is restarted. AWS credentials the
+/// developer set in the deployment's own environment win: see [`merge_runtime_only_env`].
 async fn local_bedrock_binding_env(
     binding_name: &str,
     region: &str,
@@ -481,6 +484,32 @@ async fn local_bedrock_binding_env(
         credentials.session_token(),
     ));
     Ok(env)
+}
+
+/// The variables that name AWS credentials; a deployment that sets any of them keeps its own.
+const AWS_CREDENTIAL_VARS: [&str; 4] = [
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_PROFILE",
+];
+
+/// Adds a runtime-only entry to a workload's environment. AWS credentials the deployment's
+/// environment already sets win over the developer's resolved ones: when any of them is set, the
+/// resolved keys are dropped as a group, so the two never mix into one half-and-half identity.
+pub fn merge_runtime_only_env(
+    env: &mut std::collections::HashMap<String, String>,
+    entry: std::collections::HashMap<String, String>,
+) {
+    let own_credentials = AWS_CREDENTIAL_VARS
+        .iter()
+        .any(|name| env.contains_key(*name));
+    for (name, value) in entry {
+        if own_credentials && AWS_CREDENTIAL_VARS.contains(&name.as_str()) {
+            continue;
+        }
+        env.insert(name, value);
+    }
 }
 
 /// The standard AWS variables for one set of resolved keys.
@@ -851,6 +880,19 @@ mod tests {
     /// on the variables if they ran side by side.
     #[tokio::test]
     async fn local_bedrock_env_carries_the_binding_and_the_resolved_keys_or_names_the_fix() {
+        const TOUCHED: [&str; 7] = [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "AWS_PROFILE",
+            "AWS_EC2_METADATA_DISABLED",
+            "AWS_CONFIG_FILE",
+            "AWS_SHARED_CREDENTIALS_FILE",
+        ];
+        let saved: Vec<_> = TOUCHED
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
         for name in [
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
@@ -889,5 +931,37 @@ mod tests {
         assert_eq!(env["AWS_SESSION_TOKEN"], "token-example");
         // No provider key rides along.
         assert!(!env.values().any(|value| value.contains("apiKey")));
+
+        for (name, value) in saved {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+
+    #[test]
+    fn the_deployments_own_aws_credentials_win_over_the_developers() {
+        let resolved = || {
+            aws_credential_env("AKIDDEV", "dev-secret", Some("dev-token"))
+                .into_iter()
+                .chain([("ALIEN_LLM_BINDING".to_string(), "{}".to_string())])
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+
+        let mut own = std::collections::HashMap::from([(
+            "AWS_ACCESS_KEY_ID".to_string(),
+            "AKIDOWN".to_string(),
+        )]);
+        merge_runtime_only_env(&mut own, resolved());
+        assert_eq!(own["AWS_ACCESS_KEY_ID"], "AKIDOWN");
+        assert!(!own.contains_key("AWS_SECRET_ACCESS_KEY"));
+        assert!(!own.contains_key("AWS_SESSION_TOKEN"));
+        assert_eq!(own["ALIEN_LLM_BINDING"], "{}");
+
+        let mut none = std::collections::HashMap::new();
+        merge_runtime_only_env(&mut none, resolved());
+        assert_eq!(none["AWS_ACCESS_KEY_ID"], "AKIDDEV");
+        assert_eq!(none["AWS_SESSION_TOKEN"], "dev-token");
     }
 }

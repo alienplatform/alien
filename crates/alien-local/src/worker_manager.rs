@@ -375,7 +375,7 @@ impl LocalWorkerManager {
             persisted_env.remove(name);
         }
         for (_name, entry) in resolved {
-            live_env.extend(entry.clone());
+            crate::local_bindings_provider::merge_runtime_only_env(&mut live_env, entry.clone());
         }
         let metadata = WorkerMetadata {
             worker_id: id.to_string(),

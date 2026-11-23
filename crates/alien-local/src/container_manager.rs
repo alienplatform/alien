@@ -1787,6 +1787,12 @@ async fn inspect_archive_image(
 /// Serializes loads of sandbox image archives: two sessions of one sandbox start together.
 static SANDBOX_IMAGE_LOAD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Digests of each loaded archive by path, valid while its modified time is unchanged, so each
+/// session create does not read the archive again.
+static ARCHIVE_DIGESTS: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<PathBuf, (std::time::SystemTime, [String; 2])>>,
+> = std::sync::LazyLock::new(Default::default);
+
 /// Makes the image of a sandbox build directory (or archive) available to the daemon, the way
 /// a local Container's build output is, and returns the reference sessions are created from.
 pub(crate) async fn load_built_image(
@@ -1800,28 +1806,53 @@ pub(crate) async fn load_built_image(
     } else {
         location.to_path_buf()
     };
-    let archive = tarball_path.clone();
-    let candidates = tokio::task::spawn_blocking(move || -> std::io::Result<[String; 2]> {
-        let (manifest_digest, _) = oci_archive_identity(&archive)?;
-        let config_digest = dockdash::Image::from_tarball(&archive)
-            .map_err(std::io::Error::other)?
-            .config_digest()
-            .to_string();
-        Ok([manifest_digest, config_digest])
-    })
-    .await
-    .into_alien_error()
-    .context(ErrorData::DockerContainerError {
-        container: owner.to_string(),
-        operation: "resolve_loaded_image".to_string(),
-        reason: "Image archive reader task failed".to_string(),
-    })?
-    .into_alien_error()
-    .context(ErrorData::DockerContainerError {
-        container: owner.to_string(),
-        operation: "resolve_loaded_image".to_string(),
-        reason: format!("Failed to read the image digests of '{}'", tarball_path.display()),
-    })?;
+    let modified = std::fs::metadata(&tarball_path)
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    let cached = modified.and_then(|modified| {
+        let cache = ARCHIVE_DIGESTS.lock().expect("no panic holds this lock");
+        cache
+            .get(&tarball_path)
+            .filter(|(at, _)| *at == modified)
+            .map(|(_, digests)| digests.clone())
+    });
+    let candidates = match cached {
+        Some(digests) => digests,
+        None => {
+            let archive = tarball_path.clone();
+            let digests = tokio::task::spawn_blocking(move || -> std::io::Result<[String; 2]> {
+                let (manifest_digest, _) = oci_archive_identity(&archive)?;
+                let config_digest = dockdash::Image::from_tarball(&archive)
+                    .map_err(std::io::Error::other)?
+                    .config_digest()
+                    .to_string();
+                Ok([manifest_digest, config_digest])
+            })
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: owner.to_string(),
+                operation: "resolve_loaded_image".to_string(),
+                reason: "Image archive reader task failed".to_string(),
+            })?
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: owner.to_string(),
+                operation: "resolve_loaded_image".to_string(),
+                reason: format!(
+                    "Failed to read the image digests of '{}'",
+                    tarball_path.display()
+                ),
+            })?;
+            if let Some(modified) = modified {
+                ARCHIVE_DIGESTS
+                    .lock()
+                    .expect("no panic holds this lock")
+                    .insert(tarball_path.clone(), (modified, digests.clone()));
+            }
+            digests
+        }
+    };
     let _guard = SANDBOX_IMAGE_LOAD.lock().await;
     docker_load_archive(docker, docker_host, &tarball_path, &candidates, owner).await
 }
