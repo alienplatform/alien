@@ -873,11 +873,20 @@ pub struct EmbeddingModel {
     pub upstream_id: &'static str,
 }
 
-static EMBEDDING_MODELS: &[EmbeddingModel] = &[EmbeddingModel {
-    public_id: "text-embedding-3-large",
-    cloud: Platform::Azure,
-    upstream_id: "text-embedding-3-large",
-}];
+static EMBEDDING_MODELS: &[EmbeddingModel] = &[
+    EmbeddingModel {
+        public_id: "text-embedding-3-large",
+        cloud: Platform::Azure,
+        upstream_id: "text-embedding-3-large",
+    },
+    // Vertex's publisher model, 3072 dimensions by default like `text-embedding-3-large`, and a
+    // client's `dimensions` narrows it. Served through `:predict`, one input per upstream call.
+    EmbeddingModel {
+        public_id: "gemini-embedding-001",
+        cloud: Platform::Gcp,
+        upstream_id: "gemini-embedding-001",
+    },
+];
 
 /// The embeddings model a client-sent id names on `cloud`, or `None`.
 pub fn resolve_embedding_for(model_id: &str, cloud: Platform) -> Option<&'static EmbeddingModel> {
@@ -1540,6 +1549,11 @@ mod tests {
         let m = resolve_embedding_for("text-embedding-3-large", Platform::Azure).unwrap();
         assert_eq!(m.upstream_id, "text-embedding-3-large");
         assert!(resolve_embedding_for("text-embedding-3-large", Platform::Aws).is_none());
+        assert!(resolve_embedding_for("text-embedding-3-large", Platform::Gcp).is_none());
+        let g = resolve_embedding_for("gemini-embedding-001", Platform::Gcp).unwrap();
+        assert_eq!(g.upstream_id, "gemini-embedding-001");
+        assert!(resolve_embedding_for("gemini-embedding-001", Platform::Azure).is_none());
+        assert!(lookup("gemini-embedding-001").is_none());
         // Embeddings never appear in the text-generation catalog.
         assert!(lookup("text-embedding-3-large").is_none());
     }

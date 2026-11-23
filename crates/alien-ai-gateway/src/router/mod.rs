@@ -752,7 +752,7 @@ async fn proxy_chat_completions(
 
 /// `POST /<name>/v1/embeddings`: OpenAI-compatible embeddings, forwarded as is
 /// with the model rewritten to the upstream deployment. Served where the catalog
-/// lists an embeddings model for the binding's cloud (Azure today).
+/// lists an embeddings model for the binding's cloud (Azure and GCP).
 const AZURE_EMBEDDINGS_API_VERSION: &str = "2024-10-21";
 
 async fn proxy_embeddings(
@@ -776,29 +776,35 @@ async fn proxy_embeddings(
         return Err(not_available());
     };
     let embedding = ai_catalog::resolve_embedding_for(&model, cloud).ok_or_else(not_available)?;
-    let endpoint = route
-        .azure_endpoint
-        .as_deref()
-        .ok_or_else(|| missing_field(route, "endpoint"))?;
-    let base = route
-        .upstream_base_override
-        .clone()
-        .unwrap_or_else(|| endpoint.to_string());
-    // The deployment path, not `/openai/v1/embeddings`: the v1 embeddings route answers
-    // 401 PermissionDenied for the Cognitive Services User role the workload holds,
-    // while the deployment route accepts it (verified against a real account).
-    let url = format!(
-        "{}/openai/deployments/{}/embeddings?api-version={AZURE_EMBEDDINGS_API_VERSION}",
-        base.trim_end_matches('/'),
-        embedding.upstream_id
-    );
-    payload["model"] = Value::String(embedding.upstream_id.to_string());
-    let upstream_body =
-        serde_json::to_vec(&payload)
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: "could not re-serialize the rewritten request body".to_string(),
-            })?;
+    // Azure forwards the request to its deployment; Vertex maps it onto `:predict`.
+    let azure_request = if cloud == Platform::Azure {
+        let endpoint = route
+            .azure_endpoint
+            .as_deref()
+            .ok_or_else(|| missing_field(route, "endpoint"))?;
+        let base = route
+            .upstream_base_override
+            .clone()
+            .unwrap_or_else(|| endpoint.to_string());
+        // The deployment path, not `/openai/v1/embeddings`: the v1 embeddings route answers
+        // 401 PermissionDenied for the Cognitive Services User role the workload holds,
+        // while the deployment route accepts it (verified against a real account).
+        let url = format!(
+            "{}/openai/deployments/{}/embeddings?api-version={AZURE_EMBEDDINGS_API_VERSION}",
+            base.trim_end_matches('/'),
+            embedding.upstream_id
+        );
+        payload["model"] = Value::String(embedding.upstream_id.to_string());
+        let upstream_body =
+            serde_json::to_vec(&payload)
+                .into_alien_error()
+                .context(ErrorData::Other {
+                    message: "could not re-serialize the rewritten request body".to_string(),
+                })?;
+        Some((url, upstream_body))
+    } else {
+        None
+    };
     // Embeddings answer in the OpenAI shape, so the chat-completions token parser reads
     // `prompt_tokens`. Everything from here on is a provider-bound request and is reported.
     let descriptor = AiUsageContext::new(
@@ -811,8 +817,23 @@ async fn proxy_embeddings(
     )
     .with_requested_model(&requested_model);
     let response = async {
-        let upstream = sign_and_execute(&state.client, route, &url, "", upstream_body, &[]).await?;
-        forward_response(upstream).await
+        match azure_request {
+            Some((url, upstream_body)) => {
+                let upstream =
+                    sign_and_execute(&state.client, route, &url, "", upstream_body, &[]).await?;
+                forward_response(upstream).await
+            }
+            None => {
+                vertex::proxy_vertex_embeddings(
+                    &state.client,
+                    route,
+                    embedding.upstream_id,
+                    &requested_model,
+                    &payload,
+                )
+                .await
+            }
+        }
     }
     .await;
     observe_result(response, state.usage_observer.as_ref(), descriptor)
@@ -2338,6 +2359,138 @@ mod tests {
         assert_eq!(event.provider_model, "text-embedding-3-large");
         assert_eq!(event.outcome, AiUsageOutcome::Success);
         assert_eq!(event.tokens.input_tokens, Some(7));
+    }
+
+    fn vertex_embedding_route(upstream: &str) -> GatewayRoute {
+        let mut route = gcp_route("us-east4");
+        route.upstream_base_override = Some(upstream.to_string());
+        route
+    }
+
+    #[tokio::test]
+    async fn vertex_embeddings_map_to_predict_and_back_to_the_openai_shape() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/projects/my-proj/locations/us-east4/publishers/google/models/gemini-embedding-001:predict")
+                    .matches(|req: &HttpMockRequest| {
+                        let body: Value =
+                            serde_json::from_slice(req.body.as_deref().unwrap_or_default())
+                                .unwrap_or(Value::Null);
+                        body["parameters"]["outputDimensionality"] == 3072
+                            && body.get("model").is_none()
+                            && body["instances"].as_array().is_some_and(|i| i.len() == 1)
+                    });
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"predictions":[{"embeddings":{"values":[0.5,0.25],"statistics":{"token_count":3.0,"truncated":false}}}]}"#);
+            })
+            .await;
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
+        let url = serve(build_router_with_observer(
+            vec![vertex_embedding_route(&server.base_url())],
+            observer,
+        ))
+        .await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/embeddings"))
+            .json(&json!({
+                "model": "byo/gemini-embedding-001",
+                "input": ["one", "two"],
+                "dimensions": 3072
+            }))
+            .send()
+            .await
+            .expect("proxy request");
+        assert_eq!(resp.status(), 200);
+        let body: Value = resp.json().await.expect("json body");
+        assert_eq!(body["object"], "list");
+        assert_eq!(body["data"].as_array().unwrap().len(), 2);
+        assert_eq!(body["data"][1]["index"], 1);
+        assert_eq!(body["data"][0]["embedding"], json!([0.5, 0.25]));
+        assert_eq!(body["usage"]["prompt_tokens"], 6);
+        // One upstream call per input.
+        assert_eq!(mock.hits_async().await, 2);
+
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("embeddings usage observation");
+        assert_eq!(event.provider, AiUsageProvider::GcpVertex);
+        assert_eq!(event.provider_model, "gemini-embedding-001");
+        assert_eq!(event.outcome, AiUsageOutcome::Success);
+        assert_eq!(event.tokens.input_tokens, Some(6));
+    }
+
+    #[tokio::test]
+    async fn vertex_embeddings_omit_dimensions_unless_asked_and_refuse_bad_input() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).matches(|req: &HttpMockRequest| {
+                    let body: Value =
+                        serde_json::from_slice(req.body.as_deref().unwrap_or_default())
+                            .unwrap_or(Value::Null);
+                    body.get("parameters").is_none() && body["instances"][0]["content"] == "hi"
+                });
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"predictions":[{"embeddings":{"values":[1.0],"statistics":{"token_count":1}}}]}"#);
+            })
+            .await;
+        let url = serve(build_router(vec![vertex_embedding_route(
+            &server.base_url(),
+        )]))
+        .await;
+        let client = reqwest::Client::new();
+        let post = |body: Value| {
+            client
+                .post(format!("{url}/llm/v1/embeddings"))
+                .json(&body)
+                .send()
+        };
+        assert_eq!(
+            post(json!({"model": "gemini-embedding-001", "input": "hi"}))
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+        // Token arrays, base64 output and a chat model never reach the upstream.
+        for bad in [
+            json!({"model": "gemini-embedding-001", "input": [[1, 2]]}),
+            json!({"model": "gemini-embedding-001", "input": "hi", "encoding_format": "base64"}),
+            json!({"model": "gemini-embedding-001", "input": "hi", "dimensions": 0}),
+            json!({"model": "text-embedding-3-large", "input": "hi"}),
+            json!({"model": "claude-haiku-4-5", "input": "hi"}),
+        ] {
+            let status = post(bad.clone()).await.unwrap().status();
+            assert!(status.is_client_error(), "{bad}: {status}");
+        }
+        assert_eq!(mock.hits_async().await, 1);
+    }
+
+    #[tokio::test]
+    async fn vertex_embeddings_report_an_upstream_refusal_as_the_gateway_envelope() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST);
+                then.status(429).body("quota");
+            })
+            .await;
+        let url = serve(build_router(vec![vertex_embedding_route(
+            &server.base_url(),
+        )]))
+        .await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/embeddings"))
+            .json(&json!({"model": "gemini-embedding-001", "input": "hi"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 429);
     }
 
     #[tokio::test]
