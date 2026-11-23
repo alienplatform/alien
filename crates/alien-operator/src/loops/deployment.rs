@@ -207,8 +207,22 @@ impl DeploymentLoopTransport for OperatorTransport {
                 .map_err(|e| e.into_generic())?;
         }
         if !observed_inventory_batches.is_empty() {
+            // The host and cloud collectors write their own scopes between
+            // steps: a step replaces the deployment's batches, not theirs.
             self.db
-                .set_pending_observed_inventory_batches(&observed_inventory_batches)
+                .update_pending_observed_inventory_batches(|pending| {
+                    let mut kept: Vec<_> = pending
+                        .into_iter()
+                        .filter(|batch| crate::host::is_operator_scope(&batch.inventory_scope))
+                        .filter(|batch| {
+                            !observed_inventory_batches
+                                .iter()
+                                .any(|new| new.inventory_scope == batch.inventory_scope)
+                        })
+                        .collect();
+                    kept.extend(observed_inventory_batches);
+                    kept
+                })
                 .await
                 .map_err(|e| e.into_generic())?;
         }

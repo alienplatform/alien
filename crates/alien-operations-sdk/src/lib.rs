@@ -22,6 +22,7 @@
 
 pub mod docs;
 pub mod error;
+pub mod host;
 pub mod kubernetes;
 pub mod manifest;
 pub mod mcp;
@@ -38,6 +39,7 @@ pub use alien_core::permissions::{
 };
 pub use docs::{generate_docs, generate_docs_canonical};
 pub use error::{ErrorData, Result};
+pub use host::{HostPermissions, ALLOWED_GROUPS};
 pub use kubernetes::{
     KubernetesOperationPermissions, KubernetesPermissionRule, KubernetesPermissions,
 };

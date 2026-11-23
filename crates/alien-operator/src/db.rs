@@ -1071,6 +1071,65 @@ impl OperatorDb {
         Ok(())
     }
 
+    /// Read, change and write the pending inventory batches under one lock, so
+    /// a report written by another loop in between is not lost.
+    pub async fn update_pending_observed_inventory_batches(
+        &self,
+        update: impl FnOnce(Vec<ObservedInventoryBatch>) -> Vec<ObservedInventoryBatch>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = 'pending_observed_inventory_batches'",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query pending_observed_inventory_batches".to_string(),
+            })?;
+        let current: Vec<ObservedInventoryBatch> = match rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch pending_observed_inventory_batches row".to_string(),
+            })? {
+            Some(row) => {
+                let json: String =
+                    row.get(0)
+                        .into_alien_error()
+                        .context(ErrorData::DatabaseError {
+                            message: "Failed to read pending_observed_inventory_batches value"
+                                .to_string(),
+                        })?;
+                serde_json::from_str(&json).into_alien_error().context(
+                    ErrorData::DatabaseError {
+                        message: "Failed to parse pending_observed_inventory_batches".to_string(),
+                    },
+                )?
+            }
+            None => Vec::new(),
+        };
+        drop(rows);
+        let json = serde_json::to_string(&update(current))
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to serialize pending_observed_inventory_batches".to_string(),
+            })?;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('pending_observed_inventory_batches', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (json,),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to set pending_observed_inventory_batches".to_string(),
+        })?;
+        Ok(())
+    }
+
     /// Get the current release info (the release that's currently deployed)
     pub async fn get_current_release_info(&self) -> Result<Option<ReleaseInfo>> {
         let conn = self.conn.lock().await;
@@ -1817,6 +1876,30 @@ impl OperatorDb {
                     message: "Failed to decode Pod log cursor ordinal".to_string(),
                 })?,
         }))
+    }
+
+    /// Forget one saved cursor (a journal cursor that the journal no longer accepts).
+    pub async fn delete_pod_log_offset(
+        &self,
+        pod_uid: &str,
+        container: &str,
+        restart_count: i32,
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM pod_log_offsets WHERE pod_uid = ? AND container = ? AND restart_count = ?",
+            (
+                pod_uid.to_string(),
+                container.to_string(),
+                i64::from(restart_count),
+            ),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to delete Pod log cursor".to_string(),
+        })?;
+        Ok(())
     }
 
     /// Return the durable lower bound for a Pod-log handoff. A new installation
@@ -3885,6 +3968,46 @@ mod tests {
             assert!(entries[0].contains("expected ident"));
             assert!(entries[1].contains("unknown variant"));
         }
+    }
+
+    #[tokio::test]
+    async fn concurrent_inventory_updates_keep_every_writers_batch() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = std::sync::Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let mut tasks = Vec::new();
+        for index in 0..20 {
+            let db = db.clone();
+            tasks.push(tokio::spawn(async move {
+                db.update_pending_observed_inventory_batches(|mut pending| {
+                    pending.push(alien_core::ObservedInventoryBatch {
+                        source_kind: "operator".into(),
+                        inventory_scope: format!("scope-{index}"),
+                        controller_platform: Platform::Local,
+                        backend: alien_core::HeartbeatBackend::Local,
+                        observed_at: chrono::Utc::now(),
+                        complete: true,
+                        resources: Vec::new(),
+                    });
+                    pending
+                })
+                .await
+                .unwrap();
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+        assert_eq!(
+            db.get_pending_observed_inventory_batches()
+                .await
+                .unwrap()
+                .len(),
+            20
+        );
     }
 
     #[tokio::test]
