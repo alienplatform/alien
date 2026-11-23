@@ -830,6 +830,57 @@ async fn replicated_writes_reach_every_ready_replica_or_fail() {
     server.abort();
 }
 
+/// The sandbox CA is the same on every replica, so a replica that is away (here the first one
+/// tried) never blocks a sandbox's creation while another answers.
+#[tokio::test]
+async fn the_sandbox_ca_is_taken_from_the_next_replica_when_the_first_is_away() {
+    let h = Harness::new().await;
+    let port = h.manager.admin_url.port().unwrap();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.3", port))
+        .await
+        .unwrap();
+    let router = Router::new()
+        .route(
+            "/v1/protocol",
+            axum::routing::get(|| async { axum::Json(serde_json::json!({"protocol": 2})) }),
+        )
+        .route(
+            "/v1/ca",
+            axum::routing::post(|| async {
+                axum::Json(serde_json::json!({"certificate": "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n"}))
+            }),
+        );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let mut config = h.config.clone();
+    config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+        dns: "replicas.invalid".into(),
+        addresses: vec![],
+        port,
+        count: 2,
+        min_protocol: 0,
+        proxy_port: 0,
+    });
+    let mut manager = SandboxEgressManager::with_endpoints(
+        config,
+        h.vault.clone(),
+        h.manager.gateway.clone(),
+        h.manager.admin_url.to_string(),
+    )
+    .unwrap();
+    let away: std::net::SocketAddr = format!("127.0.0.2:{port}").parse().unwrap();
+    let live: std::net::SocketAddr = format!("127.0.0.3:{port}").parse().unwrap();
+    manager.replica_addresses = Some(vec![away, live]);
+    let ca = manager.sandbox_ca("box-1").await.unwrap();
+    assert!(ca.is_some_and(|pem| pem.contains("BEGIN CERTIFICATE")));
+
+    // Every replica away: the call fails instead of returning no CA.
+    manager.replica_addresses = Some(vec![away]);
+    assert!(manager.sandbox_ca("box-1").await.is_err());
+    server.abort();
+}
+
 #[test]
 fn static_replica_addresses_are_the_write_targets_without_dns() {
     let rt = tokio::runtime::Builder::new_current_thread()

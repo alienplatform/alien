@@ -858,15 +858,29 @@ impl SandboxEgressManager {
     /// The PEM of the sandbox's CA, which the sandbox trusts for intercepted HTTPS. `None` from
     /// a gateway that predates per-sandbox credentials: its CA would change with rule hosts.
     pub async fn sandbox_ca(&self, id: &str) -> Result<Option<String>> {
+        // The CA derives from the deployment's shared secret, so every replica issues the same
+        // one: ask each in turn, so one replica being away never blocks a sandbox's creation.
+        let mut targets = self.resolved_targets().await.unwrap_or_default();
+        if targets.is_empty() {
+            targets.push(self.admin_url.as_str().trim_end_matches('/').to_string());
+        }
+        let mut last = unavailable("gateway did not issue the sandbox CA");
+        for target in targets {
+            match self.sandbox_ca_from(&target, id).await {
+                Ok(ca) => return Ok(ca),
+                Err(error) => last = error,
+            }
+        }
+        Err(last)
+    }
+
+    async fn sandbox_ca_from(&self, target: &str, id: &str) -> Result<Option<String>> {
         #[derive(Deserialize)]
         struct Issued {
             certificate: String,
         }
-        let target = self.admin_url.as_str().trim_end_matches('/').to_string();
-        match self.served_protocol(&target).await {
-            Ok(served) if served >= CREDENTIALS_PROTOCOL => {}
-            Ok(_) => return Ok(None),
-            Err(error) => return Err(error),
+        if self.served_protocol(target).await? < CREDENTIALS_PROTOCOL {
+            return Ok(None);
         }
         let authorization = self.issuer().await?.mint_admin_method(
             &self.config.audience,
