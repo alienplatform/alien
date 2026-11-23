@@ -14136,8 +14136,23 @@ remoteOperator:
             if kind.starts_with("Cluster") || kind.starts_with("Validating") {
                 cluster_scoped.push(format!("{}/{name}", kind.to_lowercase()));
             }
-            if let Some(annotations) = doc["metadata"].as_mapping_mut() {
-                annotations.remove("annotations");
+            if let Some(metadata) = doc["metadata"].as_mapping_mut() {
+                metadata.remove("annotations");
+                // Like helm, honour an object that names its own namespace (the restart
+                // probe's count Role lives in `default`); only objects without one go here.
+                if !kind.starts_with("Cluster") && !kind.starts_with("Validating") {
+                    if let Some(other) = metadata.get("namespace").and_then(YamlValue::as_str) {
+                        if other != namespace {
+                            cluster_scoped.push(format!(
+                                "{}/{name} --namespace={other}",
+                                kind.to_lowercase()
+                            ));
+                        }
+                    }
+                    metadata
+                        .entry("namespace".into())
+                        .or_insert_with(|| namespace.into());
+                }
             }
             applied.push_str("---\n");
             applied.push_str(&serde_yaml::to_string(&doc).unwrap());
@@ -14148,7 +14163,9 @@ remoteOperator:
             fn drop(&mut self) {
                 for object in self.1 {
                     let _ = Command::new("kubectl")
-                        .args(["--context", self.0, "delete", object, "--ignore-not-found"])
+                        .args(["--context", self.0, "delete"])
+                        .args(object.split_whitespace())
+                        .arg("--ignore-not-found")
                         .output();
                 }
                 let _ = Command::new("kubectl")
@@ -14159,10 +14176,7 @@ remoteOperator:
         }
         let _cleanup = Cleanup(&context, &cluster_scoped, namespace);
         assert!(kubectl(&["create", "namespace", namespace], None).0);
-        let (ok, text) = kubectl(
-            &["--namespace", namespace, "apply", "-f", "-"],
-            Some(&applied),
-        );
+        let (ok, text) = kubectl(&["apply", "-f", "-"], Some(&applied));
         assert!(ok, "apply the chart's objects: {text}");
         let workloads = format!(
             "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: dynamic\n  namespace: {namespace}\n  labels:\n    alien.dev/dynamic-deployment: customer-one\nspec:\n  replicas: 0\n  selector: {{matchLabels: {{app: dynamic}}}}\n  template:\n    metadata: {{labels: {{app: dynamic}}}}\n    spec:\n      containers: [{{name: main, image: \"registry.k8s.io/pause:3.10\"}}]\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: other\n  namespace: {namespace}\nspec:\n  replicas: 0\n  selector: {{matchLabels: {{app: other}}}}\n  template:\n    metadata: {{labels: {{app: other}}}}\n    spec:\n      containers: [{{name: main, image: \"registry.k8s.io/pause:3.10\"}}]\n"
