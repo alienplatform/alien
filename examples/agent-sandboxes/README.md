@@ -80,15 +80,20 @@ Open http://localhost:3000, start a thread and send a message.
 
    The NAT gateway uses one Elastic IP and the stack adds its own; check the account's EIP and VPC quotas first.
 
-2. Release the stack and deploy it into that VPC with `byo-vpc-aws`, passing the internal API's address:
+2. Release the stack and deploy it into that VPC with `byo-vpc-aws`, passing the internal API's address. This is a normal Alien deployment: sign in, release, then deploy with a deployment group token.
 
    ```bash
+   # The AWS build runs on arm64 and a sandbox is a live resource there.
    SANDBOX_LIFECYCLE=live alien release
-   alien-deploy deploy --token <deployment group token> --platform aws \
+
+   alien deploy --token <deployment group token> --platform aws --name agent-sandboxes \
      --network byo --vpc-id <vpc_id> \
      --public-subnet-ids <public_subnet_ids> --private-subnet-ids <private_subnet_ids> \
+     --security-group-ids <security_group_id> \
      --input internalApiUrl=<internal_api_url>
    ```
+
+   Run it with AWS credentials for the account the stack goes into. The values come from `terraform output`.
 
 3. Point the control plane at the deployment (`ALIEN_MANAGER_URL`, `ALIEN_DEPLOYMENT_ID`, `ALIEN_TOKEN`) and start it as above.
 
