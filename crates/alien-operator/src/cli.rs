@@ -2081,7 +2081,12 @@ fn check_saved_manager(
     configured: Option<&str>,
     saved: Option<&crate::daily_identity::DailyIdentityState>,
 ) -> Result<()> {
-    let Some(saved) = saved.filter(|saved| !saved.manager_url.is_empty()) else {
+    // Only an enrolled identity is held to its manager. An unenrolled candidate
+    // (a refused first enrollment) is discarded when a token enrolls again, so a
+    // corrected token for another manager must be able to replace it.
+    let Some(saved) = saved
+        .filter(|saved| !saved.manager_url.is_empty() && !saved.deployment_id.is_empty())
+    else {
         return Ok(());
     };
     if let Some(problem) = crate::enrollment_token::manager_url_problem(&saved.manager_url) {
@@ -2975,7 +2980,7 @@ mod plain_http_warning_tests {
 
 /// Startup in identity Secret mode, driven through `run_operator_cli` against a fake Kubernetes
 /// API server and a fake manager, both real HTTP servers on loopback.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod secret_startup_tests {
     use super::*;
     use alien_core::Platform;
@@ -3298,6 +3303,31 @@ mod secret_startup_tests {
             manager.keys.lock().unwrap().contains(&hash_of(key)),
             "the Secret holds a key the manager never accepted"
         );
+    }
+
+    #[tokio::test]
+    async fn a_refused_token_then_a_corrected_token_for_another_manager_ends_enrolled() {
+        // The first manager does not know the code: the enrollment is refused and an
+        // unenrolled candidate stays in the Secret.
+        let first = Manager::with_codes(&[]);
+        let first_url = first.serve().await;
+        let kube = Kube::with_empty_secret();
+        let api = kube.serve().await;
+        start(pod(Some(token(&first_url, "code-1"))), &api)
+            .await
+            .expect_err("a refused code stops the start");
+        assert!(kube.identity().is_some_and(|i| i["deploymentId"] == ""));
+        // A corrected token names another manager: the candidate is discarded, not held to
+        // the first manager.
+        let second = Manager::with_codes(&["code-2"]);
+        let second_url = second.serve().await;
+        start(pod(Some(token(&second_url, "code-2"))), &api)
+            .await
+            .expect("a corrected token must recover the install");
+        let saved = kube.identity().expect("an identity in the Secret");
+        assert_eq!(saved["deploymentId"], "dep_1");
+        assert_eq!(saved["managerUrl"], second_url.as_str());
+        assert_eq!(second.accepted.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

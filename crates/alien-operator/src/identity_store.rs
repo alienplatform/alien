@@ -1299,13 +1299,10 @@ mod tests {
             .create_secret(namespace, &secret(None))
             .await
             .expect("recreate empty");
-        assert_eq!(a.read().await.unwrap().unwrap().current, "key-from-a");
-        assert!(a.rotation_blocked().is_none());
-        // The identity is back in the Secret for a restarted operator.
-        assert_eq!(
-            make_store().read().await.unwrap().unwrap().current,
-            "key-from-a"
-        );
+        // A Secret made again under the same name is a new Secret (another UID): the old
+        // identity is not written back into it, and a restarted operator finds it empty.
+        assert!(a.read().await.unwrap().is_none());
+        assert!(make_store().read().await.unwrap().is_none());
         client.delete_secret(namespace, &name).await.ok();
     }
 }
