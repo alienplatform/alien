@@ -67,8 +67,9 @@ pub struct ComputePoolPlan {
     pub selected: ComputePoolSelection,
     /// Planner-recommended default.
     pub recommended: ComputePoolSelection,
-    /// Every catalog machine for the platform, in catalog order (config series order, then vCPU).
-    /// `available` marks the ones that can run this pool. Empty for local and Kubernetes.
+    /// Every catalog machine for the platform, in catalog order (series order within each
+    /// category, then vCPU). `available` marks the ones that can run this pool. Empty for local
+    /// and Kubernetes.
     pub machines: Vec<ComputeMachineOption>,
     /// Data disk sizes this deployment may choose, when the pool declares a data disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,6 +123,10 @@ pub struct ComputeMachineOption {
     pub unavailable_reasons: Vec<MachineUnavailableReason>,
     /// Whether this machine is the planner's default recommendation.
     pub recommended: bool,
+    /// Whether the machine picker lists the series first: on AWS the current plain, `d` and `-flex`
+    /// families of the newest generation those reach in their category and processor, their bare
+    /// metal, and every GPU series; every GCP and Azure series.
+    pub primary: bool,
 }
 
 /// A pool requirement a machine does not meet.
@@ -952,6 +957,7 @@ fn machine_options(
                 unavailable_reasons,
                 recommended: Some(spec.name) == recommended_machine
                     || Some(spec.name) == selected_machine,
+                primary: spec.primary,
             }
         })
         .collect())

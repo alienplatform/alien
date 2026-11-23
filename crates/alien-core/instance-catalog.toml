@@ -28,8 +28,22 @@
 #                  may pick can have them: they keep the values existing pools are sized and
 #                  validated with.
 #
-# Series order is the order a series appears in within its category, and the tie-break between
-# two machines of equal size in automatic selection.
+# Series order within a category is the tie-break between two machines of equal size in
+# automatic selection. On GCP and Azure it is the order below, as is the AWS GPU series' order.
+#
+# AWS lists every machine the host image boots that both regions offer: x86 machines that boot
+# in UEFI mode or are bare metal, and every arm64 machine, without Xen virtual machines, Macs or
+# accelerators, with at least 1 GiB of memory, and on storage-optimized machines a root volume
+# that fits one gp3 volume. An `[[aws.series]]` entry pins what a generated series would get
+# wrong: its label, sizes, automatic picks, nested virtualization or overrides. Every other
+# family becomes a generated series (`<family>`, and `<family>-metal` for bare metal) labeled
+# from the letters of the family name. Within each other category, AWS series are sorted by
+# processor (Graviton, AMD, Intel), generation (the number in the family name, so x2gd sorts as
+# 2 and z1d as 1) and variant, with a family's bare metal right after it.
+# `primary` marks the series the machine picker lists first: the current plain, `d` and `-flex`
+# families of the newest generation those families reach in their category and processor, their
+# bare metal, and every GPU series. GCP and Azure list only the series below,
+# and all of them are primary.
 
 [aws]
 regions = ["us-east-1", "us-west-2"]
@@ -113,6 +127,15 @@ category = "GeneralPurpose"
 label = "General purpose · AMD · 8th gen"
 from = "m8a.medium"
 
+# The naming page gives `e` no meaning for this family. AWS describes M8ine and C8ine as built
+# for security and network virtual appliances:
+# https://aws.amazon.com/ec2/instance-types/m8i/ and https://aws.amazon.com/ec2/instance-types/c8i/
+[[aws.series]]
+series = "m8ine"
+category = "GeneralPurpose"
+label = "General purpose · Intel · 8th gen · Network appliances"
+from = "m8ine.large"
+
 [[aws.series]]
 series = "c7g"
 category = "ComputeOptimized"
@@ -172,6 +195,13 @@ series = "c8a"
 category = "ComputeOptimized"
 label = "Compute optimized · AMD · 8th gen"
 from = "c8a.medium"
+
+# `e` as for m8ine.
+[[aws.series]]
+series = "c8ine"
+category = "ComputeOptimized"
+label = "Compute optimized · Intel · 8th gen · Network appliances"
+from = "c8ine.large"
 
 [[aws.series]]
 series = "r7g"
@@ -250,7 +280,8 @@ from = "i8g.large"
 series = "g5"
 category = "GpuCompute"
 label = "GPU · NVIDIA A10G"
-sizes = ["g5.xlarge", "g5.2xlarge"]
+sizes = ["g5.xlarge", "g5.2xlarge", "g5.4xlarge", "g5.8xlarge", "g5.12xlarge", "g5.16xlarge",
+         "g5.24xlarge", "g5.48xlarge"]
 auto_select_to = "g5.2xlarge"
 # AWS reports local disk in decimal GB. These sizes keep the disk existing pools are sized with.
 overrides = { "g5.xlarge" = { ephemeral_storage_gib = 250 }, "g5.2xlarge" = { ephemeral_storage_gib = 450 } }
