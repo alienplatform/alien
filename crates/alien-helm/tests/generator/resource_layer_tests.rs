@@ -1382,22 +1382,38 @@ fn the_sandbox_policies_carry_no_ipv6_rule() {
     rendered.assert_ok("sandbox policies without IPv6");
     let documents = rendered_documents(&rendered);
     let mut ranges = 0;
-    for document in documents.iter().filter(|document| document["kind"] == "NetworkPolicy") {
-        for rule in document["spec"]["egress"].as_sequence().into_iter().flatten() {
+    for document in documents
+        .iter()
+        .filter(|document| document["kind"] == "NetworkPolicy")
+    {
+        for rule in document["spec"]["egress"]
+            .as_sequence()
+            .into_iter()
+            .flatten()
+        {
             for peer in rule["to"].as_sequence().into_iter().flatten() {
                 let block = &peer["ipBlock"];
-                for cidr in block["cidr"]
-                    .as_str()
-                    .into_iter()
-                    .chain(block["except"].as_sequence().into_iter().flatten().filter_map(|x| x.as_str()))
-                {
+                for cidr in block["cidr"].as_str().into_iter().chain(
+                    block["except"]
+                        .as_sequence()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|x| x.as_str()),
+                ) {
                     ranges += 1;
-                    assert!(!cidr.contains(':'), "an IPv6 range in {:?}: {cidr}", document["metadata"]["name"]);
+                    assert!(
+                        !cidr.contains(':'),
+                        "an IPv6 range in {:?}: {cidr}",
+                        document["metadata"]["name"]
+                    );
                 }
             }
         }
     }
-    assert!(ranges > 0, "no ipBlock found: the test would pass for any chart");
+    assert!(
+        ranges > 0,
+        "no ipBlock found: the test would pass for any chart"
+    );
 }
 
 /// The probe's client pods run where sessions run: they get `sandbox.nodeSelector` and
@@ -1879,7 +1895,8 @@ fn uninstall_cleans_the_policies_in_a_separate_sandbox_namespace() {
         ),
         "{separate}"
     );
-    let default = cleanup_script("management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n");
+    let default =
+        cleanup_script("management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n");
     assert!(!default.contains("sandbox_namespace"), "{default}");
     let same = cleanup_script(
         "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n  namespace: default\n",
@@ -2185,6 +2202,12 @@ fn the_cluster_dns_role_is_not_rendered_where_it_may_be_refused_or_when_turned_o
     assert!(has_dns_role("", "v1.36.0"), "default on a generic cluster");
     assert!(has_dns_role("", "v1.36.0-eks-abc123"), "default on EKS");
     assert!(!has_dns_role("", "v1.31.5-gke.1169000"), "default on GKE");
-    assert!(has_dns_role("  readClusterDNS: true\n", "v1.31.5-gke.1169000"), "forced on");
-    assert!(!has_dns_role("  readClusterDNS: false\n", "v1.36.0"), "forced off");
+    assert!(
+        has_dns_role("  readClusterDNS: true\n", "v1.31.5-gke.1169000"),
+        "forced on"
+    );
+    assert!(
+        !has_dns_role("  readClusterDNS: false\n", "v1.36.0"),
+        "forced off"
+    );
 }
