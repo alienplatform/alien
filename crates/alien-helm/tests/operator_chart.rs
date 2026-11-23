@@ -1343,3 +1343,64 @@ fn a_plugin_cannot_be_both_opt_in_and_on_by_default_or_on_without_operations() {
         );
     }
 }
+
+#[test]
+fn plugin_and_operation_names_with_punctuation_still_load_as_a_chart() {
+    // `operation.validate()` accepts names such as `*` and `a:b`; written as bare YAML keys they
+    // would not parse, and Helm could not load the chart.
+    let mut operations = operations();
+    operations[0].plugin = "*".into();
+    operations[0].operation = "*".into();
+    operations[1].plugin = "*".into();
+    operations[1].operation = "a:b".into();
+    let mut colon = operations[0].clone();
+    colon.plugin = ":".into();
+    colon.operation = ":".into();
+    operations.push(colon);
+    let chart = generate_operator_chart(OperatorChartOptions {
+        chart_version: "1.2.3",
+        app_version: "1.2.3",
+        image_repository: "registry.example/operator",
+        image_digest: DIGEST,
+        operations: &operations,
+        plugins: &[
+            OperatorChartPlugin {
+                name: "*",
+                opt_in: false,
+                default_enabled: true,
+            },
+            OperatorChartPlugin {
+                name: ":",
+                opt_in: false,
+                default_enabled: true,
+            },
+        ],
+    })
+    .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    for (path, content) in &chart.files {
+        let target = directory.path().join(path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, content).unwrap();
+    }
+    for command in [&["template", "alien"][..], &["lint"][..]] {
+        let output = Command::new("helm")
+            .args(command)
+            .arg(directory.path())
+            .args(["--set", &format!("token={TOKEN}")])
+            .output()
+            .expect("helm must be installed to run the chart tests");
+        assert!(
+            output.status.success(),
+            "helm {command:?} failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let values: Value =
+        serde_yaml::from_str(&chart.files["values.yaml"]).expect("values.yaml is valid YAML");
+    let plugins = &values["operations"]["plugins"];
+    assert_eq!(plugins["*"]["approval"]["*"].as_str(), Some("auto"));
+    assert_eq!(plugins["*"]["approval"]["a:b"].as_str(), Some("manual"));
+    assert_eq!(plugins[":"]["approval"][":"].as_str(), Some("auto"));
+}

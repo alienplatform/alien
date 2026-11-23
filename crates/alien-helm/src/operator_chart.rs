@@ -228,7 +228,7 @@ fn default_operations(options: &OperatorChartOptions<'_>) -> (String, String) {
     }
     let mut yaml = String::from("operations:\n  plugins:\n");
     for plugin in &defaults {
-        yaml.push_str(&format!("    {}:\n      approval:\n", plugin.name));
+        yaml.push_str(&format!("    {}:\n      approval:\n", yaml_string(plugin.name)));
         for operation in options
             .operations
             .iter()
@@ -239,7 +239,10 @@ fn default_operations(options: &OperatorChartOptions<'_>) -> (String, String) {
             } else {
                 "manual"
             };
-            yaml.push_str(&format!("        {}: {approval}\n", operation.operation));
+            yaml.push_str(&format!(
+                "        {}: {approval}\n",
+                yaml_string(&operation.operation)
+            ));
         }
     }
     let names = defaults
