@@ -48,6 +48,7 @@ NO_SETUP_CHECK = {
     "crates/alien-manager/tests/handoff_lock_routes.rs": "the setup method name",
     "crates/alien-manager/tests/stack_import/protocol.rs": "names the import source",
     "crates/alien-operator/src/daily_identity.rs": "comment",
+    "crates/alien-operator/src/identity_store.rs": "error text and comments",
     "crates/alien-operator/src/loops/sync.rs": "comment",
     "crates/alien-operator/src/self_update.rs": "comment",
     "crates/alien-preflights/src/compatibility/frozen_resources_unchanged.rs": "error text",
