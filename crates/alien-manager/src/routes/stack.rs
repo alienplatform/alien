@@ -700,10 +700,10 @@ async fn stack_import_as(
             && is_idempotent_import(&existing, &stack_state, &release.id, &req)
         {
             let (deployment_token, deployment_token_expires_at) =
-                    match response_token(&state, &subject, &req, &existing).await {
-                        Ok(token) => token,
-                        Err(response) => return response,
-                    };
+                match response_token(&state, &subject, &req, &existing).await {
+                    Ok(token) => token,
+                    Err(response) => return response,
+                };
             let Some(stack_settings) = existing.stack_settings else {
                 return ErrorData::internal("imported deployment is missing stack_settings")
                     .into_response();

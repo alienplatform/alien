@@ -39,6 +39,7 @@ pub struct FaultInjectingKv {
     idempotency_get_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
     fail_wake_key_writes: AtomicBool,
     fail_wake_key_reads: AtomicBool,
+    hang_wake_key_reads: AtomicBool,
     wake_key_reads: AtomicUsize,
     pending_scans: AtomicUsize,
     /// When set, a plain pending-index scan does not see writes younger than
@@ -71,6 +72,7 @@ impl FaultInjectingKv {
             idempotency_get_barrier: Mutex::new(None),
             fail_wake_key_writes: AtomicBool::new(false),
             fail_wake_key_reads: AtomicBool::new(false),
+            hang_wake_key_reads: AtomicBool::new(false),
             wake_key_reads: AtomicUsize::new(0),
             scan_lag: Mutex::new(None),
             pending_writes: Mutex::new(Default::default()),
@@ -92,6 +94,12 @@ impl FaultInjectingKv {
     /// Arm the fault: reads of a target's lease wake key fail.
     pub fn arm_wake_key_read_failure(&self) {
         self.fail_wake_key_reads.store(true, Ordering::SeqCst);
+    }
+
+    /// Arm the fault: reads of a target's lease wake key never return, like a
+    /// store that stopped answering.
+    pub fn arm_wake_key_read_hang(&self) {
+        self.hang_wake_key_reads.store(true, Ordering::SeqCst);
     }
 
     /// Make plain pending-index scans lag: they miss entries written less than
@@ -147,6 +155,9 @@ impl Kv for FaultInjectingKv {
     async fn get(&self, key: &str) -> alien_bindings::Result<Option<KvEntry>> {
         if key.ends_with(":wake") {
             self.wake_key_reads.fetch_add(1, Ordering::SeqCst);
+            if self.hang_wake_key_reads.load(Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
             if self.fail_wake_key_reads.load(Ordering::SeqCst) {
                 return Err(alien_error::AlienError::new(ErrorData::KvOperationFailed {
                     operation: "get".to_string(),

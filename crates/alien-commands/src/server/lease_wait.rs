@@ -7,6 +7,13 @@
 //! is seen by the waiter's probe of the target's wake key in the command KV.
 //! Either way the signal is only a hint: a woken waiter repeats the scan and
 //! the atomic lease write that every lease request does.
+//!
+//! A client that disconnects just after the scan leased a command leaves that
+//! command leased: it is delivered again when the lease expires (60 seconds
+//! unless the request asked for another term), as for any lease the receiver
+//! never answered. Each waiter's queue for the wake read and for the scan is
+//! bounded by its wait window, so a store that stops answering cannot hold a
+//! request past it.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};

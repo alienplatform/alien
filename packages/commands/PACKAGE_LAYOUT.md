@@ -38,7 +38,10 @@ missing, or invalid value
 fails fast with `COMMAND_RECEIVER_CONFIG_INVALID`, naming the specific
 variable. The Rust receiver (`alien_commands::Receiver`)
 reads the identical names; the TypeScript receiver (`src/receiver.ts`) must match them
-exactly so the two are behavior-identical twins.
+exactly so the two are behavior-identical twins. One exception: waiting lease
+requests (`waitSeconds`, `ALIEN_COMMANDS_LEASE_WAIT_SECONDS`) are implemented
+by the Rust receiver only; the TypeScript receiver does not wait and keeps its
+polling backoff.
 
 | Env var | Requirement | Notes |
 |---|---|---|

@@ -44,6 +44,12 @@ const WAIT_STORE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
 /// A waiting lease request ends this long before the caller's credential
 /// expires, leaving room for its last scan's own authority check.
 const WAIT_AUTHORITY_MARGIN: Duration = Duration::from_secs(3);
+/// How long past the end of its window a waiting request may still queue for
+/// and run its last scan. Shorter than [`WAIT_AUTHORITY_MARGIN`], so the scan's
+/// own authority check still passes.
+const LAST_SCAN_GRACE: Duration = Duration::from_secs(2);
+/// Bound on the registry read that decides whether a waited-for target exists.
+const TARGET_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -1134,9 +1140,14 @@ impl CommandServer {
         // only after the caps: a wait for a target the deployment does not
         // have is refused like a wait over a cap.
         if !target_is_bound
-            && !self
-                .target_is_known(deployment_id, &lease_request.target)
-                .await
+            && !matches!(
+                tokio::time::timeout(
+                    TARGET_CHECK_TIMEOUT,
+                    self.target_is_known(deployment_id, &lease_request.target),
+                )
+                .await,
+                Ok(true)
+            )
         {
             drop(wait);
             debug!(
@@ -1164,19 +1175,32 @@ impl CommandServer {
             // Listen, and read the wake key, before scanning: a command queued
             // after the scan (here or through another replica) must still wake
             // this request.
+            let listening_since = tokio::time::Instant::now();
             let notified = wait.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            let (seen, _) = wait
-                .wake_value(tokio::time::Instant::now(), || {
+            // A read another waiter started after this one began listening is
+            // as good as its own, so waiters woken together share one read.
+            // The lock queue and the read are bounded by the wait window: a
+            // slow store must not hold a request past it.
+            let Ok((seen, _)) = tokio::time::timeout_at(
+                end,
+                wait.wake_value(listening_since, || {
                     self.read_wake_key(deployment_id, target)
-                })
-                .await;
+                }),
+            )
+            .await
+            else {
+                return Ok(LeaseResponse { leases: Vec::new() });
+            };
 
             // Waiters on one target scan one at a time. One woken after a scan
             // that began later found the queue empty needs no scan of its own.
-            let scanned = wait
-                .scan_in_turn(woken_at.take(), || async {
+            // The turn and the scan are bounded too: past the window only the
+            // last scan may still run, and only for a short grace.
+            let Ok(scanned) = tokio::time::timeout_at(
+                end + LAST_SCAN_GRACE,
+                wait.scan_in_turn(woken_at.take(), || async {
                     // Every scan of a waiting request reads consistently: a
                     // command queued just before the request arrived, or just
                     // before a wake-up, must not be hidden by a lagging read
@@ -1189,8 +1213,12 @@ impl CommandServer {
                     // may have missed a command a larger request would reach.
                     let found_nothing = matches!(&result, Ok((r, true)) if r.leases.is_empty());
                     (result.map(|(response, _)| response), found_nothing)
-                })
-                .await;
+                }),
+            )
+            .await
+            else {
+                return Ok(LeaseResponse { leases: Vec::new() });
+            };
             match scanned {
                 Some(Err(error)) => return Err(error),
                 Some(Ok(response)) if !response.leases.is_empty() => return Ok(response),

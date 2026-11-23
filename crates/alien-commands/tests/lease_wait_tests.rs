@@ -260,6 +260,29 @@ async fn a_command_queued_between_the_scan_and_the_probing_is_not_missed() {
 }
 
 #[tokio::test]
+async fn a_store_that_stops_answering_does_not_hold_a_wait_past_its_window() {
+    let server = TestCommandServer::builder()
+        .with_pull_mode()
+        .with_fault_injection()
+        .build()
+        .await;
+    server.fault_kv.as_ref().unwrap().arm_wake_key_read_hang();
+    let started = Instant::now();
+    let leases = client(&server)
+        .acquire(&lease_request(&server, 1))
+        .await
+        .unwrap();
+    assert!(leases.is_empty());
+    // The wake key read alone may take 5 s before the store call gives up;
+    // the wait's own window (1 s) bounds the request.
+    assert!(
+        started.elapsed() < Duration::from_millis(3000),
+        "answered after {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
 async fn a_failed_wake_key_write_does_not_fail_the_create() {
     let server = TestCommandServer::builder()
         .with_pull_mode()

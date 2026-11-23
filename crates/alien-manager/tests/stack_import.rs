@@ -4947,7 +4947,9 @@ async fn a_rerun_without_the_flag_mints_nothing_and_has_no_token() {
     let response: StackImportResponse = serde_json::from_value(json).unwrap();
     assert!(response.deployment_token_expires_at.is_none());
     // What it always got, never a new setup key.
-    assert!(response.deployment_token.is_none_or(|key| !key.starts_with("ax_setup_")));
+    assert!(response
+        .deployment_token
+        .is_none_or(|key| !key.starts_with("ax_setup_")));
 }
 
 #[tokio::test]
@@ -4982,9 +4984,8 @@ async fn another_groups_install_credential_mints_nothing() {
     let (_, json) = post_import(&fixture, Some(&other_token), &opt_in(body)).await;
     // Whatever the other group's import does for itself, it is not handed a
     // key for the first group's deployment, and the live key is untouched.
-    let other: StackImportResponse = serde_json::from_value(json).unwrap_or_else(|_| {
-        panic!("the other group imports its own deployment")
-    });
+    let other: StackImportResponse = serde_json::from_value(json)
+        .unwrap_or_else(|_| panic!("the other group imports its own deployment"));
     assert_ne!(other.deployment_id, minted.deployment_id);
     assert!(other.deployment_token_expires_at.is_none());
     assert!(setup_key_is_live(&fixture, &key).await);
@@ -5012,7 +5013,9 @@ async fn an_opt_in_without_an_identity_verifier_gets_the_response_it_always_got(
     assert_eq!(status, StatusCode::CREATED, "{json:#}");
     let response: StackImportResponse = serde_json::from_value(json).unwrap();
     assert!(response.deployment_token_expires_at.is_none());
-    let key = response.deployment_token.expect("the install key, as before");
+    let key = response
+        .deployment_token
+        .expect("the install key, as before");
     assert!(!key.starts_with("ax_setup_"));
 }
 
