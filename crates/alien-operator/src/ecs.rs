@@ -100,22 +100,56 @@ fn env_value(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// The log group prefix to ship, or none. Logs of every ECS service under a
+/// prefix are only shipped when `OPERATOR_ECS_LOGS=on` is set as well; a prefix
+/// alone ships nothing. A prefix must start with `/` and name at least one
+/// path segment (a bare `/` would be every log group of the account).
+pub(crate) fn log_prefix_from(
+    opt_in: Option<&str>,
+    prefix: Option<String>,
+) -> Result<Option<String>> {
+    let on = match opt_in {
+        None => false,
+        Some("on") => true,
+        Some("off") => false,
+        Some(_) => {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "OPERATOR_ECS_LOGS must be 'on' or 'off'".to_string(),
+            }))
+        }
+    };
+    if let Some(prefix) = &prefix {
+        if !prefix.starts_with('/') || prefix.trim_matches('/').is_empty() {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "OPERATOR_ECS_LOG_GROUP_PREFIX must start with '/' and name at least one path segment".to_string(),
+            }));
+        }
+    }
+    match (on, prefix) {
+        (true, Some(prefix)) => Ok(Some(prefix)),
+        (true, None) => Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "OPERATOR_ECS_LOGS=on needs OPERATOR_ECS_LOG_GROUP_PREFIX".to_string(),
+        })),
+        (false, Some(_)) => {
+            warn!("OPERATOR_ECS_LOG_GROUP_PREFIX is ignored: ECS log shipping is off (set OPERATOR_ECS_LOGS=on to ship logs)");
+            Ok(None)
+        }
+        (false, None) => Ok(None),
+    }
+}
+
 /// `None` when neither a cluster nor a log group prefix is configured.
 pub fn config_from_env() -> Result<Option<EcsConfig>> {
     let config = EcsConfig {
         cluster: env_value("OPERATOR_ECS_CLUSTER"),
-        log_group_prefix: env_value("OPERATOR_ECS_LOG_GROUP_PREFIX"),
+        log_group_prefix: log_prefix_from(
+            env_value("OPERATOR_ECS_LOGS").as_deref(),
+            env_value("OPERATOR_ECS_LOG_GROUP_PREFIX"),
+        )?,
         own_log_group: env_value("OPERATOR_ECS_OWN_LOG_GROUP"),
         enrolled_at_start: false,
         log_lookback_ms: log_lookback_ms_from_env()?,
     };
-    if let Some(prefix) = &config.log_group_prefix {
-        if !prefix.starts_with('/') {
-            return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: "OPERATOR_ECS_LOG_GROUP_PREFIX must start with '/'".to_string(),
-            }));
-        }
-    }
     Ok((config.cluster.is_some() || config.log_group_prefix.is_some()).then_some(config))
 }
 
@@ -1573,9 +1607,33 @@ mod tests {
 
     #[test]
     fn log_prefix_must_start_with_a_slash() {
-        std::env::set_var("OPERATOR_ECS_LOG_GROUP_PREFIX", "ecs/");
-        let result = config_from_env();
-        std::env::remove_var("OPERATOR_ECS_LOG_GROUP_PREFIX");
-        assert!(result.is_err());
+        assert!(log_prefix_from(Some("on"), Some("ecs/".into())).is_err());
+    }
+
+    #[test]
+    fn no_logs_are_collected_without_the_opt_in() {
+        assert_eq!(log_prefix_from(None, Some("/ecs/".into())).unwrap(), None);
+        assert_eq!(
+            log_prefix_from(Some("off"), Some("/ecs/".into())).unwrap(),
+            None
+        );
+        assert_eq!(log_prefix_from(None, None).unwrap(), None);
+        assert_eq!(
+            log_prefix_from(Some("on"), Some("/ecs/".into())).unwrap(),
+            Some("/ecs/".to_string())
+        );
+        assert!(log_prefix_from(Some("on"), None).is_err());
+        assert!(log_prefix_from(Some("yes"), Some("/ecs/".into())).is_err());
+    }
+
+    #[test]
+    fn a_bare_slash_prefix_is_refused() {
+        for bad in ["/", "//"] {
+            assert!(
+                log_prefix_from(Some("on"), Some(bad.into())).is_err(),
+                "{bad}"
+            );
+            assert!(log_prefix_from(None, Some(bad.into())).is_err(), "{bad}");
+        }
     }
 }

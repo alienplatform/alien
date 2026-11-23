@@ -1319,7 +1319,9 @@ mod tests {
             reads.finished(id, true);
         }
         // The next pass sees the same stopped containers and reads none of them again.
-        assert!(reads.to_start(&listed, &ids(&["running"]), 1_008).is_empty());
+        assert!(reads
+            .to_start(&listed, &ids(&["running"]), 1_008)
+            .is_empty());
 
         // And what the read yields is stored once: a second read of the same
         // log (a retry after a failure) skips what the first one stored.
@@ -1337,14 +1339,20 @@ mod tests {
         let none = HashSet::new();
         let mut reads = FinalReads::default();
         // First pass: the queue is full and the read gives up.
-        assert_eq!(reads.to_start(&listed, &none, 990), vec!["gone".to_string()]);
+        assert_eq!(
+            reads.to_start(&listed, &none, 990),
+            vec!["gone".to_string()]
+        );
         reads.started("gone");
         // While it runs it is not started a second time.
         assert!(reads.to_start(&listed, &none, 990).is_empty());
         reads.finished("gone", false);
         // A failed read leaves the container eligible for a later pass, even
         // when it was never followed and the next pass starts after its creation.
-        assert_eq!(reads.to_start(&listed, &none, 1_008), vec!["gone".to_string()]);
+        assert_eq!(
+            reads.to_start(&listed, &none, 1_008),
+            vec!["gone".to_string()]
+        );
         // Once it is gone from the stopped list the retry is dropped.
         let mut gone = FinalReads::default();
         gone.finished("gone", false);

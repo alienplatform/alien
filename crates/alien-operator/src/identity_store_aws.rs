@@ -15,8 +15,8 @@
 //!
 //! A crash between the two leaves an unread version with a private label that
 //! holds a copy of the key. Each start removes every private label it finds
-//! (`sweep_pending_labels`); a write in progress in another task at that moment
-//! fails its promotion and re-reads, which the store already handles.
+//! (`sweep_pending_labels`) that is older than ten minutes; a write in progress in another task
+//! is left alone: its label carries the time it was made.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -42,6 +42,8 @@ const CURRENT: &str = "AWSCURRENT";
 /// The version a secret with no current version is read at. Real version ids are UUIDs.
 const NO_VERSION: &str = "none";
 const PENDING_PREFIX: &str = "operator-pending-";
+/// How long a private label is left alone before a start removes it.
+const PENDING_GRACE_MS: i64 = 10 * 60 * 1000;
 
 pub(crate) struct AwsSecret {
     client: Arc<dyn SecretsManagerApi>,
@@ -97,11 +99,9 @@ impl AwsSecret {
         else {
             return;
         };
+        let now = now_ms();
         for (version, stages) in described.version_ids_to_stages.unwrap_or_default() {
-            for stage in stages
-                .iter()
-                .filter(|stage| stage.starts_with(PENDING_PREFIX))
-            {
+            for stage in stages.iter().filter(|stage| label_is_abandoned(stage, now)) {
                 self.drop_label(stage, &version).await;
             }
         }
@@ -145,7 +145,7 @@ impl AwsSecret {
     }
 
     fn private_stage() -> String {
-        format!("{PENDING_PREFIX}{}", Uuid::new_v4().simple())
+        format!("{PENDING_PREFIX}{}-{}", now_ms(), Uuid::new_v4().simple())
     }
 
     /// Drop a private label so its version is no longer kept. Best effort.
@@ -159,6 +159,29 @@ impl AwsSecret {
                 move_to_version_id: None,
             })
             .await;
+    }
+}
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+/// A private label is abandoned when its write cannot still be running: older
+/// than `PENDING_GRACE_MS`, or without a readable time (left by an older
+/// release, which wrote none). A write takes seconds, so a label this young
+/// belongs to a task that is writing right now (a rolling deployment has the old
+/// and the new task running together); stripping it would leave the new version
+/// without a label, which Secrets Manager may delete before it is promoted.
+fn label_is_abandoned(stage: &str, now_ms: i64) -> bool {
+    let Some(rest) = stage.strip_prefix(PENDING_PREFIX) else {
+        return false;
+    };
+    match rest
+        .split_once('-')
+        .and_then(|(ms, _)| ms.parse::<i64>().ok())
+    {
+        Some(created) => now_ms.saturating_sub(created) > PENDING_GRACE_MS,
+        None => true,
     }
 }
 
@@ -747,7 +770,10 @@ mod tests {
             secret_id: "secret".into(),
             secret_binary: None,
             secret_string: Some("{\"key\":\"copy\"}".into()),
-            version_stages: Some(vec![format!("{PENDING_PREFIX}dead")]),
+            version_stages: Some(vec![format!(
+                "{PENDING_PREFIX}{}-dead",
+                now_ms() - PENDING_GRACE_MS - 1
+            )]),
             client_request_token: Some("0".repeat(32)),
         })
         .await
@@ -757,6 +783,30 @@ mod tests {
         assert!(fake.private_labels().is_empty());
         // What is read is unchanged.
         assert!(backend.get().await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_start_leaves_the_label_of_a_write_in_progress_in_another_task() {
+        let fake = FakeSecretsManager::with_value("{}");
+        let backend = AwsSecret::new(fake.clone(), "secret");
+        // Another task (old release of a rolling deployment) is between its two calls.
+        let live = AwsSecret::private_stage();
+        let old = format!("{PENDING_PREFIX}{}-dead", now_ms() - PENDING_GRACE_MS - 1);
+        for (label, token) in [(live.clone(), "1"), (old, "2")] {
+            fake.put_secret_value(PutSecretValueRequest {
+                secret_id: "secret".into(),
+                secret_binary: None,
+                secret_string: Some("{\"key\":\"copy\"}".into()),
+                version_stages: Some(vec![label]),
+                client_request_token: Some(token.repeat(32)),
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(fake.private_labels().len(), 2);
+        backend.sweep_pending_labels().await;
+        assert_eq!(fake.private_labels().len(), 1);
+        assert!(fake.private_labels()[0].contains(&live));
     }
 
     #[tokio::test]
