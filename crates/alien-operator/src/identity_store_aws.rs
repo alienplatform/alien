@@ -591,6 +591,7 @@ mod tests {
             pending_started_at: None,
             expires_at: Utc::now() + chrono::Duration::hours(20),
             enrolled_code_hash: None,
+            collects_host: false,
             pending_enrollment: None,
             previous: None,
             store_version: Default::default(),
