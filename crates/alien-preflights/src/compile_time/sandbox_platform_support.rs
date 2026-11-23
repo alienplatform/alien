@@ -158,7 +158,13 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                     // A capability refusal names the platform and the capability, which is the
                     // right shape for the runtime caller but leaves a deployer with several
                     // sandboxes unable to tell which declaration to change.
-                    .map(|error| format!("Sandbox '{}': {error}", sandbox.id()))
+                    .map(|error| match error.error {
+                        // This message already names the sandbox.
+                        Some(alien_core::ErrorData::SandboxEgressModeRemoved { .. }) => {
+                            error.message
+                        }
+                        _ => format!("Sandbox '{}': {error}", sandbox.id()),
+                    })
             })
             .collect();
 
