@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use alien_permission_types::PermissionSet;
+use alien_permission_types::{AwsConditionValue, PermissionSet};
 
 use super::{catalog, invalid, sorted, types::*, Result};
 
@@ -191,6 +191,57 @@ fn valid_queue_arn(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
+/// `arn:<partition>:ecs:<region>:<account>:cluster/<name>`; returns the pieces
+/// the service and task ARNs are built from.
+fn parse_cluster_arn(value: &str) -> Option<(&str, &str, &str, &str)> {
+    let parts: Vec<_> = value.split(':').collect();
+    let ["arn", p, "ecs", region, account, resource] = parts.as_slice() else {
+        return None;
+    };
+    let name = resource.strip_prefix("cluster/")?;
+    let region_parts: Vec<_> = region.split('-').collect();
+    let valid_region = region_parts.len() >= 2
+        && region_parts.iter().all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        });
+    (partition(p)
+        && valid_region
+        && account.len() == 12
+        && account.bytes().all(|byte| byte.is_ascii_digit())
+        && !name.is_empty()
+        && name.len() <= 255
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')))
+    .then_some((*p, *region, *account, name))
+}
+
+/// Actions AWS cannot scope by resource: limited by the `ecs:cluster` key.
+const ECS_CONDITION_ACTIONS: &[&str] = &["ecs:ListServices", "ecs:ListTasks"];
+
+const ECS_PLACEHOLDER: &str = "arn:aws:ecs:*:*:*";
+
+/// What the catalog placeholder becomes for an ECS action, per resource type.
+fn ecs_ceiling(action: &str, cluster_arn: &str) -> Option<Vec<String>> {
+    let (partition, region, account, name) = parse_cluster_arn(cluster_arn)?;
+    let base = format!("arn:{partition}:ecs:{region}:{account}");
+    match action {
+        "ecs:DescribeClusters" => Some(vec![cluster_arn.to_string()]),
+        // No resource type (ListServices) or only a container-instance one
+        // (ListTasks): a grant on the cluster ARN would never match, so the
+        // cluster is enforced with the `ecs:cluster` condition instead.
+        "ecs:ListServices" | "ecs:ListTasks" => Some(vec!["*".to_string()]),
+        "ecs:DescribeServices" | "ecs:UpdateService" => {
+            Some(vec![format!("{base}:service/{name}/*")])
+        }
+        "ecs:DescribeTasks" | "ecs:StopTask" => Some(vec![format!("{base}:task/{name}/*")]),
+        _ => None,
+    }
+}
+
 pub fn compile(
     statements: &[AwsStatement],
     ceilings: &AwsResourceCeilings,
@@ -209,6 +260,11 @@ pub fn compile(
     ] {
         if let Some(entry) = entries.iter().find(|entry| !valid(entry)) {
             return invalid(format!("Installer-provided {name} entry '{entry}' must be an exact resource ARN without wildcards"), "installer-resource-ceiling", entry);
+        }
+    }
+    if let Some(entry) = &ceilings.ecs_cluster_arn {
+        if parse_cluster_arn(entry).is_none() {
+            return invalid(format!("Installer-provided ecsClusterArn entry '{entry}' must be an exact ECS cluster ARN without wildcards"), "installer-resource-ceiling", entry);
         }
     }
     let mut compiled = Vec::new();
@@ -250,6 +306,17 @@ pub fn compile(
                     ("sqs:GetQueueAttributes", "arn:aws:sqs:*:*:*") => {
                         Some(("sqsQueueArns", sorted(&ceilings.sqs_queue_arns)))
                     }
+                    (_, ECS_PLACEHOLDER) => {
+                        let Some(cluster) = &ceilings.ecs_cluster_arn else {
+                            return invalid(format!("AWS operation '{action}' requires the installer-provided ecsClusterArn"), action, resource);
+                        };
+                        match ecs_ceiling(action, cluster) {
+                            Some(resources) => Some(("ecsClusterArn", resources)),
+                            None => {
+                                return invalid(format!("AWS action '{action}' has no reviewed ECS resource ceiling"), action, resource);
+                            }
+                        }
+                    }
                     _ => None,
                 };
                 let resources = if let Some((name, resources)) = replaced {
@@ -264,9 +331,19 @@ pub fn compile(
                 } else {
                     vec![resource.clone()]
                 };
+                let mut condition = statement.condition.clone();
+                if resource == ECS_PLACEHOLDER && ECS_CONDITION_ACTIONS.contains(&action.as_str()) {
+                    let cluster = ceilings.ecs_cluster_arn.clone().unwrap_or_default();
+                    condition
+                        .get_or_insert_with(Default::default)
+                        .entry("ArnEquals".to_string())
+                        .or_default()
+                        .insert("ecs:cluster".to_string(), AwsConditionValue::String(cluster));
+                }
                 compiled.push(AwsStatement {
                     actions: vec![action.clone()],
                     resources,
+                    condition,
                     ..statement.clone()
                 });
             }

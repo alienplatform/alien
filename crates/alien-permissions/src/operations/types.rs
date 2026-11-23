@@ -125,6 +125,10 @@ pub struct CatalogPlugin {
 pub struct AwsResourceCeilings {
     pub s3_bucket_arns: Vec<String>,
     pub sqs_queue_arns: Vec<String>,
+    /// The installer's own ECS cluster. Cluster, service and task actions
+    /// declared on the catalog placeholder are limited to it.
+    #[serde(default)]
+    pub ecs_cluster_arn: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

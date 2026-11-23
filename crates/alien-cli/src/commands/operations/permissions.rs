@@ -92,6 +92,7 @@ pub fn permissions_task(
                     &AwsResourceCeilings {
                         s3_bucket_arns: options.s3_bucket_arn.clone(),
                         sqs_queue_arns: options.sqs_queue_arn.clone(),
+                        ecs_cluster_arn: None,
                     },
                 )
                 .map_err(|error| {
