@@ -712,11 +712,26 @@ async fn acquire_leases(
         Ok(deadline) => deadline,
         Err(error) => return error.into_response(),
     };
-    match state
-        .command_server
-        .acquire_lease_with_deadline(&lease_request.deployment_id, &lease_request, deadline)
-        .await
-    {
+    // A credential bound to the target (a receive capability) cannot name a
+    // target that does not exist; any other may send any id, so a wait for a
+    // target the deployment lacks is refused.
+    let lease =
+        if crate::auth::command_capability::is_bound_to_target(&subject, &lease_request.target) {
+            state
+                .command_server
+                .acquire_lease_for_bound_target(
+                    &lease_request.deployment_id,
+                    &lease_request,
+                    deadline,
+                )
+                .await
+        } else {
+            state
+                .command_server
+                .acquire_lease_with_deadline(&lease_request.deployment_id, &lease_request, deadline)
+                .await
+        };
+    match lease {
         Ok(response) => Json(response).into_response(),
         Err(e) => e.into_response(),
     }
@@ -1250,6 +1265,7 @@ mod tests {
                     ),
                     max_leases: 1,
                     lease_seconds: 60,
+                    wait_seconds: 0,
                 },
             )
             .await

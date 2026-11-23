@@ -25,6 +25,22 @@ pub struct ManagerConfig {
     pub heartbeat_interval_secs: u64,
     /// Self-heartbeat interval in seconds (platform mode).
     pub self_heartbeat_interval_secs: u64,
+    /// How often a lease request that waits for a command checks the target's
+    /// wake key, in seconds (minimum 1; default 1). A command queued through
+    /// another manager replica is picked up within this interval; one queued
+    /// through the same process is picked up at once.
+    pub lease_wait_probe_interval_secs: u64,
+    /// Most lease requests this process holds open while they wait for a
+    /// command (default 5,000). Over the limit a request is answered at once.
+    pub max_open_lease_waits: usize,
+    /// Most lease requests this process holds open for one (deployment,
+    /// target) while they wait (default 8). Over the limit a request is
+    /// answered at once.
+    pub max_open_lease_waits_per_target: usize,
+    /// Most lease requests this process holds open for one deployment, over
+    /// all its targets, while they wait (default 64). Over the limit a request
+    /// is answered at once.
+    pub max_open_lease_waits_per_deployment: usize,
     /// OTLP endpoint for telemetry forwarding.
     pub otlp_endpoint: Option<String>,
     /// Public base URL for this manager instance (used for command response URLs, OAuth callbacks, etc.).
@@ -147,6 +163,10 @@ impl Default for ManagerConfig {
             deployment_interval_secs: 3,
             heartbeat_interval_secs: 60,
             self_heartbeat_interval_secs: 60,
+            lease_wait_probe_interval_secs: 1,
+            max_open_lease_waits: 5_000,
+            max_open_lease_waits_per_target: 8,
+            max_open_lease_waits_per_deployment: 64,
             otlp_endpoint: None,
             base_url: None,
             releases_url: None,

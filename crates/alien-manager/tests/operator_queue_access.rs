@@ -1264,3 +1264,81 @@ async fn only_an_operators_daily_key_is_issued_the_operations_credential() {
     let (status, _) = exchange(&fixture, &fixture.dep_a, purpose, daily(successor)).await;
     assert_eq!(status, StatusCode::OK);
 }
+
+fn waiting_lease_body(deployment: &str, target: &CommandTarget) -> Value {
+    let mut body = lease_body(deployment, target);
+    body["waitSeconds"] = json!(25);
+    body
+}
+
+#[tokio::test]
+async fn a_caller_refused_to_lease_is_refused_before_any_wait() {
+    for index in 0..case_count().await {
+        let (fixture, name, bearer, allowed) = case(index).await;
+        if allowed
+            || name == "operatorOperations, other workspace"
+            || name == "operatorOperations, other project"
+        {
+            continue;
+        }
+        let router = fixture.router();
+        let started = std::time::Instant::now();
+        let (status, body) = send(
+            &router,
+            &bearer,
+            "POST",
+            "/v1/commands/leases",
+            waiting_lease_body(&fixture.dep_a, &operator_queue()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{name}: {body}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{name} waited before being refused"
+        );
+        assert_eq!(fixture.state.command_server.open_lease_waits(), 0, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn an_allowed_caller_waiting_for_the_operator_queue_is_leased_when_a_command_is_queued() {
+    for index in 0..case_count().await {
+        let (fixture, name, bearer, allowed) = case(index).await;
+        if !allowed {
+            continue;
+        }
+        let router = fixture.router();
+        let dep = fixture.dep_a.clone();
+        let waiting = tokio::spawn({
+            let (router, bearer) = (router.clone(), bearer.clone());
+            async move {
+                send(
+                    &router,
+                    &bearer,
+                    "POST",
+                    "/v1/commands/leases",
+                    waiting_lease_body(&dep, &operator_queue()),
+                )
+                .await
+            }
+        });
+        let opened = std::time::Instant::now();
+        while fixture.state.command_server.open_lease_waits() < 1 {
+            assert!(
+                opened.elapsed() < std::time::Duration::from_secs(10),
+                "{name} should be waiting"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let queued_at = std::time::Instant::now();
+        let command_id = fixture.queue_command(&fixture.dep_a).await;
+        let (status, body) = waiting.await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{name}: {body}");
+        assert_eq!(body["leases"][0]["commandId"], json!(command_id), "{name}");
+        assert!(
+            queued_at.elapsed() < std::time::Duration::from_secs(1),
+            "{name} was leased after {:?}",
+            queued_at.elapsed()
+        );
+    }
+}

@@ -15,7 +15,8 @@ export const LeaseRequestSchema = z.object({
 "maxLeases": z.optional(z.int().min(0).describe("Maximum number of leases to acquire")),
 get "target"(){
                 return CommandTargetSchema.describe("Identifies the specific resource a command is addressed to.")
-              }
+              },
+"waitSeconds": z.optional(z.int().min(0).describe("How long the server may hold this request open when no command is\nqueued yet, in seconds (0 to 25, default 0). A waiting request is\nanswered as soon as a command for the target is queued. The server\ncaps the value at 25 and at the caller's credential lifetime; a server\nthat does not support waiting answers at once."))
     }).describe("Request for acquiring leases")
 
 export type LeaseRequest = z.infer<typeof LeaseRequestSchema>

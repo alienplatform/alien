@@ -1249,14 +1249,22 @@ async fn finalize(
     use alien_commands::server::CommandServer;
 
     // --- CommandServer ---
-    let command_server: Arc<CommandServer> = Arc::new(CommandServer::new(
-        server_bindings.kv.clone(),
-        server_bindings.command_storage.clone(),
-        server_bindings.command_dispatcher.clone(),
-        server_bindings.command_registry.clone(),
-        config.commands_base_url(),
-        config.response_signing_key.clone(),
-    ));
+    let command_server: Arc<CommandServer> = Arc::new(
+        CommandServer::new(
+            server_bindings.kv.clone(),
+            server_bindings.command_storage.clone(),
+            server_bindings.command_dispatcher.clone(),
+            server_bindings.command_registry.clone(),
+            config.commands_base_url(),
+            config.response_signing_key.clone(),
+        )
+        .with_lease_wait_probe_interval(std::time::Duration::from_secs(
+            config.lease_wait_probe_interval_secs.max(1),
+        ))
+        .with_max_open_lease_waits(config.max_open_lease_waits)
+        .with_max_open_lease_waits_per_target(config.max_open_lease_waits_per_target)
+        .with_max_open_lease_waits_per_deployment(config.max_open_lease_waits_per_deployment),
+    );
 
     // --- AppState ---
     let app_state = crate::routes::AppState {

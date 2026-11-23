@@ -523,19 +523,26 @@ impl LeaseClient {
         request: &LeaseRequest,
         token: &str,
     ) -> Result<Vec<LeaseInfo>> {
-        let response = self
+        let mut builder = self
             .client
             .post(self.endpoint.clone())
             .header("Authorization", format!("Bearer {token}"))
-            .json(request)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::HttpOperationFailed {
-                message: "Failed to acquire leases".to_string(),
-                method: Some("POST".to_string()),
-                url: Some(self.endpoint.to_string()),
-            })?;
+            .json(request);
+        if let Some(timeout) = crate::types::lease_request_timeout(request.wait_seconds) {
+            // The manager may hold the request open for the wait; the client's
+            // own limit must outlast it.
+            builder = builder.timeout(timeout);
+        }
+        let response =
+            builder
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpOperationFailed {
+                    message: "Failed to acquire leases".to_string(),
+                    method: Some("POST".to_string()),
+                    url: Some(self.endpoint.to_string()),
+                })?;
 
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(AlienError::new(ErrorData::CommandReceiverUnauthorized {
@@ -1061,6 +1068,7 @@ mod tests {
             ),
             max_leases: 1,
             lease_seconds: 60,
+            wait_seconds: 0,
         }
     }
 

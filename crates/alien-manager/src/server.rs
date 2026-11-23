@@ -641,4 +641,59 @@ mod tests {
             "expected EOF from the server closing the idle connection"
         );
     }
+
+    /// A request the handler holds open (a lease request that waits for a
+    /// command) is not an idle connection: it outlives the idle timeout. When
+    /// the client disconnects, the handler is dropped, so its slot is released.
+    #[tokio::test]
+    async fn a_held_request_outlives_the_idle_timeout_and_is_dropped_on_disconnect() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Slot(Arc<AtomicUsize>);
+        impl Drop for Slot {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+
+        let open = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let router = Router::new().route(
+            "/hold",
+            get({
+                let open = open.clone();
+                move || {
+                    let open = open.clone();
+                    async move {
+                        open.fetch_add(1, Ordering::SeqCst);
+                        let _slot = Slot(open);
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        "late"
+                    }
+                }
+            }),
+        );
+        let idle_timeout = Duration::from_millis(300);
+        tokio::spawn(serve(listener, router, idle_timeout));
+
+        let mut stream = TcpStream::connect(addr).await.expect("connect");
+        stream
+            .write_all(b"GET /hold HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .expect("write");
+        // Several idle timeouts later the held request is still open.
+        tokio::time::sleep(idle_timeout * 4).await;
+        assert_eq!(open.load(Ordering::SeqCst), 1, "closed as if idle");
+
+        drop(stream);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while open.load(Ordering::SeqCst) != 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the held request stayed open after the client left"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
 }
