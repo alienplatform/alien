@@ -1000,55 +1000,75 @@ fn grants_workload_patch(role: &YamlValue) -> BTreeSet<String> {
         .collect()
 }
 
-/// Resources the chart's grant lets the Operator `patch` in the `apps` group. The grant is a
-/// Role or ClusterRole run as a `post-install,post-upgrade,post-rollback` hook; no role of the
-/// release itself may carry it, and a `pre-delete` hook of the same name removes it again.
+/// Resources the chart's grant lets the Operator `patch` in the `apps` group. The rule is in a
+/// Role or ClusterRole of the release (inert alone, and removed by a rollback to a chart without
+/// it); it reaches the Operator only through a binding run as a `post-install,post-upgrade,
+/// post-rollback` hook, and a `pre-delete` hook of the same name removes that binding again. No
+/// binding of the release itself may name such a role.
 fn patchable_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
-    let roles: Vec<_> = docs
-        .iter()
-        .filter(|doc| doc["kind"] == "Role" || doc["kind"] == "ClusterRole")
-        .collect();
-    let mut granted = BTreeSet::new();
-    for role in &roles {
-        let events = hook_events(role);
-        let patch = grants_workload_patch(role);
-        if events.is_empty() {
-            assert!(patch.is_empty(), "a release role carries a workload patch");
-        } else if events.contains(&"post-install".to_owned()) {
-            assert_eq!(
-                events,
-                ["post-install", "post-upgrade", "post-rollback"],
-                "the grant runs after the release objects are applied"
-            );
-            assert_eq!(
-                role["metadata"]["annotations"]["helm.sh/hook-delete-policy"],
-                "before-hook-creation"
-            );
-            granted.extend(patch);
-        } else {
-            assert_eq!(events, ["pre-delete"]);
-            assert!(role["rules"].as_sequence().unwrap().is_empty());
-        }
+    let is_role = |doc: &YamlValue| doc["kind"] == "Role" || doc["kind"] == "ClusterRole";
+    let is_binding =
+        |doc: &YamlValue| doc["kind"] == "RoleBinding" || doc["kind"] == "ClusterRoleBinding";
+    for role in docs.iter().filter(|doc| is_role(doc)) {
+        assert!(hook_events(role).is_empty(), "the patch rule is not a hook");
     }
-    // Each kind of hook object comes in the pair that installs and removes it, with its binding.
-    let named = |kind: &str, event: &str| -> BTreeSet<String> {
+    let hook_bindings = |event: &str| -> Vec<&YamlValue> {
         docs.iter()
-            .filter(|doc| doc["kind"] == kind && hook_events(doc).iter().any(|e| e == event))
+            .filter(|doc| is_binding(doc) && hook_events(doc).iter().any(|e| e == event))
+            .collect()
+    };
+    let install = hook_bindings("post-install");
+    let delete = hook_bindings("pre-delete");
+    for binding in &install {
+        assert_eq!(
+            hook_events(binding),
+            ["post-install", "post-upgrade", "post-rollback"],
+            "the grant is bound after the release objects are applied"
+        );
+        assert_eq!(
+            binding["metadata"]["annotations"]["helm.sh/hook-delete-policy"],
+            "before-hook-creation"
+        );
+    }
+    let names = |bindings: &[&YamlValue]| -> BTreeSet<String> {
+        bindings
+            .iter()
             .map(|doc| doc["metadata"]["name"].as_str().unwrap().to_owned())
             .collect()
     };
-    for (role, binding) in [
-        ("Role", "RoleBinding"),
-        ("ClusterRole", "ClusterRoleBinding"),
-    ] {
-        for event in ["post-install", "pre-delete"] {
-            assert_eq!(named(role, event), named(binding, event));
+    assert_eq!(
+        names(&install),
+        names(&delete),
+        "uninstall removes what the hook created"
+    );
+    let bound: BTreeSet<String> = install
+        .iter()
+        .map(|doc| doc["roleRef"]["name"].as_str().unwrap().to_owned())
+        .collect();
+    let mut granted = BTreeSet::new();
+    for role in docs.iter().filter(|doc| is_role(doc)) {
+        let patch = grants_workload_patch(role);
+        if patch.is_empty() {
+            continue;
         }
-        assert_eq!(
-            named(role, "post-install"),
-            named(role, "pre-delete"),
-            "uninstall removes what the hook created"
+        assert!(
+            bound.contains(role["metadata"]["name"].as_str().unwrap()),
+            "a release role with a workload patch has a hook binding"
         );
+        granted.extend(patch);
+    }
+    for binding in docs.iter().filter(|doc| is_binding(doc) && hook_events(doc).is_empty()) {
+        let role = docs.iter().find(|doc| {
+            is_role(doc)
+                && doc["kind"] == binding["roleRef"]["kind"]
+                && doc["metadata"]["name"] == binding["roleRef"]["name"]
+        });
+        if let Some(role) = role {
+            assert!(
+                grants_workload_patch(role).is_empty(),
+                "a release binding gives the Operator a workload patch"
+            );
+        }
     }
     granted
 }

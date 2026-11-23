@@ -3015,22 +3015,25 @@ fn restart_grants(
     RestartGrants(grants)
 }
 
-/// The objects of the workload `patch` grant: the admission policy and its
-/// binding (ordinary release objects), and the Role or ClusterRole carrying the
-/// `patch` rule with its binding, which are Helm hooks.
+/// The objects of the workload `patch` grant: the admission policy, its binding
+/// and the Role or ClusterRole carrying the `patch` rule (ordinary release
+/// objects), and the binding that gives the Operator that rule, a Helm hook.
 ///
-/// The rule is a hook so it can never exist without the policy:
+/// A Role grants nothing until it is bound, so the binding is what must never
+/// exist without the policy:
 /// - `post-install`, `post-upgrade` and `post-rollback` run only after every
 ///   release object, the policy included, has been applied. A release that
-///   fails earlier leaves no new rule.
+///   fails earlier creates no new binding.
 /// - Helm applies unknown kinds (the policy) after Role and ClusterRole, so
-///   inside the release the rule would exist for a moment before the policy.
-/// - `before-hook-creation` replaces the rule on each run: the rule is absent
+///   inside the release the binding would exist for a moment before the policy.
+/// - `before-hook-creation` replaces the binding on each run: the rule is absent
 ///   for an instant on an upgrade, never present without the policy.
+/// - The Role being a release object, a rollback to a chart that has none makes
+///   Helm remove it, and the binding left behind grants nothing.
 /// - Hook objects are not part of the release, so `helm uninstall` would leave
-///   them. A `pre-delete` hook of the same kind and name removes them before
-///   the policy is deleted: `before-hook-creation` deletes the stored object,
-///   the hook creates an empty rule that `hook-succeeded` deletes again.
+///   the binding. A `pre-delete` hook of the same kind and name removes it
+///   before the policy is deleted: `before-hook-creation` deletes the stored
+///   object, the hook recreates it and `hook-succeeded` deletes it again.
 ///
 /// Returns (release objects, hook objects).
 fn workload_restart_policy_docs(
@@ -3148,10 +3151,12 @@ fn workload_restart_policy_docs(
     );
     let install_hook = "  annotations:\n    helm.sh/hook: post-install,post-upgrade,post-rollback\n    helm.sh/hook-delete-policy: before-hook-creation\n";
     let delete_hook = "  annotations:\n    helm.sh/hook: pre-delete\n    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded\n";
+    // The Role is a release object: alone it grants nothing, and Helm removes
+    // it when a rollback goes to a chart that has none. Only the binding, which
+    // gives the Operator the rule, is a hook.
+    let role = format!("{}{rules}", object_metadata(role_kind, ""));
     let hooks = [
-        format!("{}{rules}", object_metadata(role_kind, install_hook)),
         format!("{}{subjects}", object_metadata(binding_kind, install_hook)),
-        format!("{}rules: []\n", object_metadata(role_kind, delete_hook)),
         format!("{}{subjects}", object_metadata(binding_kind, delete_hook)),
     ];
     let guard = |doc: String| {
@@ -3161,7 +3166,7 @@ fn workload_restart_policy_docs(
         )
     };
     (
-        [policy, binding].into_iter().map(guard).collect(),
+        [policy, binding, role].into_iter().map(guard).collect(),
         hooks.into_iter().map(guard).collect(),
     )
 }

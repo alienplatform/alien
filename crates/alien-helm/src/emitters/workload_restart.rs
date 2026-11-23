@@ -11,16 +11,19 @@
 //! annotation. The rule and the policy come from one decision in the
 //! generator and are rendered together or not at all.
 //!
-//! The policy and its binding are ordinary release objects. The `patch` rule
-//! is a separate Role or ClusterRole (and binding) run as Helm hooks after the
-//! release objects are applied (`post-install`, `post-upgrade`,
-//! `post-rollback`), and removed by a `pre-delete` hook before the policy is
-//! deleted. A failed release therefore leaves no rule newer than the policy.
+//! The policy, its binding and the Role or ClusterRole carrying the `patch`
+//! rule are ordinary release objects. The Role grants nothing alone; the
+//! binding that gives it to the Operator is a Helm hook run after the release
+//! objects are applied (`post-install`, `post-upgrade`, `post-rollback`), and
+//! removed by a `pre-delete` hook before the policy is deleted. A failed
+//! release therefore creates no binding newer than the policy, and a rollback
+//! to a chart from before this feature removes the Role (the binding left
+//! behind grants nothing).
 //! Limits: the API server needs a moment (measured on Kubernetes 1.31: about a
 //! quarter to half a second) to start enforcing a NEW policy, during which the
 //! rule admits unlimited patches; a cluster that serves the policy API with the
-//! admission plugin disabled, a policy deleted by hand, and a rollback to a
-//! chart from before this feature leave the rule unconfined.
+//! admission plugin disabled and a policy deleted by hand leave the rule
+//! unconfined.
 //!
 //! A product chart's Operator also manages dynamic workloads in the release
 //! namespace (its Role already allows create/update/delete of Deployments
