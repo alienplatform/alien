@@ -1450,6 +1450,7 @@ mod tests {
             docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
                 .unwrap(),
             state_dir: PathBuf::new(),
+            docker_host: String::new(),
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.to_string(),
