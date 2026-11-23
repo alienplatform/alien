@@ -10,6 +10,9 @@
 
 use std::{collections::HashMap, process::Stdio, sync::Arc};
 
+use crate::telemetry_relay::{
+    RelayConfig, RelayTarget, TelemetryRelay, ENV_METRICS_ENDPOINT, ENV_TRACES_ENDPOINT,
+};
 use alien_bindings::BindingsProvider;
 use alien_core::{
     ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME, ENV_ALIEN_DEPLOYMENT_ID,
@@ -203,7 +206,7 @@ pub async fn run(
         None
     };
 
-    let application_startup: Result<(Child, Option<CommandPushConfig>)> = async {
+    let application_startup: Result<(Child, Option<CommandPushConfig>, Option<TelemetryRelay>)> = async {
         // 2. Load user secrets from vault if a secrets list is present.
         let secrets = if let Some(ref provider) = bindings_provider {
             let process_env = std::env::vars().collect::<HashMap<_, _>>();
@@ -252,7 +255,7 @@ pub async fn run(
             .clone()
             .with_runtime_secrets(&runtime_secrets);
         if let Some(otlp_config) = log_exporter.to_otlp_config().filter(|_| export_logs) {
-            if let Some(credentials) = runtime_identity {
+            if let Some(credentials) = runtime_identity.clone() {
                 init_otlp_logging_with_identity(otlp_config, credentials)?;
             } else {
                 init_otlp_logging_from_config(otlp_config)?;
@@ -260,12 +263,20 @@ pub async fn run(
         }
 
         let command_push = command_push_config(&config, &secrets)?;
-        let child = start_application(&config, &secrets, log_exporter).await?;
-        Ok((child, command_push))
+        let (telemetry_env, telemetry_relay) = start_telemetry_relay(
+            &identity_env,
+            &runtime_secrets,
+            runtime_identity,
+            export_logs,
+        )
+        .await;
+        let child = start_application(&config, &secrets, log_exporter, &telemetry_env).await?;
+        Ok((child, command_push, telemetry_relay))
     }
     .await;
 
-    let (mut child, command_push) = match application_startup {
+    // The relay stops when this guard drops at the end of `run`.
+    let (mut child, command_push, _telemetry_relay) = match application_startup {
         Ok(started) => started,
         Err(error) => {
             if let Some(transport) = prestarted_transport {
@@ -639,6 +650,7 @@ async fn start_application(
     config: &RuntimeConfig,
     secrets: &HashMap<String, String>,
     log_exporter: crate::config::LogExporter,
+    telemetry_env: &[(&'static str, String)],
 ) -> Result<Child> {
     if config.command.is_empty() {
         return Err(AlienError::new(ErrorData::ConfigurationInvalid {
@@ -715,6 +727,9 @@ async fn start_application(
     // bindings selected by this runtime process. Apply these last so deployment
     // env or secrets cannot leave the child with a stale runtime contract.
     configure_application_runtime_env(&mut cmd, config);
+    for (key, value) in telemetry_env {
+        cmd.env(key, value);
+    }
 
     // Always pipe stdout/stderr for telemetry capture
     cmd.kill_on_drop(true);
@@ -750,6 +765,67 @@ async fn start_application(
     }
 
     Ok(child)
+}
+
+/// Starts the loopback relay for the application's metrics and traces and
+/// returns the endpoint variables that point the application at it, with the
+/// relay, which stops when dropped. Returns nothing, and leaves the
+/// application's variables alone, when there is nothing to relay or the relay
+/// cannot start: telemetry never stops the application from running.
+pub(crate) async fn start_telemetry_relay(
+    env: &HashMap<String, String>,
+    runtime_secrets: &HashMap<String, String>,
+    credentials: Option<Arc<alien_client_core::runtime_credentials::RuntimeCredentials>>,
+    export_logs: bool,
+) -> (Vec<(&'static str, String)>, Option<TelemetryRelay>) {
+    if !export_logs || crate::config::runtime_otlp_disabled(env) {
+        return (Vec::new(), None);
+    }
+    // Static headers: the shared header, overridden by the signal's own
+    // header when the deployment has one. Both may come from the runtime-only
+    // secrets; neither is passed to the application.
+    let headers_for = |signal_headers: &str| {
+        let mut headers = crate::config::otlp_headers_from_env_vars(env);
+        headers.extend(crate::config::otlp_headers_from_env_vars(runtime_secrets));
+        for source in [env, runtime_secrets] {
+            if let Some(value) = source.get(signal_headers) {
+                let only =
+                    HashMap::from([("OTEL_EXPORTER_OTLP_HEADERS".to_string(), value.clone())]);
+                headers.extend(crate::config::otlp_headers_from_env_vars(&only));
+            }
+        }
+        headers
+    };
+    let target = |endpoint_var: &str, headers_var: &str| {
+        env.get(endpoint_var).map(|endpoint| RelayTarget {
+            endpoint: endpoint.clone(),
+            headers: headers_for(headers_var),
+        })
+    };
+    let config = RelayConfig {
+        metrics: target(ENV_METRICS_ENDPOINT, "OTEL_EXPORTER_OTLP_METRICS_HEADERS"),
+        traces: target(ENV_TRACES_ENDPOINT, "OTEL_EXPORTER_OTLP_TRACES_HEADERS"),
+    };
+    if config.metrics.is_none() && config.traces.is_none() {
+        return (Vec::new(), None);
+    }
+    let (relays_metrics, relays_traces) = (config.metrics.is_some(), config.traces.is_some());
+    match TelemetryRelay::start(config, credentials).await {
+        Ok(relay) => {
+            let mut overrides = Vec::new();
+            if relays_metrics {
+                overrides.push((ENV_METRICS_ENDPOINT, relay.url("/v1/metrics")));
+            }
+            if relays_traces {
+                overrides.push((ENV_TRACES_ENDPOINT, relay.url("/v1/traces")));
+            }
+            (overrides, Some(relay))
+        }
+        Err(error) => {
+            warn!(error = %error, "Telemetry relay did not start; metrics and traces are not relayed");
+            (Vec::new(), None)
+        }
+    }
 }
 
 fn runtime_only_env(name: &str) -> bool {

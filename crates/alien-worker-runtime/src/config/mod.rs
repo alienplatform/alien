@@ -269,7 +269,7 @@ impl LogExporter {
     }
 }
 
-fn runtime_otlp_disabled(env_vars: &HashMap<String, String>) -> bool {
+pub(crate) fn runtime_otlp_disabled(env_vars: &HashMap<String, String>) -> bool {
     env_vars
         .get(ENV_ALIEN_RUNTIME_SEND_OTLP)
         .map(|value| {
@@ -281,7 +281,9 @@ fn runtime_otlp_disabled(env_vars: &HashMap<String, String>) -> bool {
         .unwrap_or(false)
 }
 
-fn otlp_headers_from_env_vars(env_vars: &HashMap<String, String>) -> HashMap<String, String> {
+pub(crate) fn otlp_headers_from_env_vars(
+    env_vars: &HashMap<String, String>,
+) -> HashMap<String, String> {
     let mut headers = HashMap::new();
 
     if let Some(auth_header) = env_vars.get("OTEL_EXPORTER_OTLP_HEADERS_AUTHORIZATION") {

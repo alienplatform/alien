@@ -331,7 +331,7 @@ pub struct OtlpConfig {
     /// Full OTLP metrics endpoint URL (optional).
     /// When set, the worker runtime exports its own VM/container orchestration metrics here.
     /// Example: "https://api.axiom.co/v1/metrics"
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_endpoint: Option<String>,
     /// Auth header value for the metrics endpoint in "key=value,..." format (optional).
     ///
@@ -340,8 +340,18 @@ pub struct OtlpConfig {
     /// this value is used exclusively for metrics.
     ///
     /// Example: "authorization=Bearer <token>,x-axiom-dataset=<metrics-dataset>"
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_auth_header: Option<String>,
+    /// Full OTLP traces endpoint URL (optional).
+    /// When set, workloads export OpenTelemetry traces here.
+    /// Example: "https://<manager-host>/v1/traces"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traces_endpoint: Option<String>,
+    /// Auth header value for the traces endpoint in "key=value,..." format (optional).
+    ///
+    /// When absent, `logs_auth_header` is reused for traces, the same way as for metrics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traces_auth_header: Option<String>,
     /// Resource attributes attached to every OTLP signal emitted for this deployment.
     ///
     /// Platform managers use this for stable identity such as `alien.workspace_id`,
@@ -350,6 +360,55 @@ pub struct OtlpConfig {
     /// the runtime/exporter.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub resource_attributes: HashMap<String, String>,
+}
+
+#[cfg(test)]
+mod otlp_config_tests {
+    use super::*;
+
+    /// A config from before traces existed parses, with no traces fields.
+    #[test]
+    fn config_without_traces_fields_still_parses() {
+        let config: OtlpConfig = serde_json::from_value(serde_json::json!({
+            "logsEndpoint": "https://manager.test/v1/logs",
+            "logsAuthHeader": "authorization=Bearer t",
+            "metricsEndpoint": "https://manager.test/v1/metrics",
+        }))
+        .unwrap();
+        assert_eq!(config.traces_endpoint, None);
+        assert_eq!(config.traces_auth_header, None);
+        assert_eq!(
+            config.metrics_endpoint.as_deref(),
+            Some("https://manager.test/v1/metrics")
+        );
+    }
+
+    /// A config without traces serializes without the new keys, so an older
+    /// reader sees exactly what it always saw; with traces set, an older
+    /// reader (which ignores unknown fields) still reads the log fields.
+    #[test]
+    fn traces_fields_stay_off_the_wire_when_unset_and_round_trip_when_set() {
+        let mut config = OtlpConfig {
+            logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            logs_auth_header: "authorization=Bearer t".to_string(),
+            metrics_endpoint: None,
+            metrics_auth_header: None,
+            traces_endpoint: None,
+            traces_auth_header: None,
+            resource_attributes: HashMap::new(),
+        };
+        let json = serde_json::to_value(&config).unwrap();
+        assert!(json.get("tracesEndpoint").is_none());
+        assert!(json.get("tracesAuthHeader").is_none());
+
+        config.traces_endpoint = Some("https://manager.test/v1/traces".to_string());
+        config.traces_auth_header = Some("authorization=Bearer t".to_string());
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["tracesEndpoint"], "https://manager.test/v1/traces");
+        assert_eq!(json["logsEndpoint"], "https://manager.test/v1/logs");
+        let back: OtlpConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(back, config);
+    }
 }
 
 #[cfg(test)]

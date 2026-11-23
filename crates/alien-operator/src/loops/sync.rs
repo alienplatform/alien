@@ -143,6 +143,13 @@ pub(super) fn sanitize_identity_config(
         {
             monitoring.metrics_auth_header = None;
         }
+        if monitoring
+            .traces_endpoint
+            .as_deref()
+            .is_some_and(same_origin)
+        {
+            monitoring.traces_auth_header = None;
+        }
     }
     Ok(())
 }

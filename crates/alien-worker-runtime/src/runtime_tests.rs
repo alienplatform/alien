@@ -448,9 +448,14 @@ async fn runtime_only_environment_subprocess_driver() {
         ]))
         .build();
 
-    let mut child = start_application(&config, &HashMap::new(), crate::config::LogExporter::None)
-        .await
-        .expect("start environment-observer application");
+    let mut child = start_application(
+        &config,
+        &HashMap::new(),
+        crate::config::LogExporter::None,
+        &[],
+    )
+    .await
+    .expect("start environment-observer application");
     let status = child.wait().await.expect("wait for observer application");
     assert!(status.success(), "environment observer rejected child env");
 }

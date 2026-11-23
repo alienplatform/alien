@@ -4518,6 +4518,8 @@ fn rebuilt_injected_config() -> DeploymentConfig {
         logs_auth_header: "authorization=Bearer deployment-token".to_string(),
         metrics_endpoint: Some("https://manager.example/v1/metrics".to_string()),
         metrics_auth_header: None,
+        traces_endpoint: None,
+        traces_auth_header: None,
         resource_attributes: HashMap::from([(
             "alien.deployment_id".to_string(),
             "dep_drift".to_string(),
@@ -5592,6 +5594,8 @@ fn monitoring_with_header(header: &str) -> alien_core::OtlpConfig {
         logs_auth_header: header.to_string(),
         metrics_endpoint: Some("https://manager.test/v1/metrics".to_string()),
         metrics_auth_header: None,
+        traces_endpoint: None,
+        traces_auth_header: None,
         resource_attributes: Default::default(),
     }
 }
