@@ -939,6 +939,16 @@ fn rendered_operator_chart(
     operations: &[KubernetesOperationPermissions],
     api_versions: &[&str],
 ) -> Vec<YamlValue> {
+    rendered_operator_chart_with_values(scope, permission, operations, api_versions, None)
+}
+
+fn rendered_operator_chart_with_values(
+    scope: OperatorScope,
+    permission: OperatorPermission,
+    operations: &[KubernetesOperationPermissions],
+    api_versions: &[&str],
+    values: Option<&str>,
+) -> Vec<YamlValue> {
     let template = generate_operator_manifest(OperatorManifestOptions {
         custom_operation_permissions: operations,
         manager_url: "https://manager.example.com",
@@ -970,7 +980,7 @@ fn rendered_operator_chart(
         ("templates/operator.yaml".to_string(), template),
     ]);
     let rendered =
-        test_utils::helm_template_with_api_versions(&files, None, "rel", "ns1", api_versions);
+        test_utils::helm_template_with_api_versions(&files, values, "rel", "ns1", api_versions);
     rendered.assert_ok("operator chart helm template");
     parse_manifest(&rendered.stdout)
 }
@@ -1003,7 +1013,8 @@ fn grants_workload_patch(role: &YamlValue) -> BTreeSet<String> {
 /// Resources the chart's grant lets the Operator `patch` in the `apps` group. The rule is in a
 /// Role or ClusterRole of the release (inert alone, and removed by a rollback to a chart without
 /// it); it reaches the Operator only through a binding run as a `post-install,post-upgrade,
-/// post-rollback` hook, and a `pre-delete` hook of the same name removes that binding again. No
+/// post-rollback` hook, and a `pre-install,pre-upgrade,pre-rollback,pre-delete` hook of the same
+/// name removes any earlier binding again. No
 /// binding of the release itself may name such a role.
 fn patchable_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
     let is_role = |doc: &YamlValue| doc["kind"] == "Role" || doc["kind"] == "ClusterRole";
@@ -1038,6 +1049,20 @@ fn patchable_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
         assert_eq!(
             binding["metadata"]["annotations"]["helm.sh/hook-delete-policy"],
             "before-hook-creation"
+        );
+    }
+    for binding in &delete {
+        // A binding an earlier revision left behind must be gone before the
+        // Role and the policy are applied again, so the copy also runs before
+        // every install, upgrade and rollback.
+        assert_eq!(
+            hook_events(binding),
+            ["pre-install", "pre-upgrade", "pre-rollback", "pre-delete"],
+            "no binding survives into the apply phase"
+        );
+        assert_eq!(
+            binding["metadata"]["annotations"]["helm.sh/hook-delete-policy"],
+            "before-hook-creation,hook-succeeded"
         );
     }
     let names = |bindings: &[&YamlValue]| -> BTreeSet<String> {
@@ -1177,6 +1202,35 @@ fn raw_manifests_never_render_a_workload_patch_or_policy() {
         let docs = parse_manifest(&manifest);
         assert!(patchable_workloads(&docs).is_empty());
         assert!(restricted_workloads(&docs).is_empty());
+    }
+}
+
+#[test]
+fn the_restart_probe_pulls_its_image_with_the_charts_pull_secrets() {
+    let operations = [restart_operation(&["deployments"], &["web"])];
+    let docs = rendered_operator_chart_with_values(
+        OperatorScope::Namespace,
+        OperatorPermission::Remediation,
+        &operations,
+        &[POLICY_API],
+        Some("runtime:\n  imagePullSecrets:\n    - name: regcred\n"),
+    );
+    for kind in ["Job", "Deployment"] {
+        let probes: Vec<_> = docs
+            .iter()
+            .filter(|doc| {
+                doc["kind"] == kind
+                    && doc["metadata"]["name"]
+                        .as_str()
+                        .is_some_and(|name| name.ends_with("-probe"))
+            })
+            .collect();
+        assert_eq!(probes.len(), 1, "one probe {kind}");
+        assert_eq!(
+            probes[0]["spec"]["template"]["spec"]["imagePullSecrets"][0]["name"],
+            "regcred",
+            "probe {kind}"
+        );
     }
 }
 

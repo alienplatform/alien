@@ -3161,7 +3161,12 @@ fn workload_restart_policy_docs(
         yaml_string(namespace)
     );
     let install_hook = "  annotations:\n    helm.sh/hook: post-install,post-upgrade,post-rollback\n    helm.sh/hook-delete-policy: before-hook-creation\n";
-    let delete_hook = "  annotations:\n    helm.sh/hook: pre-delete\n    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded\n";
+    // Also before every install, upgrade and rollback: a binding left behind by an
+    // earlier revision that rendered no policy (or whose Role is gone) would grant
+    // the patch rule the moment the Role and the policy are applied again, before
+    // the policy is enforced. Helm recreates and removes the copy first, so no
+    // binding survives into the apply phase; the install copy is created after.
+    let delete_hook = "  annotations:\n    helm.sh/hook: pre-install,pre-upgrade,pre-rollback,pre-delete\n    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded\n";
     // The Role is a release object: alone it grants nothing, and Helm removes
     // it when a rollback goes to a chart that has none. Only the binding, which
     // gives the Operator the rule, is a hook.
@@ -3229,13 +3234,13 @@ fn restart_probe_docs(
         "selector:\n    matchLabels:\n      alien.dev/restart-probe: \"{probe_name}\"\n"
     );
     let deployment = format!(
-        "{}spec:\n  replicas: 0\n  {selector}  template:\n    metadata:\n      labels:\n        alien.dev/restart-probe: \"{probe_name}\"\n    spec:\n      automountServiceAccountToken: false\n      securityContext:\n        {pod_settings}      containers:\n        - name: probe\n          image: {}\n          imagePullPolicy: IfNotPresent\n          securityContext:\n            {container_settings}",
+        "{}spec:\n  replicas: 0\n  {selector}  template:\n    metadata:\n      labels:\n        alien.dev/restart-probe: \"{probe_name}\"\n    spec:\n      automountServiceAccountToken: false\n      {{{{- with (($.Values.runtime | default dict).imagePullSecrets) }}}}\n      imagePullSecrets:\n        {{{{- toYaml . | nindent 8 }}}}\n      {{{{- end }}}}\n      securityContext:\n        {pod_settings}      containers:\n        - name: probe\n          image: {}\n          imagePullPolicy: IfNotPresent\n          securityContext:\n            {container_settings}",
         metadata("Deployment", "apps/v1", -30, all),
         yaml_string(image)
     );
     // The Job stays after a failure: its log says why.
     let job = format!(
-        "{}spec:\n  backoffLimit: 0\n  activeDeadlineSeconds: 180\n  ttlSecondsAfterFinished: 3600\n  template:\n    spec:\n      restartPolicy: Never\n      serviceAccountName: \"{probe_name}\"\n      securityContext:\n        {pod_settings}      containers:\n        - name: verify\n          image: {}\n          imagePullPolicy: IfNotPresent\n          args:\n            - verify-workload-patch-policy\n            - {}\n            - \"--deployment={probe_name}\"\n            - \"--policy={policy_name}\"\n          securityContext:\n            {container_settings}",
+        "{}spec:\n  backoffLimit: 0\n  activeDeadlineSeconds: 180\n  ttlSecondsAfterFinished: 3600\n  template:\n    spec:\n      restartPolicy: Never\n      serviceAccountName: \"{probe_name}\"\n      {{{{- with (($.Values.runtime | default dict).imagePullSecrets) }}}}\n      imagePullSecrets:\n        {{{{- toYaml . | nindent 8 }}}}\n      {{{{- end }}}}\n      securityContext:\n        {pod_settings}      containers:\n        - name: verify\n          image: {}\n          imagePullPolicy: IfNotPresent\n          args:\n            - verify-workload-patch-policy\n            - {}\n            - \"--deployment={probe_name}\"\n            - \"--policy={policy_name}\"\n          resources:\n            requests:\n              cpu: 10m\n              memory: 32Mi\n            limits:\n              memory: 128Mi\n          securityContext:\n            {container_settings}",
         metadata("Job", "batch/v1", -20, "before-hook-creation,hook-succeeded"),
         yaml_string(image),
         yaml_string(&format!("--namespace={namespace}"))
