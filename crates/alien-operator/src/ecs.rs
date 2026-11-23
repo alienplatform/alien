@@ -2,9 +2,12 @@
 //! services of one cluster as inventory.
 //!
 //! * Logs: `FilterLogEvents` polled per log group, capped in groups, events per
-//!   poll and bytes per batch. The saved position is the last event time plus
-//!   the ids of the events stored at that millisecond, committed to the local
-//!   database together with the batch, so a restart neither repeats nor skips.
+//!   poll and bytes per batch. The saved position (the newest event time, the
+//!   ids stored in the last 30 seconds, and the page of an unfinished read) is
+//!   committed to the local database together with the batch, so a restart of
+//!   the same task neither repeats nor skips. A replaced task has no saved
+//!   position: it reads back a bounded lookback and may send those lines again
+//!   (at least once, not exactly once).
 //! * Inventory: the services of the cluster named by `OPERATOR_ECS_CLUSTER`
 //!   (desired and running count, rollout state). Nothing is reported without it.
 
@@ -33,6 +36,8 @@ use crate::{
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// The pause while a group still has unread events.
+const BEHIND_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const INVENTORY_INTERVAL: Duration = Duration::from_secs(60);
 /// Most log groups followed; the rest are skipped with one warning.
 const MAX_LOG_GROUPS: usize = 20;
@@ -257,7 +262,7 @@ impl LogPosition {
         let mut fields = text.splitn(4, '|');
         let timestamp = fields.next()?;
         let seen = fields.next()?;
-        // A position saved before the cutoff existed has two fields.
+        // Two fields: no cutoff yet.
         let cutoff_ms = match fields.next() {
             Some(cutoff) => cutoff.parse().ok()?,
             None => 0,
@@ -573,6 +578,12 @@ pub(crate) async fn read_group(
                 chain.skip = 0;
                 continue;
             }
+            Err(error) if productive_pages > 0 => {
+                // What earlier pages of this poll found is kept and saved: a page
+                // that keeps failing (throttling) must not discard them every poll.
+                warn!(group, error = %error, "A later page of a log group could not be read; keeping what was read and retrying at the next poll");
+                break;
+            }
             Err(error) => {
                 return Err(error).context(ErrorData::PodLogReadFailed {
                     message: format!("could not read log group {group}"),
@@ -647,7 +658,7 @@ pub(crate) async fn poll_group(
     deployment_id: &str,
     group: &str,
     started_ms: i64,
-) -> Result<usize> {
+) -> Result<(usize, bool)> {
     let key = format!("ecs:logs:{group}");
     let position = state
         .db
@@ -659,8 +670,10 @@ pub(crate) async fn poll_group(
             ..Default::default()
         });
     let mut total = 0;
+    let mut more = false;
     for batch in read_group(logs, group, position).await? {
         total += batch.records.len();
+        more = batch.position.chain.is_some();
         let offset = PodLogOffset {
             timestamp: batch.position.encode(),
             ordinal: 0,
@@ -687,7 +700,7 @@ pub(crate) async fn poll_group(
             )
             .await?;
     }
-    Ok(total)
+    Ok((total, more))
 }
 
 async fn run_logs(
@@ -700,13 +713,17 @@ async fn run_logs(
 ) {
     // The first-ever start begins at its own start. A start that finds an
     // enrolled identity (a replaced task lost its saved positions) reads back a
-    // bounded lookback, de-duplicated by event id.
+    // bounded lookback; lines the previous task already sent can be sent again.
     let started_ms = initial_log_start_ms(
         Utc::now().timestamp_millis(),
         enrolled_at_start,
         log_lookback_ms,
     );
     loop {
+        // A group whose read is not finished (more events than one poll takes) is
+        // read again at once, so a group that logs faster than one poll's pages
+        // does not fall further behind for ever.
+        let mut behind = false;
         let result = async {
             let deployment_id = state.db.get_deployment_id().await?.ok_or_else(|| {
                 AlienError::new(ErrorData::PodLogReadFailed {
@@ -714,10 +731,9 @@ async fn run_logs(
                 })
             })?;
             for group in list_log_groups(logs.as_ref(), &prefix, own.as_deref()).await? {
-                if let Err(error) =
-                    poll_group(&state, logs.as_ref(), &deployment_id, &group, started_ms).await
-                {
-                    warn!(error = %error, "ECS log poll failed; will retry");
+                match poll_group(&state, logs.as_ref(), &deployment_id, &group, started_ms).await {
+                    Ok((_, more)) => behind |= more,
+                    Err(error) => warn!(error = %error, "ECS log poll failed; will retry"),
                 }
             }
             Result::Ok(())
@@ -728,7 +744,7 @@ async fn run_logs(
         }
         tokio::select! {
             _ = state.cancel.cancelled() => return,
-            _ = time::sleep(POLL_INTERVAL) => {}
+            _ = time::sleep(if behind { BEHIND_POLL_INTERVAL } else { POLL_INTERVAL }) => {}
         }
     }
 }
@@ -1440,6 +1456,43 @@ mod tests {
             "an event was delivered twice"
         );
         assert_eq!(unique.len(), total, "an event was never delivered");
+    }
+
+    /// Throttles every request after the first page of the group.
+    #[derive(Debug)]
+    struct ThrottledAfterFirstPage(BusyGroup, std::sync::atomic::AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl EcsApi for ThrottledAfterFirstPage {
+        async fn call(&self, op: &str, request: Value) -> alien_client_core::Result<Value> {
+            if self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 1 {
+                return Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::RateLimitExceeded {
+                        message: "Rate exceeded".to_string(),
+                    },
+                ));
+            }
+            self.0.call(op, request).await
+        }
+    }
+
+    /// A later page that keeps failing must not discard the pages read before
+    /// it: the group would otherwise make no progress at all under throttling.
+    #[tokio::test]
+    async fn an_error_on_a_later_page_keeps_what_earlier_pages_read() {
+        let group = ThrottledAfterFirstPage(
+            BusyGroup { total: 250 },
+            std::sync::atomic::AtomicUsize::new(0),
+        );
+        let position = LogPosition {
+            timestamp_ms: 1000,
+            ..Default::default()
+        };
+        let batches = read_group(&group, "g", position).await.unwrap();
+        let delivered: usize = batches.iter().map(|batch| batch.records.len()).sum();
+        assert_eq!(delivered, PAGE_LIMIT as usize, "the first page is kept");
+        let saved = &batches.last().unwrap().position;
+        assert!(saved.chain.is_some(), "the read goes on from the next page");
     }
 
     /// A group that refuses one saved page token, as a service does with an old one.
