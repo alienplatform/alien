@@ -21,7 +21,7 @@ wait_for() {
   done
   echo "timed out waiting for: $2" >&2; return 1
 }
-last_result() { events "$1" 1 | grep '"event":{"type":"result"' | tail -1 | sed -E 's/^data: //' | python3 -c 'import json,sys; print(json.load(sys.stdin)["event"].get("result"))'; }
+last_result() { events "$1" 1 | grep '"type":"result"' | tail -1 | sed -E 's/^data: //' | python3 -c 'import json,sys; print(json.load(sys.stdin)["event"].get("result"))'; }
 exec_in() { post "/api/threads/$1/exec" "$(json command "$2")" >/dev/null; sleep 4; events "$1" 1 | grep '"type":"exec"' | tail -1; }
 
 THREAD=$(post /api/threads "$(json title "demo $(date +%H:%M:%S)" user alice)" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
@@ -37,7 +37,7 @@ exec_in "$THREAD" "curl -sS -m 8 -w ' [%{http_code}]' https://example.com; curl 
 
 say "2b. The same data through the connector, asked of the agent"
 post "/api/threads/$THREAD/messages" "$(json user alice text 'List the orders.')" >/dev/null
-wait_for "$THREAD" '"event":{"type":"result"' 120
+wait_for "$THREAD" '"type":"result"' 120
 last_result "$THREAD"
 
 say "3. A write waits for approval"
