@@ -101,7 +101,7 @@ ALIEN_MANAGER_URL=<commands url> ALIEN_DEPLOYMENT_ID=<deployment id> ALIEN_TOKEN
 
 Open http://localhost:3000, start a thread and send a message.
 
-`ALIEN_AI_LOCAL_BEDROCK_REGION` makes the local `llm` resource Bedrock in that region, called with your own AWS credentials: `alien dev` resolves your default chain (`AWS_PROFILE`, environment variables or SSO) when the `model` container starts and passes the temporary keys to it. They are visible inside that container and are not refreshed, so after an SSO session expires, run `aws sso login` and restart `alien dev`.
+`ALIEN_AI_LOCAL_BEDROCK_REGION` makes the local `llm` resource Bedrock in that region, called with your own AWS credentials: `alien dev` resolves your default chain (`AWS_PROFILE`, environment variables or SSO) when the `model` container starts and passes those keys to it. They can be long-lived, are visible inside that container and are not refreshed, so after an SSO session expires, run `aws sso login` and restart `alien dev`.
 
 ## Deploy to AWS
 
@@ -196,7 +196,7 @@ Moments 1 and 2 need no model. Set `WITH_MODEL=0` to run only those; the rest go
 
 Limits accepted to keep the example small: the connector keeps turn tokens and held writes in memory and runs one replica, so a connector restart fails the writes that were waiting and the next turn gets a new token. The control plane keeps threads in a JSON file and runs one process.
 
-The example was proven on AWS and `alien dev`.
+This example was proven on AWS (deployed with `byo-vpc-aws`) and in `alien dev`. It is not covered on GCP, Azure or Kubernetes yet.
 
 ## Tests
 
