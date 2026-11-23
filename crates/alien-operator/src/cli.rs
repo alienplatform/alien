@@ -634,7 +634,7 @@ async fn run_operator_cli(
     db.set_telemetry_queue_cap(args.otlp_max_queued_bytes);
     // The manager an Operator talks to is fixed by its installation. A Secret that
     // names another one, or one that is not HTTPS, is refused before anything is sent.
-    if args.identity_secret.is_some() {
+    if args.identity_secret.is_some() || args.identity_aws_secret.is_some() {
         let configured = join_token
             .as_ref()
             .map(|token| token.manager_url.as_str())
