@@ -711,6 +711,10 @@ pub(crate) fn docker_since(saved: Option<&PodLogOffset>, started_at: DateTime<Ut
 struct DockerSource {
     id: String,
     name: String,
+    /// Unix seconds the container was created.
+    created: i64,
+    /// The container is not running (exited or dead). Docker keeps its logs.
+    stopped: bool,
 }
 
 struct DockerStream {
@@ -718,25 +722,92 @@ struct DockerStream {
     handle: JoinHandle<()>,
 }
 
+/// The stopped containers whose logs are read once more, from their saved
+/// position: one that was followed (its last lines may not have arrived before
+/// it was stopped), and one created since the previous pass that was never
+/// seen running because it started and exited between two passes. `drained`
+/// holds the stopped containers already handled, so each is read once.
+pub(crate) fn containers_to_drain(
+    sources: &[(String, i64, bool)],
+    followed: &HashSet<String>,
+    drained: &HashSet<String>,
+    created_since: i64,
+) -> Vec<String> {
+    sources
+        .iter()
+        .filter(|(id, created, stopped)| {
+            *stopped
+                && !drained.contains(id)
+                && (followed.contains(id) || *created >= created_since)
+        })
+        .map(|(id, _, _)| id.clone())
+        .collect()
+}
+
 async fn run_docker(state: Arc<OperatorState>, started_at: DateTime<Utc>) {
     let mut streams = HashMap::<String, DockerStream>::new();
+    let mut drains: Vec<JoinHandle<()>> = Vec::new();
+    let mut drained = HashSet::<String>::new();
     let own_id_prefix = std::env::var("HOSTNAME")
         .ok()
         .filter(|name| !name.is_empty());
     let mut warned_cap = false;
+    // Containers created from here on are looked at; older stopped ones are history.
+    let mut created_since = started_at.timestamp();
     loop {
-        match list_running(&own_id_prefix).await {
+        let pass_started = Utc::now().timestamp();
+        match list_containers(&own_id_prefix).await {
             Ok(sources) => {
-                let wanted: HashSet<String> =
-                    sources.iter().map(|source| source.id.clone()).collect();
-                streams.retain(|id, stream| {
-                    let keep = wanted.contains(id) && !stream.handle.is_finished();
-                    if !keep {
+                let running: HashSet<String> = sources
+                    .iter()
+                    .filter(|source| !source.stopped)
+                    .map(|source| source.id.clone())
+                    .collect();
+                let followed: HashSet<String> = streams.keys().cloned().collect();
+                let facts: Vec<(String, i64, bool)> = sources
+                    .iter()
+                    .map(|source| (source.id.clone(), source.created, source.stopped))
+                    .collect();
+                let to_drain = containers_to_drain(&facts, &followed, &drained, created_since);
+                // Stop the followers of containers that are no longer running.
+                let mut stopping = HashMap::<String, DockerStream>::new();
+                let ids: Vec<String> = streams.keys().cloned().collect();
+                for id in ids {
+                    let stream = streams.get(&id).expect("listed above");
+                    if !running.contains(&id) || stream.handle.is_finished() {
                         stream.cancel.cancel();
+                        if let Some(stream) = streams.remove(&id) {
+                            stopping.insert(id, stream);
+                        }
                     }
-                    keep
+                }
+                for source in sources
+                    .iter()
+                    .filter(|source| to_drain.contains(&source.id))
+                {
+                    drained.insert(source.id.clone());
+                    // The follower flushes its offset before the final read starts.
+                    let previous = stopping.remove(&source.id).map(|stream| stream.handle);
+                    let (task_state, task_source, task_cancel) =
+                        (state.clone(), source.clone(), state.cancel.child_token());
+                    drains.push(tokio::spawn(async move {
+                        if let Some(previous) = previous {
+                            let _ = previous.await;
+                        }
+                        drain_container(task_state, task_source, started_at, task_cancel).await;
+                    }));
+                }
+                for (_, stream) in stopping {
+                    drains.push(stream.handle);
+                }
+                drains.retain(|handle| !handle.is_finished());
+                // A container that runs again may stop again: it is read again then.
+                drained.retain(|id| {
+                    sources
+                        .iter()
+                        .any(|source| &source.id == id && source.stopped)
                 });
-                for source in sources {
+                for source in sources.into_iter().filter(|source| !source.stopped) {
                     if streams.contains_key(&source.id) {
                         continue;
                     }
@@ -756,6 +827,8 @@ async fn run_docker(state: Arc<OperatorState>, started_at: DateTime<Utc>) {
                     ));
                     streams.insert(source.id, DockerStream { cancel, handle });
                 }
+                // A little overlap: the cursor makes a second look harmless.
+                created_since = pass_started - 2;
             }
             Err(error) => warn!(error = %error, "Docker container discovery failed; will retry"),
         }
@@ -770,13 +843,17 @@ async fn run_docker(state: Arc<OperatorState>, started_at: DateTime<Utc>) {
     for (_, stream) in streams.drain() {
         let _ = stream.handle.await;
     }
+    for handle in drains {
+        let _ = handle.await;
+    }
 }
 
-async fn list_running(own_id_prefix: &Option<String>) -> Result<Vec<DockerSource>> {
+async fn list_containers(own_id_prefix: &Option<String>) -> Result<Vec<DockerSource>> {
+    use bollard::models::ContainerSummaryStateEnum as State;
     let docker = docker_client()?;
     let containers = docker
         .list_containers(Some(bollard::query_parameters::ListContainersOptions {
-            all: false,
+            all: true,
             ..Default::default()
         }))
         .await
@@ -795,14 +872,50 @@ async fn list_running(own_id_prefix: &Option<String>) -> Result<Vec<DockerSource
             {
                 return None;
             }
+            let stopped = match container.state {
+                Some(State::EXITED | State::DEAD) => true,
+                Some(State::RUNNING | State::RESTARTING | State::PAUSED) | None => false,
+                // Created but not started, or being removed: nothing to read yet.
+                Some(_) => return None,
+            };
             let name = container
                 .names
                 .and_then(|names| names.into_iter().next())
                 .map(|name| name.trim_start_matches('/').to_string())
                 .unwrap_or_else(|| id.chars().take(12).collect());
-            Some(DockerSource { id, name })
+            Some(DockerSource {
+                id,
+                name,
+                created: container.created.unwrap_or_default(),
+                stopped,
+            })
         })
         .collect())
+}
+
+/// Read what a stopped container has not stored yet, once. Docker keeps the logs
+/// of a stopped container, and the saved position makes the read exactly-once.
+async fn drain_container(
+    state: Arc<OperatorState>,
+    source: DockerSource,
+    started_at: DateTime<Utc>,
+    cancel: CancellationToken,
+) {
+    for attempt in 1..=3 {
+        match read_container_once(&state, &source, started_at, &cancel, false).await {
+            Ok(()) => return,
+            Err(error) => {
+                if cancel.is_cancelled() {
+                    return;
+                }
+                warn!(error = %error, container = %source.name, attempt, "Reading the log of a stopped container failed");
+                tokio::select! {
+                    _ = cancel.cancelled() => return,
+                    _ = time::sleep(RECONNECT_DELAY) => {}
+                }
+            }
+        }
+    }
 }
 
 async fn stream_container(
@@ -815,7 +928,7 @@ async fn stream_container(
         if cancel.is_cancelled() {
             return;
         }
-        match read_container_once(&state, &source, started_at, &cancel).await {
+        match read_container_once(&state, &source, started_at, &cancel, true).await {
             Ok(()) => {}
             Err(error) => {
                 if !cancel.is_cancelled() {
@@ -836,6 +949,7 @@ async fn read_container_once(
     source: &DockerSource,
     started_at: DateTime<Utc>,
     cancel: &CancellationToken,
+    follow: bool,
 ) -> Result<()> {
     let db = &state.db;
     let deployment_id = db.get_deployment_id().await?.ok_or_else(|| {
@@ -849,7 +963,7 @@ async fn read_container_once(
     let mut stream = docker.logs(
         &source.id,
         Some(bollard::query_parameters::LogsOptions {
-            follow: true,
+            follow,
             stdout: true,
             stderr: true,
             timestamps: true,
@@ -1140,6 +1254,34 @@ mod tests {
         let next = second.accept(at(101, 0)).unwrap();
         assert_eq!(next.ordinal, 2);
         assert!(second.accept(at(102, 0)).is_some());
+    }
+
+    #[test]
+    fn a_container_that_exits_between_two_passes_is_read_once() {
+        let ids = |list: &[&str]| list.iter().map(|id| id.to_string()).collect::<HashSet<_>>();
+        // `short` started and exited since the last pass; `old` is history;
+        // `followed` was running at the last pass and has just stopped.
+        let listed = vec![
+            ("short".to_string(), 1_000, true),
+            ("old".to_string(), 10, true),
+            ("followed".to_string(), 500, true),
+            ("running".to_string(), 1_000, false),
+        ];
+        let mut drained = HashSet::new();
+        let first = containers_to_drain(&listed, &ids(&["followed", "running"]), &drained, 990);
+        assert_eq!(first, vec!["short".to_string(), "followed".to_string()]);
+        drained.extend(first);
+        // The next pass sees the same stopped containers and reads none of them again.
+        assert!(containers_to_drain(&listed, &ids(&["running"]), &drained, 1_008).is_empty());
+
+        // And what the read yields is stored once: a second read of the same
+        // log (a retry after a failure) skips what the first one stored.
+        let lines = [at(1, 0), at(1, 0), at(2, 5)];
+        let mut first_read = DockerLineCursor::new(None);
+        let stored: Vec<_> = lines.iter().filter_map(|t| first_read.accept(*t)).collect();
+        assert_eq!(stored.len(), 3);
+        let mut retry = DockerLineCursor::new(stored.last().cloned());
+        assert!(lines.iter().all(|t| retry.accept(*t).is_none()));
     }
 
     #[test]

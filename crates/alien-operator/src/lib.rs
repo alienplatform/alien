@@ -1857,6 +1857,7 @@ pub async fn save_enrolled_identity_for_tests(
         pending_started_at: None,
         expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
         enrolled_code_hash: None,
+        collects_host: false,
         store_version: Default::default(),
         pending_enrollment: None,
         previous: None,

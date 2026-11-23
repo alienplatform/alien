@@ -38,6 +38,10 @@ pub(crate) struct DailyIdentityState {
     /// this hash is spent and is never sent again.
     #[serde(default)]
     pub enrolled_code_hash: Option<String>,
+    /// Set when the install was made with an enrollment token. Host logs and
+    /// host inventory then stay on at later starts, which have no token.
+    #[serde(default)]
+    pub collects_host: bool,
     #[serde(default)]
     pub pending_enrollment: Option<PendingEnrollment>,
     /// The key the manager last accepted, kept while the manager refuses the
@@ -171,6 +175,7 @@ impl DailyIdentity {
                     pending_started_at: None,
                     expires_at: Utc::now(),
                     enrolled_code_hash: None,
+                    collects_host: false,
                     pending_enrollment: None,
                     previous: None,
                     store_version: Default::default(),
@@ -1204,6 +1209,7 @@ mod persistence_tests {
             pending: Some(format!("ax_day_v1_{}", "2".repeat(64))),
             pending_started_at: Some(Utc::now()),
             enrolled_code_hash: None,
+            collects_host: false,
             pending_enrollment: None,
             previous: None,
             store_version: Default::default(),
@@ -1374,6 +1380,7 @@ mod persistence_tests {
             pending: None,
             pending_started_at: None,
             enrolled_code_hash: Some(key_hash("ax_enroll_original")),
+            collects_host: false,
             pending_enrollment: None,
             previous: None,
             store_version: Default::default(),
@@ -1583,6 +1590,7 @@ mod persistence_tests {
             pending_started_at: None,
             expires_at: Utc::now() + chrono::Duration::hours(20),
             enrolled_code_hash: None,
+            collects_host: false,
             pending_enrollment: None,
             previous: None,
             store_version: Default::default(),
@@ -2174,6 +2182,7 @@ mod persistence_tests {
                 pending: None,
                 pending_started_at: None,
                 enrolled_code_hash: None,
+                collects_host: false,
                 pending_enrollment: None,
                 previous: None,
                 store_version: Default::default(),
@@ -2305,6 +2314,7 @@ mod persistence_tests {
                 pending_started_at: None,
                 expires_at: Utc::now() - chrono::Duration::seconds(1),
                 enrolled_code_hash: None,
+                collects_host: false,
                 pending_enrollment: None,
                 previous: None,
                 store_version: Default::default(),
@@ -2356,6 +2366,7 @@ mod persistence_tests {
             pending_started_at: None,
             expires_at: Utc::now() + chrono::Duration::hours(1),
             enrolled_code_hash: None,
+            collects_host: false,
             pending_enrollment: None,
             previous: None,
             store_version: Default::default(),
@@ -2497,6 +2508,7 @@ mod grace_tests {
             pending_started_at: pending.map(|_| started),
             expires_at,
             enrolled_code_hash: None,
+            collects_host: false,
             pending_enrollment: None,
             previous: None,
             store_version: Default::default(),
@@ -2987,6 +2999,7 @@ mod lost_enrollment_tests {
             pending_started_at: None,
             expires_at: Utc::now() + chrono::Duration::hours(20),
             enrolled_code_hash: None,
+            collects_host: false,
             pending_enrollment: None,
             previous: None,
             store_version: Default::default(),

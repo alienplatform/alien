@@ -1103,7 +1103,7 @@ async fn run_operator_cli(
         &operator_config.data_dir,
         operator_config.operations.as_ref(),
     );
-    let enrolled_by_token = join_token.is_some();
+    let enrolled_by_token = install_collects_host(&db, join_token.is_some()).await?;
     let host_logs = crate::host_logs::config_from_env(enrolled_by_token)?;
     let runtime_options = OperatorRuntimeOptions {
         readiness_server_port: crate::readiness_server_port_from_env()?,
@@ -1131,6 +1131,27 @@ async fn run_operator_cli(
     .await?;
 
     Ok(())
+}
+
+/// Whether this install collects host logs and inventory by default: it was made
+/// with an enrollment token, on this start or an earlier one. A start with a token
+/// saves the choice with the identity, because later starts have no token.
+async fn install_collects_host(
+    db: &std::sync::Arc<crate::db::OperatorDb>,
+    token_given: bool,
+) -> Result<bool> {
+    let Some(mut identity) = db
+        .read_daily_identity()
+        .await?
+        .filter(|identity| !identity.deployment_id.is_empty())
+    else {
+        return Ok(token_given);
+    };
+    if token_given && !identity.collects_host {
+        identity.collects_host = true;
+        db.write_daily_identity(&identity).await?;
+    }
+    Ok(token_given || identity.collects_host)
 }
 
 /// The Operator sends its deployment token to the manager URL. An `http` URL still works,
@@ -2106,8 +2127,8 @@ fn check_saved_manager(
     // Only an enrolled identity is held to its manager. An unenrolled candidate
     // (a refused first enrollment) is discarded when a token enrolls again, so a
     // corrected token for another manager must be able to replace it.
-    let Some(saved) = saved
-        .filter(|saved| !saved.manager_url.is_empty() && !saved.deployment_id.is_empty())
+    let Some(saved) =
+        saved.filter(|saved| !saved.manager_url.is_empty() && !saved.deployment_id.is_empty())
     else {
         return Ok(());
     };
@@ -2434,6 +2455,7 @@ mod tests {
             pending_started_at: None,
             expires_at: chrono::Utc::now() + chrono::Duration::hours(20),
             enrolled_code_hash: None,
+            collects_host: false,
             pending_enrollment: None,
             previous: None,
             store_version: Default::default(),
@@ -2467,6 +2489,40 @@ mod tests {
                 .is_some()
         );
         assert!(super::join_token_for_saved_identity(None, Some(&saved)).is_none());
+    }
+
+    #[tokio::test]
+    async fn host_collection_chosen_by_the_token_install_stays_on_without_the_token() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_str().unwrap();
+        let db = std::sync::Arc::new(
+            crate::db::OperatorDb::new(path, &"a".repeat(64))
+                .await
+                .unwrap(),
+        );
+        // Before enrollment finishes there is nothing to save the choice in.
+        assert!(super::install_collects_host(&db, true).await.unwrap());
+        assert!(!super::install_collects_host(&db, false).await.unwrap());
+
+        db.write_daily_identity(&saved_identity("https://a.example", "dep_1"))
+            .await
+            .unwrap();
+        // An install that predates the collector, enrolled by another route, stays off.
+        assert!(!super::install_collects_host(&db, false).await.unwrap());
+        // The start that enrolls with the token turns it on and saves the choice.
+        assert!(super::install_collects_host(&db, true).await.unwrap());
+        // The next start has no token: collection is still on.
+        let enabled = super::install_collects_host(&db, false).await.unwrap();
+        assert!(enabled);
+        assert!(crate::host_logs::parse_sources(None, true, true, enabled)
+            .unwrap()
+            .is_some_and(|config| config.docker));
+        // An explicit choice still wins.
+        assert!(
+            crate::host_logs::parse_sources(Some("none"), true, true, enabled)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -3260,8 +3316,9 @@ mod secret_startup_tests {
             return status(409, "Conflict");
         }
         body["metadata"]["uid"] = existing["metadata"]["uid"].clone();
-        body["metadata"]["resourceVersion"] =
-            (kube.version.fetch_add(1, Ordering::SeqCst) + 100).to_string().into();
+        body["metadata"]["resourceVersion"] = (kube.version.fetch_add(1, Ordering::SeqCst) + 100)
+            .to_string()
+            .into();
         *current = Some(body.clone());
         Json(body).into_response()
     }
@@ -3326,7 +3383,10 @@ mod secret_startup_tests {
             .collect()
     }
 
-    async fn manager_enroll(State(m): State<Manager>, Json(body): Json<serde_json::Value>) -> Response {
+    async fn manager_enroll(
+        State(m): State<Manager>,
+        Json(body): Json<serde_json::Value>,
+    ) -> Response {
         m.enrolls.fetch_add(1, Ordering::SeqCst);
         let hash = body["initialKeyHash"].as_str().unwrap().to_owned();
         {
@@ -3347,7 +3407,10 @@ mod secret_startup_tests {
         .into_response()
     }
 
-    async fn manager_exchange(State(m): State<Manager>, Json(body): Json<serde_json::Value>) -> Response {
+    async fn manager_exchange(
+        State(m): State<Manager>,
+        Json(body): Json<serde_json::Value>,
+    ) -> Response {
         m.exchanges.fetch_add(1, Ordering::SeqCst);
         let hash = hash_of(body["proof"]["key"].as_str().unwrap_or_default());
         if !m.keys.lock().unwrap().contains(&hash) {
@@ -3401,21 +3464,37 @@ mod secret_startup_tests {
     fn pod(token: Option<String>) -> Pod {
         let directory = tempfile::tempdir().unwrap();
         let mut argv: Vec<String> = [
-            "operator", "--platform", "kubernetes", "--namespace", "ns",
-            "--identity-secret", "identity", "--otlp-port", "0",
+            "operator",
+            "--platform",
+            "kubernetes",
+            "--namespace",
+            "ns",
+            "--identity-secret",
+            "identity",
+            "--otlp-port",
+            "0",
         ]
         .map(String::from)
         .into();
-        argv.extend(["--data-dir".into(), directory.path().join("data").display().to_string()]);
+        argv.extend([
+            "--data-dir".into(),
+            directory.path().join("data").display().to_string(),
+        ]);
         if let Some(token) = token {
             let file = directory.path().join("token");
             std::fs::write(&file, token).unwrap();
             std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
             argv.extend(["--enrollment-token-file".into(), file.display().to_string()]);
         }
-        let OperatorCliArgs { args, operator_image } =
-            OperatorCliArgs::try_parse_from(argv).expect("parse operator test arguments");
-        Pod { _directory: directory, args, operator_image }
+        let OperatorCliArgs {
+            args,
+            operator_image,
+        } = OperatorCliArgs::try_parse_from(argv).expect("parse operator test arguments");
+        Pod {
+            _directory: directory,
+            args,
+            operator_image,
+        }
     }
 
     /// Start the pod and wait a moment: `Err` when it stopped, `Ok` when it was still running.
@@ -3457,7 +3536,11 @@ mod secret_startup_tests {
             .await
             .expect_err("an operator with nowhere to keep its identity must not enroll");
         assert!(error.to_string().contains("identity Secret"), "{error}");
-        assert_eq!(manager.enrolls.load(Ordering::SeqCst), 0, "the code was used");
+        assert_eq!(
+            manager.enrolls.load(Ordering::SeqCst),
+            0,
+            "the code was used"
+        );
         assert!(kube.secret.lock().unwrap().is_none());
     }
 
@@ -3468,7 +3551,9 @@ mod secret_startup_tests {
         let kube = Kube::with_empty_secret();
         let api = kube.serve().await;
         // First start: enrolls.
-        start(pod(Some(token(&url, "code-1"))), &api).await.expect("first start");
+        start(pod(Some(token(&url, "code-1"))), &api)
+            .await
+            .expect("first start");
         assert_eq!(manager.accepted.load(Ordering::SeqCst), 1);
         let enrolled = kube.identity().expect("the identity reached the Secret");
         assert_eq!(enrolled["deploymentId"], "dep_1");
@@ -3486,13 +3571,20 @@ mod secret_startup_tests {
         let manager = Manager::with_codes(&["code-1"]);
         let url = manager.serve().await;
         // The code was used by an earlier install; this Secret holds no identity.
-        manager.codes.lock().unwrap().insert("code-1".into(), Some("someone-else".into()));
+        manager
+            .codes
+            .lock()
+            .unwrap()
+            .insert("code-1".into(), Some("someone-else".into()));
         let kube = Kube::with_empty_secret();
         let api = kube.serve().await;
         let error = start(pod(Some(token(&url, "code-1"))), &api)
             .await
             .expect_err("nothing can enroll with a used code");
-        assert!(error.to_string().contains("Issue a new enrollment token"), "{error}");
+        assert!(
+            error.to_string().contains("Issue a new enrollment token"),
+            "{error}"
+        );
         assert!(kube.identity().is_none_or(|i| i["deploymentId"] == ""));
     }
 
@@ -3564,7 +3656,9 @@ mod secret_startup_tests {
                 .await
                 .expect_err(&format!("{saved} must be refused"));
             assert!(
-                error.to_string().contains("manager address saved in the identity Secret"),
+                error
+                    .to_string()
+                    .contains("manager address saved in the identity Secret"),
                 "{error}"
             );
         }
