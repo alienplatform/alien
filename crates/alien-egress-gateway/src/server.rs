@@ -82,6 +82,16 @@ impl Gateway {
         )
     }
 
+    /// Which sandbox and version a credential record is for, without its rules.
+    pub fn credential_identity(&self, signed: &str) -> Result<crate::record::Summary> {
+        crate::sandbox_credentials::CredentialRecord::identity(
+            signed,
+            &self.keys,
+            &self.config.audiences,
+            chrono::Utc::now().timestamp_millis().max(0) as u64,
+        )
+    }
+
     /// Store a credential set. It needs the sandbox's live policy: rules never predate or
     /// outlive the sandbox they belong to.
     pub fn apply_credentials(
@@ -1145,11 +1155,11 @@ mod link_relay_tests {
         };
         sandbox.write_all(payload).await.unwrap();
         let target = Target::parse(&format!("{host}:6379"), None).unwrap();
-        let registry = Arc::new(Connections::default());
+        let registry = Arc::new(crate::connections::Connections::default());
         let now = chrono::Utc::now().timestamp() as u64;
         let (identity, _cancel) = registry
             .register(
-                Claims {
+                crate::token::Claims {
                     iss: "alien-sandbox".into(),
                     aud: "p/r".into(),
                     sub: "s".into(),

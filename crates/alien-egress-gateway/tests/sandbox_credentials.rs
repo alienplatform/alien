@@ -1243,6 +1243,63 @@ async fn catch_up_skips_a_set_naming_a_link_this_replica_no_longer_declares() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_page_of_rejected_sets_does_not_hide_the_valid_sets_after_it() {
+    logs();
+    let Some(ip) = link_ip() else {
+        eprintln!("no link-space address on this host; skipped");
+        return;
+    };
+    let key = key();
+    let links = json!([{"id":"connector","host":"connector.svc","ports":[8080],
+        "ranges":[format!("{ip}/32")],"addresses":[ip.to_string()]}]);
+    let (la, lb) = (
+        TcpListener::bind("127.0.0.1:0").await.unwrap(),
+        TcpListener::bind("127.0.0.1:0").await.unwrap(),
+    );
+    let (admin_a, admin_b) = (la.local_addr().unwrap(), lb.local_addr().unwrap());
+    // The peer holds more than one page of sets for a link this replica no longer declares,
+    // all sorting before the one valid set.
+    let mut first = config(&key, links, admin_a);
+    first["policyMemoryBytes"] = json!(256 * 1024 * 1024);
+    let a = start(first, la).await;
+    let mut updated = config(&key, json!([]), admin_b);
+    updated["peers"] = json!({"static":[admin_a.to_string()]});
+    let b = start(updated, lb).await;
+    let policy = Policy::Allow {
+        allow: vec!["link:connector".into(), "api.example.com".into()],
+    };
+    let gateway = a.live.snapshot().unwrap();
+    gateway.policies.set_ready();
+    let big = "v".repeat(6000);
+    let rejected: Vec<Value> = (0..30)
+        .map(|index| {
+            json!({"link":"connector","header":format!("X-Rule-{index}"),"value":big})
+        })
+        .collect();
+    let mut subs: Vec<String> = (0..40).map(|index| format!("a-{index:02}")).collect();
+    subs.push("z-valid".into());
+    for sub in &subs {
+        apply_policy(&gateway, &key, sub, Some(&policy), now_ms());
+        let rules = if sub == "z-valid" {
+            json!([{"host":"api.example.com","header":"Authorization","value":FIRST}])
+        } else {
+            json!(rejected)
+        };
+        let record = credential_record(&key, sub, now_ms(), rules);
+        assert_eq!(
+            put_credentials(admin_a, &grant(&key, sub, "PUT"), &record)
+                .await
+                .0,
+            204
+        );
+    }
+    let restarted = b.live.snapshot().unwrap();
+    restarted.replication.catch_up(&b.live).await.unwrap();
+    assert!(version(admin_b, &key, "z-valid").await[0].is_u64());
+    assert!(version(admin_b, &key, "a-00").await[0].is_null());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_failed_catch_up_before_a_write_is_unavailable_not_a_bad_request() {
     logs();
     let key = key();

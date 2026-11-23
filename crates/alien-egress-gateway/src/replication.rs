@@ -409,8 +409,19 @@ impl Replication {
         peer: SocketAddr,
         gateway: &crate::server::Gateway,
     ) -> Result<()> {
+        // Sets this replica looked at and did not keep (rules it cannot accept, a policy it
+        // does not hold). They are reported as known in the next pull, so the sender's page
+        // moves past them instead of repeating the same full page.
+        let mut examined: std::collections::BTreeMap<(String, String), crate::record::Version> =
+            std::collections::BTreeMap::new();
         loop {
-            let known = serde_json::to_vec(&gateway.sandbox_credentials.summary()?)
+            let mut summary = gateway.sandbox_credentials.summary()?;
+            summary.extend(examined.iter().map(|((aud, sub), ver)| crate::record::Summary {
+                aud: aud.clone(),
+                sub: sub.clone(),
+                ver: ver.clone(),
+            }));
+            let known = serde_json::to_vec(&summary)
                 .into_alien_error()
                 .context(unavailable("encode credential summary"))?;
             let (status, bytes) = self
@@ -426,29 +437,38 @@ impl Replication {
             }
             let records: Vec<String> = serde_json::from_slice(&bytes)
                 .map_err(|_| AlienError::new(unavailable("decode replica credentials")))?;
-            let mut applied = 0;
+            let mut progress = false;
             for signed in records {
                 // A set that no longer verifies against this replica's config (a link the
                 // stack update removed) is skipped; requests through it get no injection.
-                let record = match gateway.verify_credentials(signed) {
+                let record = match gateway.verify_credentials(signed.clone()) {
                     Ok(record) => record,
                     Err(error) => {
                         tracing::warn!(code = %error.code, "skipped a credential set that does not verify");
+                        if let Ok(seen) = gateway.credential_identity(&signed) {
+                            progress |= note_examined(&mut examined, seen);
+                        }
                         continue;
                     }
                 };
                 // A set whose policy this replica does not hold (deleted, or not yet arrived)
                 // is skipped; the policy's own catch-up decides.
+                let seen = crate::record::Summary {
+                    aud: record.aud.clone(),
+                    sub: record.sub.clone(),
+                    ver: record.ver.clone(),
+                };
                 if gateway
                     .policies
                     .resolve_now(&record.aud, &record.sub)
                     .is_some()
-                    && gateway.apply_credential_record(record)?
                 {
-                    applied += 1;
+                    progress |= gateway.apply_credential_record(record)?;
+                } else {
+                    progress |= note_examined(&mut examined, seen);
                 }
             }
-            if applied == 0 {
+            if !progress {
                 break;
             }
         }
@@ -878,6 +898,28 @@ mod tests {
                 .resolve("p/r", &format!("box-{index}"))
                 .await
                 .is_ok());
+        }
+    }
+}
+
+/// Remember that a set was looked at; true when that is new information (not seen before, or
+/// a newer version of one that was).
+fn note_examined(
+    examined: &mut std::collections::BTreeMap<(String, String), crate::record::Version>,
+    seen: crate::record::Summary,
+) -> bool {
+    match examined.entry((seen.aud, seen.sub)) {
+        std::collections::btree_map::Entry::Vacant(slot) => {
+            slot.insert(seen.ver);
+            true
+        }
+        std::collections::btree_map::Entry::Occupied(mut slot) => {
+            if crate::record::compare_versions(slot.get(), &seen.ver).is_lt() {
+                slot.insert(seen.ver);
+                true
+            } else {
+                false
+            }
         }
     }
 }

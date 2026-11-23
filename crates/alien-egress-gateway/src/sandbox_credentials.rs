@@ -134,17 +134,15 @@ impl fmt::Debug for CredentialRecord {
 }
 
 impl CredentialRecord {
-    /// Verify the signature, the identity and every rule. `links` are the declared link ids of
-    /// the record's audience; a rule naming another link is refused.
-    pub fn verify(
-        signed: String,
+    /// The signature and identity checks every record passes, whatever its rules say.
+    fn verified_claims(
+        signed: &str,
         keys: &HashMap<String, PublicKey>,
         audiences: &[String],
-        links: impl Fn(&str) -> Vec<String>,
         now_ms: u64,
-    ) -> Result<Self> {
+    ) -> Result<Claims> {
         let claims: Claims =
-            crate::token::verify_signed_limit(&signed, keys, Some(RECORD_TYPE), MAX_RECORD_BYTES)?;
+            crate::token::verify_signed_limit(signed, keys, Some(RECORD_TYPE), MAX_RECORD_BYTES)?;
         if claims.v != 1 {
             return Err(AlienError::new(ErrorData::RecordFormatUnsupported));
         }
@@ -164,6 +162,36 @@ impl CredentialRecord {
         if claims.rules.len() > MAX_RULES {
             return Err(invalid("too many credential rules"));
         }
+        Ok(claims)
+    }
+
+    /// Which sandbox and version a record is for, when its rules are not acceptable here
+    /// (a link this replica no longer declares). A catch-up reports it as examined, so the
+    /// sender's next page moves past it.
+    pub fn identity(
+        signed: &str,
+        keys: &HashMap<String, PublicKey>,
+        audiences: &[String],
+        now_ms: u64,
+    ) -> Result<Summary> {
+        let claims = Self::verified_claims(signed, keys, audiences, now_ms)?;
+        Ok(Summary {
+            aud: claims.aud,
+            sub: claims.sub,
+            ver: claims.ver,
+        })
+    }
+
+    /// Verify the signature, the identity and every rule. `links` are the declared link ids of
+    /// the record's audience; a rule naming another link is refused.
+    pub fn verify(
+        signed: String,
+        keys: &HashMap<String, PublicKey>,
+        audiences: &[String],
+        links: impl Fn(&str) -> Vec<String>,
+        now_ms: u64,
+    ) -> Result<Self> {
+        let claims = Self::verified_claims(&signed, keys, audiences, now_ms)?;
         let declared = links(&claims.aud);
         let rules = claims
             .rules
