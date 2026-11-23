@@ -91,8 +91,10 @@ pub struct Args {
     pub enrollment_token_file: Option<PathBuf>,
 
     /// The same enrollment token given directly, for targets that cannot mount
-    /// a file (`docker run -e`, container service secrets). The file wins when
-    /// both are set. The value is never logged.
+    /// a file (container service secrets). Prefer the file: an environment
+    /// variable stays visible in `docker inspect` and in the process
+    /// environment for the life of the container. The file wins when both are
+    /// set. The value is never logged.
     #[arg(long, env = "OPERATOR_ENROLLMENT_TOKEN", hide_env_values = true)]
     pub enrollment_token: Option<String>,
 
@@ -1104,7 +1106,7 @@ async fn run_operator_cli(
         operator_config.operations.as_ref(),
     );
     let enrolled_by_token = install_collects_host(&db, join_token.is_some()).await?;
-    let host_logs = crate::host_logs::config_from_env(enrolled_by_token)?;
+    let host_logs = crate::host_logs::config_from_env()?;
     let runtime_options = OperatorRuntimeOptions {
         readiness_server_port: crate::readiness_server_port_from_env()?,
         identity_initialized_config_map: crate::identity_initialized_config_map_from_env()?,
@@ -1133,25 +1135,24 @@ async fn run_operator_cli(
     Ok(())
 }
 
-/// Whether this install collects host logs and inventory by default: it was made
-/// with an enrollment token, on this start or an earlier one. A start with a token
-/// saves the choice with the identity, because later starts have no token.
+/// Whether this is a new install that reports its host: no enrolled identity
+/// exists yet, so the token is spent on this start. An enrolled identity keeps
+/// the choice saved when it was made; a token still present in the environment
+/// of an earlier install does not change it. This does not start any log source.
 async fn install_collects_host(
     db: &std::sync::Arc<crate::db::OperatorDb>,
     token_given: bool,
 ) -> Result<bool> {
-    let Some(mut identity) = db
-        .read_daily_identity()
-        .await?
-        .filter(|identity| !identity.deployment_id.is_empty())
-    else {
-        return Ok(token_given);
-    };
-    if token_given && !identity.collects_host {
-        identity.collects_host = true;
-        db.write_daily_identity(&identity).await?;
-    }
-    Ok(token_given || identity.collects_host)
+    Ok(
+        match db
+            .read_daily_identity()
+            .await?
+            .filter(|identity| !identity.deployment_id.is_empty())
+        {
+            Some(identity) => identity.collects_host,
+            None => token_given,
+        },
+    )
 }
 
 /// The Operator sends its deployment token to the manager URL. An `http` URL still works,
@@ -2386,9 +2387,16 @@ async fn resolve_join_token(
         }
     }
     match inline.map(str::trim) {
-        Some(value) if !value.is_empty() => Ok(Some(
-            crate::enrollment_token::EnrollmentToken::parse(value)?,
-        )),
+        Some(value) if !value.is_empty() => {
+            warn!(
+                "The enrollment token is read from the environment, which stays visible in \
+                 the container's configuration and process environment. Mount it as a file \
+                 and set OPERATOR_ENROLLMENT_TOKEN_FILE instead."
+            );
+            Ok(Some(crate::enrollment_token::EnrollmentToken::parse(
+                value,
+            )?))
+        }
         _ => Ok(None),
     }
 }
@@ -2492,7 +2500,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_collection_chosen_by_the_token_install_stays_on_without_the_token() {
+    async fn host_report_follows_the_enrollment_of_this_start_not_a_leftover_token() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().to_str().unwrap();
         let db = std::sync::Arc::new(
@@ -2500,29 +2508,26 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        // Before enrollment finishes there is nothing to save the choice in.
+        // No identity yet: the token is spent on this start.
         assert!(super::install_collects_host(&db, true).await.unwrap());
         assert!(!super::install_collects_host(&db, false).await.unwrap());
 
+        // An install enrolled before this choice existed, with its old token
+        // still in the environment, starts nothing.
         db.write_daily_identity(&saved_identity("https://a.example", "dep_1"))
             .await
             .unwrap();
-        // An install that predates the collector, enrolled by another route, stays off.
+        assert!(!super::install_collects_host(&db, true).await.unwrap());
         assert!(!super::install_collects_host(&db, false).await.unwrap());
-        // The start that enrolls with the token turns it on and saves the choice.
-        assert!(super::install_collects_host(&db, true).await.unwrap());
-        // The next start has no token: collection is still on.
-        let enabled = super::install_collects_host(&db, false).await.unwrap();
-        assert!(enabled);
-        assert!(crate::host_logs::parse_sources(None, true, true, enabled)
-            .unwrap()
-            .is_some_and(|config| config.docker));
-        // An explicit choice still wins.
-        assert!(
-            crate::host_logs::parse_sources(Some("none"), true, true, enabled)
-                .unwrap()
-                .is_none()
-        );
+
+        // The install made by enrollment saved the choice.
+        let mut identity = saved_identity("https://a.example", "dep_1");
+        identity.collects_host = true;
+        db.write_daily_identity(&identity).await.unwrap();
+        assert!(super::install_collects_host(&db, false).await.unwrap());
+
+        // No log source starts without OPERATOR_HOST_LOGS, whatever the token says.
+        assert!(crate::host_logs::parse_sources(None).unwrap().is_none());
     }
 
     #[tokio::test]

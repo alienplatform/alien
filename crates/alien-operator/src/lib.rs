@@ -74,7 +74,7 @@ impl OperatorRuntimeOptions {
             identity_initialized_config_map: identity_initialized_config_map_from_env()?,
             runtime_deployment_scope: runtime_deployment_scope_from_env()?,
             pod_log_collection: pod_logs::config_from_env()?,
-            host_logs: host_logs::config_from_env(false)?,
+            host_logs: host_logs::config_from_env()?,
             host_inventory: None,
         })
     }

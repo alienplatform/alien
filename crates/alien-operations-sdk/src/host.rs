@@ -28,15 +28,15 @@ pub const ALLOWED_GROUPS: [&str; 2] = ["systemd-journal", "docker"];
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostPermissions {
     /// Groups the service user must belong to: `systemd-journal`, `docker`. Membership of
-    /// the `docker` group is equivalent to root on that host, whatever the operation's risk
-    /// tier: validation does not refuse it for a read-only operation.
+    /// the `docker` group is equivalent to root on that host, so a read-only operation
+    /// cannot declare it.
     #[serde(default)]
     pub groups: Vec<String>,
     /// Exact `sudo` command templates, e.g. `/usr/bin/systemctl restart {unit}.service`.
     #[serde(default)]
     pub sudo_commands: Vec<String>,
     /// The operation uses the Docker socket. Access to the socket is equivalent to root on
-    /// that host, whatever the operation's risk tier.
+    /// that host, so a read-only operation cannot declare it.
     #[serde(default)]
     pub docker_socket: bool,
 }
@@ -79,6 +79,13 @@ impl HostPermissions {
                 return Err(invalid(format!("group '{group}' is listed twice")));
             }
         }
+        if tier == RiskTier::ReadOnly
+            && (self.docker_socket || self.groups.iter().any(|g| g == "docker"))
+        {
+            return Err(invalid(
+                "a read-only operation cannot use the docker group or the Docker socket, which give root on the host; use the mutating tier or higher",
+            ));
+        }
         if !self.sudo_commands.is_empty() && tier == RiskTier::ReadOnly {
             return Err(invalid(
                 "a read-only operation cannot declare sudo commands",
@@ -118,6 +125,22 @@ mod tests {
         with(&[], &["/usr/bin/systemctl restart {unit}.service"], false)
             .validate(RiskTier::Mutating)
             .unwrap();
+    }
+
+    #[test]
+    fn a_read_only_operation_cannot_declare_the_docker_group_or_socket() {
+        for permissions in [
+            with(&["docker"], &[], false),
+            with(&[], &[], true),
+            with(&["systemd-journal", "docker"], &[], true),
+        ] {
+            let error = permissions
+                .validate(RiskTier::ReadOnly)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("read-only"), "{error}");
+            permissions.validate(RiskTier::Mutating).unwrap();
+        }
     }
 
     #[test]

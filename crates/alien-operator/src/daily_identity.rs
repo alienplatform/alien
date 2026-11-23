@@ -38,8 +38,9 @@ pub(crate) struct DailyIdentityState {
     /// this hash is spent and is never sent again.
     #[serde(default)]
     pub enrolled_code_hash: Option<String>,
-    /// Set when the install was made with an enrollment token. Host logs and
-    /// host inventory then stay on at later starts, which have no token.
+    /// Set when this install was enrolled with a code (a new install), not by
+    /// a token left over in the environment of an older one. The host
+    /// inventory then stays on at later starts, which have no token.
     #[serde(default)]
     pub collects_host: bool,
     #[serde(default)]
@@ -175,7 +176,7 @@ impl DailyIdentity {
                     pending_started_at: None,
                     expires_at: Utc::now(),
                     enrolled_code_hash: None,
-                    collects_host: false,
+                    collects_host: true,
                     pending_enrollment: None,
                     previous: None,
                     store_version: Default::default(),

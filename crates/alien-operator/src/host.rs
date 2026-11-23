@@ -9,6 +9,11 @@ use crate::error::{ErrorData, Result};
 const DEFAULT_DOCKER_SOCKET: &str = "/var/run/docker.sock";
 
 /// The Docker socket path: `OPERATOR_DOCKER_SOCKET` or the standard path.
+///
+/// A mounted Docker socket is equivalent to root on the host. Docker log collection
+/// and the docker operations only need to list and read containers, so
+/// `OPERATOR_DOCKER_SOCKET` can point at a read-only socket proxy that allows
+/// those calls and nothing else.
 pub fn docker_socket_path() -> String {
     std::env::var("OPERATOR_DOCKER_SOCKET")
         .ok()

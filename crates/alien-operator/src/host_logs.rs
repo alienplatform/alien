@@ -51,23 +51,13 @@ pub struct HostLogsConfig {
     pub docker: bool,
 }
 
-/// Parse `OPERATOR_HOST_LOGS`. Unset means Docker logs when the operator runs
-/// in a container with the Docker socket mounted and was given an enrollment
-/// token (a new install), and nothing otherwise: an install that predates this
-/// collector collects nothing new after an upgrade.
-pub fn parse_sources(
-    value: Option<&str>,
-    in_container: bool,
-    socket_present: bool,
-    enrolled_by_token: bool,
-) -> Result<Option<HostLogsConfig>> {
+/// Parse `OPERATOR_HOST_LOGS`. Unset means no host log source: reading the logs
+/// of every container on a Docker host is a choice the install command makes
+/// by setting `OPERATOR_HOST_LOGS=docker`, so an Operator upgraded in place
+/// never starts it on its own.
+pub fn parse_sources(value: Option<&str>) -> Result<Option<HostLogsConfig>> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(
-            (in_container && socket_present && enrolled_by_token).then_some(HostLogsConfig {
-                journald: false,
-                docker: true,
-            }),
-        );
+        return Ok(None);
     };
     let mut config = HostLogsConfig::default();
     for source in value.split(',').map(str::trim) {
@@ -87,20 +77,13 @@ pub fn parse_sources(
     Ok(Some(config))
 }
 
-/// `enrolled_by_token` is whether this start was given an enrollment token by
-/// any route (flag, file or environment), as resolved by the command line.
-pub fn config_from_env(enrolled_by_token: bool) -> Result<Option<HostLogsConfig>> {
+pub fn config_from_env() -> Result<Option<HostLogsConfig>> {
     let value = std::env::var("OPERATOR_HOST_LOGS").ok();
     log_units_from_env()?;
     if !crate::host::HOST_COLLECTION_SUPPORTED {
         return Ok(unsupported_platform(value.as_deref()));
     }
-    parse_sources(
-        value.as_deref(),
-        Path::new("/.dockerenv").exists(),
-        Path::new(&crate::host::docker_socket_path()).exists(),
-        enrolled_by_token,
-    )
+    parse_sources(value.as_deref())
 }
 
 /// Host collection is off on a platform without journald, systemd and Unix
@@ -1117,26 +1100,25 @@ mod tests {
 
     #[test]
     fn sources_parse_and_unknown_values_refuse_to_start() {
-        assert_eq!(parse_sources(None, false, true, true).unwrap(), None);
-        assert_eq!(parse_sources(None, true, false, true).unwrap(), None);
+        // Unset starts no source, even in a container with the socket mounted.
+        assert_eq!(parse_sources(None).unwrap(), None);
+        assert_eq!(parse_sources(Some("  ")).unwrap(), None);
         assert_eq!(
-            parse_sources(None, true, true, true).unwrap(),
+            parse_sources(Some("docker")).unwrap(),
             Some(HostLogsConfig {
                 journald: false,
                 docker: true
             })
         );
-        // An install that was not enrolled with a token collects nothing new.
-        assert_eq!(parse_sources(None, true, true, false).unwrap(), None);
         assert_eq!(
-            parse_sources(Some("journald, docker"), false, false, false).unwrap(),
+            parse_sources(Some("journald, docker")).unwrap(),
             Some(HostLogsConfig {
                 journald: true,
                 docker: true
             })
         );
-        assert_eq!(parse_sources(Some("none"), true, true, true).unwrap(), None);
-        let error = parse_sources(Some("journald,syslog"), false, false, false)
+        assert_eq!(parse_sources(Some("none")).unwrap(), None);
+        let error = parse_sources(Some("journald,syslog"))
             .unwrap_err()
             .to_string();
         assert!(error.contains("syslog"), "{error}");
