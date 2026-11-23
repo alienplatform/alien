@@ -716,6 +716,9 @@ struct DockerStream {
 pub(crate) struct FinalReads {
     in_flight: HashSet<String>,
     done: HashSet<String>,
+    /// Containers whose final read failed: tried again whatever `followed`
+    /// and the creation time say, while they are still stopped.
+    retry: HashSet<String>,
 }
 
 impl FinalReads {
@@ -732,7 +735,9 @@ impl FinalReads {
                 *stopped
                     && !self.done.contains(id)
                     && !self.in_flight.contains(id)
-                    && (followed.contains(id) || *created >= created_since)
+                    && (followed.contains(id)
+                        || *created >= created_since
+                        || self.retry.contains(id))
             })
             .map(|(id, _, _)| id.clone())
             .collect()
@@ -745,7 +750,10 @@ impl FinalReads {
     pub(crate) fn finished(&mut self, id: &str, succeeded: bool) {
         self.in_flight.remove(id);
         if succeeded {
+            self.retry.remove(id);
             self.done.insert(id.to_string());
+        } else {
+            self.retry.insert(id.to_string());
         }
     }
 
@@ -757,6 +765,7 @@ impl FinalReads {
     /// A container that runs again may stop again: it is read again then.
     pub(crate) fn forget_unless_stopped(&mut self, stopped: &HashSet<String>) {
         self.done.retain(|id| stopped.contains(id));
+        self.retry.retain(|id| stopped.contains(id));
     }
 }
 
@@ -1333,12 +1342,18 @@ mod tests {
         // While it runs it is not started a second time.
         assert!(reads.to_start(&listed, &none, 990).is_empty());
         reads.finished("gone", false);
-        // A failed read leaves the container eligible for a later pass.
-        assert_eq!(reads.to_start(&listed, &none, 990), vec!["gone".to_string()]);
+        // A failed read leaves the container eligible for a later pass, even
+        // when it was never followed and the next pass starts after its creation.
+        assert_eq!(reads.to_start(&listed, &none, 1_008), vec!["gone".to_string()]);
+        // Once it is gone from the stopped list the retry is dropped.
+        let mut gone = FinalReads::default();
+        gone.finished("gone", false);
+        gone.forget_unless_stopped(&HashSet::new());
+        assert!(gone.to_start(&listed, &none, 1_008).is_empty());
         reads.started("gone");
         reads.finished("gone", true);
         // The read that stored its lines is the last one.
-        assert!(reads.to_start(&listed, &none, 990).is_empty());
+        assert!(reads.to_start(&listed, &none, 1_008).is_empty());
     }
 
     #[test]
