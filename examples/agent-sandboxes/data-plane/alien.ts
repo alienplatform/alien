@@ -8,8 +8,9 @@
 //              It holds placeholder keys, never real credentials.
 //   model      forwards the agent's model calls to the deployment's own AI service
 //              (Bedrock on AWS) with the container's identity.
-//   connector  the only way to the customer's internal API. Private, reachable from a
-//              sandbox only through its link. Reads pass, writes wait for approval.
+//   connector  the only way to the customer's private systems (internal API, scanner).
+//              Private, reachable from a sandbox only through its link. Reads pass, writes
+//              wait for approval, and it adds the customer's own scanner key.
 
 import * as alien from "@alienplatform/core"
 
@@ -22,6 +23,24 @@ const inputs = alien.inputs({
     placeholder: "http://10.40.10.50:8080",
     format: "url",
     env: { name: "INTERNAL_API_URL", targetResources: ["connector"] },
+  }),
+  scannerUrl: alien.string({
+    providedBy: "deployer",
+    required: true,
+    label: "Scanner URL",
+    description: "Private address of the scanner the connector calls.",
+    placeholder: "http://10.40.10.50:8081",
+    format: "url",
+    env: { name: "SCANNER_URL", targetResources: ["connector"] },
+  }),
+  // The customer's own key for their scanner. They write it into their own secret store; only
+  // the connector reads it. Alien, the control plane and the sandbox never see it.
+  scannerApiKey: alien.secret({
+    providedBy: "deployer",
+    required: true,
+    label: "Scanner API key",
+    description: "The key the customer's scanner requires. Read by the connector only.",
+    env: { name: "SCANNER_API_KEY", targetResources: ["connector"] },
   }),
 })
 

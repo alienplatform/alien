@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Drives the demo moments through the control plane's HTTP API, the same calls the UI makes.
-#   CONTROL_PLANE=http://localhost:3000 INTERNAL_API_IP=<private ip> ./demo.sh
-# Moments 1-2 run commands in the sandbox directly. Moments 3-5 go through the agent and need a model.
+#   CONTROL_PLANE=http://localhost:3000 INTERNAL_API_IP=<private ip> SCANNER_IP=<private ip> ./demo.sh
+# Moments 1-2 run commands in the sandbox directly. Moments 3-6 go through the agent and need a model.
 set -euo pipefail
 
 CP=${CONTROL_PLANE:-http://localhost:3000}
@@ -53,7 +53,17 @@ post "/api/threads/$THREAD/messages" "$(json user bob text 'Cancel order 1004.')
 sleep 40
 events "$THREAD" 1 | grep -E 'user switched|bob' | tail -4
 
-say "5. Idle, pause, resume with the agent process alive"
+say "5. A key the sandbox never holds"
+post "/api/threads/$THREAD/messages" "$(json user alice text 'List the scanner findings.')" >/dev/null
+sleep 40
+last_result "$THREAD"
+echo "the sandbox's environment has no scanner key:"
+exec_in "$THREAD" 'env | grep -ci scanner || true'
+SCANNER=${SCANNER_IP:-scanner}
+echo "and the scanner is not reachable from it:"
+exec_in "$THREAD" "curl -sS -m 8 -w ' [%{http_code}]' http://$SCANNER:8081/findings"
+
+say "6. Idle, pause, resume with the agent process alive"
 post "/api/threads/$THREAD/messages" "$(json user alice text 'Start `orders watch` in the background and tell me its pid.')" >/dev/null
 sleep 40
 echo "waiting $IDLE_WAIT s for the thread to pause"; sleep "$IDLE_WAIT"

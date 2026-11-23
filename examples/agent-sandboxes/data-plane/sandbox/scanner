@@ -1,0 +1,34 @@
+#!/usr/bin/env node
+// scanner: the agent's tool for the company's scanner, through the connector.
+//
+//   scanner findings
+//   scanner finding <id>
+//
+// The scanner needs the customer's API key. The sandbox has none: the connector adds it.
+// This only sends the per-turn `Authorization: Bearer $CONNECTOR_TOKEN` the gateway replaces.
+
+const base = process.env.CONNECTOR_URL
+if (!base) {
+  console.error("CONNECTOR_URL is not set")
+  process.exit(2)
+}
+
+async function get(path) {
+  const response = await fetch(`${base}/scanner${path}`, {
+    headers: { authorization: `Bearer ${process.env.CONNECTOR_TOKEN ?? ""}` },
+  })
+  const text = await response.text()
+  if (!response.ok) {
+    console.error(`${response.status}: ${text}`)
+    process.exit(1)
+  }
+  console.log(JSON.stringify(JSON.parse(text), null, 2))
+}
+
+const [command, id] = process.argv.slice(2)
+if (command === "findings") await get("/findings")
+else if (command === "finding" && id) await get(`/findings/${encodeURIComponent(id)}`)
+else {
+  console.error("usage: scanner findings | finding <id>")
+  process.exit(2)
+}

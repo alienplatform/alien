@@ -3,6 +3,7 @@
 // HTTP on :8080, reached by sandboxes only through their link (no public endpoint):
 //   GET   /orders, GET /orders/:id     reads, passed through
 //   PATCH /orders/:id                  writes, held until approved
+//   GET   /scanner/*                   the scanner's reads, with the customer's own key added here
 // Every request must carry the per-turn token the gateway adds to the link; the sandbox's own
 // `Authorization: Bearer placeholder` is refused.
 //
@@ -15,9 +16,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createCommandReceiver } from "@alienplatform/commands"
 import { allowed } from "./access"
 import { Approvals } from "./approvals"
+import { scannerGet, scannerPath } from "./scanner"
 import { TurnTokens } from "./tokens"
 
 const INTERNAL_API_URL = (process.env.INTERNAL_API_URL ?? "").replace(/\/$/, "")
+const SCANNER_URL = process.env.SCANNER_URL ?? ""
+// The customer's key, from their own secret store. Only this process reads it.
+const SCANNER_API_KEY = process.env.SCANNER_API_KEY ?? ""
 const tokens = new TurnTokens(Number(process.env.TURN_TOKEN_TTL_SECONDS ?? 900) * 1000)
 const approvals = new Approvals(Number(process.env.APPROVAL_TIMEOUT_SECONDS ?? 600) * 1000)
 
@@ -45,7 +50,8 @@ async function internal(method: string, path: string, body?: string): Promise<{ 
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", "http://connector")
   if (url.pathname === "/health") return send(res, 200, { ok: true })
-  if (!url.pathname.startsWith("/orders")) return send(res, 404, { error: "not found" })
+  const scanner = scannerPath(url.pathname)
+  if (!scanner && !url.pathname.startsWith("/orders")) return send(res, 404, { error: "not found" })
 
   const grant = tokens.check(req.headers.authorization)
   if ("error" in grant) {
@@ -53,6 +59,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return send(res, 401, { error: grant.error })
   }
   const { user, threadId } = grant
+
+  if (scanner) {
+    if (req.method !== "GET") return send(res, 405, { error: "the scanner is read only" })
+    if (!allowed(user, "scanner:read")) return send(res, 403, { error: `${user} may not read scanner findings` })
+    const result = await scannerGet(SCANNER_URL, SCANNER_API_KEY, scanner + url.search)
+    console.log(`${user} read scanner ${scanner}: ${result.status}`)
+    return send(res, result.status, result.body)
+  }
 
   if (req.method === "GET") {
     if (!allowed(user, "orders:read")) return send(res, 403, { error: `${user} may not read orders` })

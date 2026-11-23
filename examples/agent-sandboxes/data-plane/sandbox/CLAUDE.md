@@ -12,5 +12,9 @@ company's order system for you:
   turn, start it detached: `setsid nohup orders watch 30 > /sandbox/workspace/watch.log 2>&1 &`, then
   report its pid (`pgrep -f "orders watch"`).
 
+Use the `scanner` command for the company's scanner findings: `scanner findings` lists them,
+`scanner finding <id>` shows one. It is read only and also goes through the connector; there is no
+scanner key in this sandbox, so never ask for one.
+
 The sandbox has no other network access, and it holds no real credentials: `CONNECTOR_TOKEN` and
 `ANTHROPIC_API_KEY` are placeholders.

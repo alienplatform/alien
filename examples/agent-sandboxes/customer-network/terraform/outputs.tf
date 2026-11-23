@@ -19,6 +19,11 @@ output "internal_api_url" {
   value       = "http://${local.internal_api_ip}:8080"
 }
 
+output "scanner_url" {
+  description = "The connector's scannerUrl input."
+  value       = "http://${local.internal_api_ip}:8081"
+}
+
 # The network settings for `alien deploy`, as JSON.
 output "network" {
   value = jsonencode({

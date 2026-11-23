@@ -28,7 +28,8 @@ The control plane is your SaaS: a chat UI and a thread router. It talks to each 
                                     ║            │                                                 ║
                                     ║            ▼                                                 ║
                                     ║  ┌─ customer-network/ · already there ────────────────────┐  ║
-                                    ║  │ internal API on a private address                      │  ║
+                                    ║  │ internal API, private address                          │  ║
+                                    ║  │ scanner, wants its own key                             │  ║
                                     ║  └────────────────────────────────────────────────────────┘  ║
                                     ╚══════════════════════════════════════════════════════════════╝
 ```
@@ -40,10 +41,27 @@ The control plane is your SaaS: a chat UI and a thread router. It talks to each 
 | `agent` | Sandbox | One per thread. Its policy is `allow: ["link:model", "link:connector"]`: no internet, and its only ways out are two links. It starts with `ANTHROPIC_API_KEY=placeholder` and `CONNECTOR_TOKEN=placeholder`. |
 | `runner` | Container, commands | Holds the sandbox binding. Creates, resumes and pauses each thread's sandbox and runs each agent turn in it. Not reachable from a sandbox. |
 | `model` | Container | Serves the Anthropic Messages API to the sandboxes, backed by the stack's `llm` AI resource. On AWS that is Bedrock in the same account, called with the container's own identity, so no model key exists. |
-| `connector` | Container, commands | The only way to the internal API. No public endpoint; a sandbox reaches it only through its link. It checks the per-turn token on every request, lets reads through and holds writes until they are approved. |
+| `connector` | Container, commands | The only way to the customer's private systems: the internal API and the scanner. No public endpoint; a sandbox reaches it only through its link. It checks the per-turn token on every request, lets reads through, holds writes until they are approved, and adds the customer's own scanner key to the scanner's requests. |
 | `llm` | AI | The deployment's own model service. |
 
-Outside the stack, the customer's network: [`customer-network/terraform/`](./customer-network/terraform) creates a VPC with private subnets behind a NAT gateway and a small orders API ([`customer-network/internal-api/`](./customer-network/internal-api)) on a private address. The stack is deployed into that VPC.
+Outside the stack, the customer's network: [`customer-network/terraform/`](./customer-network/terraform) creates a VPC with private subnets behind a NAT gateway, a small orders API ([`customer-network/internal-api/`](./customer-network/internal-api)) and a scanner that lists findings ([`customer-network/scanner/`](./customer-network/scanner)), both on a private address. The stack is deployed into that VPC.
+
+## Credentials the customer owns
+
+The scanner wants an API key, and that key belongs to the customer. The stack declares it as a deployer secret (`scannerApiKey` in [`data-plane/alien.ts`](./data-plane/alien.ts)) that maps into the **connector's** environment only. The customer writes it into their own secret store (`alien dev vault set deployer-secrets scanner-api-key --stdin` locally, an SSM parameter on AWS; `alien deploy` prints the exact command). Alien, your control plane and the sandbox never see it, and the sandbox has no scanner key at all, not even a placeholder.
+
+The connector is the one way to private systems: the sandbox calls `/scanner/findings` on its link, the connector checks the per-turn token (who may call), and sends the request to the scanner with `Authorization: Bearer <the customer's key>`. Scanner calls are reads, so they pass without approval. Environment values are read when the connector starts, so rotating the key means restarting it.
+
+A public SaaS API (a cloud EDR or a ticketing API, say) goes the other way: the sandbox's egress policy allows that host, and the runner installs a host rule with `updateCredentials`, so the gateway adds the key on the way out. The key comes from a deployer secret mapped into the **runner's** environment, and the sandbox holds a placeholder:
+
+```ts
+await agent.updateCredentials(sandboxId, [
+  { host: "api.example-tickets.com", header: "Authorization", valuePrefix: "Bearer ", value: process.env.TICKETS_API_KEY! },
+])
+// and in alien.ts: .defaultPolicy({ allow: ["link:model", "link:connector", "api.example-tickets.com"] })
+```
+
+This path is not demoed here: host rules reach public hosts only, never private addresses. OAuth refresh tokens and per-turn JWTs fit the same two paths: the connector refreshes or mints them and the runner installs the result as a rule. Both paths read their key at start.
 
 ## A turn, step by step
 
@@ -66,9 +84,14 @@ docker build -t agent-sandboxes-sandbox:dev data-plane/sandbox/
 
 # The data plane (`alien` commands run in data-plane/, where alien.ts is).
 (cd data-plane && SANDBOX_IMAGE=agent-sandboxes-sandbox:dev ALIEN_AI_LOCAL_BEDROCK_REGION=us-east-1 \
-  alien dev --input internalApiUrl=http://internal-api:8080)
+  alien dev --input internalApiUrl=http://internal-api:8080 --input scannerUrl=http://scanner:8081)
 
-# The internal API, on the local deployment network, outside the stack.
+# The customer's key for their scanner, written into the deployment's own secret store and
+# given to the mock scanner. Any value works; the two must match.
+export SCANNER_API_KEY=$(openssl rand -hex 16)
+printf '%s' "$SCANNER_API_KEY" | alien dev vault --deployment <deployment id> set deployer-secrets scanner-api-key --stdin
+
+# The internal API and the scanner, on the local deployment network, outside the stack.
 docker compose -f customer-network/local/compose.yml up -d --build
 
 # The control plane, with the values `alien dev` prints.
@@ -86,7 +109,7 @@ Open http://localhost:3000, start a thread and send a message.
 
    ```bash
    cd customer-network/terraform
-   terraform init && terraform apply
+   terraform init && terraform apply -var scanner_api_key=<a key you choose>
    terraform output
    ```
 
@@ -103,10 +126,10 @@ Open http://localhost:3000, start a thread and send a message.
      --network byo --vpc-id <vpc_id> \
      --public-subnet-ids <public_subnet_ids> --private-subnet-ids <private_subnet_ids> \
      --security-group-ids <security_group_id> \
-     --input internalApiUrl=<internal_api_url>
+     --input internalApiUrl=<internal_api_url> --input scannerUrl=<scanner_url>
    ```
 
-   Run it with AWS credentials for the account the stack goes into. The values come from `terraform output`.
+   Run it with AWS credentials for the account the stack goes into. The values come from `terraform output`. Then write the same scanner key into the deployment's secret store, as `alien deploy` prints (an SSM parameter in the account).
 
 3. Point the control plane at the deployment (`ALIEN_MANAGER_URL`, `ALIEN_DEPLOYMENT_ID`, `ALIEN_TOKEN`) and start it as above.
 
@@ -122,8 +145,9 @@ Start a thread as `alice`. The **Run in sandbox** box runs a shell command in th
 2. **Nothing else is reachable.** Run `curl -m5 https://example.com` and `curl -m5 http://<internal API private IP>:8080/orders`: both are refused. Then ask the agent to *list the orders*: it runs `orders list`, which goes through the connector and works.
 3. **Writes wait for approval.** Ask: *refund order 1003*. The agent runs `orders update 1003 --status refunded`, says it is waiting, and an Approve / Deny bar appears. Approve, and the agent reports the refund.
 4. **Switch the user mid-thread.** Pick `bob` and ask: *cancel order 1004*. Before the turn starts, the sandbox is bound to `bob`; `bob` may read orders but not change them, so the connector answers 403 and the agent says so. Reads still work.
-5. **Idle threads pause and resume.** Ask the agent to *keep an orders watch running in the background*. It starts `orders watch` detached and reports its pid. Leave the thread idle until it shows *paused*, then send another message: it resumes, `pgrep -f "orders watch"` shows the same pid, and the agent remembers the earlier turns. Local sandboxes do not pause, so this one shows on AWS.
-6. **Another account.** Apply `customer-network/terraform/` and deploy the same release into a second AWS account. Everything above works the same.
+5. **A key the sandbox never holds.** Ask the agent: *list the scanner findings*. It runs `scanner findings`, the connector adds the customer's key, and three findings come back. Run `env | sort` in the sandbox again: there is no scanner key, and `curl http://<scanner private IP>:8081/findings` is refused.
+6. **Idle threads pause and resume.** Ask the agent to *keep an orders watch running in the background*. It starts `orders watch` detached and reports its pid. Leave the thread idle until it shows *paused*, then send another message: it resumes, `pgrep -f "orders watch"` shows the same pid, and the agent remembers the earlier turns. Local sandboxes do not pause, so this one shows on AWS.
+7. **Another account.** Apply `customer-network/terraform/` and deploy the same release into a second AWS account. Everything above works the same.
 
 ### What you should see
 
@@ -152,7 +176,7 @@ $ orders update 1004 --status cancelled               # after switching to bob
 [`demo.sh`](./demo.sh) makes the same calls the UI makes against the control plane's HTTP API and prints what comes back:
 
 ```bash
-CONTROL_PLANE=http://localhost:3000 INTERNAL_API_IP=<internal API private IP> ./demo.sh
+CONTROL_PLANE=http://localhost:3000 INTERNAL_API_IP=<private IP> SCANNER_IP=<private IP> ./demo.sh
 ```
 
 Moments 1 and 2 need no model. Set `WITH_MODEL=0` to run only those; the rest go through the agent, approve the held write as `alice`, switch to `bob`, and wait `IDLE_WAIT` seconds (default 180) for the pause before resuming.

@@ -1,6 +1,9 @@
+import { createServer } from "node:http"
+import type { AddressInfo } from "node:net"
 import { describe, expect, it } from "vitest"
 import { allowed } from "../data-plane/connector/src/access"
 import { Approvals } from "../data-plane/connector/src/approvals"
+import { scannerGet, scannerPath } from "../data-plane/connector/src/scanner"
 import { TurnTokens } from "../data-plane/connector/src/tokens"
 
 describe("turn tokens", () => {
@@ -61,5 +64,35 @@ describe("approvals", () => {
     const { decision } = approvals.hold(write)
     await expect(decision).resolves.toMatchObject({ approved: false, by: "timeout" })
     expect(approvals.list()).toEqual([])
+  })
+})
+
+describe("scanner", () => {
+  it("routes only /scanner/* paths", () => {
+    expect(scannerPath("/scanner/findings")).toBe("/findings")
+    expect(scannerPath("/orders")).toBeUndefined()
+    expect(scannerPath("/scanner")).toBeUndefined()
+  })
+
+  it("every user may read it, an unknown user may not", () => {
+    expect(allowed("bob", "scanner:read")).toBe(true)
+    expect(allowed("mallory", "scanner:read")).toBe(false)
+  })
+
+  it("adds the customer's key; the caller never supplies one", async () => {
+    const seen: Array<string | undefined> = []
+    const server = createServer((req, res) => {
+      seen.push(req.headers.authorization)
+      res.end(JSON.stringify({ findings: [] }))
+    })
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    try {
+      expect(await scannerGet(url, "customer-key", "/findings")).toEqual({ status: 200, body: { findings: [] } })
+      expect(seen).toEqual(["Bearer customer-key"])
+      expect((await scannerGet(url, "", "/findings")).status).toBe(503)
+    } finally {
+      server.close()
+    }
   })
 })

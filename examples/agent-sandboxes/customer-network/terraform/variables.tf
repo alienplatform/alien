@@ -15,3 +15,9 @@ variable "vpc_cidr" {
   type        = string
   default     = "10.40.0.0/16"
 }
+
+variable "scanner_api_key" {
+  description = "The key the mock scanner requires. Write the same value into the stack's secret store."
+  type        = string
+  sensitive   = true
+}

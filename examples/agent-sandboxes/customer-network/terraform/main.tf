@@ -104,14 +104,14 @@ resource "aws_security_group" "stack" {
 }
 
 # The internal API: one small instance in a private subnet, no public address, reachable on
-# 8080 from inside the VPC only.
+# 8080 (internal API) and 8081 (scanner) from inside the VPC only.
 resource "aws_security_group" "internal_api" {
   name        = "${var.name_prefix}-internal-api"
   description = "internal API, VPC only"
   vpc_id      = aws_vpc.this.id
   ingress {
     from_port   = 8080
-    to_port     = 8080
+    to_port     = 8081
     protocol    = "tcp"
     cidr_blocks = [var.vpc_cidr]
   }
@@ -155,8 +155,23 @@ resource "aws_instance" "internal_api" {
     [Install]
     WantedBy=multi-user.target
     UNIT
+    mkdir -p /opt/scanner
+    echo '${base64encode(file("${path.module}/../scanner/server.mjs"))}' | base64 -d > /opt/scanner/server.mjs
+    cat > /etc/systemd/system/scanner.service <<'UNIT'
+    [Unit]
+    Description=scanner
+    After=network-online.target
+    [Service]
+    ExecStart=/usr/bin/node /opt/scanner/server.mjs
+    Environment=SCANNER_API_KEY=${var.scanner_api_key}
+    Environment=PORT=8081
+    Restart=always
+    DynamicUser=yes
+    [Install]
+    WantedBy=multi-user.target
+    UNIT
     systemctl daemon-reload
-    systemctl enable --now internal-api
+    systemctl enable --now internal-api scanner
   EOT
   tags                        = { Name = "${var.name_prefix}-internal-api" }
   depends_on                  = [aws_route_table_association.private]
