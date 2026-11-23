@@ -328,6 +328,22 @@ impl SecretIdentityStore {
                     .or(inner.memory.take());
                 if let Some(key) = secret_text(&secret, ENCRYPTION_KEY).filter(|k| valid_key(k)) {
                     inner.key = Some(key);
+                } else if let Some(key) = inner.key.clone() {
+                    // The key in use never reached the Secret (its first write
+                    // failed). Try again now, so a restart finds the key the
+                    // cache was opened with, not a different one.
+                    if !self.stopping.load(Ordering::Relaxed) {
+                        let mut with_key = secret.clone();
+                        with_key
+                            .data
+                            .get_or_insert_with(Default::default)
+                            .insert(ENCRYPTION_KEY.into(), ByteString(key.into_bytes()));
+                        if let Ok(PutOutcome::Stored(stored)) = self.backend.put(&with_key).await {
+                            inner.secret = Some(stored.clone());
+                            inner.uid = stored.metadata.uid.clone();
+                            secret = stored;
+                        }
+                    }
                 }
                 Loaded::Found(secret)
             }
@@ -485,7 +501,10 @@ impl SecretIdentityStore {
             if let Some(key) = secret_text(&secret, ENCRYPTION_KEY).filter(|k| valid_key(k)) {
                 return Ok(key);
             }
-            let key = random_hex_key()?;
+            let key = match inner.key.clone() {
+                Some(key) => key,
+                None => random_hex_key()?,
+            };
             let stored = key.clone();
             match self
                 .update(&mut inner, None, |data| {
@@ -657,6 +676,23 @@ impl IdentityStore for SecretIdentityStore {
             }
         }
         let value = serialize(state)?;
+        // A state read from the Secret is only the latest word while the Secret
+        // is still at that version. When another process has saved an enrolled
+        // identity since (a newer rotated key), finishing this older enrollment
+        // would overwrite it: report a conflict and let the caller read again.
+        if let (Some(read_at), Some(current)) = (state.store_version.get(), secret.as_ref()) {
+            let newer_saved = current.metadata.resource_version.as_ref() != Some(&read_at)
+                && secret_text(current, IDENTITY_KEY).is_some_and(|saved| {
+                    parse_identity(current)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|saved| !saved.deployment_id.is_empty())
+                        && saved.as_bytes() != value.0.as_slice()
+                });
+            if newer_saved {
+                return Err(AlienError::new(ErrorData::IdentityConflict));
+            }
+        }
         self.update(&mut inner, None, |data| {
             data.insert(IDENTITY_KEY.into(), value);
         })
@@ -962,6 +998,36 @@ mod tests {
         assert!(store.write(&state("dep_1", "key-b")).await.is_err());
         // The key for the local database still works, from memory.
         assert_eq!(store.encryption_key().await.unwrap().len(), 64);
+    }
+
+    #[tokio::test]
+    async fn a_key_that_could_not_be_saved_is_saved_by_a_later_read_and_stays_the_same() {
+        let fake = Fake::with_empty_secret();
+        let first = store(&fake);
+        fake.refuse_writes.store(true, Ordering::Relaxed);
+        let key = first.encryption_key().await.unwrap();
+        // The first write failed: the Secret holds no key yet.
+        fake.refuse_writes.store(false, Ordering::Relaxed);
+        first.read().await.unwrap();
+        // A restart finds the key the cache was opened with.
+        let restarted = store(&fake);
+        assert_eq!(restarted.encryption_key().await.unwrap(), key);
+    }
+
+    #[tokio::test]
+    async fn finishing_an_older_enrollment_does_not_overwrite_a_newer_saved_identity() {
+        let fake = Fake::with_empty_secret();
+        let (a, b) = (store(&fake), store(&fake));
+        a.persist_enrolled(&state("dep_1", "key-a")).await.unwrap();
+        // B reads the identity and starts to finish an enrollment from it.
+        let older = b.read().await.unwrap().unwrap();
+        // Meanwhile A saves a newer, rotated key.
+        a.write(&state("dep_1", "key-rotated")).await.unwrap();
+        let mut finishing = older;
+        finishing.current = "key-from-older-enrollment".into();
+        let error = b.persist_enrolled(&finishing).await.unwrap_err();
+        assert!(matches!(error.error, Some(ErrorData::IdentityConflict)));
+        assert_eq!(b.read().await.unwrap().unwrap().current, "key-rotated");
     }
 
     #[tokio::test]

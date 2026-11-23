@@ -2168,8 +2168,8 @@ async fn open_cache(
 ) -> Result<crate::db::OperatorDb> {
     match crate::db::OperatorDb::new(data_dir, key).await {
         Ok(db) => Ok(db),
-        Err(error) if data_persistent == Some(false) => {
-            warn!(error = %error, "Cannot open the local cache; starting with an empty one");
+        Err(error) if data_persistent == Some(false) && crate::db::OperatorDb::is_key_mismatch(&error) => {
+            warn!(error = %error, "The local cache was written with another key; starting with an empty one");
             let mut entries = tokio::fs::read_dir(data_dir).await.ok();
             while let Some(entry) = match entries.as_mut() {
                 Some(entries) => entries.next_entry().await.ok().flatten(),
@@ -2733,6 +2733,35 @@ mod tests {
         super::open_cache(path, &"b".repeat(64), Some(false))
             .await
             .expect("a cache directory is emptied and opened again");
+    }
+
+    #[tokio::test]
+    async fn a_cache_is_emptied_only_for_a_key_that_does_not_match_not_for_other_open_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_str().unwrap();
+        crate::db::OperatorDb::new(path, &"a".repeat(64))
+            .await
+            .unwrap();
+        let count = || {
+            std::fs::read_dir(directory.path())
+                .unwrap()
+                .filter(|entry| {
+                    entry
+                        .as_ref()
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("operator.db")
+                })
+                .count()
+        };
+        let before = count();
+        // Not a key mismatch (the key is not even a valid key): the files stay.
+        super::open_cache(path, "not-a-key", Some(false))
+            .await
+            .err()
+            .expect("an unusable key is an error");
+        assert_eq!(count(), before);
     }
 
     /// Counts the enrollment-code requests an Operator makes with its token.

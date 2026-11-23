@@ -196,6 +196,23 @@ pub struct OperatorDb {
 }
 
 impl OperatorDb {
+    /// Whether opening failed because the database was written with another
+    /// key (its pages do not decrypt), not for a passing reason such as a busy
+    /// file or a failed migration. Only then is the database unusable as it is.
+    pub(crate) fn is_key_mismatch<E>(error: &alien_error::AlienError<E>) -> bool
+    where
+        E: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+    {
+        let mut source = error.source.as_deref();
+        while let Some(inner) = source {
+            if inner.message.starts_with("Decryption failed") {
+                return true;
+            }
+            source = inner.source.as_deref();
+        }
+        false
+    }
+
     /// Keep the enrolled identity in `store` instead of this database, which
     /// is then a cache. Its canonical deployment ID is restored from the store.
     pub(crate) async fn use_identity_store(
