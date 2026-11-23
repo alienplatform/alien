@@ -127,12 +127,54 @@ data "aws_ssm_parameter" "al2023_arm64" {
   name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
 }
 
+# The scanner's key lives in the customer's own secret store, not in the instance's user data.
+# The instance reads it at boot with its own role.
+resource "aws_ssm_parameter" "scanner_api_key" {
+  name  = "/${var.name_prefix}/scanner-api-key"
+  type  = "SecureString"
+  value = var.scanner_api_key
+}
+
+data "aws_kms_alias" "ssm" {
+  name = "alias/aws/ssm"
+}
+
+resource "aws_iam_role" "internal_api" {
+  name = "${var.name_prefix}-internal-api"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "read_scanner_key" {
+  name = "read-scanner-key"
+  role = aws_iam_role.internal_api.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = "ssm:GetParameter", Resource = aws_ssm_parameter.scanner_api_key.arn },
+      { Effect = "Allow", Action = "kms:Decrypt", Resource = data.aws_kms_alias.ssm.target_key_arn },
+    ]
+  })
+}
+
+resource "aws_iam_instance_profile" "internal_api" {
+  name = "${var.name_prefix}-internal-api"
+  role = aws_iam_role.internal_api.name
+}
+
 resource "aws_instance" "internal_api" {
   ami                         = data.aws_ssm_parameter.al2023_arm64.value
   instance_type               = "t4g.nano"
   subnet_id                   = aws_subnet.private[0].id
   private_ip                  = local.internal_api_ip
   associate_public_ip_address = false
+  iam_instance_profile        = aws_iam_instance_profile.internal_api.name
   vpc_security_group_ids      = [aws_security_group.internal_api.id]
   metadata_options {
     http_tokens = "required"
@@ -157,13 +199,16 @@ resource "aws_instance" "internal_api" {
     UNIT
     mkdir -p /opt/scanner
     echo '${base64encode(file("${path.module}/../scanner/server.mjs"))}' | base64 -d > /opt/scanner/server.mjs
+    # The scanner's key, from the customer's secret store, into a file only root (systemd) reads.
+    umask 077
+    printf 'SCANNER_API_KEY=%s\n' "$(aws ssm get-parameter --region ${var.region} --name ${aws_ssm_parameter.scanner_api_key.name} --with-decryption --query Parameter.Value --output text)" > /etc/scanner.env
     cat > /etc/systemd/system/scanner.service <<'UNIT'
     [Unit]
     Description=scanner
     After=network-online.target
     [Service]
     ExecStart=/usr/bin/node /opt/scanner/server.mjs
-    Environment=SCANNER_API_KEY=${var.scanner_api_key}
+    EnvironmentFile=/etc/scanner.env
     Environment=PORT=8081
     Restart=always
     DynamicUser=yes
@@ -174,5 +219,5 @@ resource "aws_instance" "internal_api" {
     systemctl enable --now internal-api scanner
   EOT
   tags                        = { Name = "${var.name_prefix}-internal-api" }
-  depends_on                  = [aws_route_table_association.private]
+  depends_on                  = [aws_route_table_association.private, aws_iam_role_policy.read_scanner_key]
 }

@@ -1,4 +1,4 @@
-// The customer's "scanner": a vulnerability-findings style service on a private address, outside
+// The customer's "scanner": a findings-list style service on a private address, outside
 // the stack. It wants `Authorization: Bearer <key>`, a key the customer owns. Only the connector
 // holds it.
 //

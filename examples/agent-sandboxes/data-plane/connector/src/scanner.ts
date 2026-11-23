@@ -13,8 +13,3 @@ export async function scannerGet(
   })
   return { status: response.status, body: await response.json() }
 }
-
-/** `/scanner/findings` is the scanner's `/findings`. */
-export function scannerPath(pathname: string): string | undefined {
-  return pathname.startsWith("/scanner/") ? pathname.slice("/scanner".length) : undefined
-}

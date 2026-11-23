@@ -17,7 +17,7 @@ variable "vpc_cidr" {
 }
 
 variable "scanner_api_key" {
-  description = "The key the mock scanner requires. Write the same value into the stack's secret store."
+  description = "The key the mock scanner requires. Stored as a SecureString in this account (it is also in Terraform state); write the same value into the stack's secret store."
   type        = string
   sensitive   = true
 }

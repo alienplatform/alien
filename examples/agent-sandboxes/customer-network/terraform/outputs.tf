@@ -24,13 +24,16 @@ output "scanner_url" {
   value       = "http://${local.internal_api_ip}:8081"
 }
 
-# The network settings for `alien deploy`, as JSON.
-output "network" {
-  value = jsonencode({
-    type               = "byo-vpc-aws"
-    vpc_id             = aws_vpc.this.id
-    public_subnet_ids  = aws_subnet.public[*].id
-    private_subnet_ids = aws_subnet.private[*].id
-    security_group_ids = [aws_security_group.stack.id]
-  })
+# Everything `alien deploy` needs about this network, in the form its flags take: comma-separated
+# subnet ids and the two inputs. Use it as `alien deploy ... $(terraform output -raw deploy_flags)`.
+output "deploy_flags" {
+  value = join(" ", [
+    "--network byo",
+    "--vpc-id ${aws_vpc.this.id}",
+    "--public-subnet-ids ${join(",", aws_subnet.public[*].id)}",
+    "--private-subnet-ids ${join(",", aws_subnet.private[*].id)}",
+    "--security-group-ids ${aws_security_group.stack.id}",
+    "--input internalApiUrl=http://${local.internal_api_ip}:8080",
+    "--input scannerUrl=http://${local.internal_api_ip}:8081",
+  ])
 }

@@ -50,10 +50,10 @@ function showApprovals(pending) {
     text.textContent = `${write.user} wants ${write.method} ${write.path} ${JSON.stringify(write.body)}`
     const approve = document.createElement("button")
     approve.textContent = "Approve"
-    approve.onclick = () => api(`/api/threads/${current}/approvals/${write.id}`, { approve: true, by: $("user").value })
+    approve.onclick = () => api(`/api/threads/${current}/approvals/${write.id}`, { approve: true, by: $("approver").value }).catch(e => line("notice", e.message))
     const deny = document.createElement("button")
     deny.textContent = "Deny"
-    deny.onclick = () => api(`/api/threads/${current}/approvals/${write.id}`, { approve: false, by: $("user").value })
+    deny.onclick = () => api(`/api/threads/${current}/approvals/${write.id}`, { approve: false, by: $("approver").value }).catch(e => line("notice", e.message))
     div.append(text, approve, deny)
     box.append(div)
   }

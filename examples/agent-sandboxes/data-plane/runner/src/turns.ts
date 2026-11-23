@@ -11,7 +11,20 @@ export type NewEvent = RunnerEvent extends infer E ? (E extends RunnerEvent ? Om
 
 const MAX_EVENTS = 2000
 
+/** Runs one function at a time, in the order they were asked for. */
+export class Mutex {
+  private tail: Promise<unknown> = Promise.resolve()
+
+  run<T>(fn: () => Promise<T> | T): Promise<T> {
+    const result = this.tail.then(fn)
+    this.tail = result.catch(() => {})
+    return result
+  }
+}
+
 export class ThreadEvents {
+  /** Serializes everything that changes the thread's sandbox: open, resume, turn start, pause. */
+  readonly lock = new Mutex()
   running = false
   sessionId: string | undefined
   private events: RunnerEvent[] = []
@@ -56,4 +69,32 @@ export class LineSplitter {
     this.rest = ""
     return last ? [last] : []
   }
+}
+
+/** Starts a turn unless one is running. `start` runs inside the thread's lock, so a pause cannot interleave. */
+export function startTurn(t: ThreadEvents, start: () => void): Promise<void> {
+  return t.lock.run(() => {
+    if (t.running) throw new Error("a turn is already running in this thread")
+    t.running = true
+    start()
+  })
+}
+
+/**
+ * Pauses the thread's sandbox only if no turn is running, checked inside the thread's lock: a
+ * turn that arrives meanwhile waits for the pause to finish and then resumes it.
+ */
+export function pauseWhenIdle(
+  t: ThreadEvents,
+  canPause: () => Promise<boolean>,
+  pause: () => Promise<void>,
+): Promise<{ paused: boolean; reason?: string }> {
+  return t.lock.run(async () => {
+    if (t.running) throw new Error("a turn is running; pause after it ends")
+    if (!(await canPause())) {
+      return { paused: false, reason: "this platform keeps sandboxes running instead of pausing them" }
+    }
+    await pause()
+    return { paused: true }
+  })
 }

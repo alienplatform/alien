@@ -8,36 +8,28 @@
 // `Authorization: Bearer placeholder` is refused.
 //
 // Commands, from the control plane through the deployment's command channel:
-//   issue-token { threadId, user }     a token for the next turn
-//   approvals   { threadId? }          writes waiting for a decision
-//   decide      { id, approve, by }    approve or deny one
+//   issue-token  { threadId, user }               a token for the next turn
+//   revoke-token { threadId }                     end the thread's token (the turn is over)
+//   approvals    { threadId? }                    writes waiting for a decision
+//   decide       { id, threadId, approve, by }    approve or deny one
 
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import { createServer, type ServerResponse } from "node:http"
 import { createCommandReceiver } from "@alienplatform/commands"
-import { allowed } from "./access"
 import { Approvals } from "./approvals"
-import { scannerGet, scannerPath } from "./scanner"
+import { createConnector, type Upstream } from "./handler"
+import { scannerGet } from "./scanner"
 import { TurnTokens } from "./tokens"
 
 const INTERNAL_API_URL = (process.env.INTERNAL_API_URL ?? "").replace(/\/$/, "")
 const SCANNER_URL = process.env.SCANNER_URL ?? ""
 // The customer's key, from their own secret store. Only this process reads it.
 const SCANNER_API_KEY = process.env.SCANNER_API_KEY ?? ""
-const tokens = new TurnTokens(Number(process.env.TURN_TOKEN_TTL_SECONDS ?? 900) * 1000)
+// A token ends with its turn; this limit only covers a turn nobody ended, so it must outlast the
+// runner's longest turn (30 minutes).
+const tokens = new TurnTokens(Number(process.env.TURN_TOKEN_TTL_SECONDS ?? 35 * 60) * 1000)
 const approvals = new Approvals(Number(process.env.APPROVAL_TIMEOUT_SECONDS ?? 600) * 1000)
 
-function send(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { "content-type": "application/json" })
-  res.end(JSON.stringify(body))
-}
-
-async function readBody(req: IncomingMessage): Promise<string> {
-  let raw = ""
-  for await (const chunk of req) raw += chunk
-  return raw
-}
-
-async function internal(method: string, path: string, body?: string): Promise<{ status: number; body: unknown }> {
+async function internal(method: string, path: string, body?: string): Promise<Upstream> {
   if (!INTERNAL_API_URL) return { status: 503, body: { error: "INTERNAL_API_URL is not set" } }
   const response = await fetch(`${INTERNAL_API_URL}${path}`, {
     method,
@@ -47,63 +39,21 @@ async function internal(method: string, path: string, body?: string): Promise<{ 
   return { status: response.status, body: await response.json() }
 }
 
-async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const url = new URL(req.url ?? "/", "http://connector")
-  if (url.pathname === "/health") return send(res, 200, { ok: true })
-  const scanner = scannerPath(url.pathname)
-  if (!scanner && !url.pathname.startsWith("/orders")) return send(res, 404, { error: "not found" })
+const connector = createConnector({
+  tokens,
+  approvals,
+  internal,
+  scanner: path => scannerGet(SCANNER_URL, SCANNER_API_KEY, path),
+  log: line => console.log(line),
+})
 
-  const grant = tokens.check(req.headers.authorization)
-  if ("error" in grant) {
-    console.log(`refused ${req.method} ${url.pathname}: ${grant.error}`)
-    return send(res, 401, { error: grant.error })
-  }
-  const { user, threadId } = grant
-
-  if (scanner) {
-    if (req.method !== "GET") return send(res, 405, { error: "the scanner is read only" })
-    if (!allowed(user, "scanner:read")) return send(res, 403, { error: `${user} may not read scanner findings` })
-    const result = await scannerGet(SCANNER_URL, SCANNER_API_KEY, scanner + url.search)
-    console.log(`${user} read scanner ${scanner}: ${result.status}`)
-    return send(res, result.status, result.body)
-  }
-
-  if (req.method === "GET") {
-    if (!allowed(user, "orders:read")) return send(res, 403, { error: `${user} may not read orders` })
-    const result = await internal("GET", url.pathname)
-    console.log(`${user} read ${url.pathname}: ${result.status}`)
-    return send(res, result.status, result.body)
-  }
-
-  if (req.method === "PATCH") {
-    if (!allowed(user, "orders:write")) {
-      console.log(`refused ${user} write ${url.pathname}: no write access`)
-      return send(res, 403, { error: `${user} may not change orders` })
-    }
-    const raw = await readBody(req)
-    let body: unknown
-    try {
-      body = JSON.parse(raw)
-    } catch {
-      return send(res, 400, { error: "body must be JSON" })
-    }
-    const { write, decision } = approvals.hold({ threadId, user, method: "PATCH", path: url.pathname, body })
-    console.log(`holding ${user} write ${url.pathname} as ${write.id}`)
-    const outcome = await decision
-    if (!outcome.approved) {
-      console.log(`denied ${write.id} by ${outcome.by}`)
-      return send(res, 403, { error: `write denied by ${outcome.by}: ${outcome.reason}` })
-    }
-    const result = await internal("PATCH", url.pathname, raw)
-    console.log(`approved ${write.id} by ${outcome.by}: ${result.status}`)
-    return send(res, result.status, { approvedBy: outcome.by, result: result.body })
-  }
-
-  send(res, 405, { error: "method not allowed" })
+function send(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { "content-type": "application/json" })
+  res.end(JSON.stringify(body))
 }
 
 createServer((req, res) => {
-  handle(req, res).catch(error => {
+  connector.handle(req, res).catch(error => {
     console.error("request failed", error)
     if (!res.headersSent) send(res, 502, { error: "internal API unreachable" })
   })
@@ -135,15 +85,11 @@ receiver.command("approvals", async input => {
   return { pending: approvals.list(threadId) }
 })
 
+receiver.command("revoke-token", async input => ({ revoked: tokens.revoke(field(input, "threadId")) }))
+
 receiver.command("decide", async input => {
-  const id = field(input, "id")
-  const by = field(input, "by")
   const approve = typeof input === "object" && input !== null && "approve" in input && input.approve === true
-  const decided = approvals.decide(
-    id,
-    approve ? { approved: true, by } : { approved: false, by, reason: "denied in the control plane" },
-  )
-  return { decided }
+  return connector.decide({ id: field(input, "id"), threadId: field(input, "threadId"), approve, by: field(input, "by") })
 })
 
 // A source-built container compiles to one CommonJS bundle, which forbids top-level await.

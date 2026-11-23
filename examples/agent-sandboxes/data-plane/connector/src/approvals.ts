@@ -19,12 +19,15 @@ export type Decision =
   | { approved: false; by: string; reason: string }
 
 export class Approvals {
-  private pending = new Map<string, { write: PendingWrite; settle: (d: Decision) => void }>()
+  private pending = new Map<string, { write: PendingWrite; token: string; settle: (d: Decision) => void }>()
 
   constructor(private readonly timeoutMs: number) {}
 
-  /** Holds a write until `decide` or the timeout, whichever comes first. */
-  hold(write: Omit<PendingWrite, "id" | "requestedAt">): { write: PendingWrite; decision: Promise<Decision> } {
+  /**
+   * Holds a write until `decide` or the timeout, whichever comes first. `token` is the turn
+   * token the request came with; it stays here, never in the list the control plane reads.
+   */
+  hold(write: Omit<PendingWrite, "id" | "requestedAt">, token: string): { write: PendingWrite; decision: Promise<Decision> } {
     const full: PendingWrite = { ...write, id: randomUUID(), requestedAt: new Date().toISOString() }
     const decision = new Promise<Decision>(resolve => {
       const timer = setTimeout(() => {
@@ -33,6 +36,7 @@ export class Approvals {
       }, this.timeoutMs)
       this.pending.set(full.id, {
         write: full,
+        token,
         settle: d => {
           clearTimeout(timer)
           this.pending.delete(full.id)
@@ -47,6 +51,12 @@ export class Approvals {
     return [...this.pending.values()]
       .map(p => p.write)
       .filter(w => threadId === undefined || w.threadId === threadId)
+  }
+
+  /** The held write, with the token that asked for it. */
+  get(id: string): { write: PendingWrite; token: string } | undefined {
+    const entry = this.pending.get(id)
+    return entry && { write: entry.write, token: entry.token }
   }
 
   /** False when the write is no longer pending (decided, or timed out). */

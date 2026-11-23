@@ -31,10 +31,23 @@ export interface DataPlane {
   bindTurn(sandboxId: string, token: string): Promise<{ bound: boolean; reason?: string }>
   turn(input: { threadId: string; sandboxId: string; sessionId?: string; user: string; text: string }): Promise<void>
   events(threadId: string, after: number, waitMs: number): Promise<EventsResult>
-  exec(sandboxId: string, command: string): Promise<{ exitCode: number | null; stdout: string; stderr: string }>
+  /** Ends the turn's access: the connector forgets the thread's token and the sandbox's rules are removed. */
+  endTurn(threadId: string, sandboxId: string): Promise<void>
+  /** Ends every process the user's turns left running in the sandbox. */
+  endProcesses(sandboxId: string, user: string): Promise<{ ended: number }>
+  exec(
+    sandboxId: string,
+    command: string,
+    user: string,
+  ): Promise<{ exitCode: number | null; stdout: string; stderr: string }>
   pause(threadId: string, sandboxId: string): Promise<{ paused: boolean; reason?: string }>
   approvals(threadId?: string): Promise<PendingWrite[]>
-  decide(id: string, approve: boolean, by: string): Promise<boolean>
+  decide(input: { id: string; threadId: string; approve: boolean; by: string }): Promise<Decided>
+}
+
+export interface Decided {
+  decided: boolean
+  reason?: string
 }
 
 export function commandsDataPlane(config: { managerUrl: string; deploymentId: string; token: string }): DataPlane {
@@ -49,11 +62,17 @@ export function commandsDataPlane(config: { managerUrl: string; deploymentId: st
       await runner.invoke("turn", input)
     },
     events: (threadId, after, waitMs) => runner.invoke<EventsResult>("events", { threadId, after, waitMs }),
-    exec: (sandboxId, command) => runner.invoke("exec", { sandboxId, command }),
+    endTurn: async (threadId, sandboxId) => {
+      await Promise.all([
+        connector.invoke("revoke-token", { threadId }),
+        runner.invoke("unbind-turn", { sandboxId }),
+      ])
+    },
+    endProcesses: (sandboxId, user) => runner.invoke("end-processes", { sandboxId, user }),
+    exec: (sandboxId, command, user) => runner.invoke("exec", { sandboxId, command, user }),
     pause: (threadId, sandboxId) => runner.invoke("pause", { threadId, sandboxId }),
     approvals: async threadId =>
       (await connector.invoke<{ pending: PendingWrite[] }>("approvals", { threadId })).pending,
-    decide: async (id, approve, by) =>
-      (await connector.invoke<{ decided: boolean }>("decide", { id, approve, by })).decided,
+    decide: input => connector.invoke<Decided>("decide", input),
   }
 }

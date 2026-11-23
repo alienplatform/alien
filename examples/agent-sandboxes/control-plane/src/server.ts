@@ -61,8 +61,7 @@ app.post("/api/threads/:id/exec", async c => {
 
 app.post("/api/threads/:id/approvals/:approval", async c => {
   const body = await c.req.json<{ approve: boolean; by: string }>()
-  const decided = await router.decide(c.req.param("id"), c.req.param("approval"), body.approve, body.by)
-  return c.json({ decided })
+  return c.json(await router.decide(c.req.param("id"), c.req.param("approval"), body.approve, body.by))
 })
 
 app.get("/api/threads/:id/events", c => {

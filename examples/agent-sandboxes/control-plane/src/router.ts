@@ -3,10 +3,15 @@
 // A message opens the thread's sandbox (creating it, or resuming it if it was paused), binds it
 // to the user who is asking, and only then starts the turn. While the turn runs, the router
 // long-polls the runner for the agent's events and the connector for writes waiting for
-// approval, and fans both out to the browser. A thread left idle is paused.
+// approval, and fans both out to the browser. When the turn ends its access ends with it. A
+// thread left idle is paused.
+//
+// Opening, starting a turn, pausing and resuming a thread's sandbox run one at a time (one lock
+// per thread), so a thread gets one sandbox and a pause cannot catch a message half way.
 
 import { bindTurn } from "./bind-turn"
-import type { DataPlane, PendingWrite } from "./data-plane"
+import type { DataPlane, Decided, PendingWrite } from "./data-plane"
+import { KeyedLock } from "./lock"
 import type { Thread, ThreadStore } from "./store"
 
 export type UiEvent =
@@ -25,6 +30,7 @@ export class ThreadRouter {
   private listeners = new Map<string, Set<Listener>>()
   private cursors = new Map<string, number>()
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private locks = new KeyedLock()
 
   constructor(
     private readonly dp: DataPlane,
@@ -74,29 +80,38 @@ export class ThreadRouter {
 
   /** Starts a turn. Resolves once the turn has started; its events arrive through `subscribe`. */
   async send(threadId: string, user: string, text: string): Promise<void> {
-    let thread = this.store.get(threadId)
-    if (!thread) throw new Error(`no thread ${threadId}`)
-    if (thread.state === "running") throw new Error("this thread is already answering")
-    this.clearIdle(threadId)
-    if (thread.user !== user) this.emit(threadId, { type: "notice", text: `user switched to ${user}` })
-    this.store.update(threadId, { user })
-    this.emit(threadId, { type: "user", user, text })
-    this.setState(threadId, "running")
-    try {
-      thread = await this.open(thread)
-      const sandboxId = thread.sandboxId as string
-      // The turn does not start until the gateway has the new user's token.
-      const binding = await bindTurn(this.dp, { threadId, sandboxId }, user)
-      this.emit(threadId, {
-        type: "notice",
-        text: binding.bound ? `sandbox bound to ${user}` : `sandbox not bound: ${binding.reason}`,
-      })
-      await this.dp.turn({ threadId, sandboxId, sessionId: thread.sessionId, user, text })
-    } catch (error) {
-      this.emit(threadId, { type: "notice", text: `turn failed to start: ${message(error)}` })
-      this.finish(threadId)
-      throw error
-    }
+    await this.locks.run(threadId, async () => {
+      let thread = this.store.get(threadId)
+      if (!thread) throw new Error(`no thread ${threadId}`)
+      if (thread.state === "running") throw new Error("this thread is already answering")
+      this.clearIdle(threadId)
+      const previousUser = thread.user
+      if (previousUser !== user) this.emit(threadId, { type: "notice", text: `user switched to ${user}` })
+      this.store.update(threadId, { user })
+      this.emit(threadId, { type: "user", user, text })
+      this.setState(threadId, "running")
+      try {
+        const hadSandbox = thread.sandboxId !== undefined
+        thread = await this.open(thread)
+        const sandboxId = thread.sandboxId as string
+        // What the previous user's turns left running must not run as the new user.
+        if (previousUser !== user && hadSandbox) {
+          const { ended } = await this.dp.endProcesses(sandboxId, previousUser)
+          this.emit(threadId, {
+            type: "notice",
+            text: `ended ${ended} process${ended === 1 ? "" : "es"} that ${previousUser}'s turns left running`,
+          })
+        }
+        // The turn does not start until the gateway has the new user's token.
+        await bindTurn(this.dp, { threadId, sandboxId }, user)
+        this.emit(threadId, { type: "notice", text: `sandbox bound to ${user}` })
+        await this.dp.turn({ threadId, sandboxId, sessionId: thread.sessionId, user, text })
+      } catch (error) {
+        this.emit(threadId, { type: "notice", text: `turn failed to start: ${message(error)}` })
+        await this.finish(threadId)
+        throw error
+      }
+    })
     void this.pump(threadId)
   }
 
@@ -132,10 +147,19 @@ export class ThreadRouter {
       this.emit(threadId, { type: "notice", text: `lost the turn's events: ${message(error)}` })
     }
     if (pending) this.emit(threadId, { type: "approvals", pending: [] })
-    this.finish(threadId)
+    await this.finish(threadId)
   }
 
-  private finish(threadId: string): void {
+  /** The turn is over: its token and the sandbox's credential rules go, then the thread is idle. */
+  private async finish(threadId: string): Promise<void> {
+    const sandboxId = this.store.get(threadId)?.sandboxId
+    if (sandboxId) {
+      try {
+        await this.dp.endTurn(threadId, sandboxId)
+      } catch (error) {
+        this.emit(threadId, { type: "notice", text: `could not end the turn's access: ${message(error)}` })
+      }
+    }
     this.setState(threadId, "idle")
     this.armIdle(threadId)
   }
@@ -153,42 +177,57 @@ export class ThreadRouter {
     )
   }
 
-  private async pauseIdle(threadId: string): Promise<void> {
-    const thread = this.store.get(threadId)
-    if (!thread?.sandboxId || thread.state !== "idle") return
-    try {
-      const result = await this.dp.pause(threadId, thread.sandboxId)
-      if (result.paused) {
-        this.setState(threadId, "paused")
-        this.emit(threadId, { type: "notice", text: `paused sandbox ${thread.sandboxId} after idling` })
-      } else {
-        this.emit(threadId, { type: "notice", text: `not paused: ${result.reason}` })
+  private pauseIdle(threadId: string): Promise<void> {
+    // Under the thread's lock, and only if the thread is still idle when the lock is ours: a
+    // message that arrived first has started a turn (or is waiting behind this pause, and then
+    // resumes the sandbox).
+    return this.locks.run(threadId, async () => {
+      const thread = this.store.get(threadId)
+      if (!thread?.sandboxId || thread.state !== "idle") return
+      try {
+        const result = await this.dp.pause(threadId, thread.sandboxId)
+        if (result.paused) {
+          this.setState(threadId, "paused")
+          this.emit(threadId, { type: "notice", text: `paused sandbox ${thread.sandboxId} after idling` })
+        } else {
+          this.emit(threadId, { type: "notice", text: `not paused: ${result.reason}` })
+        }
+      } catch (error) {
+        this.emit(threadId, { type: "notice", text: `pause failed: ${message(error)}` })
       }
-    } catch (error) {
-      this.emit(threadId, { type: "notice", text: `pause failed: ${message(error)}` })
-    }
+    })
   }
 
   /** Runs a shell command in the thread's sandbox, resuming it first if it is paused. */
   async exec(threadId: string, command: string): Promise<void> {
-    let thread = this.store.get(threadId)
-    if (!thread) throw new Error(`no thread ${threadId}`)
-    if (!thread.sandboxId || thread.state === "paused") {
-      thread = await this.open(thread)
-      if (thread.state === "paused") this.setState(threadId, "idle")
-    }
-    const result = await this.dp.exec(thread.sandboxId as string, command)
+    const thread = await this.locks.run(threadId, async () => {
+      let current = this.store.get(threadId)
+      if (!current) throw new Error(`no thread ${threadId}`)
+      if (!current.sandboxId || current.state === "paused") {
+        current = await this.open(current)
+        if (current.state === "paused") this.setState(threadId, "idle")
+      }
+      return current
+    })
+    const result = await this.dp.exec(thread.sandboxId as string, command, thread.user)
     this.emit(threadId, { type: "exec", command, ...result })
     if (this.store.get(threadId)?.state !== "running") this.armIdle(threadId)
   }
 
-  async decide(threadId: string, id: string, approve: boolean, by: string): Promise<boolean> {
-    const decided = await this.dp.decide(id, approve, by)
+  /**
+   * Passes an approver's decision to the connector, which decides whether it counts. The demo
+   * has no sign-in, so `by` is the identity the UI claims; in your product your own sign-in
+   * decides who is approving.
+   */
+  async decide(threadId: string, id: string, approve: boolean, by: string): Promise<Decided> {
+    const result = await this.dp.decide({ id, threadId, approve, by })
     this.emit(threadId, {
       type: "notice",
-      text: decided ? `${by} ${approve ? "approved" : "denied"} the write` : "that write is no longer waiting",
+      text: result.decided
+        ? `${by} ${approve ? "approved" : "denied"} the write`
+        : `${by}'s decision was not accepted: ${result.reason ?? "that write is no longer waiting"}`,
     })
-    return decided
+    return result
   }
 }
 

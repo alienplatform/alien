@@ -3,20 +3,27 @@
 //
 //   open       { threadId, sandboxId? }             create the thread's sandbox, or resume it
 //   bind-turn  { sandboxId, token }                 install the turn token on the connector link
+//   unbind-turn { sandboxId }                       remove every credential rule from the sandbox
+//   end-processes { sandboxId, user }               end what that user's turns left running
 //   turn       { threadId, sandboxId, sessionId?, user, text }   start one agent turn
 //   events     { threadId, after, waitMs? }         long-poll the turn's events
-//   exec       { sandboxId, command }               run a shell command in the sandbox
+//   exec       { sandboxId, command, user }         run a shell command in the sandbox
 //   pause      { threadId, sandboxId }              pause an idle sandbox
 //   close      { sandboxId }                        end it
 //
 // One turn is one process: `claude -p` with stream-json in and out, `--resume <session>` after
-// the first turn. Claude Code keeps the conversation on the sandbox's disk, so nothing runs
-// between turns and a pause never cuts a live stream.
+// the first turn. Claude Code keeps the conversation on the sandbox's disk, so the agent session
+// needs nothing running between turns and a pause never cuts a live stream. A process the agent
+// leaves running (a watcher, say) keeps running, but the turn's credentials are removed when the
+// turn ends, so between turns it has no access through the connector.
+//
+// Open, turn start and pause of one thread run one at a time (the thread's lock).
 
 import { randomUUID } from "node:crypto"
 import { sandbox } from "@alienplatform/bindings"
 import { createCommandReceiver } from "@alienplatform/commands"
-import { LineSplitter, ThreadEvents } from "./turns"
+import { END_PROCESSES_SCRIPT, TURN_USER_VAR } from "./processes"
+import { LineSplitter, pauseWhenIdle, startTurn, ThreadEvents } from "./turns"
 
 const agent = sandbox("agent")
 const MODEL = process.env.MODEL ?? "claude-sonnet-4-6"
@@ -72,13 +79,15 @@ async function prepareWorkspace(sandboxId: string) {
   }
 }
 
-async function agentEnv(): Promise<Record<string, string>> {
+async function agentEnv(user: string): Promise<Record<string, string>> {
   const modelUrl = await agent.linkUrl("model", 8080)
   const connectorUrl = await agent.linkUrl("connector", 8080)
   if (!modelUrl || !connectorUrl) throw new Error("the agent sandbox must link model and connector")
   return {
     // Also passed with every command: a local sandbox takes its environment from the command.
     ...PLACEHOLDER_ENV,
+    // Marks every process this command starts, so a user switch can end them (processes.ts).
+    [TURN_USER_VAR]: user,
     ANTHROPIC_BASE_URL: modelUrl.replace(/\/$/, ""),
     CONNECTOR_URL: connectorUrl.replace(/\/$/, ""),
     ANTHROPIC_MODEL: MODEL,
@@ -99,7 +108,6 @@ async function agentEnv(): Promise<Record<string, string>> {
 
 async function runTurn(t: ThreadEvents, sandboxId: string, sessionId: string | undefined, user: string, text: string) {
   const turnId = randomUUID()
-  t.running = true
   t.push({ kind: "turn-start", turnId, user })
   const args = [
     "-p",
@@ -117,7 +125,7 @@ async function runTurn(t: ThreadEvents, sandboxId: string, sessionId: string | u
     const proc = await agent.runInteractive(sandboxId, "claude", {
       args,
       cwd: WORKSPACE_DIR,
-      env: await agentEnv(),
+      env: await agentEnv(user),
       timeoutMs: TURN_TIMEOUT_MS,
     })
     const message = { type: "user", message: { role: "user", content: [{ type: "text", text }] } }
@@ -147,6 +155,13 @@ async function runTurn(t: ThreadEvents, sandboxId: string, sessionId: string | u
     error = e instanceof Error ? e.message : String(e)
     console.error(`turn ${turnId} failed`, e)
   } finally {
+    // The turn's access ends with the turn, before anything else can start in this thread.
+    try {
+      await agent.updateCredentials(sandboxId, [])
+    } catch (e) {
+      console.error(`turn ${turnId}: removing the credentials failed`, e)
+      error ??= `could not remove the turn's credentials: ${e instanceof Error ? e.message : String(e)}`
+    }
     t.running = false
     t.push({ kind: "turn-end", turnId, exitCode, ...(error ? { error } : {}) })
   }
@@ -156,52 +171,62 @@ async function runTurn(t: ThreadEvents, sandboxId: string, sessionId: string | u
 // enough for a chat.
 const receiver = createCommandReceiver({ maxLeases: 16, pollIntervalMs: 1000 })
 
+// One sandbox per thread: the router asks once, and the lock makes a second `open` for the same
+// thread wait and find the first one's sandbox.
+const sandboxOf = new Map<string, string>()
+
 receiver.command("open", async input => {
   const i = obj(input)
   const threadId = str(i, "threadId")
-  const known = optStr(i, "sandboxId")
-  if (known) {
-    const found = await agent.get(known)
-    if (found && found.state === "paused") {
-      await agent.resume(known)
-      return { sandboxId: known, created: false, resumed: true }
+  return thread(threadId).lock.run(async () => {
+    const known = optStr(i, "sandboxId") ?? sandboxOf.get(threadId)
+    if (known) {
+      const found = await agent.get(known)
+      if (found && found.state === "paused") {
+        await agent.resume(known)
+        return { sandboxId: known, created: false, resumed: true }
+      }
+      if (found && found.state !== "terminated") return { sandboxId: known, created: false, resumed: false }
     }
-    if (found && found.state !== "terminated") return { sandboxId: known, created: false, resumed: false }
-  }
-  const created = await agent.create({ env: PLACEHOLDER_ENV })
-  await prepareWorkspace(created.sandboxId)
-  // A fresh sandbox starts a fresh conversation.
-  thread(threadId).sessionId = undefined
-  console.log(`thread ${threadId}: sandbox ${created.sandboxId}`)
-  return { sandboxId: created.sandboxId, created: true, resumed: false }
+    const created = await agent.create({ env: PLACEHOLDER_ENV })
+    sandboxOf.set(threadId, created.sandboxId)
+    await prepareWorkspace(created.sandboxId)
+    // A fresh sandbox starts a fresh conversation.
+    thread(threadId).sessionId = undefined
+    console.log(`thread ${threadId}: sandbox ${created.sandboxId}`)
+    return { sandboxId: created.sandboxId, created: true, resumed: false }
+  })
 })
 
-// A sandbox credential rule: the gateway sets this header on the sandbox's
-// plain-HTTP requests to the link, and the call returns once every gateway replica has it.
-interface CredentialRule {
-  link: string
-  header: string
-  valuePrefix?: string
-  value: string
-}
-interface SandboxCredentials {
-  updateCredentials(sandboxId: string, rules: CredentialRule[]): Promise<void>
-}
-function hasCredentials(s: object): s is SandboxCredentials {
-  return "updateCredentials" in s && typeof s.updateCredentials === "function"
-}
-
+// A credential rule makes the egress gateway set a header on the sandbox's requests to a link;
+// the call returns once every gateway replica has it. Rules apply to the whole sandbox, so the
+// router binds before each turn and the runner removes the rule when the turn ends.
 receiver.command("bind-turn", async input => {
   const i = obj(input)
-  const sandboxId = str(i, "sandboxId")
-  const token = str(i, "token")
-  if (!hasCredentials(agent)) {
-    return { bound: false, reason: "this SDK has no sandbox credentials API yet" }
-  }
-  await agent.updateCredentials(sandboxId, [
-    { link: "connector", header: "Authorization", valuePrefix: "Bearer ", value: token },
+  await agent.updateCredentials(str(i, "sandboxId"), [
+    { link: "connector", header: "Authorization", valuePrefix: "Bearer ", value: str(i, "token") },
   ])
   return { bound: true }
+})
+
+receiver.command("unbind-turn", async input => {
+  await agent.updateCredentials(str(obj(input), "sandboxId"), [])
+  return { unbound: true }
+})
+
+// What the previous user's turns started must not run as the next user.
+receiver.command("end-processes", async input => {
+  const i = obj(input)
+  const user = str(i, "user")
+  const ended: string[] = []
+  for await (const frame of agent.runCommand(str(i, "sandboxId"), "sh", {
+    args: ["-c", END_PROCESSES_SCRIPT],
+    env: { OWNER: user },
+    timeoutMs: 30_000,
+  })) {
+    if (frame.kind === "stdout") ended.push(...frame.data.toString("utf8").split("\n").filter(Boolean))
+  }
+  return { ended: ended.length }
 })
 
 receiver.command("turn", async input => {
@@ -211,10 +236,9 @@ receiver.command("turn", async input => {
   const user = str(i, "user")
   const text = str(i, "text")
   const t = thread(threadId)
-  if (t.running) throw new Error("a turn is already running in this thread")
   // The router's store survives a runner restart; this process's memory may not.
   const sessionId = optStr(i, "sessionId") ?? t.sessionId
-  void runTurn(t, sandboxId, sessionId, user, text)
+  await startTurn(t, () => void runTurn(t, sandboxId, sessionId, user, text))
   return { started: true }
 })
 
@@ -231,13 +255,14 @@ receiver.command("exec", async input => {
   const i = obj(input)
   const sandboxId = str(i, "sandboxId")
   const command = str(i, "command")
+  const user = str(i, "user")
   let stdout = ""
   let stderr = ""
   let exitCode: number | null = null
   for await (const frame of agent.runCommand(sandboxId, "sh", {
     args: ["-c", command],
     cwd: WORKSPACE_DIR,
-    env: await agentEnv(),
+    env: await agentEnv(user),
     timeoutMs: 30_000,
   })) {
     if (frame.kind === "stdout") stdout += frame.data.toString("utf8")
@@ -249,13 +274,12 @@ receiver.command("exec", async input => {
 
 receiver.command("pause", async input => {
   const i = obj(input)
-  if (thread(str(i, "threadId")).running) throw new Error("a turn is running; pause after it ends")
   const sandboxId = str(i, "sandboxId")
-  if (!(await agent.capabilities(sandboxId)).includes("pauseResume")) {
-    return { paused: false, reason: "this platform keeps sandboxes running instead of pausing them" }
-  }
-  await agent.pause(sandboxId)
-  return { paused: true }
+  return pauseWhenIdle(
+    thread(str(i, "threadId")),
+    async () => (await agent.capabilities(sandboxId)).includes("pauseResume"),
+    () => agent.pause(sandboxId),
+  )
 })
 
 receiver.command("close", async input => {
