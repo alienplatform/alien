@@ -365,7 +365,11 @@ fn enumerate_push_targets(
             // bound to their own targets), and the manager pushes to that
             // Worker itself, so asking would only be refused on every tick. A
             // token-installed Operator holds the deployment token and keeps
-            // leasing it.
+            // leasing it. Nothing is lost by skipping: the manager never issues
+            // a relay credential for a reserved id, and the operations Worker
+            // is installed only on push deployments without an Operator (AWS
+            // and GCP), where the manager pushes to it. A Kubernetes
+            // deployment has none.
             if enrolled && resource_id == OPERATIONS_WORKER_TARGET_ID {
                 return None;
             }
