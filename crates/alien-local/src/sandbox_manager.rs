@@ -76,9 +76,8 @@ pub struct SandboxSessionConfig {
     /// Environment placed in the session
     pub env: HashMap<String, String>,
     /// Services of the deployment the session reaches through the sandbox's egress gateway.
-    /// Empty, the session gets the sandbox's shared network as before. Otherwise (with
-    /// `Allow`) it sits alone on its own internal network with the gateway, which is its only
-    /// way out.
+    /// With `Allow`, the session sits alone on its own internal network with the gateway, which
+    /// is its only way out; these are the services it can reach through it.
     pub links: Vec<SandboxLink>,
 }
 
@@ -133,8 +132,11 @@ pub struct LocalSandboxManager {
     /// Running gateways, by sandbox. Held across a gateway's create so two sessions do not
     /// start two.
     gateways: tokio::sync::Mutex<HashMap<String, Arc<LocalGateway>>>,
-    /// Image of the egress gateway a sandbox with links runs behind.
+    /// Image of the egress gateway every sandbox that reaches anything runs behind.
     gateway_image: String,
+    /// Seeds the session CAs of every gateway. Per process, like `gateway_key`, so a gateway
+    /// recreated for changed links keeps issuing the CA its sessions already trust.
+    gateway_secret: String,
 }
 
 impl LocalSandboxManager {
@@ -148,6 +150,7 @@ impl LocalSandboxManager {
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.to_string(),
+            gateway_secret: new_gateway_secret(),
         })
     }
 
@@ -212,19 +215,34 @@ impl LocalSandboxManager {
         self.ensure_image(&config.image).await?;
         let image = crate::sandbox_identity::inspect(&self.docker, &config.image, sandbox).await?;
 
-        let linked = config.egress == SandboxEgressMode::Allow && !config.links.is_empty();
+        // Every session that reaches anything goes through the sandbox's gateway, links or not,
+        // so its policy and credential rules apply as on the cloud platforms. A session's
+        // preview ports are published by a relay container beside it (see
+        // `start_preview_relays`), because Docker publishes nothing from an internal network.
+        // A gateway image that predates admin protocol 2 keeps the earlier behavior: only
+        // sessions with links run behind it, and it publishes no preview relays.
+        // An image with no digest (a local build, a `:dev` tag) cannot be judged by name: it is
+        // taken as current until its gateway has started and said which protocol it serves.
+        let gateway_current = self.gateway_serves_credentials(sandbox).await;
+        let linked = config.egress == SandboxEgressMode::Allow
+            && (gateway_current || !config.links.is_empty());
         let created = async {
             let session_egress = if linked {
                 let gateway = self.gateway(sandbox, &config.links).await?;
-                Some(
-                    crate::sandbox_gateway::attach_session(
-                        &self.docker,
-                        &gateway,
-                        sandbox,
-                        session_id,
+                if gateway.serves_credentials() || !config.links.is_empty() {
+                    Some(
+                        crate::sandbox_gateway::attach_session(
+                            &self.docker,
+                            &gateway,
+                            sandbox,
+                            session_id,
+                        )
+                        .await?,
                     )
-                    .await?,
-                )
+                } else {
+                    // An older gateway behind an undigested tag: only linked sessions use it.
+                    None
+                }
             } else {
                 None
             };
@@ -281,8 +299,21 @@ impl LocalSandboxManager {
             format!("ALIEN_SANDBOX_EXEC_GID={}", image.identity.gid),
             format!("ALIEN_SANDBOX_ROOT={SESSION_ROOT}"),
         ]);
-        if let Some(egress) = session_egress {
-            env.extend(egress.env);
+        let mut ca_mount = None;
+        if let Some(egress) = &session_egress {
+            env.extend(egress.env.iter().cloned());
+            if let Some(ca) = &egress.ca {
+                let directory = self.ca_directory(&name);
+                write_ca_files(&directory, ca, None)
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::SandboxSessionFailed {
+                        session_id: session_id.to_string(),
+                        operation: "write the session's CA".to_string(),
+                    })?;
+                env.extend(ca_env());
+                ca_mount = Some(directory);
+            }
         }
 
         let labels = HashMap::from([
@@ -296,8 +327,12 @@ impl LocalSandboxManager {
 
         // Bound to 127.0.0.1, never 0.0.0.0: a preview is for the developer's own machine, and
         // publishing on all interfaces would expose untrusted code to the local network.
-        let port_bindings: HashMap<String, Option<Vec<PortBinding>>> = config
-            .preview_ports
+        let direct_preview_ports: &[u16] = if session_egress.is_some() {
+            &[]
+        } else {
+            &config.preview_ports
+        };
+        let port_bindings: HashMap<String, Option<Vec<PortBinding>>> = direct_preview_ports
             .iter()
             .map(|port| {
                 (
@@ -310,8 +345,7 @@ impl LocalSandboxManager {
             })
             .collect();
 
-        let exposed_ports: Vec<String> = config
-            .preview_ports
+        let exposed_ports: Vec<String> = direct_preview_ports
             .iter()
             .map(|port| format!("{port}/tcp"))
             .collect();
@@ -343,6 +377,10 @@ impl LocalSandboxManager {
             cap_add: Some(vec!["KILL".to_string()]),
             security_opt: Some(vec!["no-new-privileges:true".to_string()]),
             init: Some(true),
+            // The session's CA and trust bundle, read-only, for HTTPS the gateway intercepts.
+            binds: ca_mount
+                .as_ref()
+                .map(|directory| vec![format!("{}:{CA_MOUNT}:ro", directory.display())]),
             pids_limit: config.pids_limit,
             memory: Some(config.memory_bytes),
             nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
@@ -395,6 +433,23 @@ impl LocalSandboxManager {
                 operation: "create".to_string(),
             })?;
 
+        if let (Some(directory), Some(ca)) = (
+            &ca_mount,
+            session_egress
+                .as_ref()
+                .and_then(|egress| egress.ca.as_ref()),
+        ) {
+            // The image's own roots stay trusted: the bundle is them plus the session's CA.
+            let system = self.system_bundle(&created.id).await;
+            write_ca_files(directory, ca, system.as_deref())
+                .await
+                .into_alien_error()
+                .context(ErrorData::SandboxSessionFailed {
+                    session_id: session_id.to_string(),
+                    operation: "write the session's trust bundle".to_string(),
+                })?;
+        }
+
         self.docker
             .start_container(&created.id, None)
             .await
@@ -404,11 +459,54 @@ impl LocalSandboxManager {
                 operation: "start".to_string(),
             })?;
 
+        let relays = self.gateway_serves_credentials(sandbox).await;
+        if let Some(egress) = session_egress.as_ref().filter(|_| relays) {
+            if let Err(error) = crate::sandbox_gateway::start_preview_relays(
+                &self.docker,
+                &self.gateway_image,
+                session_id,
+                &name,
+                &egress.network,
+                &config.preview_ports,
+            )
+            .await
+            {
+                let _ =
+                    crate::sandbox_gateway::remove_preview_relays(&self.docker, session_id, &name)
+                        .await;
+                let _ = self
+                    .docker
+                    .remove_container(
+                        &created.id,
+                        Some(RemoveContainerOptions {
+                            force: true,
+                            v: true,
+                            ..Default::default()
+                        }),
+                    )
+                    .await;
+                return Err(error);
+            }
+        }
+
         Ok(SandboxSessionHandle {
             session_id: session_id.to_string(),
             container_id: created.id,
             running: true,
         })
+    }
+
+    /// Whether the sandbox's gateway serves admin protocol 2. A pinned image answers by its
+    /// digest; an undigested one by the protocol its running gateway reported (taken as current
+    /// until one has started).
+    async fn gateway_serves_credentials(&self, sandbox: &str) -> bool {
+        if !alien_core::sandbox_egress::gateway_image_serves_credentials(&self.gateway_image) {
+            return false;
+        }
+        match self.gateways.lock().await.get(sandbox) {
+            Some(gateway) => gateway.serves_credentials(),
+            None => true,
+        }
     }
 
     /// The sandbox's gateway, started or replaced for these links.
@@ -452,6 +550,7 @@ impl LocalSandboxManager {
         let gateway = crate::sandbox_gateway::ensure_gateway(
             &self.docker,
             &self.gateway_key,
+            &self.gateway_secret,
             sandbox,
             &self.gateway_image,
             &links,
@@ -460,6 +559,81 @@ impl LocalSandboxManager {
         .await?;
         gateways.insert(sandbox.to_string(), Arc::clone(&gateway));
         Ok(gateway)
+    }
+
+    /// Replaces a session's credential rules on its sandbox's gateway. Returns once the gateway
+    /// holds them, so the session's next request uses them.
+    pub async fn update_credentials(
+        &self,
+        sandbox: &str,
+        session_id: &str,
+        rules: &[alien_core::SandboxCredentialRule],
+    ) -> Result<()> {
+        if !self.gateway_serves_credentials(sandbox).await {
+            return Err(AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: session_id.to_string(),
+                operation: format!(
+                    "update credentials: {}",
+                    alien_core::sandbox_egress::CREDENTIALS_UNAVAILABLE
+                ),
+            }));
+        }
+        let gateway = self
+            .gateways
+            .lock()
+            .await
+            .get(sandbox)
+            .cloned()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxSessionFailed {
+                    session_id: session_id.to_string(),
+                    operation: "update credentials: this sandbox runs no egress gateway in \
+                                alien dev. A sandbox with egress `none` reaches nothing to put a \
+                                credential on"
+                        .to_string(),
+                })
+            })?;
+        gateway.update_credentials(session_id, rules).await
+    }
+
+    /// Host directory with one session's CA and trust bundle, bind-mounted read-only.
+    fn ca_directory(&self, container: &str) -> PathBuf {
+        self.state_dir.join("sandbox-egress-ca").join(container)
+    }
+
+    /// The image's CA bundle, read from the created container before it starts.
+    async fn system_bundle(&self, container_id: &str) -> Option<String> {
+        use futures::TryStreamExt;
+        for path in SYSTEM_BUNDLES {
+            let archive: Vec<u8> = match self
+                .docker
+                .download_from_container(
+                    container_id,
+                    Some(bollard::query_parameters::DownloadFromContainerOptions {
+                        path: path.to_string(),
+                    }),
+                )
+                .map_ok(|chunk| chunk.to_vec())
+                .try_concat()
+                .await
+            {
+                Ok(archive) => archive,
+                Err(_) => continue,
+            };
+            let mut entries = tar::Archive::new(archive.as_slice());
+            let Ok(mut entries) = entries.entries() else {
+                continue;
+            };
+            if let Some(Ok(mut entry)) = entries.next() {
+                let mut text = String::new();
+                if std::io::Read::read_to_string(&mut entry, &mut text).is_ok()
+                    && text.contains("BEGIN CERTIFICATE")
+                {
+                    return Some(text);
+                }
+            }
+        }
+        None
     }
 
     /// Pulls the sandbox image if the daemon does not already have it.
@@ -886,14 +1060,30 @@ impl LocalSandboxManager {
                 operation: "inspect for preview".to_string(),
             })?;
 
-        let host_port = inspected
-            .network_settings
-            .and_then(|settings| settings.ports)
-            .and_then(|ports| ports.get(&format!("{port}/tcp")).cloned().flatten())
-            .and_then(|bindings| {
-                bindings
-                    .first()
-                    .and_then(|binding| binding.host_port.clone())
+        // A session behind the gateway is previewed through its relay; any other publishes the
+        // port itself.
+        let relayed = match inspected.name.as_deref() {
+            Some(name) => {
+                crate::sandbox_gateway::preview_host_port(
+                    &self.docker,
+                    name.trim_start_matches('/'),
+                    port,
+                )
+                .await
+            }
+            None => None,
+        };
+        let host_port = relayed
+            .or_else(|| {
+                inspected
+                    .network_settings
+                    .and_then(|settings| settings.ports)
+                    .and_then(|ports| ports.get(&format!("{port}/tcp")).cloned().flatten())
+                    .and_then(|bindings| {
+                        bindings
+                            .first()
+                            .and_then(|binding| binding.host_port.clone())
+                    })
             })
             .ok_or_else(|| {
                 AlienError::new(ErrorData::SandboxSessionFailed {
@@ -973,8 +1163,10 @@ impl LocalSandboxManager {
                     })
             }
         }
-        // A session of a sandbox with links had its own network; its policy and network go
-        // with it. Nothing to do for any other session.
+        crate::sandbox_gateway::remove_preview_relays(&self.docker, session_id, &name).await?;
+        // A session behind the gateway had its own network and CA; its policy, credential rules,
+        // network and CA go with it. Nothing to do for any other session.
+        let _ = tokio::fs::remove_dir_all(self.ca_directory(&name)).await;
         let gateway = self.gateways.lock().await.get(sandbox).cloned();
         crate::sandbox_gateway::detach_session(
             &self.docker,
@@ -1025,6 +1217,54 @@ impl LocalSandboxManager {
         gateway?;
         Ok(terminated + inspections?)
     }
+}
+
+/// Where a session finds its CA (`ca.pem`) and trust bundle (`bundle.pem`).
+pub const CA_MOUNT: &str = "/etc/alien-egress";
+
+/// Where images keep their system CA bundle, most common first.
+const SYSTEM_BUNDLES: [&str; 3] = [
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/cert.pem",
+];
+
+/// The variables common TLS clients read their trust from: OpenSSL, curl and Python read the
+/// bundle; Node adds `ca.pem` to its own roots.
+fn ca_env() -> [String; 4] {
+    [
+        format!("SSL_CERT_FILE={CA_MOUNT}/bundle.pem"),
+        format!("REQUESTS_CA_BUNDLE={CA_MOUNT}/bundle.pem"),
+        format!("CURL_CA_BUNDLE={CA_MOUNT}/bundle.pem"),
+        format!("NODE_EXTRA_CA_CERTS={CA_MOUNT}/ca.pem"),
+    ]
+}
+
+/// The CA carries no private key; the gateway's never leaves the gateway.
+async fn write_ca_files(
+    directory: &std::path::Path,
+    ca: &str,
+    system: Option<&str>,
+) -> std::io::Result<()> {
+    if ca.contains("PRIVATE KEY") {
+        return Err(std::io::Error::other("the sandbox CA must not carry a key"));
+    }
+    tokio::fs::create_dir_all(directory).await?;
+    tokio::fs::write(directory.join("ca.pem"), ca).await?;
+    let mut bundle = system.unwrap_or_default().trim_end().to_string();
+    if !bundle.is_empty() {
+        bundle.push('\n');
+    }
+    bundle.push_str(ca);
+    tokio::fs::write(directory.join("bundle.pem"), bundle).await
+}
+
+fn new_gateway_secret() -> String {
+    use base64::Engine;
+    use rand::RngCore;
+    let mut secret = [0u8; 32];
+    rand::rng().fill_bytes(&mut secret);
+    base64::engine::general_purpose::STANDARD.encode(secret)
 }
 
 /// Resolves a caller-supplied path against the session root.
@@ -1178,6 +1418,33 @@ mod tests {
         }
     }
 
+    /// Against a gateway image that predates admin protocol 2, the credentials call is refused
+    /// with a clear message before any gateway is looked up.
+    #[tokio::test]
+    async fn credentials_are_refused_with_a_gateway_that_predates_them() {
+        let server = MockServer::start_async().await;
+        let manager = LocalSandboxManager {
+            docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
+                .unwrap(),
+            state_dir: PathBuf::new(),
+            gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
+            gateways: Default::default(),
+            gateway_image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.to_string(),
+            gateway_secret: new_gateway_secret(),
+        };
+        let manager = manager.with_gateway_image(
+            "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037",
+        );
+        let error = manager
+            .update_credentials("box", "s1", &[])
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:?}").contains("per-sandbox credentials are not available"),
+            "{error:?}"
+        );
+    }
+
     /// A declaration that names the manager's own variables is refused before Docker is asked
     /// for anything, so it never chooses what code in the session reads.
     #[tokio::test]
@@ -1196,6 +1463,7 @@ mod tests {
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: String::new(),
+            gateway_secret: new_gateway_secret(),
         };
         for name in [
             "ALIEN_SANDBOX_EXEC_UID",
@@ -1272,6 +1540,7 @@ mod tests {
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: String::new(),
+            gateway_secret: new_gateway_secret(),
         };
 
         assert!(
@@ -1351,6 +1620,7 @@ mod tests {
                 gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
                 gateways: Default::default(),
                 gateway_image: String::new(),
+                gateway_secret: new_gateway_secret(),
             };
 
             let error = manager

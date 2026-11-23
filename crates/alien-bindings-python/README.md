@@ -91,6 +91,11 @@ finally:
     await runtime.terminate(instance.sandbox_id)
 ```
 
+`await runtime.update_credentials(sandbox_id, rules)` replaces one sandbox's credential rules:
+the egress gateway puts each rule's header on that sandbox's matching requests, so the sandbox
+only holds a placeholder. It returns once every gateway replica holds the new set. See
+[sandbox credentials](../../packages/core/SANDBOX_CREDENTIALS.md).
+
 Long-running commands can use `start_job`, `poll_job`, and `cancel_job`. Call `capabilities()` for new sessions, or `capabilities(sandbox_id)` for an existing session, before optional file, job, pause/resume, or isolation behavior. Azure sessions retain the transport they were created with across image upgrades and rollbacks.
 
 ## PostgreSQL TLS

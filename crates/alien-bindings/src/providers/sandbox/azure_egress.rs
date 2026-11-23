@@ -10,6 +10,8 @@ use alien_error::AlienError;
 use std::{collections::BTreeMap, sync::Arc};
 
 const IDENTITY_LABEL: &str = "alien-egress-identity";
+/// Set when the gateway's CA was handed to the sandbox's agent at create.
+pub(super) const CA_LABEL: &str = "alien-egress-ca";
 
 /// Azure echoes the effective HTTP policy twice and adds its enforcement mode.
 /// Both copies must match, including rule order; unknown fields remain refused.
@@ -103,6 +105,14 @@ impl AzureSandbox {
         // Azure chooses its vendor id after create; the label persists the pre-created identity.
         let identity = uuid::Uuid::new_v4().to_string();
         let token = manager.mint_identity(&identity, expires / 1000).await?;
+        // The agent installs the sandbox's CA at start, so every process it runs trusts it. The
+        // label records that it was handed over: Azure has no agent endpoint to ask later.
+        if self.agent {
+            if let Some(ca) = manager.sandbox_ca(&identity).await? {
+                environment.insert("ALIEN_SANDBOX_EGRESS_CA".into(), ca);
+                labels.insert(CA_LABEL.into(), "1".into());
+            }
+        }
         // An agent image can run the loopback forwarder, so with several replicas its proxy
         // address is the loopback and the agent fails over between the replicas per connection.
         // Without the agent there is no forwarder: the one gateway address stays.
@@ -213,6 +223,14 @@ impl AzureSandbox {
         }
         self.discard(sandbox_id, reason).await
     }
+}
+
+/// Whether this sandbox's agent was given the CA, which host rules need.
+pub(super) fn has_ca(sandbox: &Sandbox) -> bool {
+    sandbox
+        .labels
+        .get(CA_LABEL)
+        .is_some_and(|value| value == "1")
 }
 
 pub(super) fn identity(sandbox: &Sandbox) -> Result<&str> {

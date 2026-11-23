@@ -355,10 +355,196 @@ impl Replication {
         }
         Ok(())
     }
+    /// A credential set counts as live only once every discovered replica holds it. A peer that
+    /// does not know the route (an older gateway) fails the fan-out: it would serve the sandbox
+    /// without the rules the caller was told are live.
+    pub async fn fanout_credentials(
+        &self,
+        record: &crate::sandbox_credentials::CredentialRecord,
+    ) -> Result<()> {
+        let body = serde_json::to_vec(&Mutation {
+            record: record.signed.clone(),
+        })
+        .into_alien_error()
+        .context(unavailable("encode replica credentials"))?;
+        // A replica that became ready while this write was going out is reached on a later
+        // round: peers are resolved again until a round finds nobody new.
+        let mut reached: Vec<SocketAddr> = Vec::new();
+        loop {
+            let pending: Vec<SocketAddr> = self
+                .peers()
+                .await?
+                .into_iter()
+                .filter(|peer| !reached.contains(peer))
+                .collect();
+            if pending.is_empty() {
+                return Ok(());
+            }
+            for peer in pending {
+                let (status, _) = match self
+                    .request(peer, "/v1/replicas/credentials-write", body.clone())
+                    .await
+                {
+                    Ok(answer) => answer,
+                    Err(error) => {
+                        tracing::warn!(%peer, code = %error.code, "credential fan-out to a peer failed");
+                        return Err(error);
+                    }
+                };
+                if status != 204 {
+                    tracing::warn!(%peer, status, "a peer did not acknowledge fanned-out credentials");
+                    return Err(AlienError::new(unavailable(
+                        "replica did not acknowledge credentials",
+                    )));
+                }
+                reached.push(peer);
+            }
+        }
+    }
+
+    /// Exchange credential sets with one peer, after policies (a set needs its policy). A peer
+    /// that answers 404 is an older gateway and holds none.
+    async fn catch_up_credentials(
+        &self,
+        peer: SocketAddr,
+        gateway: &crate::server::Gateway,
+    ) -> Result<()> {
+        // Sets this replica looked at and did not keep (rules it cannot accept, a policy it
+        // does not hold). They are reported as known in the next pull, so the sender's page
+        // moves past them instead of repeating the same full page.
+        let mut examined: std::collections::BTreeMap<(String, String), crate::record::Version> =
+            std::collections::BTreeMap::new();
+        loop {
+            let mut summary = gateway.sandbox_credentials.summary()?;
+            summary.extend(
+                examined
+                    .iter()
+                    .map(|((aud, sub), ver)| crate::record::Summary {
+                        aud: aud.clone(),
+                        sub: sub.clone(),
+                        ver: ver.clone(),
+                    }),
+            );
+            let known = serde_json::to_vec(&summary)
+                .into_alien_error()
+                .context(unavailable("encode credential summary"))?;
+            let (status, bytes) = self
+                .request(peer, "/v1/replicas/credentials-pull", known)
+                .await?;
+            if status == 404 {
+                return Ok(());
+            }
+            if status != 200 {
+                return Err(AlienError::new(unavailable(
+                    "replica credentials unavailable",
+                )));
+            }
+            let records: Vec<String> = serde_json::from_slice(&bytes)
+                .map_err(|_| AlienError::new(unavailable("decode replica credentials")))?;
+            let mut progress = false;
+            for signed in records {
+                // A set that no longer verifies against this replica's config (a link the
+                // stack update removed) is skipped; requests through it get no injection.
+                let record = match gateway.verify_credentials(signed.clone()) {
+                    Ok(record) => record,
+                    Err(error) => {
+                        tracing::warn!(code = %error.code, "skipped a credential set that does not verify");
+                        if let Ok(seen) = gateway.credential_identity(&signed) {
+                            progress |= note_examined(&mut examined, seen);
+                        }
+                        continue;
+                    }
+                };
+                // A set whose policy this replica does not hold (deleted, or not yet arrived)
+                // is skipped; the policy's own catch-up decides.
+                let seen = crate::record::Summary {
+                    aud: record.aud.clone(),
+                    sub: record.sub.clone(),
+                    ver: record.ver.clone(),
+                };
+                if gateway
+                    .policies
+                    .resolve_now(&record.aud, &record.sub)
+                    .is_some()
+                {
+                    progress |= gateway.apply_credential_record(record)?;
+                } else {
+                    progress |= note_examined(&mut examined, seen);
+                }
+            }
+            if !progress {
+                break;
+            }
+        }
+        let (status, bytes) = self
+            .request(peer, "/v1/replicas/credentials-summary", b"null".to_vec())
+            .await?;
+        if status == 404 {
+            return Ok(());
+        }
+        if status != 200 {
+            return Err(AlienError::new(unavailable(
+                "replica credential summary unavailable",
+            )));
+        }
+        let known: Vec<Summary> = serde_json::from_slice(&bytes)
+            .map_err(|_| AlienError::new(unavailable("decode replica credential summary")))?;
+        for signed in gateway
+            .sandbox_credentials
+            .newer_than(&known, &gateway.config.audiences)?
+        {
+            let body = serde_json::to_vec(&Mutation { record: signed })
+                .into_alien_error()
+                .context(unavailable("encode replica credentials"))?;
+            // The peer may not hold the policy yet; it takes the set on a later pass.
+            let _ = self
+                .request(peer, "/v1/replicas/credentials-write", body)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn catch_up(&self, live: &LiveGateway) -> Result<()> {
         let gateway = live
             .snapshot()
             .ok_or_else(|| denied("config unavailable"))?;
+        self.sync_peers(&gateway).await?;
+        if !gateway.policies.ready() {
+            // A write acknowledged while the first pass ran reached the other replicas but not
+            // this one (replicas are found only once ready). Pull again before becoming ready.
+            self.sync_peers(&gateway).await?;
+        }
+        // Rules of sandboxes whose policy is gone (deleted, expired, or a retired audience).
+        gateway.sandbox_credentials.retain(|aud, sub| {
+            gateway.config.audiences.iter().any(|known| known == aud)
+                && gateway.policies.resolve_now(aud, sub).is_some()
+        })?;
+        gateway.policies.set_ready();
+        Ok(())
+    }
+
+    /// How long a replica that just became ready waits before its last sync: the other
+    /// replicas list only ready replicas, so until discovery has refreshed they may still
+    /// acknowledge writes without it.
+    pub const DISCOVERY_WINDOW: Duration = Duration::from_secs(15);
+
+    /// The last step of joining: a full sync that started after this replica became
+    /// discoverable. Only then does it inject credentials, so a set removed while it was
+    /// joining is never put on a request.
+    pub async fn complete_join(&self, live: &LiveGateway) -> Result<()> {
+        self.catch_up(live).await?;
+        if let Some(gateway) = live.snapshot() {
+            gateway.sandbox_credentials.set_serving(true);
+            // Connections opened during the join window relayed unread (no rules were served).
+            // End those the now-served rules cover, so the client reconnects through the read path.
+            for (aud, sub, rules) in gateway.sandbox_credentials.held_rules() {
+                gateway.connections.close_uninspected(&aud, &sub, &rules);
+            }
+        }
+        Ok(())
+    }
+
+    async fn sync_peers(&self, gateway: &Arc<crate::server::Gateway>) -> Result<()> {
         gateway.policies.expire_tombstones()?;
         for peer in self.peers().await? {
             let mut ignored_expired = Vec::new();
@@ -402,8 +588,8 @@ impl Replication {
                     }
                 }
             }
+            self.catch_up_credentials(peer, gateway).await?;
         }
-        gateway.policies.set_ready();
         Ok(())
     }
 }
@@ -436,8 +622,7 @@ impl<'de> Visitor<'de> for RecordVisitor {
                 });
             } else {
                 self.0
-                    .policies
-                    .apply(record, false)
+                    .apply_policy(record, false)
                     .map_err(serde::de::Error::custom)?;
             }
             count += 1;
@@ -450,9 +635,21 @@ pub async fn run(live: Arc<LiveGateway>) -> Result<()> {
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_sync = None;
+    // When this replica became ready, while it still injects no credentials.
+    let mut joined: Option<tokio::time::Instant> = None;
     loop {
         tick.tick().await;
         if let Some(gateway) = live.snapshot() {
+            if gateway.policies.ready() && !gateway.sandbox_credentials.serving() {
+                let since = *joined.get_or_insert_with(tokio::time::Instant::now);
+                if since.elapsed() >= Replication::DISCOVERY_WINDOW {
+                    last_sync = Some(tokio::time::Instant::now());
+                    if let Err(error) = gateway.replication.complete_join(&live).await {
+                        tracing::warn!(code=%error.code, "replica synchronization failed");
+                    }
+                }
+                continue;
+            }
             if gateway.policies.ready()
                 && last_sync.is_some_and(|last: tokio::time::Instant| {
                     last.elapsed() < Duration::from_secs(30)
@@ -710,6 +907,28 @@ mod tests {
                 .resolve("p/r", &format!("box-{index}"))
                 .await
                 .is_ok());
+        }
+    }
+}
+
+/// Remember that a set was looked at; true when that is new information (not seen before, or
+/// a newer version of one that was).
+fn note_examined(
+    examined: &mut std::collections::BTreeMap<(String, String), crate::record::Version>,
+    seen: crate::record::Summary,
+) -> bool {
+    match examined.entry((seen.aud, seen.sub)) {
+        std::collections::btree_map::Entry::Vacant(slot) => {
+            slot.insert(seen.ver);
+            true
+        }
+        std::collections::btree_map::Entry::Occupied(mut slot) => {
+            if crate::record::compare_versions(slot.get(), &seen.ver).is_lt() {
+                slot.insert(seen.ver);
+                true
+            } else {
+                false
+            }
         }
     }
 }

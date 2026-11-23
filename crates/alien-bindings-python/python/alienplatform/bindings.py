@@ -610,6 +610,25 @@ class SandboxAllowEgress(TypedDict):
 EgressPolicy = Literal["internet"] | SandboxAllowEgress
 
 
+class SandboxCredentialRule(TypedDict, total=False):
+    """One credential rule of a sandbox. Exactly one of ``host`` and ``link``.
+
+    A ``host`` rule applies to HTTPS requests to that exact internet host, through the
+    gateway's TLS interception and the sandbox's own CA. A ``link`` rule applies to plain HTTP
+    requests to a service the stack links to the sandbox. The egress policy still decides what
+    the sandbox reaches; a rule never widens it. ``header`` and ``value`` are required.
+    """
+
+    host: str
+    link: str
+    port: int
+    method: str
+    path: str
+    header: str
+    valuePrefix: str
+    value: str
+
+
 class Sandbox:
     def __init__(self, name: str) -> None:
         self._handle = _LazyHandle[Any]("sandbox", name)
@@ -675,6 +694,20 @@ class Sandbox:
     @translate_errors
     async def update_egress(self, sandbox_id: str, egress: EgressPolicy) -> None:
         await (await self._handle.get()).update_egress(sandbox_id, json.dumps(egress))
+
+    @translate_errors
+    async def update_credentials(
+        self, sandbox_id: str, rules: Sequence[SandboxCredentialRule]
+    ) -> None:
+        """Replace the sandbox's credential rules; returns once every gateway replica holds them.
+
+        The list is the whole set: an empty list removes every rule. Call it from the code that
+        owns the sandbox, never from inside it. A failed call may be partly applied (some replicas
+        hold the new set); retry with the whole intended list.
+        """
+        await (await self._handle.get()).update_credentials(
+            sandbox_id, json.dumps([dict(rule) for rule in rules])
+        )
 
     @translate_errors
     async def list(self) -> list[SandboxInfo]:

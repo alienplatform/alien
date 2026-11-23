@@ -15,8 +15,7 @@ use tokio::{
 };
 
 use crate::{
-    config::CredentialRule,
-    credentials::Credentials,
+    credentials::Injection,
     error::{denied, invalid, unavailable, Result},
     policy::Target,
     server::HEADER_TIMEOUT,
@@ -30,7 +29,7 @@ pub async fn forward<G, U>(
     guest: G,
     upstream: U,
     target: Target,
-    injection: Option<(&Credentials, &[CredentialRule])>,
+    injection: Option<&Injection>,
 ) -> Result<()>
 where
     G: AsyncRead + AsyncWrite + Unpin + Send,
@@ -49,14 +48,15 @@ where
         let target = target.clone();
         let failure = service_failure.clone();
         async move {
-            if let Err(error) = prepare(&mut request, &target, injection.is_some()) {
+            if let Err(error) = prepare(&mut request, &target) {
                 *failure.lock().await = Some(error);
                 return Ok::<_, Infallible>(empty(StatusCode::FORBIDDEN));
             }
-            if let Some((credentials, rules)) = injection {
-                if let Err(error) = credentials.inject(&mut request, rules).await {
+            // The sandbox's rules as they are now, not as they were when the connection opened.
+            if let Some(injection) = injection {
+                if let Err(error) = injection.apply(&mut request) {
                     *failure.lock().await = Some(error);
-                    return Ok(empty(StatusCode::BAD_GATEWAY));
+                    return Ok(empty(StatusCode::FORBIDDEN));
                 }
             }
             let response = match sender.lock().await.send_request(request).await {
@@ -101,7 +101,7 @@ fn empty(status: StatusCode) -> Response<Body> {
     response
 }
 
-fn prepare(request: &mut Request<Incoming>, target: &Target, injection: bool) -> Result<()> {
+fn prepare(request: &mut Request<Incoming>, target: &Target) -> Result<()> {
     let headers = request.headers();
     if headers.get_all(HOST).iter().count() != 1 {
         return Err(invalid("exactly one Host required"));
@@ -158,12 +158,6 @@ fn prepare(request: &mut Request<Incoming>, target: &Target, injection: bool) ->
     request
         .headers_mut()
         .insert(CONNECTION, HeaderValue::from_static("close"));
-    if injection {
-        let path = request.uri().path();
-        if path.contains(['%', '\\']) || path.split('/').any(|part| part == "." || part == "..") {
-            return Err(denied("ambiguous credential path"));
-        }
-    }
     let path = request
         .uri()
         .path_and_query()

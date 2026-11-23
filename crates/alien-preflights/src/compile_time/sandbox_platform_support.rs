@@ -110,7 +110,7 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                 if sandbox.egress == SandboxEgress::Internet
                     && !matches!(
                         platform,
-                        Platform::Aws | Platform::Kubernetes | Platform::Azure | Platform::Gcp
+                        Platform::Aws | Platform::Kubernetes | Platform::Azure | Platform::Gcp | Platform::Local
                     )
                 {
                     return Some(format!(
@@ -564,6 +564,17 @@ mod tests {
                 assert!(result.errors.join(" ").contains("root image USER"));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn local_accepts_internet_egress_because_alien_dev_runs_a_gateway() {
+        let mut value = sandbox("agent", None, SandboxEgress::Internet);
+        value.image_user = Some(2001);
+        let result = SandboxPlatformSupportCheck
+            .check(&stack_with(value), Platform::Local)
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.errors);
     }
 
     /// Kubernetes boots a root image only with an egress boundary outside the pod; the refusal

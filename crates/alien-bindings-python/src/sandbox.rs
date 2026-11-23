@@ -385,6 +385,34 @@ impl SandboxHandle {
         })
     }
 
+    fn update_credentials<'py>(
+        &self,
+        py: Python<'py>,
+        sandbox_id: String,
+        rules_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // Fixed error text: a parser's message could repeat part of a credential value.
+        let rules: Vec<alien_core::SandboxCredentialRule> = serde_json::from_str(&rules_json)
+            .map_err(|_| {
+                map_alien_error(alien_error::AlienError::new(
+                    alien_bindings::error::ErrorData::InvalidInput {
+                        operation_context: "sandbox.updateCredentials".to_string(),
+                        details: "expected a list of credential rules, each with host or link, \
+                                  header and value"
+                            .to_string(),
+                        field_name: Some("rules".to_string()),
+                    },
+                ))
+            })?;
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            inner
+                .update_credentials(&sandbox_id, rules)
+                .await
+                .map_err(map_alien_error)
+        })
+    }
+
     fn get<'py>(&self, py: Python<'py>, sandbox_id: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         future_into_py(py, async move {

@@ -140,7 +140,10 @@ async fn an_agent_sandbox_with_two_gateway_replicas_proxies_through_a_loopback_f
         None,
     )
     .with_egress_manager(
-        Arc::new(h.reopen_with_replicas(&["10.0.6.4", "10.0.6.5"]).await),
+        Arc::new(
+            h.reopen_with_replicas_reachable(&["10.0.6.4", "10.0.6.5"])
+                .await,
+        ),
         None,
     );
     sandbox.agent = true;

@@ -18,12 +18,13 @@ use tokio::{
 
 use crate::{
     config::Config,
-    config::{CredentialRule, GatewayLink},
+    config::GatewayLink,
     connections::{Connections, IdentityPermit, SourcePermit},
     error::{denied, invalid, unavailable, Result},
     io::{Counters, Metered, Prefixed},
     policy::{check_addresses, check_link_addresses, PolicyExt, Target},
     protocol::{read_client_hello, request_target, MAX_HEADERS, MAX_HEADER_BYTES},
+    sandbox_credentials::RuleTarget,
     store::PolicyStore,
     token::{self, Claims},
 };
@@ -41,8 +42,10 @@ pub struct Gateway {
     pub keys: HashMap<String, PublicKey>,
     /// Current policies shared by all replicas.
     pub policies: Arc<PolicyStore>,
-    /// Gateway-only CA and vault access.
+    /// Gateway-only CA and upstream TLS trust.
     pub credentials: Arc<crate::credentials::Credentials>,
+    /// Each sandbox's current credential rules, shared by all configuration snapshots.
+    pub sandbox_credentials: Arc<crate::sandbox_credentials::CredentialStore>,
     /// Total accepted proxy connections.
     pub accepted: Arc<std::sync::atomic::AtomicU64>,
     /// Total denied or failed proxy connections.
@@ -53,6 +56,100 @@ pub struct Gateway {
 }
 
 impl Gateway {
+    /// Apply a verified policy record. A deletion drops the sandbox's credential rules on the
+    /// same replica at once, so no rule outlives its sandbox's grant.
+    pub fn apply_policy(&self, record: crate::record::Record, only_missing: bool) -> Result<bool> {
+        let deleted = record.claims.deleted;
+        let (aud, sub) = (record.claims.aud.clone(), record.claims.sub.clone());
+        let applied = self.policies.apply(record, only_missing)?;
+        if deleted && self.policies.resolve_now(&aud, &sub).is_none() {
+            self.sandbox_credentials.remove(&aud, &sub)?;
+        }
+        Ok(applied)
+    }
+
+    /// Verify a signed credential record against this deployment's keys and links.
+    pub fn verify_credentials(
+        &self,
+        signed: String,
+    ) -> Result<crate::sandbox_credentials::CredentialRecord> {
+        crate::sandbox_credentials::CredentialRecord::verify(
+            signed,
+            &self.keys,
+            &self.config.audiences,
+            |aud| self.config.link_ids(aud),
+            chrono::Utc::now().timestamp_millis().max(0) as u64,
+        )
+    }
+
+    /// Which sandbox and version a credential record is for, without its rules.
+    pub fn credential_identity(&self, signed: &str) -> Result<crate::record::Summary> {
+        crate::sandbox_credentials::CredentialRecord::identity(
+            signed,
+            &self.keys,
+            &self.config.audiences,
+            chrono::Utc::now().timestamp_millis().max(0) as u64,
+        )
+    }
+
+    /// Store a credential set. It needs the sandbox's live policy: rules never predate or
+    /// outlive the sandbox they belong to.
+    pub fn apply_credentials(
+        &self,
+        record: crate::sandbox_credentials::CredentialRecord,
+    ) -> Result<()> {
+        if self
+            .policies
+            .resolve_now(&record.aud, &record.sub)
+            .is_none()
+        {
+            return Err(alien_error::AlienError::new(
+                crate::error::ErrorData::PolicyMissing,
+            ));
+        }
+        self.apply_credential_record(record).map(|_| ())
+    }
+
+    /// Store a verified set. When it changes the sandbox's rules, the sandbox's connections that
+    /// relay a covered destination unread end before this returns, so the write's
+    /// acknowledgement means every later request is read and carries the rules.
+    pub fn apply_credential_record(
+        &self,
+        record: crate::sandbox_credentials::CredentialRecord,
+    ) -> Result<bool> {
+        let (aud, sub, rules) = (record.aud.clone(), record.sub.clone(), record.rules.clone());
+        let applied = self.sandbox_credentials.apply(record)?;
+        if applied {
+            self.connections.close_uninspected(&aud, &sub, &rules);
+        }
+        Ok(applied)
+    }
+
+    /// Store a credential set, catching up from the peers once when this replica does not hold
+    /// the sandbox's policy yet: a new grant counts once one replica holds it, so another can
+    /// lag until its next anti-entropy pass. A sandbox no replica knows stays refused.
+    pub async fn apply_credentials_caught_up(
+        &self,
+        live: &crate::runtime::LiveGateway,
+        record: crate::sandbox_credentials::CredentialRecord,
+    ) -> Result<()> {
+        match self.apply_credentials(record.clone()) {
+            Err(error)
+                if error.code == "SANDBOX_EGRESS_POLICY_MISSING" && self.replication.enabled() =>
+            {
+                // A failed catch-up is transient: the caller retries on 503, not 400.
+                if let Err(error) = self.replication.catch_up(live).await {
+                    tracing::warn!(code = %error.code, "catch-up before a credential write failed");
+                    return Err(alien_error::AlienError::new(
+                        crate::error::ErrorData::GatewayUnavailable,
+                    ));
+                }
+                self.apply_credentials(record)
+            }
+            result => result,
+        }
+    }
+
     /// Authorize the authenticated identity against its currently stored policy. Returns the
     /// declared link the target names, which the connection may then reach inside the
     /// deployment.
@@ -376,12 +473,30 @@ async fn authorized_proxy(
         }
     };
     audit.link = link.as_ref().map(|link| link.id.clone());
-    let rules = credential_rules(&gateway.config, claims, &target);
-    let raw = raw_link_relay(link.as_ref(), &rules);
+    // The sandbox's own rules for this destination, read again for every request.
+    let injection = crate::credentials::Injection {
+        store: gateway.sandbox_credentials.clone(),
+        aud: claims.aud.clone(),
+        sub: claims.sub.clone(),
+        target: match &link {
+            Some(link) => RuleTarget::Link(link.id.clone()),
+            None => RuleTarget::Host(target.host.clone()),
+        },
+        port: target.port,
+    };
+    // Mark before reading the rules: a rule change after this point either shows in the
+    // lookup or finds the mark and ends the connection.
+    identity.set_uninspected(Some((injection.target.clone(), injection.port)));
+    let raw = raw_link_relay(link.as_ref(), injection.current().is_empty());
     if raw {
         crate::tunnel::keep_alive(&stream.inner);
     }
     if !connect {
+        // A credential crosses the internet only inside TLS; a link is inside the deployment.
+        if link.is_none() && !injection.current().is_empty() {
+            refuse(stream, false).await?;
+            return Err(denied("credential destination requires TLS"));
+        }
         // A WebSocket handshake to a declared link carries the WebSocket once the service
         // accepts it; every other plain-proxy request is forwarded as exactly one request.
         let websocket = if raw {
@@ -399,11 +514,12 @@ async fn authorized_proxy(
         audit.allowed = true;
         log_open(audit);
         let Some(head) = websocket else {
+            identity.set_uninspected(None);
             return crate::http_proxy::forward(
                 Prefixed::new(input, stream),
                 upstream,
                 target,
-                None,
+                link.is_some().then_some(&injection),
             )
             .await;
         };
@@ -431,9 +547,10 @@ async fn authorized_proxy(
         upstream,
         target,
         raw,
-        &rules,
+        link.is_some(),
+        &injection,
         &gateway.credentials,
-        (&claims.aud, &claims.sub),
+        identity,
     )
     .await
 }
@@ -604,24 +721,12 @@ fn response_head(
     head
 }
 
-/// The credential rules for this identity and destination.
-fn credential_rules(config: &Config, claims: &Claims, target: &Target) -> Vec<CredentialRule> {
-    config
-        .credentials
-        .iter()
-        .filter(|rule| {
-            rule.aud == claims.aud && rule.host == target.host && rule.port == target.port
-        })
-        .cloned()
-        .collect()
-}
-
 /// Whether a connection may carry any protocol to a declared link. The link is already pinned
 /// to the linked service: its exact name, a declared port and addresses inside the link's
 /// ranges, rechecked by the sweep. A destination with credential rules stays on the inspected
 /// TLS path, so the credential is only ever added by the gateway to a matching request.
-fn raw_link_relay(link: Option<&GatewayLink>, rules: &[CredentialRule]) -> bool {
-    link.is_some() && rules.is_empty()
+fn raw_link_relay(link: Option<&GatewayLink>, no_rules: bool) -> bool {
+    link.is_some() && no_rules
 }
 
 /// What may flow through an acknowledged CONNECT tunnel. `raw` (a declared link without
@@ -632,9 +737,10 @@ async fn tunnel(
     mut upstream: TcpStream,
     target: Target,
     raw: bool,
-    rules: &[CredentialRule],
+    link: bool,
+    injection: &crate::credentials::Injection,
     credentials: &crate::credentials::Credentials,
-    identity: (&str, &str),
+    identity: &IdentityPermit,
 ) -> Result<()> {
     if raw || target.host.parse::<std::net::Ipv4Addr>().is_ok() {
         // Explicit IP/CIDR rules and declared links are the only grants for opaque, including
@@ -659,7 +765,11 @@ async fn tunnel(
     let mut guest = Prefixed::new(vec![first], guest);
     if first != 22 {
         // HTTP parsing enforces Host on every port; arbitrary protocols need an IP/CIDR rule.
-        if !rules.is_empty() {
+        identity.set_uninspected(None);
+        if link {
+            return crate::http_proxy::forward(guest, upstream, target, Some(injection)).await;
+        }
+        if !injection.current().is_empty() {
             return Err(denied("credential destination requires TLS"));
         }
         return crate::http_proxy::forward(guest, upstream, target, None).await;
@@ -668,15 +778,14 @@ async fn tunnel(
         .await
         .into_alien_error()
         .context(unavailable("ClientHello timeout"))??;
-    if !rules.is_empty() {
+    // Interception is decided from the rules as they are when the ClientHello arrives.
+    if !injection.current().is_empty() {
+        if link {
+            return Err(denied("credential link requires plain HTTP"));
+        }
+        identity.set_uninspected(None);
         return credentials
-            .forward(
-                Prefixed::new(hello, guest),
-                upstream,
-                identity,
-                target,
-                rules,
-            )
+            .forward(Prefixed::new(hello, guest), upstream, target, injection)
             .await;
     }
     upstream
@@ -976,11 +1085,12 @@ mod link_relay_tests {
         net::{TcpListener, TcpStream},
     };
 
-    use super::{raw_link_relay, relay_websocket, tunnel, CredentialRule, GatewayLink};
+    use super::{raw_link_relay, relay_websocket, tunnel, GatewayLink};
     use crate::{
-        credentials::Credentials,
+        credentials::{Credentials, Injection},
         io::{Counters, Metered, Prefixed},
         policy::Target,
+        sandbox_credentials::{CredentialRecord, CredentialStore, Rule, RuleTarget},
     };
 
     fn link() -> GatewayLink {
@@ -993,10 +1103,35 @@ mod link_relay_tests {
         }
     }
 
-    fn rule() -> CredentialRule {
-        serde_json::from_value(serde_json::json!({"aud":"p/r","host":"api.svc","port":6379,
-            "method":"GET","path":"/","header":"Authorization","vaultBinding":"test-vault","secret":"key"}))
-        .unwrap()
+    fn rule() -> Rule {
+        Rule {
+            target: RuleTarget::Link("api".into()),
+            port: Some(6379),
+            method: None,
+            path: "/".into(),
+            header: http::HeaderName::from_static("authorization"),
+            value: http::HeaderValue::from_static("Bearer real"),
+        }
+    }
+
+    fn injection(rules: &[Rule]) -> Injection {
+        let store = Arc::new(CredentialStore::new(1 << 20));
+        store
+            .apply(CredentialRecord {
+                signed: String::new(),
+                aud: "p/r".into(),
+                sub: "s".into(),
+                ver: (1, String::new()),
+                rules: Arc::new(rules.to_vec()),
+            })
+            .unwrap();
+        Injection {
+            store,
+            aud: "p/r".into(),
+            sub: "s".into(),
+            target: RuleTarget::Link("api".into()),
+            port: 6379,
+        }
     }
 
     async fn pair() -> (TcpStream, TcpStream) {
@@ -1009,20 +1144,9 @@ mod link_relay_tests {
 
     /// Runs an acknowledged tunnel to `host:6379` with `payload` from the sandbox; returns
     /// whether the tunnel ended in an error and the bytes the service received.
-    async fn run(
-        host: &str,
-        raw: bool,
-        rules: &[CredentialRule],
-        payload: &[u8],
-    ) -> (bool, Vec<u8>) {
-        let bindings = Arc::new(
-            alien_bindings::Bindings::from_env_map(HashMap::from([(
-                "ALIEN_DEPLOYMENT_TYPE".into(),
-                "local".into(),
-            )]))
-            .unwrap(),
-        );
-        let credentials = Credentials::new(bindings, &[], rules, Some([7; 32])).unwrap();
+    async fn run(host: &str, raw: bool, rules: &[Rule], payload: &[u8]) -> (bool, Vec<u8>) {
+        let injection = injection(rules);
+        let credentials = Credentials::new(&[], Some([7; 32])).unwrap();
         let (mut sandbox, guest) = pair().await;
         let (upstream, mut service) = pair().await;
         let mut guest = Metered {
@@ -1031,14 +1155,30 @@ mod link_relay_tests {
         };
         sandbox.write_all(payload).await.unwrap();
         let target = Target::parse(&format!("{host}:6379"), None).unwrap();
+        let registry = Arc::new(crate::connections::Connections::default());
+        let now = chrono::Utc::now().timestamp() as u64;
+        let (identity, _cancel) = registry
+            .register(
+                crate::token::Claims {
+                    iss: "alien-sandbox".into(),
+                    aud: "p/r".into(),
+                    sub: "s".into(),
+                    iat: now,
+                    exp: now + 600,
+                },
+                None,
+                guest.counters.clone(),
+            )
+            .unwrap();
         let relay = tunnel(
             Prefixed::new(Vec::new(), &mut guest),
             upstream,
             target,
             raw,
-            rules,
+            true,
+            &injection,
             &credentials,
-            ("p/r", "s"),
+            &identity,
         );
         let receive = async {
             let mut received = Vec::new();
@@ -1065,7 +1205,7 @@ mod link_relay_tests {
 
     #[tokio::test]
     async fn a_link_without_credential_rules_relays_any_protocol() {
-        assert!(raw_link_relay(Some(&link()), &[]));
+        assert!(raw_link_relay(Some(&link()), true));
         let (_, received) = run("api.svc", true, &[], PING).await;
         assert_eq!(received, PING);
     }
@@ -1076,8 +1216,8 @@ mod link_relay_tests {
     #[tokio::test]
     async fn a_link_with_credential_rules_stays_off_the_raw_relay() {
         let rules = [rule()];
-        assert!(!raw_link_relay(Some(&link()), &rules));
-        assert!(!raw_link_relay(None, &[]));
+        assert!(!raw_link_relay(Some(&link()), rules.is_empty()));
+        assert!(!raw_link_relay(None, true));
         for payload in [PING, WEBSOCKET] {
             let (failed, received) = run("api.svc", false, &rules, payload).await;
             assert!(failed);

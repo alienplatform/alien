@@ -74,6 +74,7 @@ function fakeRemoteAddon() {
       throw new Error("not used by this test")
     },
     updateEgress: async () => {},
+    updateCredentials: async () => {},
     capabilities: () => ["files", "reconnect"],
     sessionCapabilities: async sandboxId => {
       expect(sandboxId).toBe("agent-session")

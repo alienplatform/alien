@@ -4678,7 +4678,10 @@ fn the_proxy_variables_point_at_the_loopback_forwarder_with_the_sandbox_token() 
 
 #[test]
 fn the_replica_envelope_names_the_op_and_the_replicas_once() {
-    let envelope = egress_proxy_envelope(&["10.0.0.4:22".to_string(), "10.0.0.5:22".to_string()]);
+    let envelope = egress_proxy_envelope(
+        &["10.0.0.4:22".to_string(), "10.0.0.5:22".to_string()],
+        None,
+    );
     assert_eq!(envelope["op"], "setEgressProxy");
     assert_eq!(envelope["v"], AGENT_PROTOCOL_VERSION);
     assert_eq!(envelope["replicas"], json!(["10.0.0.4:22", "10.0.0.5:22"]));
@@ -4699,4 +4702,53 @@ async fn without_a_gateway_a_command_gets_no_proxy_variables() {
     };
     let out = provider.with_proxy_env("123", request).await.unwrap();
     assert!(out.env.is_empty(), "{:?}", out.env);
+}
+
+#[test]
+fn the_replica_envelope_carries_the_ca_only_when_there_is_one() {
+    let replicas = ["10.0.0.4:22".to_string()];
+    assert!(egress_proxy_envelope(&replicas, None).get("caCert").is_none());
+    let envelope = egress_proxy_envelope(&replicas, Some("PEM"));
+    assert_eq!(envelope["caCert"], "PEM");
+}
+
+#[test]
+fn the_trust_variables_name_the_agents_bundle() {
+    let env: std::collections::BTreeMap<_, _> =
+        ca_environment("/tmp/bundle.pem").into_iter().collect();
+    for name in [
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+    ] {
+        assert_eq!(env[name], "/tmp/bundle.pem", "{name}");
+    }
+}
+
+/// An agent that predates the bundle answers health without `egressCaPath`: no trust variables,
+/// and the answer is asked for once.
+#[tokio::test]
+async fn an_agent_without_a_bundle_gets_no_trust_variables_and_is_asked_once() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().times(1).returning(|_, _, _| {
+        Ok(br#"{"protocolVersion":1,"bootId":"b","status":"ready"}"#.to_vec())
+    });
+    let provider = provider(client);
+    assert_eq!(provider.agent_ca_path("sbx").await.unwrap(), None);
+    assert_eq!(provider.agent_ca_path("sbx").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn an_agent_that_installed_the_bundle_reports_where() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().times(1).returning(|_, _, _| {
+        Ok(br#"{"protocolVersion":1,"bootId":"b","status":"ready","egressCaPath":"/tmp/x.pem"}"#
+            .to_vec())
+    });
+    let provider = provider(client);
+    assert_eq!(
+        provider.agent_ca_path("sbx").await.unwrap().as_deref(),
+        Some("/tmp/x.pem")
+    );
 }

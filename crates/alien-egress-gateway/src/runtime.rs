@@ -27,8 +27,9 @@ use alien_error::{AlienError, Context, IntoAlienError};
 
 use crate::{
     config::Config,
-    credentials::{self, Credentials},
+    credentials::Credentials,
     error::{invalid, unavailable, Result},
+    sandbox_credentials::CredentialStore,
     server::Gateway,
     store::PolicyStore,
 };
@@ -54,6 +55,7 @@ pub struct LiveGateway {
     addresses: (SocketAddr, SocketAddr),
     connections: Arc<crate::connections::Connections>,
     policies: Arc<PolicyStore>,
+    sandbox_credentials: Arc<CredentialStore>,
 }
 
 impl LiveGateway {
@@ -74,6 +76,7 @@ impl LiveGateway {
             stopping: AtomicBool::new(false),
             connections: gateway.connections.clone(),
             policies: gateway.policies.clone(),
+            sandbox_credentials: gateway.sandbox_credentials.clone(),
             accepted: gateway.accepted.clone(),
             denied: gateway.denied.clone(),
             addresses: (gateway.config.listen, gateway.config.admin),
@@ -132,6 +135,7 @@ impl LiveGateway {
                 ));
             }
             gateway.policies = self.policies.clone();
+            gateway.sandbox_credentials = self.sandbox_credentials.clone();
             {
                 // Compare immutable settings even after the last-good serving window expired.
                 let previous = self
@@ -148,8 +152,7 @@ impl LiveGateway {
                         "replica discovery/memory-budget/connection-limit changes require a restart",
                     ));
                 }
-                if previous.config.credentials == gateway.config.credentials
-                    && previous.config.upstream_ca_certificates
+                if previous.config.upstream_ca_certificates
                         == gateway.config.upstream_ca_certificates
                 {
                     gateway.credentials = previous.credentials.clone();
@@ -225,7 +228,6 @@ pub async fn build_after(
         .into_alien_error()
         .context(unavailable("parse gateway config"))?;
     let keys = config.verification_keys()?;
-    credentials::validate_rules(&config.credentials)?;
     let embedded = config
         .replica_secret
         .as_deref()
@@ -246,15 +248,7 @@ pub async fn build_after(
     // The CA seed stays with the first secret this process knew, so issued CAs are stable
     // until restart.
     let seed = secrets.first().copied();
-    if !config.credentials.is_empty() && seed.is_none() {
-        return Err(invalid("credential rules require replicaSecret"));
-    }
-    let credentials = Credentials::new(
-        bindings,
-        &config.upstream_ca_certificates,
-        &config.credentials,
-        seed,
-    )?;
+    let credentials = Credentials::new(&config.upstream_ca_certificates, seed)?;
     let mut resolver = hickory_resolver::TokioResolver::builder_tokio()
         .into_alien_error()
         .context(unavailable("read DNS configuration"))?;
@@ -270,13 +264,16 @@ pub async fn build_after(
         config.admin.port(),
         resolver.clone(),
     )?);
-    let policies = Arc::new(PolicyStore::new(
-        !replication.enabled(),
-        crate::memory::policy_budget(
-            config.policy_memory_bytes,
-            std::path::Path::new("/sys/fs/cgroup/memory.max"),
-        )?,
-    ));
+    let budget = crate::memory::policy_budget(
+        config.policy_memory_bytes,
+        std::path::Path::new("/sys/fs/cgroup/memory.max"),
+    )?;
+    let policies = Arc::new(PolicyStore::new(!replication.enabled(), budget));
+    // Credential rules get a quarter of the policy budget on top of it; a full store refuses.
+    let sandbox_credentials = Arc::new(CredentialStore::new((budget / 4).max(1)));
+    // A replica that joins others injects nothing until a sync that started after it became
+    // discoverable has finished (`Replication::complete_join`).
+    sandbox_credentials.set_serving(!replication.enabled());
     Ok(Gateway {
         replication,
         connections: Arc::new(crate::connections::Connections::default()),
@@ -284,6 +281,7 @@ pub async fn build_after(
         config,
         keys,
         policies,
+        sandbox_credentials,
         credentials: Arc::new(credentials),
         accepted,
         denied,

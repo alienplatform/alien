@@ -8,7 +8,7 @@ use alien_bindings::Bindings;
 use alien_egress_gateway::{
     admin,
     error::{ErrorData, Result},
-    logging,
+    logging, relay,
     runtime::{self, ConfigSource, LiveGateway},
     server,
 };
@@ -38,6 +38,22 @@ async fn main() -> Result<()> {
             if cloud { "compiled in" } else { "MISSING" }
         );
         std::process::exit(if cloud { 0 } else { 1 });
+    }
+    // `--relay <listen> <target>`: the per-session preview forwarder of `alien dev`.
+    if env::args().nth(1).as_deref() == Some("--relay") {
+        let (Some(listen), Some(target)) = (env::args().nth(2), env::args().nth(3)) else {
+            return Err(alien_error::AlienError::new(failed(
+                "--relay needs <listen> <target>",
+            )));
+        };
+        let listen = listen
+            .parse()
+            .into_alien_error()
+            .context(failed("parse the relay listen address"))?;
+        return relay::run(listen, target)
+            .await
+            .into_alien_error()
+            .context(failed("relay"));
     }
     tracing_subscriber::registry()
         .with(logging::json_layer(std::io::stdout))

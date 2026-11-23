@@ -60,6 +60,33 @@ pub const NO_LINKS_GATEWAY_DIGESTS: &[&str] = &[
     "sha256:69d97f5aceb41f5bc8eee09e497cd967f04ef19b649150a472607153446ef7d8",
 ];
 
+/// Gateway images pinned before admin protocol 2: per-sandbox credential rules, the stable
+/// sandbox CA and the preview relay. A binding that needs protocol 2 cannot use a gateway on one
+/// of these, and every check that would lead to one gives [`CREDENTIALS_UNAVAILABLE`]. The list
+/// never grows: the release that pins a gateway serving protocol 2 opens the feature.
+pub const NO_CREDENTIALS_GATEWAY_DIGESTS: &[&str] = &[
+    "sha256:dbac794afe2185a8ce025d92ec05a5878d6367ae9380eccc2c3dfc4d55f1c59c",
+    "sha256:1dc14128e34426b84c7a02228a6de790ea092b156776c3f2688b9843b26fc924",
+    "sha256:7a3a66b0894c05fca445cbf5fd71e351cd8a9a98c40744acad4496b59574bdbd",
+    "sha256:f0e47d06eea327bc27fdc1238dae6a8938572db0c1d139495d00dd5623b657dd",
+    "sha256:b252a1b423b95385e5df0c57a37daae6937daa274e3c7783c71704584b18483d",
+    "sha256:8538880f99141888e54bedc7d290194dfee5bfe11910266b309dde53de2601b0",
+    "sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1",
+    // The published v3.3.71 image.
+    "sha256:69d97f5aceb41f5bc8eee09e497cd967f04ef19b649150a472607153446ef7d8",
+    // The published v3.3.72 image, which reads links but not credential rules.
+    "sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037",
+];
+
+/// The refusal for anything that needs admin protocol 2 while the installed gateway image
+/// predates it.
+pub const CREDENTIALS_UNAVAILABLE: &str = "per-sandbox credentials are not available with the egress gateway image this release installs; a later release enables them";
+
+/// Whether a gateway running `image` serves admin protocol 2: per-sandbox credential rules.
+pub fn gateway_image_serves_credentials(image: &str) -> bool {
+    !is_pinned_to(image, NO_CREDENTIALS_GATEWAY_DIGESTS)
+}
+
 /// Whether a gateway running `image` enforces sandbox links.
 pub fn gateway_image_serves_links(image: &str) -> bool {
     !is_pinned_to(image, NO_LINKS_GATEWAY_DIGESTS)
@@ -455,6 +482,15 @@ mod tests {
     #[test]
     fn the_pinned_gateway_image_serves_links() {
         assert!(gateway_image_serves_links(SANDBOX_EGRESS_GATEWAY_IMAGE));
+        let published = "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037";
+        assert!(!gateway_image_serves_credentials(published));
+        assert!(gateway_image_serves_credentials(
+            "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        ));
+        // Every image that predates links also predates protocol 2.
+        for digest in NO_LINKS_GATEWAY_DIGESTS {
+            assert!(NO_CREDENTIALS_GATEWAY_DIGESTS.contains(digest));
+        }
     }
 
     /// The published v3.3.72 gateway refuses WebSocket and other non-HTTP traffic to a link.

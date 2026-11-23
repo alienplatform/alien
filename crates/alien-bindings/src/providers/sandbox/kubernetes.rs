@@ -591,8 +591,13 @@ impl KubernetesSandbox {
                     None => crate::sandbox_egress::now_unix()? + GATEWAY_IDENTITY_FALLBACK_SECONDS,
                 };
                 let delivery = manager.create(identity, &policy, session_ends_at).await?;
-                self.deliver_egress(&claim.session_id, Some(&delivery.token), &delivery.policy)
-                    .await
+                self.deliver_egress(
+                    &claim.session_id,
+                    Some(&delivery.token),
+                    &delivery.policy,
+                    delivery.ca.as_deref(),
+                )
+                .await
             }
             .await;
             if let Err(error) = installation {
@@ -796,7 +801,30 @@ impl Sandbox for KubernetesSandbox {
         let identity = Self::egress_identity(&claim)?;
         manager.update(identity, &policy).await?;
         let record = manager.policy_record(identity).await?;
-        self.deliver_egress(sandbox_id, None, &record).await
+        self.deliver_egress(sandbox_id, None, &record, None).await
+    }
+
+    async fn update_credentials(
+        &self,
+        sandbox_id: &str,
+        rules: Vec<alien_core::SandboxCredentialRule>,
+    ) -> Result<()> {
+        super::egress::validate_credentials(&rules)?;
+        let manager = self
+            .egress_manager
+            .as_ref()
+            .ok_or_else(|| super::egress::unsupported("update_credentials"))?;
+        let claim = self.claimed(sandbox_id).await?.ok_or_else(|| {
+            self.failed("sandbox.updateCredentials", "the sandbox does not exist")
+        })?;
+        super::egress::require_ca_for_host_rules(
+            &rules,
+            self.request(sandbox_id, reqwest::Method::GET, "/v1/health"),
+        )
+        .await?;
+        manager
+            .update_credentials(Self::egress_identity(&claim)?, &rules)
+            .await
     }
 
     async fn list(&self) -> Result<Vec<SandboxInstance>> {

@@ -65,7 +65,7 @@ Accepted limitations of this version:
 
 - **Frozen.** The gateway VMs come from setup, and a gateway image update rides a
   setup re-run. The binding checks the gateway's protocol version through the admin
-  API and refuses with "re-run setup to update the egress gateway" when it cannot
+  API and refuses with "deploy a release that installs a newer egress gateway and re-run setup" when it cannot
   serve it. The admin protocol stays backward compatible.
   A setup re-run never takes both gateways down together. The image does not ride the
   VMs' custom data (which would replace both VMs at once); a run command on each VM

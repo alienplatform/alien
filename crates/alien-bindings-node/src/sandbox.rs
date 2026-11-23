@@ -37,6 +37,23 @@ fn parse_egress(value: serde_json::Value) -> napi::Result<alien_core::EgressPoli
         .map_err(map_alien_error)
 }
 
+/// Fixed error text: a parser's message could repeat part of a credential value.
+fn parse_credentials(
+    value: serde_json::Value,
+) -> napi::Result<Vec<alien_core::SandboxCredentialRule>> {
+    serde_json::from_value(value).map_err(|_| {
+        map_alien_error(alien_error::AlienError::new(
+            alien_bindings::error::ErrorData::InvalidInput {
+                operation_context: "sandbox.updateCredentials".to_string(),
+                details: "expected an array of credential rules, each with host or link, header \
+                          and value"
+                    .to_string(),
+                field_name: Some("rules".to_string()),
+            },
+        ))
+    })
+}
+
 /// Environment as the Rust side wants it. A `BTreeMap` so the order a caller supplied does not
 /// change what the sandbox sees.
 fn into_env(env: Option<std::collections::HashMap<String, String>>) -> BTreeMap<String, String> {
@@ -442,6 +459,19 @@ impl SandboxHandle {
     ) -> napi::Result<()> {
         self.inner
             .update_egress(&sandbox_id, parse_egress(egress)?)
+            .await
+            .map_err(map_alien_error)
+    }
+
+    /// Replaces the sandbox's credential rules; resolves once every gateway replica holds them.
+    #[napi]
+    pub async fn update_credentials(
+        &self,
+        sandbox_id: String,
+        rules: serde_json::Value,
+    ) -> napi::Result<()> {
+        self.inner
+            .update_credentials(&sandbox_id, parse_credentials(rules)?)
             .await
             .map_err(map_alien_error)
     }

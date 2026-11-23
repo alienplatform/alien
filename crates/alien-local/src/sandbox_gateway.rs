@@ -1,6 +1,7 @@
-//! The egress gateway a local sandbox that links services runs behind.
+//! The egress gateway a local sandbox runs behind.
 //!
-//! Only a sandbox with links gets one. Its sessions then have no route of their own: each
+//! Every sandbox whose sessions reach anything gets one, as on the cloud platforms, so its
+//! policy and credential rules apply in `alien dev` too. Its sessions have no route of their own: each
 //! session sits alone on an `--internal` Docker network, and the sandbox's gateway container
 //! joins that network next to it. The gateway also sits on `deployment-network`, where the
 //! linked services run, so it is the one way out of the session: to the internet, and to the
@@ -8,8 +9,8 @@
 //! gateway, as on the cloud platforms.
 //!
 //! One network per live session keeps sessions apart (a session reaches only its own network's
-//! members) but draws on the Docker daemon's address pools, which bound how many linked
-//! sessions can run at once.
+//! members) but draws on the Docker daemon's address pools, which bound how many sessions can
+//! run at once.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -58,6 +59,27 @@ pub(crate) struct LocalGateway {
     container: String,
     digest: String,
     egress: SandboxEgressManager,
+    /// The admin protocol the running gateway answered with; 1 when it names none.
+    protocol: u64,
+}
+
+impl LocalGateway {
+    /// Whether this gateway serves per-sandbox credential rules (admin protocol 2).
+    pub(crate) fn serves_credentials(&self) -> bool {
+        self.protocol >= 2
+    }
+
+    /// Replaces a session's credential rules on the sandbox's gateway; returns once it holds them.
+    pub(crate) async fn update_credentials(
+        &self,
+        session_id: &str,
+        rules: &[alien_core::SandboxCredentialRule],
+    ) -> Result<()> {
+        self.egress
+            .update_credentials(session_id, rules)
+            .await
+            .context(failed("update the session's credential rules", session_id))
+    }
 }
 
 impl std::fmt::Debug for LocalGateway {
@@ -70,6 +92,9 @@ impl std::fmt::Debug for LocalGateway {
 
 /// What a session needs to reach the outside through its sandbox's gateway.
 pub(crate) struct SessionEgress {
+    /// PEM of the session's CA, which it trusts for HTTPS the gateway intercepts to put a
+    /// credential on a request. `None` from a gateway image that predates credentials.
+    pub ca: Option<String>,
     /// The session's own network, to create the session container on.
     pub(crate) network: String,
     /// Proxy environment carrying the session's gateway token.
@@ -148,8 +173,17 @@ pub(crate) fn session_network_name(sandbox: &str, session_id: &str) -> String {
 
 /// The configuration the sandbox's gateway runs: the sandbox is its one audience, the process
 /// key its one key, and the sandbox's links the only private destinations it reaches.
-fn gateway_config(sandbox: &str, key: &GeneratedSigningKey, links: &[GatewayLink]) -> String {
+///
+/// `replica_secret` seeds the session CAs. It is fixed for the life of the process, so a gateway
+/// recreated for changed links issues the same CA to the sessions already running.
+fn gateway_config(
+    sandbox: &str,
+    key: &GeneratedSigningKey,
+    replica_secret: &str,
+    links: &[GatewayLink],
+) -> String {
     serde_json::json!({
+        "replicaSecret": replica_secret,
         "listen": format!("0.0.0.0:{PROXY_PORT}"),
         "admin": format!("0.0.0.0:{ADMIN_PORT}"),
         "audiences": [audience(sandbox)],
@@ -183,15 +217,17 @@ fn not_found(error: &bollard::errors::Error) -> bool {
 /// changed configuration (the stack's links changed) replaces it, and the replacement joins
 /// every live session's network again and receives their policies, so running sessions keep
 /// their proxy.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn ensure_gateway(
     docker: &Docker,
     key: &GeneratedSigningKey,
+    replica_secret: &str,
     sandbox: &str,
     image: &str,
     links: &[GatewayLink],
     current: Option<Arc<LocalGateway>>,
 ) -> Result<Arc<LocalGateway>> {
-    let config = gateway_config(sandbox, key, links);
+    let config = gateway_config(sandbox, key, replica_secret, links);
     let digest = hex::encode(Sha256::digest(config.as_bytes()));
     let name = gateway_name(sandbox);
 
@@ -267,12 +303,13 @@ pub(crate) async fn ensure_gateway(
         &format!("http://127.0.0.1:{admin_port}"),
     )
     .context(failed("reach the egress gateway", sandbox))?;
-    wait_until_serving(docker, &name, admin_port, sandbox).await?;
+    let protocol = wait_until_serving(docker, &name, admin_port, sandbox).await?;
 
     let gateway = Arc::new(LocalGateway {
         container: name,
         digest,
         egress,
+        protocol,
     });
     for session_id in session_networks(docker, sandbox).await?.into_values() {
         join_session_network(docker, &gateway, sandbox, &session_id).await?;
@@ -352,7 +389,7 @@ async fn wait_until_serving(
     name: &str,
     admin_port: u16,
     sandbox: &str,
-) -> Result<()> {
+) -> Result<u64> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
@@ -362,7 +399,8 @@ async fn wait_until_serving(
     for _ in 0..100 {
         if let Ok(response) = client.get(&url).send().await {
             if response.status().is_success() {
-                return Ok(());
+                let body: serde_json::Value = response.json().await.unwrap_or_default();
+                return Ok(body["protocol"].as_u64().unwrap_or(1));
             }
         }
         let state = docker
@@ -448,13 +486,18 @@ pub(crate) async fn attach_session(
         .await
         .context(failed("publish the session's egress policy", session_id))?;
 
+    let ca = gateway.egress.sandbox_ca(session_id).await.context(failed(
+        "read the session's CA from the egress gateway",
+        session_id,
+    ))?;
+
     let proxy = format!("http://alien:{token}@{GATEWAY_ALIAS}:{PROXY_PORT}");
     let mut env: Vec<String> = ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]
         .into_iter()
         .map(|name| format!("{name}={proxy}"))
         .collect();
     env.extend(["NO_PROXY", "no_proxy"].map(|name| format!("{name}=localhost,127.0.0.1")));
-    Ok(SessionEgress { network, env })
+    Ok(SessionEgress { ca, network, env })
 }
 
 async fn join_session_network(
@@ -563,6 +606,156 @@ async fn remove_network(docker: &Docker, network: &str, session_id: &str) -> Res
     }
 }
 
+/// Label on a preview relay container: the session container it forwards to.
+const LABEL_PREVIEW_RELAY: &str = "dev.alien.sandbox.preview-relay";
+
+fn relay_name(container: &str, port: u16) -> String {
+    format!("{container}-preview-{port}")
+}
+
+/// Starts one relay per declared preview port for a session on an internal network. Docker
+/// publishes no port of a container whose only network is internal, so the relay is created on
+/// the shared network (which publishes the port on loopback) and then joins the session's
+/// network, where it reaches the session by name. It forwards inbound connections to the one
+/// port and nothing else: it gives the session no route out, and the session's own network
+/// stays internal.
+pub(crate) async fn start_preview_relays(
+    docker: &Docker,
+    image: &str,
+    session_id: &str,
+    container: &str,
+    session_network: &str,
+    ports: &[u16],
+) -> Result<()> {
+    for port in ports {
+        let name = relay_name(container, *port);
+        let key = format!("{port}/tcp");
+        let created = docker
+            .create_container(
+                Some(CreateContainerOptions {
+                    name: Some(name.clone()),
+                    ..Default::default()
+                }),
+                ContainerCreateBody {
+                    image: Some(image.to_string()),
+                    cmd: Some(vec![
+                        "--relay".to_string(),
+                        format!("0.0.0.0:{port}"),
+                        format!("{container}:{port}"),
+                    ]),
+                    labels: Some(HashMap::from([(
+                        LABEL_PREVIEW_RELAY.to_string(),
+                        container.to_string(),
+                    )])),
+                    exposed_ports: Some(vec![key.clone()]),
+                    host_config: Some(HostConfig {
+                        network_mode: Some(crate::container_manager::NETWORK_NAME.to_string()),
+                        port_bindings: Some(HashMap::from([(
+                            key,
+                            Some(vec![PortBinding {
+                                host_ip: Some("127.0.0.1".to_string()),
+                                host_port: None,
+                            }]),
+                        )])),
+                        readonly_rootfs: Some(true),
+                        cap_drop: Some(vec!["ALL".to_string()]),
+                        security_opt: Some(vec!["no-new-privileges:true".to_string()]),
+                        memory: Some(64 * 1024 * 1024),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .into_alien_error()
+            .context(failed("create the preview relay", session_id))?;
+        docker
+            .connect_network(
+                session_network,
+                NetworkConnectRequest {
+                    container: created.id.clone(),
+                    endpoint_config: None,
+                },
+            )
+            .await
+            .into_alien_error()
+            .context(failed(
+                "connect the preview relay to the session",
+                session_id,
+            ))?;
+        docker
+            .start_container(&created.id, None)
+            .await
+            .into_alien_error()
+            .context(failed("start the preview relay", session_id))?;
+    }
+    Ok(())
+}
+
+/// The loopback port a session's preview port is published on, if it has a relay for it.
+pub(crate) async fn preview_host_port(
+    docker: &Docker,
+    container: &str,
+    port: u16,
+) -> Option<String> {
+    let inspected = docker
+        .inspect_container(&relay_name(container, port), None)
+        .await
+        .ok()?;
+    inspected
+        .network_settings?
+        .ports?
+        .get(&format!("{port}/tcp"))
+        .cloned()
+        .flatten()?
+        .first()?
+        .host_port
+        .clone()
+}
+
+/// Removes a session's preview relays. Idempotent.
+pub(crate) async fn remove_preview_relays(
+    docker: &Docker,
+    session_id: &str,
+    container: &str,
+) -> Result<()> {
+    let relays = docker
+        .list_containers(Some(
+            bollard::query_parameters::ListContainersOptionsBuilder::default()
+                .all(true)
+                .filters(&HashMap::from([(
+                    "label".to_string(),
+                    vec![format!("{LABEL_PREVIEW_RELAY}={container}")],
+                )]))
+                .build(),
+        ))
+        .await
+        .into_alien_error()
+        .context(failed("list the session's preview relays", session_id))?;
+    for relay in relays {
+        let Some(id) = relay.id else { continue };
+        match docker
+            .remove_container(
+                &id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+        {
+            Ok(()) => {}
+            Err(error) if not_found(&error) => {}
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(failed("remove the preview relay", session_id))
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Removes the sandbox's gateway container. An absent one is success.
 pub(crate) async fn remove_gateway(docker: &Docker, sandbox: &str) -> Result<()> {
     match docker
@@ -646,6 +839,25 @@ pub(crate) async fn deployment_network_range(docker: &Docker) -> Result<ipnet::I
 
 #[cfg(test)]
 mod tests {
+    /// A gateway image with no digest is judged by what its running gateway answers.
+    #[tokio::test]
+    async fn the_protocol_a_gateway_answers_is_read_and_an_unnamed_one_is_protocol_1() {
+        for (body, expected) in [(r#"{"protocol":2}"#, 2), (r#"{"status":"ok"}"#, 1)] {
+            let router = axum::Router::new().route(
+                "/v1/protocol",
+                axum::routing::get(move || async move { body }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            let docker = Docker::connect_with_local_defaults().unwrap();
+            let protocol = wait_until_serving(&docker, "none", port, "sandbox")
+                .await
+                .unwrap();
+            assert_eq!(protocol, expected);
+        }
+    }
+
     use super::*;
 
     fn link() -> GatewayLink {
@@ -664,10 +876,12 @@ mod tests {
     fn the_gateway_config_carries_the_sandbox_links_under_its_audience() {
         let key = alien_bindings::sandbox_egress_token::generate_signing_key();
         let config: serde_json::Value =
-            serde_json::from_str(&gateway_config("agents", &key, &[link()])).unwrap();
+            serde_json::from_str(&gateway_config("agents", &key, "c2VlZA==", &[link()])).unwrap();
         assert_eq!(config["audiences"], serde_json::json!(["local/agents"]));
         assert_eq!(config["keys"][0]["kid"], key.kid.as_str());
         assert_eq!(config["deniedRanges"], serde_json::json!([]));
+        assert_eq!(config["credentials"], serde_json::json!([]));
+        assert_eq!(config["replicaSecret"], "c2VlZA==");
         assert_eq!(
             config["links"],
             serde_json::json!({"local/agents": [{"id": "api", "host": "api.svc", "ports": [8080], "ranges": ["172.30.0.0/16"]}]})

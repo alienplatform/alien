@@ -312,6 +312,12 @@ fn main() -> Result<()> {
             }
         }
         #[cfg(target_os = "linux")]
+        if state.gateway_egress.is_none() {
+            // The trust bundle exists before any command or the image runs.
+            alien_sandbox_agent::ca_bundle::install_from_environment()
+                .map_err(|reason| alien_error::AlienError::new(failed("install the egress CA", reason)))?;
+        }
+        #[cfg(target_os = "linux")]
         if state.gateway_egress.is_none() && !state.image_process.waiting_for_activation()? {
             state.start_image_once()?;
         }

@@ -140,6 +140,9 @@ It is an admin-body authenticator, never a proxy-token claim.
 - `PUT /v1/policies {record}` carries the independently signed policy record.
 - `DELETE /v1/policies {record}` carries a signed deletion tombstone.
 - `GET /v1/policies/record?aud=...&sub=...` returns `{record}` or 404.
+- `PUT /v1/credentials {record}` replaces one sandbox's credential rules (below);
+  `GET /v1/credentials?aud=...&sub=...` returns `{version}` only.
+- `POST /v1/ca {aud,sub}` returns the sandbox's public CA.
 - `GET /health` is unauthenticated readiness; `GET /metrics` requires an admin grant.
 
 The record has `typ: "alien-egress-record"`, claims `{v:1,aud,sub,ver,policy}` or
@@ -151,28 +154,43 @@ Refusal logs are limited to twenty per second per replica; fixed-category counte
 still count every refusal. Metrics include active connections, without host or
 sandbox labels. Tokens, request headers and secret values are never logged.
 
-Optional credential rules contain `aud`, exact `host`, `port`, uppercase `method`,
-`path`, `header`, `vaultBinding`, `secret`, and optional `valuePrefix`. Paths match
-exactly unless they end in `/`, which selects that subtree. Ambiguous encoded paths
-are refused during interception. Header values come from the deployment vault and
-are never logged. The gateway replaces the matching header, verifies the upstream
-TLS certificate, and does not follow redirects. An upstream service can deliberately
-reflect a credential; only configure trusted origins. `upstreamCaCertificates` may
-add deployment-owned trust roots encoded as base64 DER.
+Per-sandbox credential rules are set at runtime, never in this configuration (which
+accepts only `"credentials": []`, as earlier controllers write it). `PUT /v1/credentials
+{record}` with a `PUT` admin grant for the same `aud`/`sub` replaces one sandbox's whole rule
+set. The record has `typ: "alien-egress-credentials"` and claims
+`{v:1,aud,sub,ver,rules:[{host|link,port?,method?,path?,header,valuePrefix?,value}]}`; the
+newest `ver` wins, equal and older ones are acknowledged no-ops, and `rules: []` removes every
+rule. A write needs the sandbox's live policy, and deleting that policy drops its rules on the
+replica at once. The replica stores the set in memory only, sends it to every peer
+(`/v1/replicas/credentials-write`), and answers 204 only once every peer acknowledged; a
+peer that is away or older (404) means 503. A starting replica pulls the sets from a peer
+(`credentials-summary`, `credentials-pull`) before it is ready, and the 30-second
+anti-entropy pass exchanges them too. `GET /v1/credentials?aud=...&sub=...` returns
+`{version}`, never rules. `GET /v1/protocol` answers 2 from a gateway that serves this; a
+binding refuses an older one. At most 32 rules, 8 KiB per value; rules cannot set routing,
+framing or proxy headers, and every parse error is fixed text, so a value never reaches a
+log, the connection log, a metric or an error.
 
-`POST /v1/ca {aud,sub}` with a matching admin JWS creates or returns a sandbox's
-public CA certificate as `{certificate: "PEM"}`. The private CA is deterministically
-derived from the gateway-only replica secret, sandbox identity and allowed host
-set. All replicas derive the same CA without a separate store. The gateway needs
-read permission on each configured credential vault. Deliver the public CA through
-the agent's `PUT /v1/egress {token,policy,caCert?}`. Trust bundle paths
-are passed to standard tools; applications with their own trust stores must import
-the public CA explicitly. The CA is constrained to the audience's configured
-credential host names and excludes IP certificates. Changing this host set issues
-a different scoped CA, so clients must fetch and install its new public certificate.
-Leaf TLS configurations are cached per sandbox and host for one hour; vault values
-are cached for at most sixty seconds. Both caches retain at most 256 entries and
-never serve expired entries after a dependency failure.
+Rules are read for each request, from the sandbox's own proxy identity. A `host` rule
+applies to TLS to that exact host: the gateway decides at the ClientHello, terminates the
+guest's TLS with a leaf from the sandbox CA, replaces the header (after removing hop-by-hop
+fields, so `Connection` cannot strip it), and re-originates TLS verified against the web PKI
+plus `upstreamCaCertificates` (base64 DER). Plain HTTP to a host with a rule is refused. A
+`link` rule applies to plain HTTP to that declared link, in absolute form or inside a CONNECT;
+TLS to a link with a rule is refused. Paths match exactly unless they end in `/`; ambiguous
+paths are refused while a rule covers the destination. The policy check runs first, so a rule
+never widens reach. The gateway does not follow redirects. An upstream service can
+deliberately reflect a credential; only write rules for trusted origins.
+
+`POST /v1/ca {aud,sub}` with a matching `POST` admin grant returns the sandbox's public CA as
+`{certificate: "PEM"}`. Its key is derived from the gateway-only replica secret and the
+sandbox identity alone (`alien-egress-ca-v2`), so every replica derives the same CA and it does
+not change when rules do. It excludes IP addresses; DNS names are unconstrained, and a leaf is
+issued only for a host that has a current rule for that sandbox. Deliver the public CA through
+the agent's `PUT /v1/egress {token,policy,caCert?}` or `ALIEN_SANDBOX_EGRESS_CA`; the agent
+writes a trust bundle and sets `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and
+`NODE_EXTRA_CA_CERTS` for every command. Applications with their own trust stores must import
+it. Leaf TLS configurations are cached per sandbox and host for one hour, at most 256 entries.
 
 For a gateway-backed resource the agent starts without a token. Health reports
 `awaiting-egress-policy`, and

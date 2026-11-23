@@ -245,6 +245,8 @@ pub struct GcpAgentPlatformSandbox {
     gateway: Option<GatewayEgress>,
     default_policy: Option<alien_core::EgressPolicy>,
     proxy_tokens: std::sync::Mutex<std::collections::HashMap<String, CachedProxyToken>>,
+    /// What each sandbox's agent reported about its trust bundle: where it is, or none.
+    ca_paths: std::sync::Mutex<std::collections::HashMap<String, Option<String>>>,
     client: Arc<dyn AgentPlatformApi>,
     /// Bare reasoning-engine id the client interpolates into its paths. The binding may carry a
     /// full resource name, so it is reduced to its last segment once, here.
@@ -525,8 +527,15 @@ impl GcpAgentPlatformSandbox {
             .manager
             .create(sandbox_id, policy, expires_at)
             .await?;
-        self.execute_op(sandbox_id, CREATE, egress_proxy_envelope(&gateway.replicas))
-            .await?;
+        // The sandbox's own CA, so HTTPS to a host with a credential rule verifies. A gateway that
+        // predates per-sandbox credentials has none to give.
+        let ca = gateway.manager.sandbox_ca(sandbox_id).await?;
+        self.execute_op(
+            sandbox_id,
+            CREATE,
+            egress_proxy_envelope(&gateway.replicas, ca.as_deref()),
+        )
+        .await?;
         Ok(())
     }
 
@@ -572,7 +581,47 @@ impl GcpAgentPlatformSandbox {
         for (name, value) in proxy_environment(&token) {
             request.env.insert(name, value);
         }
+        if let Some(path) = self.agent_ca_path(sandbox_id).await? {
+            for (name, value) in ca_environment(&path) {
+                request.env.insert(name, value);
+            }
+        }
         Ok(request)
+    }
+
+    /// Where the agent installed the sandbox's trust bundle, or `None` when it has not (an agent
+    /// that predates it, or a gateway with no per-sandbox CA). Asked of the agent itself, so any
+    /// process that holds the sandbox gets the same answer; the answer is kept.
+    async fn agent_ca_path(&self, sandbox_id: &str) -> Result<Option<String>> {
+        if let Some(known) = self
+            .ca_paths
+            .lock()
+            .expect("ca path cache lock")
+            .get(sandbox_id)
+        {
+            return Ok(known.clone());
+        }
+        let body = self
+            .execute_op(
+                sandbox_id,
+                RUN_COMMAND,
+                json!({ "v": AGENT_PROTOCOL_VERSION, "op": "health" }),
+            )
+            .await?;
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Health {
+            egress_ca_path: Option<String>,
+        }
+        let path = serde_json::from_slice::<Health>(&body)
+            .ok()
+            .and_then(|health| health.egress_ca_path);
+        // The bundle is installed during create, before any command, so the answer does not change.
+        self.ca_paths
+            .lock()
+            .expect("ca path cache lock")
+            .insert(sandbox_id.to_string(), path.clone());
+        Ok(path)
     }
 
     /// The `ttl` a create is sent with: what the caller asked for, never above what the
@@ -603,6 +652,7 @@ impl GcpAgentPlatformSandbox {
             gateway: None,
             default_policy: None,
             proxy_tokens: Default::default(),
+            ca_paths: Default::default(),
             client,
             engine,
             template,
@@ -1473,13 +1523,35 @@ impl GcpAgentPlatformSandbox {
 }
 
 /// The control-channel envelope that gives the agent its gateway replicas, once.
-fn egress_proxy_envelope(replicas: &[String]) -> serde_json::Value {
-    json!({
+fn egress_proxy_envelope(replicas: &[String], ca: Option<&str>) -> serde_json::Value {
+    let mut envelope = json!({
         "v": AGENT_PROTOCOL_VERSION,
         "op": "setEgressProxy",
         "replicas": replicas,
-    })
+    });
+    if let Some(ca) = ca {
+        envelope["caCert"] = ca.into();
+    }
+    envelope
 }
+
+/// The trust variables a command runs with once the agent has installed the sandbox's bundle.
+fn ca_environment(bundle_path: &str) -> Vec<(String, String)> {
+    [
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+    ]
+    .into_iter()
+    .map(|name| (name.to_string(), bundle_path.to_string()))
+    .collect()
+}
+
+/// Message for host rules on a sandbox whose agent cannot install the CA.
+const AGENT_WITHOUT_CA: &str = "this sandbox's agent predates trust-bundle delivery, so credential \
+rules for an internet host cannot be served (HTTPS to the host could not be verified); rules for \
+a link work. Create the sandbox again with an agent image from the current release";
 
 /// The proxy variables a command runs with: the loopback forwarder, carrying the sandbox's own
 /// identity token. The variables are reserved, so a caller cannot have set them.
@@ -1542,6 +1614,29 @@ impl Sandbox for GcpAgentPlatformSandbox {
         };
         self.gateway_policy(Some(&egress))?;
         gateway.manager.update(sandbox_id, &egress).await
+    }
+
+    async fn update_credentials(
+        &self,
+        sandbox_id: &str,
+        rules: Vec<alien_core::SandboxCredentialRule>,
+    ) -> Result<()> {
+        super::egress::validate_credentials(&rules)?;
+        let gateway = self
+            .gateway
+            .as_ref()
+            .ok_or_else(|| super::egress::unsupported("update_credentials"))?;
+        // A host rule needs HTTPS interception, so the sandbox must trust the CA. A link rule
+        // is plain HTTP inside the deployment and needs none.
+        if rules.iter().any(|rule| rule.host.is_some())
+            && self.agent_ca_path(sandbox_id).await?.is_none()
+        {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.updateCredentials".to_string(),
+                reason: AGENT_WITHOUT_CA.to_string(),
+            }));
+        }
+        gateway.manager.update_credentials(sandbox_id, &rules).await
     }
 
     /// The platform's row, unnarrowed. `sandboxLifetime` stays true even with no declared ttl:

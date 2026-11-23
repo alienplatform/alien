@@ -31,11 +31,16 @@ static WRITER_ID: LazyLock<String> = LazyLock::new(|| {
         .collect()
 });
 static LAST_MILLIS: AtomicU64 = AtomicU64::new(0);
+/// The admin protocol that serves per-sandbox credential rules and the stable sandbox CA.
+const CREDENTIALS_PROTOCOL: u32 = 2;
 
 /// A token for the backend's authenticated agent transport. Debug never exposes it.
 pub struct EgressDelivery {
     pub(crate) token: String,
     pub(crate) policy: String,
+    /// The sandbox's CA, installed with the first delivery so every process the sandbox starts
+    /// trusts it. `None` from a gateway that predates per-sandbox credentials.
+    pub(crate) ca: Option<String>,
 }
 impl fmt::Debug for EgressDelivery {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -173,7 +178,8 @@ impl SandboxEgressManager {
     ) -> Result<EgressDelivery> {
         let token = self.mint_identity(id, expires_at).await?;
         let policy = self.write_grant(id, policy).await?;
-        Ok(EgressDelivery { token, policy })
+        let ca = self.sandbox_ca(id).await?;
+        Ok(EgressDelivery { token, policy, ca })
     }
     /// Publish the policy of a sandbox whose identity was minted earlier (Azure learns its
     /// sandbox id only after the platform create). It is a first write, so it follows the
@@ -199,7 +205,8 @@ impl SandboxEgressManager {
     pub async fn renew(&self, id: &str, expires_at: i64) -> Result<EgressDelivery> {
         let token = self.mint_identity(id, expires_at).await?;
         let policy = self.policy_record(id).await?;
-        Ok(EgressDelivery { token, policy })
+        let ca = self.sandbox_ca(id).await?;
+        Ok(EgressDelivery { token, policy, ca })
     }
     /// Azure needs identity before create; this never reads or publishes policy.
     pub async fn mint_identity(&self, id: &str, expires_at: i64) -> Result<String> {
@@ -741,6 +748,166 @@ impl SandboxEgressManager {
         Ok(true)
     }
 
+    /// Replace a sandbox's credential rules on every gateway replica. Returns once every replica
+    /// acknowledged the new set, so the sandbox's next request uses it. An empty list removes
+    /// every rule. A gateway older than admin protocol 2 is refused, never written to.
+    ///
+    /// A replica that is away or catching up makes the call fail with a retryable error once
+    /// the attempts run out; retrying the call is safe (the newest set wins).
+    pub async fn update_credentials(
+        &self,
+        id: &str,
+        rules: &[alien_core::SandboxCredentialRule],
+    ) -> Result<()> {
+        crate::providers::sandbox::egress::validate_credentials(rules)?;
+        let issuer = self.issuer().await?;
+        let version = self.next_version()?;
+        let record =
+            issuer.mint_credentials(&self.config.audience, id, (version, &WRITER_ID), rules)?;
+        let body = serde_json::json!({ "record": record });
+        drop(record);
+        let attempts: u64 = if self.config.replicas.is_some() {
+            10
+        } else {
+            3
+        };
+        let backoff = |attempt: u64| std::time::Duration::from_millis(100 * (attempt + 1));
+        let old = || {
+            unavailable(
+                "the egress gateway does not serve per-sandbox credentials yet; deploy a release that installs a newer egress gateway and re-run setup",
+            )
+        };
+        // The exact record on every attempt: a partial fan-out may already have applied it.
+        for attempt in 0..attempts {
+            let last = attempt + 1 == attempts;
+            let retry = |error: AlienError<ErrorData>| {
+                if last {
+                    Err(exhausted(error))
+                } else {
+                    Ok(())
+                }
+            };
+            let targets = match self.write_targets().await {
+                Ok(targets) => targets,
+                Err(error) => {
+                    retry(error)?;
+                    tokio::time::sleep(backoff(attempt)).await;
+                    continue;
+                }
+            };
+            match self.protocol_check(&targets, CREDENTIALS_PROTOCOL).await {
+                Ok(true) => {}
+                Ok(false) => return Err(old()),
+                Err(error) => {
+                    retry(error)?;
+                    tokio::time::sleep(backoff(attempt)).await;
+                    continue;
+                }
+            }
+            let mut acknowledged = true;
+            for target in &targets {
+                let authorization = issuer.mint_admin(
+                    &self.config.audience,
+                    id,
+                    EgressAdminOperation::Put,
+                    now_unix()?,
+                )?;
+                let response = self
+                    .admin
+                    .put(format!("{target}/v1/credentials"))
+                    .timeout(REPLICA_WRITE)
+                    .bearer_auth(authorization)
+                    .json(&body)
+                    .send()
+                    .await;
+                match response {
+                    Ok(response) if response.status() == reqwest::StatusCode::NO_CONTENT => {}
+                    // The route is unknown: an older gateway that answers the protocol request
+                    // with a newer number cannot exist, but never ack on it.
+                    Ok(response) if response.status() == reqwest::StatusCode::NOT_FOUND => {
+                        return Err(old())
+                    }
+                    Ok(response) => {
+                        let transient =
+                            response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE;
+                        let error = credentials_error(response).await;
+                        if !(transient && error.code == "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE") {
+                            return Err(error);
+                        }
+                        retry(error)?;
+                        acknowledged = false;
+                        break;
+                    }
+                    Err(_) => {
+                        retry(unavailable(
+                            "gateway credential request failed after repeated attempts",
+                        ))?;
+                        acknowledged = false;
+                        break;
+                    }
+                }
+            }
+            if acknowledged {
+                return Ok(());
+            }
+            tokio::time::sleep(backoff(attempt)).await;
+        }
+        unreachable!("every final attempt returns")
+    }
+
+    /// The PEM of the sandbox's CA, which the sandbox trusts for intercepted HTTPS. `None` from
+    /// a gateway that predates per-sandbox credentials: its CA would change with rule hosts.
+    pub async fn sandbox_ca(&self, id: &str) -> Result<Option<String>> {
+        // The CA derives from the deployment's shared secret, so every replica issues the same
+        // one: ask each in turn, so one replica being away never blocks a sandbox's creation.
+        let mut targets = self.resolved_targets().await.unwrap_or_default();
+        // The configured admin address is the last resort, whatever the lookup returned.
+        let admin = self.admin_url.as_str().trim_end_matches('/').to_string();
+        if !targets.contains(&admin) {
+            targets.push(admin);
+        }
+        let mut last = unavailable("gateway did not issue the sandbox CA");
+        for target in targets {
+            match self.sandbox_ca_from(&target, id).await {
+                Ok(ca) => return Ok(ca),
+                Err(error) => last = error,
+            }
+        }
+        Err(last)
+    }
+
+    async fn sandbox_ca_from(&self, target: &str, id: &str) -> Result<Option<String>> {
+        #[derive(Deserialize)]
+        struct Issued {
+            certificate: String,
+        }
+        if self.served_protocol(target).await? < CREDENTIALS_PROTOCOL {
+            return Ok(None);
+        }
+        let authorization = self.issuer().await?.mint_admin_method(
+            &self.config.audience,
+            id,
+            "POST",
+            now_unix()?,
+        )?;
+        let response = self
+            .admin
+            .post(format!("{target}/v1/ca"))
+            .timeout(REPLICA_REQUEST)
+            .bearer_auth(authorization)
+            .json(&serde_json::json!({"aud": self.config.audience, "sub": id}))
+            .send()
+            .await
+            .map_err(|_| unavailable("gateway CA request failed"))?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(unavailable("gateway did not issue the sandbox CA"));
+        }
+        let body = bounded_body(response, 16 * 1024).await?;
+        serde_json::from_slice::<Issued>(&body)
+            .map(|issued| Some(issued.certificate))
+            .map_err(|_| unavailable("gateway returned an invalid sandbox CA"))
+    }
+
     /// Read the recovery record without renewing the sandbox identity.
     pub async fn policy_record(&self, id: &str) -> Result<String> {
         #[derive(Deserialize)]
@@ -809,6 +976,28 @@ async fn bounded_body(mut response: reqwest::Response, limit: usize) -> Result<V
     }
     Ok(body)
 }
+/// A refusal of a credential write. The gateway's message is never included: it is fixed text,
+/// but this keeps any value out of the error even from a gateway that misbehaves.
+async fn credentials_error(response: reqwest::Response) -> AlienError<ErrorData> {
+    let status = response.status().as_u16();
+    let body = bounded_body(response, 4096).await.unwrap_or_default();
+    let code = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| value["code"].as_str().map(str::to_owned))
+        .filter(|code| code.bytes().all(|b| b.is_ascii_uppercase() || b == b'_'));
+    match code.as_deref() {
+        Some("SANDBOX_EGRESS_VERSION_IN_FUTURE") => {
+            AlienError::new(ErrorData::SandboxEgressVersionInFuture)
+        }
+        Some("SANDBOX_EGRESS_POLICY_STORE_FULL") => {
+            AlienError::new(ErrorData::SandboxEgressPolicyStoreFull)
+        }
+        other => unavailable(&format!(
+            "gateway refused the credential rules (HTTP {status}{})",
+            other.map(|code| format!(", {code}")).unwrap_or_default()
+        )),
+    }
+}
 async fn gateway_error(response: reqwest::Response) -> AlienError<ErrorData> {
     let status = response.status().as_u16();
     let body = match bounded_body(response, 4096).await {
@@ -832,6 +1021,9 @@ async fn gateway_error(response: reqwest::Response) -> AlienError<ErrorData> {
         )),
     }
 }
+#[cfg(all(test, feature = "local"))]
+#[path = "sandbox_credentials_tests.rs"]
+mod credentials_tests;
 #[cfg(all(test, feature = "local"))]
 #[path = "sandbox_egress_tests.rs"]
 pub(crate) mod tests;

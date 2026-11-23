@@ -142,8 +142,13 @@ impl AwsSandbox {
         sandbox_id: &str,
         delivery: crate::sandbox_egress::EgressDelivery,
     ) -> Result<()> {
-        self.deliver_egress(sandbox_id, Some(&delivery.token), &delivery.policy)
-            .await
+        self.deliver_egress(
+            sandbox_id,
+            Some(&delivery.token),
+            &delivery.policy,
+            delivery.ca.as_deref(),
+        )
+        .await
     }
 
     async fn deliver_egress(
@@ -151,10 +156,14 @@ impl AwsSandbox {
         sandbox_id: &str,
         token: Option<&str>,
         policy: &str,
+        ca: Option<&str>,
     ) -> Result<()> {
         let mut body = serde_json::json!({"policy":policy});
         if let Some(token) = token {
             body["token"] = token.into();
+        }
+        if let Some(ca) = ca {
+            body["caCert"] = ca.into();
         }
         let deadline = std::time::Instant::now() + SANDBOX_READY_TIMEOUT;
         loop {
@@ -951,9 +960,44 @@ impl Sandbox for AwsSandbox {
             // Keep the live identity unchanged while refreshing the agent's copy for
             // recovery after total gateway loss. Paused agents receive it on resume.
             let record = manager.policy_record(sandbox_id).await?;
-            self.deliver_egress(sandbox_id, None, &record).await?;
+            self.deliver_egress(sandbox_id, None, &record, None).await?;
         }
         Ok(())
+    }
+
+    async fn update_credentials(
+        &self,
+        sandbox_id: &str,
+        rules: Vec<alien_core::SandboxCredentialRule>,
+    ) -> Result<()> {
+        super::egress::validate_credentials(&rules)?;
+        let manager = self
+            .egress_manager
+            .as_ref()
+            .ok_or_else(|| super::egress::unsupported("update_credentials"))?;
+        let sandbox = self
+            .fetch(sandbox_id, "sandbox.updateCredentials")
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.updateCredentials".into(),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
+                    ),
+                })
+            })?;
+        if sandbox.state == SandboxState::Terminated {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "sandboxTerminated".to_string(),
+                reason: format!("sandbox '{sandbox_id}' has terminated"),
+            }));
+        }
+        super::egress::require_ca_for_host_rules(
+            &rules,
+            self.authorized_request(sandbox_id, reqwest::Method::GET, HEALTH_PATH),
+        )
+        .await?;
+        manager.update_credentials(sandbox_id, &rules).await
     }
 
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {

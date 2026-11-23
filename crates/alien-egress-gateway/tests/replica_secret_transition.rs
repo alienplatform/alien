@@ -299,12 +299,15 @@ impl Cluster {
             .is_some_and(|child| child.try_wait().unwrap().is_none())
     }
 
+    /// Ready, and serving sandbox traffic: a replica opens its proxy port only after its
+    /// health turns ready (it polls for that every 100 ms), so both are checked.
     async fn healthy(&self, index: usize) -> bool {
         self.client
             .get(format!("http://{}/health", self.replicas[index].admin))
             .send()
             .await
             .is_ok_and(|response| response.status() == 200)
+            && TcpStream::connect(self.replicas[index].proxy).await.is_ok()
     }
 
     /// Waits until a replica's admin listener answers, ready or not.

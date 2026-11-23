@@ -19,11 +19,13 @@ pub mod protocol;
 pub mod record;
 pub mod replication;
 pub mod runtime;
+pub mod sandbox_credentials;
 pub mod server;
 pub mod store;
 pub mod token;
 mod tunnel;
 
 pub mod recovery;
+pub mod relay;
 
 pub mod memory;

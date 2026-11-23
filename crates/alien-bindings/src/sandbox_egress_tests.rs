@@ -275,6 +275,29 @@ impl Harness {
         .unwrap()
     }
     /// A manager whose binding lists fixed replica addresses (admin port 3129), as on Azure.
+    /// Like `reopen_with_replicas`, but the admin URL stays this harness's gateway, so a create
+    /// that reads the sandbox CA reaches it.
+    pub(crate) async fn reopen_with_replicas_reachable(
+        &self,
+        addresses: &[&str],
+    ) -> SandboxEgressManager {
+        let mut config = self.config.clone();
+        config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+            dns: String::new(),
+            addresses: addresses.iter().map(|a| a.to_string()).collect(),
+            port: 3129,
+            count: addresses.len() as u32,
+            min_protocol: 0,
+            proxy_port: 0,
+        });
+        SandboxEgressManager::with_endpoints(
+            config,
+            self.vault.clone(),
+            format!("{}:3128", addresses[0]),
+            self.manager.admin_url.to_string(),
+        )
+        .unwrap()
+    }
     pub(crate) async fn reopen_with_replicas(&self, addresses: &[&str]) -> SandboxEgressManager {
         let mut config = self.config.clone();
         config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
@@ -804,6 +827,54 @@ async fn replicated_writes_reach_every_ready_replica_or_fail() {
     // A replica that does not acknowledge fails the write.
     second.refuse.store(true, Ordering::SeqCst);
     assert!(manager.update("box-1", &wide).await.is_err());
+    server.abort();
+}
+
+/// The sandbox CA is the same on every replica, so a replica that is away (here the first one
+/// tried) never blocks a sandbox's creation while another answers.
+#[tokio::test]
+async fn the_sandbox_ca_is_taken_from_the_next_replica_when_the_first_is_away() {
+    let h = Harness::new().await;
+    let port = h.manager.admin_url.port().unwrap();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.3", port))
+        .await
+        .unwrap();
+    let router = Router::new()
+        .route(
+            "/v1/protocol",
+            axum::routing::get(|| async { axum::Json(serde_json::json!({"protocol": 2})) }),
+        )
+        .route(
+            "/v1/ca",
+            axum::routing::post(|| async {
+                axum::Json(serde_json::json!({"certificate": "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n"}))
+            }),
+        );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let mut config = h.config.clone();
+    config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+        dns: "replicas.invalid".into(),
+        addresses: vec![],
+        port,
+        count: 2,
+        min_protocol: 0,
+        proxy_port: 0,
+    });
+    let mut manager = SandboxEgressManager::with_endpoints(
+        config,
+        h.vault.clone(),
+        h.manager.gateway.clone(),
+        h.manager.admin_url.to_string(),
+    )
+    .unwrap();
+    let away: std::net::SocketAddr = format!("127.0.0.2:{port}").parse().unwrap();
+    let live: std::net::SocketAddr = format!("127.0.0.3:{port}").parse().unwrap();
+    manager.replica_addresses = Some(vec![away, live]);
+    let ca = manager.sandbox_ca("box-1").await.unwrap();
+    assert!(ca.is_some_and(|pem| pem.contains("BEGIN CERTIFICATE")));
+
     server.abort();
 }
 

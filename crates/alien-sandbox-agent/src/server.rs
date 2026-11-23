@@ -146,6 +146,21 @@ impl AgentState {
         }
         #[cfg(not(unix))]
         let _ = env;
+        // An agent without a gateway egress mode of its own (Azure) still trusts the CA the
+        // platform handed over; the gateway egress mode sets the same variables itself.
+        #[cfg(unix)]
+        if self.gateway_egress_absent() {
+            crate::ca_bundle::command_environment(env);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn gateway_egress_absent(&self) -> bool {
+        self.gateway_egress.is_none()
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    fn gateway_egress_absent(&self) -> bool {
+        true
     }
 
     /// Called only after network checks, before accepting any session operation.
@@ -191,6 +206,10 @@ pub struct HealthResponse {
     pub boot_id: String,
     /// Session readiness; awaiting-egress-policy until create installs the signed token.
     pub status: String,
+    /// Where the egress trust bundle is installed once management has delivered the sandbox's CA
+    /// to a forwarding agent. Absent until then, and on an agent that predates it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub egress_ca_path: Option<String>,
 }
 
 /// Optional version assertion from the caller.
@@ -445,11 +464,20 @@ async fn health(
         Some(egress) => egress.status()?,
         None => status,
     };
+    let egress_ca_path = crate::ca_bundle::installed_path();
+    #[cfg(target_os = "linux")]
+    let egress_ca_path = egress_ca_path.or_else(|| {
+        state
+            .gateway_egress
+            .as_ref()
+            .and_then(|egress| egress.installed_ca_path())
+    });
     Ok(Json(HealthResponse {
         image_command: state.image_process.status()?,
         status: status.into(),
         protocol_version: PROTOCOL_VERSION,
         boot_id,
+        egress_ca_path,
     }))
 }
 
@@ -1249,9 +1277,20 @@ async fn agent_platform(
             #[derive(Deserialize)]
             struct Envelope {
                 replicas: Vec<String>,
+                #[serde(default, rename = "caCert")]
+                ca_certificate: Option<String>,
             }
             let envelope: Envelope = reparse(&body)?;
-            set_egress_proxy(&state, peer, &headers, &envelope.replicas).await?;
+            // An agent that predates the certificate ignores it; health says whether the bundle
+            // is installed (`egressCaPath`), so the caller never has to guess.
+            set_egress_proxy(
+                &state,
+                peer,
+                &headers,
+                &envelope.replicas,
+                envelope.ca_certificate.as_deref(),
+            )
+            .await?;
             Ok(StatusCode::NO_CONTENT.into_response())
         }
         "previewGrant" => Ok(preview_grant(
@@ -1654,10 +1693,26 @@ async fn set_egress_proxy(
     peer: SocketAddr,
     headers: &HeaderMap,
     replicas: &[String],
+    ca_certificate: Option<&str>,
 ) -> std::result::Result<(), ApiError> {
     authorize_control(state, peer, headers, SandboxOperationClass::Execute).await?;
-    crate::proxy_failover::configure_from_control(replicas)
-        .map_err(|reason| ApiError::from(AlienError::new(ErrorData::RequestInvalid { reason })))
+    let invalid =
+        |reason: String| ApiError::from(AlienError::new(ErrorData::RequestInvalid { reason }));
+    // Checked before the forwarder starts, so a bad certificate leaves nothing half set.
+    if let Some(certificate) = ca_certificate {
+        crate::ca_bundle::validate(certificate).map_err(invalid)?;
+    }
+    crate::proxy_failover::configure_from_control(replicas).map_err(invalid)?;
+    let Some(certificate) = ca_certificate else {
+        return Ok(());
+    };
+    crate::ca_bundle::install(
+        certificate,
+        &crate::ca_bundle::SYSTEM_ROOTS.map(std::path::Path::new),
+        std::path::Path::new(crate::ca_bundle::BUNDLE_PATH),
+    )
+    .map(|_| ())
+    .map_err(invalid)
 }
 
 #[cfg(target_os = "linux")]
@@ -1838,6 +1893,15 @@ mod native_environment_tests {
         let arm = source
             .find("\"setEgressProxy\" =>")
             .expect("the envelope op exists");
-        assert!(source[arm..arm + 400].contains("set_egress_proxy(&state, peer, &headers"));
+        assert!(source[arm..arm + 900].contains("set_egress_proxy("));
+        // A bad certificate is refused before the forwarder starts, and nothing is written
+        // before the authorization.
+        let validate = body
+            .find("ca_bundle::validate(")
+            .expect("it validates the CA");
+        let install = body
+            .find("ca_bundle::install(")
+            .expect("it installs the CA");
+        assert!(authorize < validate && validate < configure && configure < install);
     }
 }

@@ -654,9 +654,7 @@ impl GatewayEgress {
         } else {
             "/tmp/alien-egress-ca-bundle.pem"
         };
-        let system = std::fs::read("/etc/ssl/certs/ca-certificates.crt")
-            .into_alien_error()
-            .context(failed("read system trust roots"))?;
+        let system = crate::ca_bundle::read_system_roots(&crate::ca_bundle::SYSTEM_ROOTS);
         let write_bundle = |file: &mut std::fs::File| -> std::io::Result<()> {
             file.set_len(0)?;
             file.seek(SeekFrom::Start(0))?;
@@ -687,6 +685,11 @@ impl GatewayEgress {
             .write()
             .map_err(|_| invalid("CA lock poisoned"))? = Some(path.into());
         Ok(())
+    }
+
+    /// Where this agent installed the sandbox's trust bundle, if management delivered a CA.
+    pub fn installed_ca_path(&self) -> Option<String> {
+        self.ca_path.read().ok().and_then(|path| path.clone())
     }
 
     /// Configure standard proxy-aware tools without disclosing the gateway token.

@@ -1067,6 +1067,32 @@ impl Sandbox for AzureSandbox {
         manager.update(gateway::identity(&sandbox)?, &policy).await
     }
 
+    async fn update_credentials(
+        &self,
+        sandbox_id: &str,
+        rules: Vec<alien_core::SandboxCredentialRule>,
+    ) -> Result<()> {
+        super::egress::validate_credentials(&rules)?;
+        Self::checked_sandbox_id("sandbox.updateCredentials", sandbox_id)?;
+        let manager = self
+            .egress_manager
+            .as_ref()
+            .ok_or_else(|| super::egress::unsupported("update_credentials"))?;
+        let sandbox = self
+            .read_sandbox("sandbox.updateCredentials", sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxGone".into(),
+                    reason: "sandbox no longer exists".into(),
+                })
+            })?;
+        super::egress::require_known_ca_for_host_rules(&rules, gateway::has_ca(&sandbox))?;
+        manager
+            .update_credentials(gateway::identity(&sandbox)?, &rules)
+            .await
+    }
+
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.terminate", sandbox_id)?;
         // Continue deletion even when revocation fails, then report that failure.

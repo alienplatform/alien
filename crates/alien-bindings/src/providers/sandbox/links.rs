@@ -106,6 +106,13 @@ impl Sandbox for LinkedSandbox {
     ) -> Result<()> {
         self.inner.update_egress(sandbox_id, egress).await
     }
+    async fn update_credentials(
+        &self,
+        sandbox_id: &str,
+        rules: Vec<alien_core::SandboxCredentialRule>,
+    ) -> Result<()> {
+        self.inner.update_credentials(sandbox_id, rules).await
+    }
     fn capabilities(&self) -> alien_core::SandboxCapabilities {
         self.inner.capabilities()
     }
