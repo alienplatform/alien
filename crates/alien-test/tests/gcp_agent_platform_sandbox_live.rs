@@ -942,7 +942,6 @@ async fn reach_through_a_manager_deployed_binding() {
         BindingValue::value(template),
         BindingValue::value(region),
         internal["maxLifetimeSeconds"].as_u64().map(|v| v as u32),
-        internal["allowEgress"].as_bool().unwrap_or(false),
     );
     if let SandboxBinding::GcpAgentPlatform(value) = &mut binding {
         value.egress = Some(alien_core::SandboxEgress::Internet.into());

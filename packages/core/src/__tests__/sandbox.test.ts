@@ -149,7 +149,10 @@ it("preserves the deprecated deny declaration and supervisor settings without ga
 })
 
 it("refuses the removed egress modes", () => {
-  for (const egress of [{ mode: "allow" }, { mode: "allowDomains", domains: ["api.example.com"] }]) {
+  for (const egress of [
+    { mode: "allow" },
+    { mode: "allowDomains", domains: ["api.example.com"] },
+  ]) {
     expect(SandboxConfigSchema.safeParse({ ...complete().build().config, egress }).success).toBe(
       false,
     )
