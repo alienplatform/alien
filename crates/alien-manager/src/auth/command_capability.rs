@@ -310,7 +310,9 @@ fn is_setup_key(subject: &Subject) -> bool {
 /// 2. the deployment's own deployment token with the manager role, for both
 ///    reserved ids (a token-installed Operator relay may lease the operations
 ///    worker from stack state). Setup and setup-import keys, which act as the
-///    same role, do not pass.
+///    same role, do not pass. A deployment's embedder that issues other
+///    credentials with the manager role and deployment scope decides who holds
+///    them: they pass here.
 ///
 /// Other subjects are refused.
 ///

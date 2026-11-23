@@ -2021,7 +2021,7 @@ async fn a_presigned_answer_of_one_lease_does_not_answer_another_lease_or_comman
 #[tokio::test]
 async fn a_lease_without_its_command_record_is_released_by_no_caller() {
     for index in 0..case_count().await {
-        let (fixture, name, bearer, _) = case(index).await;
+        let (fixture, name, bearer, allowed) = case(index).await;
         let router = fixture.router();
         let command_id = "cmd_without_a_record";
         let lease_id = "lease_without_a_record";
@@ -2061,10 +2061,16 @@ async fn a_lease_without_its_command_record_is_released_by_no_caller() {
             json!({}),
         )
         .await;
-        assert!(
-            status == StatusCode::NOT_FOUND || status == StatusCode::FORBIDDEN,
-            "{name}: {status} {body}"
-        );
+        if allowed {
+            // The rule lets this caller through, so only the missing record
+            // stops it.
+            assert_eq!(status, StatusCode::NOT_FOUND, "{name}: {body}");
+        } else {
+            assert!(
+                status == StatusCode::NOT_FOUND || status == StatusCode::FORBIDDEN,
+                "{name}: {status} {body}"
+            );
+        }
         assert!(
             fixture
                 .state

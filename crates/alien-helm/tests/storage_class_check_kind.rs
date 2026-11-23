@@ -119,10 +119,17 @@ fn the_install_names_a_missing_default_storage_class() {
             "jsonpath={range .items[*]}{.metadata.name}={.spec.storageClassName};{end}",
         ]);
         let listed = String::from_utf8_lossy(&output.stdout).to_string();
-        let entries: Vec<&str> = listed.split(';').filter(|entry| !entry.is_empty()).collect();
+        let entries: Vec<&str> = listed
+            .split(';')
+            .filter(|entry| !entry.is_empty())
+            .collect();
         assert_eq!(entries.len(), 1, "exactly one claim rendered: {listed}");
         assert!(entries[0].contains("-runtime-data="), "{listed}");
-        entries[0].split_once('=').expect("name=class").1.to_string()
+        entries[0]
+            .split_once('=')
+            .expect("name=class")
+            .1
+            .to_string()
     };
     // The cluster has no default StorageClass.
     let _ = kubectl(&["delete", "storageclass", "--all"]);
