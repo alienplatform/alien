@@ -694,6 +694,67 @@ async fn a_rule_added_ends_the_sandbox_tunnels_that_would_skip_it() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_tunnel_opened_during_the_join_window_ends_when_the_replica_starts_serving() {
+    let Some(ip) = link_ip() else {
+        eprintln!("no link-space address on this host; skipped");
+        return;
+    };
+    let key = key();
+    let (port, mut origin) = keep_alive_origin(ip).await;
+    let admin_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let links = json!([{"id":"connector","host":"connector.svc","ports":[port],
+        "ranges":[format!("{ip}/32")],"addresses":[ip.to_string()]}]);
+    let running = start(
+        config(&key, links, admin_listener.local_addr().unwrap()),
+        admin_listener,
+    )
+    .await;
+    let gateway = running.live.snapshot().unwrap();
+    let policy = Policy::Allow {
+        allow: vec!["link:connector".into()],
+    };
+    apply_policy(&gateway, &key, "box", Some(&policy), now_ms());
+    let token = proxy_token(&key, "box");
+
+    // The replica holds the sandbox's rules but is still joining: it serves none.
+    gateway.sandbox_credentials.set_serving(false);
+    let rules = json!([{"link":"connector","header":"Authorization","value":FIRST}]);
+    let (status, body) = put_credentials(
+        running.admin,
+        &grant(&key, "box", "PUT"),
+        &credential_record(&key, "box", now_ms(), rules),
+    )
+    .await;
+    assert_eq!(status, 204, "{body}");
+    let mut tunnel = open_tunnel(running.proxy, port, &token).await;
+    assert!(request_in(&mut tunnel, port).await);
+    assert!(next(&mut origin)
+        .await
+        .contains("authorization: placeholder"));
+
+    // Serving starts: the tunnel that relayed unread ends, a new request carries the value.
+    gateway
+        .replication
+        .complete_join(&running.live)
+        .await
+        .unwrap();
+    assert!(gateway.sandbox_credentials.serving());
+    // Wait for the close itself: a request written while it is still propagating may pass.
+    let mut buf = [0u8; 16];
+    assert!(
+        matches!(
+            tokio::time::timeout(Duration::from_secs(5), tunnel.read(&mut buf)).await,
+            Ok(Ok(0)) | Ok(Err(_))
+        ),
+        "join-window tunnel survived"
+    );
+    let mut again = open_tunnel(running.proxy, port, &token).await;
+    assert!(request_in(&mut again, port).await);
+    let head = next(&mut origin).await;
+    assert!(head.contains(&format!("authorization: {FIRST}")), "{head}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_write_is_acknowledged_only_once_every_replica_holds_it() {
     logs();
     let key = key();

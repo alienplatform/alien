@@ -379,6 +379,18 @@ impl CredentialStore {
             .map(|entry| entry.record.ver.clone()))
     }
 
+    /// Every sandbox's held rules, for ending connections that relayed unread while the
+    /// replica was not serving.
+    pub fn held_rules(&self) -> Vec<(String, String, std::sync::Arc<Vec<Rule>>)> {
+        let Ok(entries) = self.entries.read() else {
+            return Vec::new();
+        };
+        entries
+            .iter()
+            .map(|((aud, sub), entry)| (aud.clone(), sub.clone(), entry.record.rules.clone()))
+            .collect()
+    }
+
     /// The rules of one sandbox that apply to `target:port`, read at the moment of the request.
     pub fn rules_for(&self, aud: &str, sub: &str, target: &RuleTarget, port: u16) -> Vec<Rule> {
         if !self.serving() {

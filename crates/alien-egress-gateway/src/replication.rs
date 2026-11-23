@@ -535,6 +535,11 @@ impl Replication {
         self.catch_up(live).await?;
         if let Some(gateway) = live.snapshot() {
             gateway.sandbox_credentials.set_serving(true);
+            // Connections opened during the join window relayed unread (no rules were served).
+            // End those the now-served rules cover, so the client reconnects through the read path.
+            for (aud, sub, rules) in gateway.sandbox_credentials.held_rules() {
+                gateway.connections.close_uninspected(&aud, &sub, &rules);
+            }
         }
         Ok(())
     }
