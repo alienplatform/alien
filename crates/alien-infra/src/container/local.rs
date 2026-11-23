@@ -386,7 +386,11 @@ impl LocalContainerController {
                     })
                 })?;
             let entry = bindings_provider
-                .resolve_runtime_only_binding_env(&binding_ref.name, &binding_ref.resource_type)
+                .resolve_runtime_only_binding_env(
+                    &binding_ref.name,
+                    &binding_ref.resource_type,
+                    &env_vars,
+                )
                 .await
                 .context(ErrorData::ResourceControllerConfigError {
                     resource_id: binding_ref.name.clone(),
@@ -404,7 +408,7 @@ impl LocalContainerController {
                         ),
                     })
                 })?;
-            env_vars.extend(entry);
+            alien_local::merge_runtime_only_env(&mut env_vars, entry);
         }
 
         // A linked Local sandbox is reached over the host gateway with a mounted token file

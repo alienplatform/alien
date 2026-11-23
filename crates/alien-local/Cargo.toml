@@ -4,6 +4,8 @@ version.workspace = true
 edition = "2021"
 license-file.workspace = true
 [dependencies]
+aws-config = { workspace = true }
+aws-credential-types = { workspace = true }
 bon = { workspace = true }
 tempfile = { workspace = true }
 sha2 = { workspace = true }

@@ -45,6 +45,8 @@ impl Harness {
             preview_ports: vec![8080],
             env: Default::default(),
             links: Vec::new(),
+            max_lifetime: None,
+            egress_policy: None,
         };
 
         let route = SandboxRoute::ensure(manager, SANDBOX, template)
@@ -366,6 +368,8 @@ async fn a_create_in_flight_at_removal_is_visible_to_the_reap_that_follows() {
         preview_ports: Vec::new(),
         env: Default::default(),
         links: Vec::new(),
+        max_lifetime: None,
+        egress_policy: None,
     };
     let route = SandboxRoute::ensure(Arc::clone(&manager), SANDBOX_SLOW, template)
         .await
@@ -577,8 +581,6 @@ async fn language_bindings_preserve_egress_requests_against_local() {
         "egress": {"mode":"allow"},
     })
     .to_string();
-    let mut unsupported: serde_json::Value = serde_json::from_str(&binding).unwrap();
-    unsupported["egress"] = json!("internet");
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let python = std::env::var("ALIEN_TEST_PYTHON")
         .expect("set ALIEN_TEST_PYTHON to the wheel's interpreter");
@@ -596,7 +598,6 @@ async fn language_bindings_preserve_egress_requests_against_local() {
             .arg(root.join(script))
             .env("ALIEN_DEPLOYMENT_TYPE", "local")
             .env("ALIEN_EGRESS_TEST_BINDING", &binding)
-            .env("ALIEN_EGRESS_UNSUPPORTED_BINDING", unsupported.to_string())
             .output()
             .await
             .expect("language process starts");
@@ -620,4 +621,319 @@ async fn language_bindings_preserve_egress_requests_against_local() {
         "language tests must terminate their real containers"
     );
     SandboxRoute::remove(SANDBOX).await;
+}
+
+/// A route for `sandbox` whose sessions get `max_lifetime`, and the binding over it.
+async fn lifetime_route(
+    sandbox: &str,
+    max_lifetime: Option<std::time::Duration>,
+) -> (
+    TempDir,
+    Arc<LocalSandboxManager>,
+    alien_bindings::providers::sandbox::local::LocalSandbox,
+) {
+    use alien_core::bindings::{BindingValue, LocalSandboxBinding};
+    let dir = TempDir::new().expect("temp dir");
+    let manager = Arc::new(
+        LocalSandboxManager::new(dir.path().to_path_buf()).expect("Docker must be reachable"),
+    );
+    manager.reap(sandbox).await.expect("clean slate");
+    SandboxRoute::remove(sandbox).await;
+    let template = SandboxSessionConfig {
+        image: IMAGE.to_string(),
+        cpu_cores: 0.5,
+        memory_bytes: 268_435_456,
+        pids_limit: Some(64),
+        scratch_bytes: 16_777_216,
+        egress: SandboxEgressMode::Deny,
+        preview_ports: Vec::new(),
+        env: Default::default(),
+        links: Vec::new(),
+        max_lifetime,
+        egress_policy: None,
+    };
+    let route = SandboxRoute::ensure(Arc::clone(&manager), sandbox, template)
+        .await
+        .expect("route binds on loopback");
+    let binding = alien_bindings::providers::sandbox::local::LocalSandbox::new(
+        "agent",
+        &LocalSandboxBinding {
+            default_policy: None,
+            egress: None,
+            manager_url: BindingValue::Value(route.base_url.clone()),
+            sandbox_key: BindingValue::Value(sandbox.to_string()),
+            token_path: BindingValue::Value(route.token_path.display().to_string()),
+            links: Default::default(),
+        },
+    )
+    .await
+    .expect("binding reads the route token");
+    (dir, manager, binding)
+}
+
+/// Polls until the sandbox is gone, up to `within`.
+async fn gone_within(
+    binding: &alien_bindings::providers::sandbox::local::LocalSandbox,
+    id: &str,
+    within: std::time::Duration,
+) -> bool {
+    use alien_bindings::traits::Sandbox;
+    let deadline = tokio::time::Instant::now() + within;
+    while tokio::time::Instant::now() < deadline {
+        if binding.get(id).await.expect("get").is_none() {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    false
+}
+
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_session_ends_at_the_declared_lifetime() {
+    use alien_bindings::traits::{CreateSandboxRequest, Sandbox};
+    const KEY: &str = "route-lifetime";
+    let (_dir, manager, binding) =
+        lifetime_route(KEY, Some(std::time::Duration::from_secs(3))).await;
+
+    let instance = binding
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("sandbox starts");
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    assert!(
+        binding
+            .get(&instance.sandbox_id)
+            .await
+            .expect("get")
+            .is_some(),
+        "the sandbox runs until its lifetime"
+    );
+    assert!(
+        gone_within(
+            &binding,
+            &instance.sandbox_id,
+            std::time::Duration::from_secs(10)
+        )
+        .await,
+        "the sandbox must end at its declared lifetime"
+    );
+    manager.reap(KEY).await.expect("cleanup");
+    SandboxRoute::remove(KEY).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_requested_lifetime_shortens_the_declared_one() {
+    use alien_bindings::traits::{CreateSandboxRequest, Sandbox};
+    const KEY: &str = "route-lifetime-request";
+    let (_dir, manager, binding) =
+        lifetime_route(KEY, Some(std::time::Duration::from_secs(3600))).await;
+
+    let instance = binding
+        .create(CreateSandboxRequest {
+            timeout_ms: Some(2_000),
+            ..Default::default()
+        })
+        .await
+        .expect("a local sandbox takes a create-time lifetime");
+    assert!(
+        gone_within(
+            &binding,
+            &instance.sandbox_id,
+            std::time::Duration::from_secs(10)
+        )
+        .await,
+        "the shorter, requested lifetime must win"
+    );
+    manager.reap(KEY).await.expect("cleanup");
+    SandboxRoute::remove(KEY).await;
+}
+
+/// The deadline is a label on the container, so a manager that never saw the create (a restart
+/// of `alien dev`) still ends the session once the wall clock passes it.
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_session_past_its_label_deadline_ends_after_a_restart() {
+    const KEY: &str = "route-deadline-restart";
+    let dir = TempDir::new().expect("temp dir");
+    let first = LocalSandboxManager::new(dir.path().to_path_buf()).expect("Docker");
+    first.reap(KEY).await.expect("clean slate");
+    let config = |lifetime| SandboxSessionConfig {
+        image: IMAGE.to_string(),
+        cpu_cores: 0.5,
+        memory_bytes: 268_435_456,
+        pids_limit: Some(64),
+        scratch_bytes: 16_777_216,
+        egress: SandboxEgressMode::Deny,
+        preview_ports: Vec::new(),
+        env: Default::default(),
+        links: Vec::new(),
+        max_lifetime: lifetime,
+        egress_policy: None,
+    };
+    first
+        .create_session(
+            KEY,
+            "short",
+            &config(Some(std::time::Duration::from_secs(2))),
+        )
+        .await
+        .expect("short session");
+    first
+        .create_session(
+            KEY,
+            "long",
+            &config(Some(std::time::Duration::from_secs(3600))),
+        )
+        .await
+        .expect("long session");
+    first
+        .create_session(KEY, "unbounded", &config(None))
+        .await
+        .expect("unbounded session");
+    drop(first);
+
+    // A new manager: no timer exists for any of them.
+    let restarted = LocalSandboxManager::new(dir.path().to_path_buf()).expect("Docker");
+    assert_eq!(restarted.end_expired(KEY).await.expect("check"), 0);
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert_eq!(restarted.end_expired(KEY).await.expect("check"), 1);
+
+    let mut left: Vec<_> = restarted
+        .list_sessions(KEY)
+        .await
+        .expect("list")
+        .into_iter()
+        .map(|session| session.session_id)
+        .collect();
+    left.sort();
+    assert_eq!(left, ["long", "unbounded"]);
+    restarted.reap(KEY).await.expect("cleanup");
+}
+
+/// A create-time policy overrides the declaration's default through the route, and the default
+/// applies when the create names none.
+#[tokio::test]
+#[ignore = "requires a real Docker daemon and ALIEN_TEST_EGRESS_GATEWAY_IMAGE"]
+async fn the_route_applies_the_default_policy_and_a_create_time_one_replaces_it() {
+    use alien_bindings::traits::{CreateSandboxRequest, Sandbox};
+    use alien_core::{bindings::BindingValue, bindings::LocalSandboxBinding, EgressPolicy};
+    const KEY: &str = "route-policy";
+    const NETWORK: &str = "deployment-network";
+    let run = |args: &[&str]| {
+        std::process::Command::new("docker")
+            .args(args)
+            .output()
+            .expect("docker CLI")
+    };
+    if !run(&["network", "inspect", NETWORK]).status.success() {
+        assert!(run(&["network", "create", NETWORK]).status.success());
+    }
+    let _ = run(&["rm", "-f", "route-policy-api"]);
+    assert!(run(&[
+        "run",
+        "-d",
+        "--name",
+        "route-policy-api",
+        "--network",
+        NETWORK,
+        "--network-alias",
+        "api.svc",
+        "busybox:1.36",
+        "sh",
+        "-c",
+        "mkdir /w && echo api-ok > /w/index.html && httpd -f -p 8080 -h /w",
+    ])
+    .status
+    .success());
+
+    let dir = TempDir::new().expect("temp dir");
+    let image = std::env::var("ALIEN_TEST_EGRESS_GATEWAY_IMAGE").expect("gateway image");
+    let manager = Arc::new(
+        LocalSandboxManager::new(dir.path().to_path_buf())
+            .expect("Docker")
+            .with_gateway_image(image),
+    );
+    manager.reap(KEY).await.expect("clean slate");
+    SandboxRoute::remove(KEY).await;
+    let template = SandboxSessionConfig {
+        image: IMAGE.to_string(),
+        cpu_cores: 0.5,
+        memory_bytes: 268_435_456,
+        pids_limit: Some(64),
+        scratch_bytes: 16_777_216,
+        egress: SandboxEgressMode::Allow,
+        preview_ports: Vec::new(),
+        env: Default::default(),
+        links: vec![alien_local::SandboxLink {
+            id: "api".into(),
+            ports: vec![8080],
+        }],
+        max_lifetime: None,
+        egress_policy: Some(EgressPolicy::Allow {
+            allow: vec!["link:api".to_string()],
+        }),
+    };
+    let route = SandboxRoute::ensure(Arc::clone(&manager), KEY, template)
+        .await
+        .expect("route");
+    let binding = alien_bindings::providers::sandbox::local::LocalSandbox::new(
+        "agent",
+        &LocalSandboxBinding {
+            default_policy: None,
+            egress: Some(alien_core::SandboxEgress::Internet.into()),
+            manager_url: BindingValue::Value(route.base_url.clone()),
+            sandbox_key: BindingValue::Value(KEY.to_string()),
+            token_path: BindingValue::Value(route.token_path.display().to_string()),
+            links: Default::default(),
+        },
+    )
+    .await
+    .expect("binding");
+
+    let reaches_api = |session_id: String| {
+        let manager = Arc::clone(&manager);
+        async move {
+            let session = manager
+                .list_sessions(KEY)
+                .await
+                .expect("list")
+                .into_iter()
+                .find(|s| s.session_id == session_id)
+                .expect("session");
+            let result = manager
+                .exec(
+                    &session.container_id,
+                    &["wget", "-q", "-T", "10", "-O-", "http://api.svc:8080/"].map(String::from),
+                )
+                .await
+                .expect("exec");
+            result.exit_code == 0
+        }
+    };
+
+    let defaulted = binding
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("default policy session");
+    assert!(
+        reaches_api(defaulted.sandbox_id.clone()).await,
+        "the declared default reaches the link"
+    );
+    let replaced = binding
+        .create(CreateSandboxRequest {
+            egress: Some(EgressPolicy::Allow { allow: vec![] }),
+            ..Default::default()
+        })
+        .await
+        .expect("create-time policy session");
+    assert!(
+        !reaches_api(replaced.sandbox_id.clone()).await,
+        "a create-time allow: [] replaces the default and refuses the link"
+    );
+
+    manager.reap(KEY).await.expect("cleanup");
+    SandboxRoute::remove(KEY).await;
+    let _ = run(&["rm", "-f", "route-policy-api"]);
 }

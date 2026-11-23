@@ -618,79 +618,15 @@ impl LocalContainerManager {
             load_guards.push(lock.lock_owned().await);
         }
 
-        if let Some(image_id) = self
-            .inspect_archive_image(&candidates, container_id)
-            .await?
-        {
-            return Ok(image_id);
-        }
-        info!(
-            tarball = %tarball_path.display(),
-            container_id = %container_id,
-            "Loading OCI image from local tarball"
-        );
-
-        // Use `docker load` instead of `import_image` to preserve CMD/ENTRYPOINT
-        // docker import is for filesystem tarballs, docker load is for OCI image tarballs
-        let output = crate::docker_connection::docker_command(&self.docker_host)
-            .args(&["load", "-i", &tarball_path.to_string_lossy()])
-            .output()
-            .await
-            .into_alien_error()
-            .context(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "docker_load".to_string(),
-                reason: "Failed to execute docker load command".to_string(),
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AlienError::new(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "docker_load".to_string(),
-                reason: format!("docker load failed: {}", stderr),
-            }));
-        }
-
-        if let Some(image_id) = self
-            .inspect_archive_image(&candidates, container_id)
-            .await?
-        {
-            return Ok(image_id);
-        }
-        Err(AlienError::new(ErrorData::DockerContainerError {
-            container: container_id.to_string(),
-            operation: "inspect_loaded_image".to_string(),
-            reason: format!(
-                "Docker did not load image {} (manifest) or {} (config)",
-                candidates[0], candidates[1]
-            ),
-        }))
-    }
-
-    async fn inspect_archive_image(
-        &self,
-        candidates: &[String; 2],
-        container_id: &str,
-    ) -> Result<Option<String>> {
-        for image_id in candidates {
-            match self.docker.inspect_image(image_id).await {
-                Ok(_) => return Ok(Some(image_id.clone())),
-                Err(bollard::errors::Error::DockerResponseServerError {
-                    status_code: 404, ..
-                }) => continue,
-                Err(error) => {
-                    return Err(error).into_alien_error().context(
-                        ErrorData::DockerContainerError {
-                            container: container_id.to_string(),
-                            operation: "inspect_loaded_image".to_string(),
-                            reason: format!("Failed to inspect loaded image {image_id}"),
-                        },
-                    );
-                }
-            }
-        }
-        Ok(None)
+        let _load_guards = load_guards;
+        docker_load_archive(
+            &self.docker,
+            &self.docker_host,
+            tarball_path,
+            &candidates,
+            container_id,
+        )
+        .await
     }
 
     /// Make a registry image available to the daemon and return a reference
@@ -812,7 +748,7 @@ impl LocalContainerManager {
     }
 
     /// Finds an OCI tarball in a directory (searches *.oci.tar recursively up to 1 level deep).
-    fn find_oci_tarball(dir: &Path) -> Result<PathBuf> {
+    pub(crate) fn find_oci_tarball(dir: &Path) -> Result<PathBuf> {
         // First, look in the directory itself
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
@@ -1767,6 +1703,158 @@ fn shared_bind_mount_user(_bind_mounts: &[BindMount]) -> Option<String> {
     // Docker Desktop mediates bind mounts through its VM/file-sharing layer;
     // host uid/gid values do not identify the container user there.
     None
+}
+
+/// Loads an archive into the daemon unless the daemon already has its image, and returns the id
+/// the daemon knows it by: the manifest digest on the containerd image store, the config digest
+/// on the classic one. Callers serialize loads of the same archive.
+async fn docker_load_archive(
+    docker: &Docker,
+    docker_host: &str,
+    tarball_path: &Path,
+    candidates: &[String; 2],
+    owner: &str,
+) -> Result<String> {
+    if let Some(image_id) = inspect_archive_image(docker, candidates, owner).await? {
+        return Ok(image_id);
+    }
+    info!(
+        tarball = %tarball_path.display(),
+        container_id = %owner,
+        "Loading OCI image from local tarball"
+    );
+
+    // Use `docker load` instead of `import_image` to preserve CMD/ENTRYPOINT
+    // docker import is for filesystem tarballs, docker load is for OCI image tarballs
+    let output = crate::docker_connection::docker_command(docker_host)
+        .args(&["load", "-i", &tarball_path.to_string_lossy()])
+        .output()
+        .await
+        .into_alien_error()
+        .context(ErrorData::DockerContainerError {
+            container: owner.to_string(),
+            operation: "docker_load".to_string(),
+            reason: "Failed to execute docker load command".to_string(),
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AlienError::new(ErrorData::DockerContainerError {
+            container: owner.to_string(),
+            operation: "docker_load".to_string(),
+            reason: format!("docker load failed: {}", stderr),
+        }));
+    }
+
+    if let Some(image_id) = inspect_archive_image(docker, candidates, owner).await? {
+        return Ok(image_id);
+    }
+    Err(AlienError::new(ErrorData::DockerContainerError {
+        container: owner.to_string(),
+        operation: "inspect_loaded_image".to_string(),
+        reason: format!(
+            "Docker did not load image {} (manifest) or {} (config)",
+            candidates[0], candidates[1]
+        ),
+    }))
+}
+
+async fn inspect_archive_image(
+    docker: &Docker,
+    candidates: &[String; 2],
+    owner: &str,
+) -> Result<Option<String>> {
+    for image_id in candidates {
+        match docker.inspect_image(image_id).await {
+            Ok(_) => return Ok(Some(image_id.clone())),
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => continue,
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::DockerContainerError {
+                        container: owner.to_string(),
+                        operation: "inspect_loaded_image".to_string(),
+                        reason: format!("Failed to inspect loaded image {image_id}"),
+                    });
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Serializes loads of sandbox image archives: two sessions of one sandbox start together.
+static SANDBOX_IMAGE_LOAD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Digests of each loaded archive by path, valid while its modified time is unchanged, so each
+/// session create does not read the archive again.
+static ARCHIVE_DIGESTS: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<PathBuf, (std::time::SystemTime, [String; 2])>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Makes the image of a sandbox build directory (or archive) available to the daemon, the way
+/// a local Container's build output is, and returns the reference sessions are created from.
+pub(crate) async fn load_built_image(
+    docker: &Docker,
+    docker_host: &str,
+    location: &Path,
+    owner: &str,
+) -> Result<String> {
+    let tarball_path = if location.is_dir() {
+        LocalContainerManager::find_oci_tarball(location)?
+    } else {
+        location.to_path_buf()
+    };
+    let modified = std::fs::metadata(&tarball_path)
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    let cached = modified.and_then(|modified| {
+        let cache = ARCHIVE_DIGESTS.lock().expect("no panic holds this lock");
+        cache
+            .get(&tarball_path)
+            .filter(|(at, _)| *at == modified)
+            .map(|(_, digests)| digests.clone())
+    });
+    let candidates = match cached {
+        Some(digests) => digests,
+        None => {
+            let archive = tarball_path.clone();
+            let digests = tokio::task::spawn_blocking(move || -> std::io::Result<[String; 2]> {
+                let (manifest_digest, _) = oci_archive_identity(&archive)?;
+                let config_digest = dockdash::Image::from_tarball(&archive)
+                    .map_err(std::io::Error::other)?
+                    .config_digest()
+                    .to_string();
+                Ok([manifest_digest, config_digest])
+            })
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: owner.to_string(),
+                operation: "resolve_loaded_image".to_string(),
+                reason: "Image archive reader task failed".to_string(),
+            })?
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: owner.to_string(),
+                operation: "resolve_loaded_image".to_string(),
+                reason: format!(
+                    "Failed to read the image digests of '{}'",
+                    tarball_path.display()
+                ),
+            })?;
+            if let Some(modified) = modified {
+                ARCHIVE_DIGESTS
+                    .lock()
+                    .expect("no panic holds this lock")
+                    .insert(tarball_path.clone(), (modified, digests.clone()));
+            }
+            digests
+        }
+    };
+    let _guard = SANDBOX_IMAGE_LOAD.lock().await;
+    docker_load_archive(docker, docker_host, &tarball_path, &candidates, owner).await
 }
 
 /// The OCI layout's `index.json`, reduced to what image identification needs.

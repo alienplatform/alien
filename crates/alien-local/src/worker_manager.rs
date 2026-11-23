@@ -375,7 +375,7 @@ impl LocalWorkerManager {
             persisted_env.remove(name);
         }
         for (_name, entry) in resolved {
-            live_env.extend(entry.clone());
+            crate::local_bindings_provider::merge_runtime_only_env(&mut live_env, entry.clone());
         }
         let metadata = WorkerMetadata {
             worker_id: id.to_string(),
@@ -477,7 +477,7 @@ impl LocalWorkerManager {
         let mut resolved_bindings = Vec::new();
         for binding in &runtime_only_bindings {
             if let Some(entry) = bindings_provider
-                .resolve_runtime_only_binding_env(&binding.name, &binding.resource_type)
+                .resolve_runtime_only_binding_env(&binding.name, &binding.resource_type, &env_vars)
                 .await
                 .context(ErrorData::Other {
                     message: format!("Failed to resolve runtime-only binding '{}'", binding.name),

@@ -169,7 +169,7 @@ impl LocalWorkerManager {
         let mut resolved_bindings = Vec::new();
         for binding in &options.runtime_only_bindings {
             if let Some(entry) = bindings_provider
-                .resolve_runtime_only_binding_env(&binding.name, &binding.resource_type)
+                .resolve_runtime_only_binding_env(&binding.name, &binding.resource_type, &env_vars)
                 .await
                 .context(ErrorData::Other {
                     message: format!("Failed to resolve runtime-only binding '{}'", binding.name),

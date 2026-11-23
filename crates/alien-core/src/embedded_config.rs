@@ -274,8 +274,7 @@ mod tests {
             let loaded: DeployCliConfig = serde_json::from_str(json).unwrap();
             assert_eq!(loaded.label_domain, None, "{json}");
         }
-        let loaded: DeployCliConfig =
-            serde_json::from_str(r#"{"labelDomain":"acme.dev"}"#).unwrap();
+        let loaded: DeployCliConfig = serde_json::from_str(r#"{"labelDomain":"acme.dev"}"#).unwrap();
         assert_eq!(loaded.label_domain.as_deref(), Some("acme.dev"));
     }
 

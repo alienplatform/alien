@@ -3087,7 +3087,7 @@
               "type": "string"
             }
           ],
-          "description": "Wall-clock ceiling on a single sandbox, after which the platform terminates it.\n\nOptional because not every backend has the primitive: Kubernetes has\n`activeDeadlineSeconds` and AWS `maximumDurationInSeconds`, while neither Azure nor Local\nexpose one, so declaring a ceiling there is refused at plan time rather than accepted and\nnever applied. AWS caps it at 8 hours."
+          "description": "Wall-clock ceiling on a single sandbox, after which the platform terminates it.\n\nOptional: without it a sandbox runs until it is terminated. Kubernetes applies it as\n`activeDeadlineSeconds`, AWS as `maximumDurationInSeconds`, Google Cloud as the sandbox's\nTTL, Azure through the controller's reaper, and local development through the sandbox\nmanager, which ends the container. AWS caps it at 8 hours."
         },
         "on-pause": {
           "description": "A program the agent runs inside the image, with the image's own grant, before the\nplatform pauses the sandbox with its memory kept. Killed by process group at a deadline.\nBest effort: the image must also survive a stop with no warning. The program must be one\nof the image's own files, not on a declared image-permissions mount. AWS only.",

@@ -89,7 +89,7 @@ pub use daemon_supervisor::DaemonLaunchOptions;
 pub use docker_network::{start_docker_bridge_proxy, start_docker_bridge_proxy_with_shutdown};
 pub use error::{ErrorData, Result};
 pub use kv_manager::LocalKvManager;
-pub use local_bindings_provider::LocalBindingsProvider;
+pub use local_bindings_provider::{merge_runtime_only_env, LocalBindingsProvider};
 pub use postgres_manager::LocalPostgresManager;
 pub use queue_manager::LocalQueueManager;
 pub use redis_manager::{LocalRedisManager, RedisSpec, VALKEY_VERSION};

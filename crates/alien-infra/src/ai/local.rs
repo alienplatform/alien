@@ -29,6 +29,51 @@ const DEFAULT_PROVIDER: &str = AiBinding::LOCAL_DEFAULT_PROVIDER;
 pub struct LocalAiController {
     /// The BYO-key provider (e.g. "openai"). None until create_start runs.
     pub(crate) provider: Option<String>,
+    /// The Bedrock region, when `ALIEN_AI_LOCAL_BEDROCK_REGION` selected Bedrock.
+    #[serde(default)]
+    pub(crate) region: Option<String>,
+}
+
+impl LocalAiController {
+    /// Picks Bedrock or the BYO-key provider from the developer's environment. Run on create
+    /// and on update, so the binding and heartbeat agree with what the runtime resolves at
+    /// each start (it reads the same variable every time).
+    fn resolve_provider(&mut self, id: &str) -> Result<()> {
+        // Bedrock in the developer's own account needs no provider key: the linked workload
+        // signs with the AWS credentials `alien dev` resolves for it at start.
+        let bedrock_region = AiBinding::local_bedrock_region().map_err(|message| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(id.to_string()),
+                message,
+            })
+        })?;
+        if let Some(region) = bedrock_region {
+            self.provider = Some(AiBinding::LOCAL_BEDROCK_PROVIDER.to_string());
+            self.region = Some(region.clone());
+            info!(id=%id, %region, "Local AI controller: Bedrock with the developer's AWS credentials");
+        } else {
+            // Fail loud if the developer hasn't supplied a key: local AI has no ambient
+            // identity to fall back on, so this is a required, actionable precondition.
+            if std::env::var(API_KEY_ENV)
+                .map(|k| k.is_empty())
+                .unwrap_or(true)
+            {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    resource_id: Some(id.to_string()),
+                    message: format!(
+                        "local AI resource '{}' needs a provider API key: set {API_KEY_ENV} \
+                         before `alien dev`, or set {} to use Bedrock with your AWS credentials",
+                        id,
+                        AiBinding::LOCAL_BEDROCK_REGION_ENV
+                    ),
+                }));
+            }
+            self.provider = Some(DEFAULT_PROVIDER.to_string());
+            self.region = None;
+            info!(id=%id, provider=DEFAULT_PROVIDER, "Local AI (BYO-key) controller: no resource to create");
+        }
+        Ok(())
+    }
 }
 
 #[controller]
@@ -44,23 +89,7 @@ impl LocalAiController {
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Ai>()?;
 
-        // Fail loud if the developer hasn't supplied a key — local AI has no ambient
-        // identity to fall back on, so this is a required, actionable precondition.
-        if std::env::var(API_KEY_ENV)
-            .map(|k| k.is_empty())
-            .unwrap_or(true)
-        {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                resource_id: Some(config.id.clone()),
-                message: format!(
-                    "local AI resource '{}' needs a provider API key: set {API_KEY_ENV} before `alien dev`",
-                    config.id
-                ),
-            }));
-        }
-
-        self.provider = Some(DEFAULT_PROVIDER.to_string());
-        info!(id=%config.id, provider=DEFAULT_PROVIDER, "Local AI (BYO-key) controller: no resource to create");
+        self.resolve_provider(&config.id)?;
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -105,7 +134,7 @@ impl LocalAiController {
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────
-    // Ai has no mutable fields -- update is a no-op that also recovers RefreshFailed.
+    // Ai has no mutable fields; update resolves the provider again and recovers RefreshFailed.
 
     #[flow_entry(Update, from = [Ready, RefreshFailed])]
     #[handler(
@@ -115,7 +144,8 @@ impl LocalAiController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Ai>()?;
-        info!(id=%config.id, "Local AI update (no-op -- no mutable fields)");
+        self.resolve_provider(&config.id)?;
+        info!(id=%config.id, "Local AI update: provider resolved again");
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -171,6 +201,18 @@ impl LocalAiController {
             Some(p) => p,
             None => return Ok(None),
         };
+        // Bedrock carries no secret: the region is the whole binding, and the AWS credentials
+        // travel the runtime-only channel.
+        if let Some(region) = &self.region {
+            return Ok(Some(
+                serde_json::to_value(AiBinding::bedrock(region.clone()))
+                    .into_alien_error()
+                    .context(ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize AI binding parameters".to_string(),
+                    })?,
+            ));
+        }
         let mut value = serde_json::to_value(AiBinding::external(provider.clone(), String::new()))
             .into_alien_error()
             .context(ErrorData::ResourceStateSerializationFailed {
@@ -210,6 +252,23 @@ mod tests {
         assert!(
             value.get("apiKey").is_none(),
             "the synced binding must never carry the provider key: {value}"
+        );
+    }
+
+    #[test]
+    fn a_bedrock_controller_syncs_the_region_and_no_secret() {
+        let controller = LocalAiController {
+            provider: Some("bedrock".to_string()),
+            region: Some("us-east-1".to_string()),
+            ..Default::default()
+        };
+        let value = controller
+            .get_binding_params()
+            .expect("binding params serialize")
+            .expect("a provisioned controller emits a binding");
+        assert_eq!(
+            value,
+            serde_json::json!({"service": "bedrock", "region": "us-east-1"})
         );
     }
 }

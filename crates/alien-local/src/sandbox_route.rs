@@ -43,6 +43,13 @@ fn token_file_name(sandbox: &str) -> String {
 pub struct CreateSessionBody {
     /// Session id within the sandbox
     pub session_id: String,
+    /// A lifetime the caller asks for. It can only shorten the declared ceiling, never lengthen
+    /// it, so it is safe to take from the client.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// The session's outbound policy, instead of the declaration's default.
+    #[serde(default)]
+    pub egress: Option<alien_core::EgressPolicy>,
 }
 
 /// A request to run a command.
@@ -391,6 +398,7 @@ impl SandboxRoute {
         };
 
         let template = Arc::new(Mutex::new(template));
+        let expiry = end_expired_sessions(Arc::clone(&manager), sandbox.to_string());
         let state = RouteState {
             manager,
             sandbox: sandbox.to_string(),
@@ -444,8 +452,14 @@ impl SandboxRoute {
                 // Either an explicit stop or the sender being dropped ends the wait.
                 let _ = stop.await;
             });
-            if let Err(error) = serve.await {
-                tracing::error!("local sandbox route stopped: {error}");
+            // The expiry loop never ends on its own; it is dropped when the route stops.
+            tokio::select! {
+                result = serve => {
+                    if let Err(error) = result {
+                        tracing::error!("local sandbox route stopped: {error}");
+                    }
+                }
+                () = expiry => {}
             }
         });
 
@@ -605,11 +619,25 @@ async fn create_session(
     authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
 
     // Cloned out of the lock: the session create is an await, and the guard is not Send.
-    let template = state
+    let mut template = state
         .template
         .lock()
         .expect("no panic holds this lock")
         .clone();
+    if let Some(policy) = body.egress {
+        policy
+            .validate()
+            .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+        template.egress_policy = Some(policy);
+    }
+
+    // The effective lifetime goes on the container as a wall-clock deadline, which the manager
+    // enforces from the labels: after a restart and across a machine's sleep as well.
+    let lifetime = session_lifetime(
+        template.max_lifetime,
+        body.timeout_ms.map(std::time::Duration::from_millis),
+    );
+    template.max_lifetime = lifetime;
 
     let handle = state
         .manager
@@ -622,6 +650,32 @@ async fn create_session(
         container_id: handle.container_id,
         running: handle.running,
     }))
+}
+
+/// How long a new session may run: the shorter of the declared ceiling and the caller's request.
+fn session_lifetime(
+    declared: Option<std::time::Duration>,
+    requested: Option<std::time::Duration>,
+) -> Option<std::time::Duration> {
+    match (declared, requested) {
+        (Some(declared), Some(requested)) => Some(declared.min(requested)),
+        (declared, requested) => declared.or(requested),
+    }
+}
+
+/// Ends sessions at their deadline, as a cloud backend's deadline does, for one sandbox's route.
+/// The deadline itself is a label on each container, compared with the wall clock: this loop only
+/// wakes up to check, in short steps so a machine's sleep does not slide it, and checks again
+/// when a check fails. It lives as long as the route: it is part of the route's serving task, so
+/// it stops with it, and it sees sessions that were created before a restart as well.
+async fn end_expired_sessions(manager: Arc<LocalSandboxManager>, sandbox: String) {
+    const STEP: std::time::Duration = std::time::Duration::from_secs(5);
+    loop {
+        tokio::time::sleep(STEP).await;
+        if let Err(error) = manager.end_expired(&sandbox).await {
+            tracing::warn!(%sandbox, %error, "could not end sandboxes at their lifetime; retrying");
+        }
+    }
 }
 
 async fn list_sessions(
@@ -1044,5 +1098,22 @@ mod tests {
             generate_token().len() >= 64,
             "a guessable token is not a token"
         );
+    }
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    use super::session_lifetime;
+    use std::time::Duration;
+
+    #[test]
+    fn the_shorter_of_the_declared_and_requested_lifetime_wins() {
+        let s = Duration::from_secs;
+        assert_eq!(session_lifetime(None, None), None);
+        assert_eq!(session_lifetime(Some(s(60)), None), Some(s(60)));
+        assert_eq!(session_lifetime(None, Some(s(5))), Some(s(5)));
+        assert_eq!(session_lifetime(Some(s(60)), Some(s(5))), Some(s(5)));
+        // A request cannot lengthen the declared ceiling.
+        assert_eq!(session_lifetime(Some(s(60)), Some(s(600))), Some(s(60)));
     }
 }

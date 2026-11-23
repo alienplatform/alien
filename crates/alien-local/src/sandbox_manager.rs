@@ -36,6 +36,10 @@ pub(crate) const LABEL_SESSION: &str = "dev.alien.sandbox.session";
 /// Label carrying the `uid:gid` every command in the session runs as. Set by the manager when it
 /// creates the container and fixed from then on: nothing inside the container can change it.
 const LABEL_EXEC_USER: &str = "dev.alien.sandbox.exec-user";
+/// Label carrying the wall-clock time (epoch seconds) the session's lifetime ends. Kept on the
+/// container so a restarted process, or a clock that moved while the machine slept, still ends
+/// the session on time.
+const LABEL_DEADLINE: &str = "dev.alien.sandbox.deadline";
 /// Prefix of the environment names the manager sets in a session. A session's own environment
 /// may not use it, so code in the session never reads a value the declaration chose.
 const RESERVED_ENV_PREFIX: &str = "ALIEN_SANDBOX_";
@@ -79,6 +83,12 @@ pub struct SandboxSessionConfig {
     /// With `Allow`, the session sits alone on its own internal network with the gateway, which
     /// is its only way out; these are the services it can reach through it.
     pub links: Vec<SandboxLink>,
+    /// The declaration's `maxLifetimeSeconds`: the route ends each session this long after it
+    /// is created. `None`, a session runs until it is terminated.
+    pub max_lifetime: Option<std::time::Duration>,
+    /// The policy a session's gateway enforces when the create names none: the declaration's
+    /// default. `None`, the whole public internet.
+    pub egress_policy: Option<alien_core::EgressPolicy>,
 }
 
 /// A service a sandbox links: a container on `deployment-network`, by its resource id, on its
@@ -125,6 +135,7 @@ pub struct SandboxExecResult {
 #[derive(Debug)]
 pub struct LocalSandboxManager {
     docker: Docker,
+    docker_host: String,
     state_dir: PathBuf,
     /// Signs this process's gateway tokens and policy writes. Generated per process: a restart
     /// reaps every gateway and session.
@@ -137,20 +148,47 @@ pub struct LocalSandboxManager {
     /// Seeds the session CAs of every gateway. Per process, like `gateway_key`, so a gateway
     /// recreated for changed links keeps issuing the CA its sessions already trust.
     gateway_secret: String,
+    /// One lock per session container name. Create, terminate and the expiry cleanup of the
+    /// same session id run one at a time, so a late cleanup cannot remove what a newer create
+    /// of the same id just set up.
+    session_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl LocalSandboxManager {
+    fn session_lock(&self, name: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.session_locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(name.to_string())
+            .or_default()
+            .clone()
+    }
+
+    /// Drops the map entry of a finished session when nobody else holds or waits on its lock
+    /// (the map and `lock` are the only owners), so the map does not grow with every session id.
+    fn release_session_lock(&self, name: &str, lock: Arc<tokio::sync::Mutex<()>>) {
+        let mut locks = self
+            .session_locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if Arc::strong_count(&lock) == 2 {
+            locks.remove(name);
+        }
+    }
+
     /// Connects to the local Docker daemon.
     pub fn new(state_dir: PathBuf) -> Result<Self> {
-        let docker = crate::connect_docker()?;
+        let (docker, docker_host) = crate::docker_connection::connect_docker_with_host()?;
 
         Ok(Self {
             docker,
+            docker_host,
             state_dir,
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.to_string(),
             gateway_secret: new_gateway_secret(),
+            session_locks: Default::default(),
         })
     }
 
@@ -187,6 +225,18 @@ impl LocalSandboxManager {
         session_id: &str,
         config: &SandboxSessionConfig,
     ) -> Result<SandboxSessionHandle> {
+        let lock = self.session_lock(&Self::container_name(sandbox, session_id));
+        let _guard = lock.lock().await;
+        self.create_session_locked(sandbox, session_id, config)
+            .await
+    }
+
+    async fn create_session_locked(
+        &self,
+        sandbox: &str,
+        session_id: &str,
+        config: &SandboxSessionConfig,
+    ) -> Result<SandboxSessionHandle> {
         if let Some(reserved) = config
             .env
             .keys()
@@ -212,8 +262,9 @@ impl LocalSandboxManager {
             }));
         }
 
-        self.ensure_image(&config.image).await?;
-        let image = crate::sandbox_identity::inspect(&self.docker, &config.image, sandbox).await?;
+        let image_reference = self.ensure_image(&config.image, sandbox).await?;
+        let image =
+            crate::sandbox_identity::inspect(&self.docker, &image_reference, sandbox).await?;
 
         // Every session that reaches anything goes through the sandbox's gateway, links or not,
         // so its policy and credential rules apply as on the cloud platforms. A session's
@@ -224,6 +275,28 @@ impl LocalSandboxManager {
         // An image with no digest (a local build, a `:dev` tag) cannot be judged by name: it is
         // taken as current until its gateway has started and said which protocol it serves.
         let gateway_current = self.gateway_serves_credentials(sandbox).await;
+        let policy = config
+            .egress_policy
+            .as_ref()
+            .unwrap_or(&alien_core::EgressPolicy::Internet);
+        // An older gateway cannot enforce a policy, and a session it does not carry would run
+        // on the plain bridge with the whole internet: refuse rather than ignore the policy.
+        let unenforced_policy = || {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: session_id.to_string(),
+                operation: format!(
+                    "the egress policy cannot be enforced: the sandbox's egress gateway \
+                     ({}) predates admin protocol 2, which needs a gateway newer than \
+                     v3.3.72",
+                    self.gateway_image
+                ),
+            })
+        };
+        let needs_gateway = config.egress == SandboxEgressMode::Allow
+            && *policy != alien_core::EgressPolicy::Internet;
+        if needs_gateway && !gateway_current && config.links.is_empty() {
+            return Err(unenforced_policy());
+        }
         let linked = config.egress == SandboxEgressMode::Allow
             && (gateway_current || !config.links.is_empty());
         let created = async {
@@ -236,11 +309,15 @@ impl LocalSandboxManager {
                             &gateway,
                             sandbox,
                             session_id,
+                            policy,
                         )
                         .await?,
                     )
+                } else if needs_gateway {
+                    // An older gateway behind an undigested tag, found out once it started.
+                    return Err(unenforced_policy());
                 } else {
-                    // An older gateway behind an undigested tag: only linked sessions use it.
+                    // Only linked sessions use it.
                     None
                 }
             } else {
@@ -316,7 +393,7 @@ impl LocalSandboxManager {
             }
         }
 
-        let labels = HashMap::from([
+        let mut labels = HashMap::from([
             (LABEL_SANDBOX.to_string(), sandbox.to_string()),
             (LABEL_SESSION.to_string(), session_id.to_string()),
             (
@@ -324,6 +401,13 @@ impl LocalSandboxManager {
                 format!("{}:{}", image.identity.uid, image.identity.gid),
             ),
         ]);
+
+        if let Some(lifetime) = config.max_lifetime {
+            labels.insert(
+                LABEL_DEADLINE.to_string(),
+                (now_epoch_secs() + lifetime.as_secs()).to_string(),
+            );
+        }
 
         // Bound to 127.0.0.1, never 0.0.0.0: a preview is for the developer's own machine, and
         // publishing on all interfaces would expose untrusted code to the local network.
@@ -636,13 +720,27 @@ impl LocalSandboxManager {
         None
     }
 
-    /// Pulls the sandbox image if the daemon does not already have it.
+    /// Makes the sandbox image available to the daemon and returns the reference to create from.
     ///
     /// A sandbox cannot start without its root filesystem, and Docker's create call does not
-    /// pull. Inspecting first keeps the common case off the network.
-    async fn ensure_image(&self, image: &str) -> Result<()> {
+    /// pull. A build directory or archive is loaded the way a local Container's is; any other
+    /// reference is inspected first, which keeps the common case off the network.
+    async fn ensure_image(&self, image: &str, sandbox: &str) -> Result<String> {
+        // Only an explicit path is a local build: a bare name like `node` is a registry
+        // reference even when a folder of that name sits in the working directory.
+        let explicit_path =
+            image.starts_with("./") || image.starts_with("../") || image.starts_with('/');
+        if explicit_path && std::path::Path::new(image).exists() {
+            return crate::container_manager::load_built_image(
+                &self.docker,
+                &self.docker_host,
+                std::path::Path::new(image),
+                sandbox,
+            )
+            .await;
+        }
         if self.docker.inspect_image(image).await.is_ok() {
-            return Ok(());
+            return Ok(image.to_string());
         }
 
         let mut pull = self.docker.create_image(
@@ -663,7 +761,7 @@ impl LocalSandboxManager {
                 })?;
         }
 
-        Ok(())
+        Ok(image.to_string())
     }
 
     async fn ensure_egress_network(&self, name: &str) -> Result<()> {
@@ -1097,6 +1195,19 @@ impl LocalSandboxManager {
 
     /// Lists the sessions this manager is tracking for a sandbox.
     pub async fn list_sessions(&self, sandbox: &str) -> Result<Vec<SandboxSessionHandle>> {
+        Ok(self
+            .list_with_deadlines(sandbox)
+            .await?
+            .into_iter()
+            .map(|(handle, _)| handle)
+            .collect())
+    }
+
+    /// Sessions with the epoch second their lifetime ends, when they have one.
+    async fn list_with_deadlines(
+        &self,
+        sandbox: &str,
+    ) -> Result<Vec<(SandboxSessionHandle, Option<u64>)>> {
         let filters = HashMap::from([(
             "label".to_string(),
             vec![format!("{LABEL_SANDBOX}={sandbox}")],
@@ -1119,25 +1230,78 @@ impl LocalSandboxManager {
         Ok(containers
             .into_iter()
             .filter_map(|container| {
-                let session_id = container.labels.as_ref()?.get(LABEL_SESSION)?.clone();
-                Some(SandboxSessionHandle {
-                    session_id,
-                    container_id: container.id?,
-                    running: container.state
-                        == Some(bollard::models::ContainerSummaryStateEnum::RUNNING),
-                })
+                let labels = container.labels.as_ref()?;
+                let session_id = labels.get(LABEL_SESSION)?.clone();
+                let deadline = labels.get(LABEL_DEADLINE).and_then(|v| v.parse().ok());
+                Some((
+                    SandboxSessionHandle {
+                        session_id,
+                        container_id: container.id?,
+                        running: container.state
+                            == Some(bollard::models::ContainerSummaryStateEnum::RUNNING),
+                    },
+                    deadline,
+                ))
             })
             .collect())
+    }
+
+    /// Ends every session of the sandbox whose lifetime has run out by the wall clock, and
+    /// returns how many. Each is removed by the container id this listing saw, so a session
+    /// terminated and created again under the same id is not caught by the old one's deadline.
+    pub async fn end_expired(&self, sandbox: &str) -> Result<usize> {
+        let now = now_epoch_secs();
+        let mut ended = 0;
+        let mut first_error = None;
+        for (handle, deadline) in self.list_with_deadlines(sandbox).await? {
+            if !deadline.is_some_and(|deadline| deadline <= now) {
+                continue;
+            }
+            tracing::info!(%sandbox, session_id = %handle.session_id, "sandbox reached its lifetime; terminating");
+            match self
+                .terminate_target(sandbox, &handle.session_id, &handle.container_id)
+                .await
+            {
+                Ok(()) => ended += 1,
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(ended), Err)
     }
 
     /// Removes a session and its private network. Idempotent: an absent session is success.
     pub async fn terminate(&self, sandbox: &str, session_id: &str) -> Result<()> {
         let name = Self::container_name(sandbox, session_id);
+        self.terminate_target(sandbox, session_id, &name).await
+    }
 
+    /// Removes the session's container named by `target` (its name or its id).
+    async fn terminate_target(&self, sandbox: &str, session_id: &str, target: &str) -> Result<()> {
+        let name = Self::container_name(sandbox, session_id);
+        let lock = self.session_lock(&name);
+        let guard = lock.lock().await;
+        let result = self
+            .terminate_locked(sandbox, session_id, target, &name)
+            .await;
+        drop(guard);
+        self.release_session_lock(&name, lock);
+        result
+    }
+
+    async fn terminate_locked(
+        &self,
+        sandbox: &str,
+        session_id: &str,
+        target: &str,
+        name: &str,
+    ) -> Result<()> {
+        let name = name.to_string();
         let removed = self
             .docker
             .remove_container(
-                &name,
+                target,
                 Some(RemoveContainerOptions {
                     force: true,
                     v: true,
@@ -1153,7 +1317,14 @@ impl LocalSandboxManager {
             // there tells the caller untrusted code has stopped when it has not.
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 404, ..
-            }) => {}
+            }) => {
+                // Targeted by the id of a container that is already gone: whoever removed it
+                // cleaned up, and a session created again under this id owns the gateway
+                // policy, CA and relays now.
+                if target != name {
+                    return Ok(());
+                }
+            }
             Err(error) => {
                 return Err(error)
                     .into_alien_error()
@@ -1217,6 +1388,13 @@ impl LocalSandboxManager {
         gateway?;
         Ok(terminated + inspections?)
     }
+}
+
+fn now_epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
 }
 
 /// Where a session finds its CA (`ca.pem`) and trust bundle (`bundle.pem`).
@@ -1418,6 +1596,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_finished_sessions_lock_entry_is_dropped_unless_someone_else_holds_it() {
+        let manager = LocalSandboxManager {
+            docker: Docker::connect_with_http(
+                "http://127.0.0.1:1",
+                5,
+                bollard::API_DEFAULT_VERSION,
+            )
+            .unwrap(),
+            state_dir: PathBuf::new(),
+            docker_host: String::new(),
+            gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
+            gateways: Default::default(),
+            gateway_image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.to_string(),
+            gateway_secret: new_gateway_secret(),
+            session_locks: Default::default(),
+        };
+        let lock = manager.session_lock("a");
+        manager.release_session_lock("a", lock);
+        assert!(manager.session_locks.lock().unwrap().is_empty());
+
+        let lock = manager.session_lock("b");
+        let waiter = manager.session_lock("b");
+        manager.release_session_lock("b", lock);
+        assert_eq!(manager.session_locks.lock().unwrap().len(), 1);
+        drop(waiter);
+    }
+
     /// Against a gateway image that predates admin protocol 2, the credentials call is refused
     /// with a clear message before any gateway is looked up.
     #[tokio::test]
@@ -1427,10 +1633,12 @@ mod tests {
             docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
                 .unwrap(),
             state_dir: PathBuf::new(),
+            docker_host: String::new(),
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.to_string(),
             gateway_secret: new_gateway_secret(),
+            session_locks: Default::default(),
         };
         let manager = manager.with_gateway_image(
             "ghcr.io/alienplatform/alien-egress-gateway@sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037",
@@ -1460,10 +1668,12 @@ mod tests {
             docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
                 .unwrap(),
             state_dir: PathBuf::new(),
+            docker_host: String::new(),
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: String::new(),
             gateway_secret: new_gateway_secret(),
+            session_locks: Default::default(),
         };
         for name in [
             "ALIEN_SANDBOX_EXEC_UID",
@@ -1484,6 +1694,8 @@ mod tests {
                         preview_ports: Vec::new(),
                         env: HashMap::from([(name.to_string(), "0".to_string())]),
                         links: Vec::new(),
+                        max_lifetime: None,
+                        egress_policy: None,
                     },
                 )
                 .await
@@ -1491,6 +1703,44 @@ mod tests {
             assert!(error.to_string().contains("is reserved"), "{error}");
         }
         any.assert_hits_async(0).await;
+    }
+
+    /// An expiry cleanup that targets a container id a newer session of the same id has
+    /// replaced finds nothing to remove and leaves the new session's gateway state alone.
+    #[tokio::test]
+    async fn a_stale_expiry_removal_does_not_clean_up_a_recreated_session() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(DELETE)
+                    .path_contains("/containers/old-container-id");
+                then.status(404)
+                    .json_body(serde_json::json!({"message":"no such container"}));
+            })
+            .await;
+        let anything_else = server
+            .mock_async(|when, then| {
+                when.any_request()
+                    .matches(|req| !req.path.contains("/containers/old-container-id"));
+                then.status(500);
+            })
+            .await;
+        let manager = LocalSandboxManager {
+            docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
+                .unwrap(),
+            state_dir: PathBuf::new(),
+            docker_host: String::new(),
+            gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
+            gateways: Default::default(),
+            gateway_image: String::new(),
+            gateway_secret: new_gateway_secret(),
+            session_locks: Default::default(),
+        };
+        manager
+            .terminate_target("box", "s1", "old-container-id")
+            .await
+            .expect("a stale removal is not an error");
+        anything_else.assert_hits_async(0).await;
     }
 
     #[tokio::test]
@@ -1537,10 +1787,12 @@ mod tests {
             docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
                 .unwrap(),
             state_dir: PathBuf::new(),
+            docker_host: String::new(),
             gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
             gateways: Default::default(),
             gateway_image: String::new(),
             gateway_secret: new_gateway_secret(),
+            session_locks: Default::default(),
         };
 
         assert!(
@@ -1617,10 +1869,12 @@ mod tests {
                 )
                 .unwrap(),
                 state_dir: PathBuf::new(),
+                docker_host: String::new(),
                 gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
                 gateways: Default::default(),
                 gateway_image: String::new(),
                 gateway_secret: new_gateway_secret(),
+                session_locks: Default::default(),
             };
 
             let error = manager

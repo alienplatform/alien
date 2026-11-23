@@ -2027,7 +2027,10 @@ impl BindingsProviderApi for BindingsProvider {
         let gateway = binding.egress().and_then(|value| value.gateway());
         // `internet` is declared only together with a gateway, on every backend: a binding that
         // names none was written by a setup that predates it, and never opens outbound instead.
+        // A local sandbox's gateway runs in the local manager, which enforces the declaration
+        // itself, so its binding names none.
         if gateway.is_none()
+            && !matches!(&binding, SandboxBinding::Local(_))
             && binding
                 .egress()
                 .is_some_and(|egress| *egress.declaration() == alien_core::SandboxEgress::Internet)
@@ -2041,7 +2044,7 @@ impl BindingsProviderApi for BindingsProvider {
             policy
                 .validate()
                 .map_err(crate::providers::sandbox::egress::policy_error)?;
-            if gateway.is_none() {
+            if gateway.is_none() && !matches!(&binding, SandboxBinding::Local(_)) {
                 return Err(crate::providers::sandbox::egress::unsupported(
                     "defaultPolicy",
                 ));

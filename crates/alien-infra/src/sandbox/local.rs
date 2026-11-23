@@ -126,6 +126,16 @@ impl LocalSandboxController {
         self.egress = Some(config.into());
         self.links = link_bindings(ctx.desired_stack, &config);
 
+        // Sessions past their wall-clock deadline end here too: after a restart no timer is
+        // left from the process that created them.
+        manager
+            .end_expired(&config.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to end sandbox sessions past their lifetime".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+
         // "Healthy" on a platform with nothing durable means the runtime is still there to
         // create sessions in; the session count itself is not a health signal.
         let sessions =
@@ -405,6 +415,11 @@ fn session_template(
             .into_iter()
             .map(|(id, ports)| alien_local::SandboxLink { id, ports })
             .collect(),
+        egress_policy: sandbox.default_policy.clone(),
+        max_lifetime: sandbox
+            .lifecycle
+            .max_lifetime_seconds
+            .map(|seconds| std::time::Duration::from_secs(u64::from(seconds))),
     })
 }
 

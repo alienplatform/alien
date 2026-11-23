@@ -8,7 +8,6 @@
 //! request shows up as a hit rather than passing quietly.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,43 +42,6 @@ async fn serve(router: Router) -> String {
     let address = listener.local_addr().expect("address");
     tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
     format!("http://{address}")
-}
-
-/// Both create verbs refuse with the code a caller branches on. `get_or_create` is checked too
-/// because it is the one that reaches an existing sandbox, which honours a lifetime no more than
-/// a fresh one does.
-async fn refuses_a_created_lifetime(sandbox: &dyn Sandbox) {
-    assert!(
-        !sandbox.capabilities().sandbox_lifetime,
-        "this helper is for the backends that declare no lifetime"
-    );
-
-    for (what, error) in [
-        (
-            "create",
-            sandbox
-                .create(with_lifetime())
-                .await
-                .expect_err("a backend with no lifetime cannot take one"),
-        ),
-        (
-            "get_or_create",
-            sandbox
-                .get_or_create(with_lifetime())
-                .await
-                .expect_err("nor on the reconnect path"),
-        ),
-    ] {
-        assert_eq!(
-            error.code, "OPERATION_NOT_SUPPORTED",
-            "{what} must refuse as unsupported so a caller reading `sandboxLifetime: false` and \
-             a caller that asked anyway are told the same thing: {error}"
-        );
-        assert!(
-            error.to_string().contains("sandboxLifetime"),
-            "{what} has to name the capability that is missing: {error}"
-        );
-    }
 }
 
 /// AWS declares the capability, and `RunMicrovm` is where the deadline is set. What is observable
@@ -384,25 +346,26 @@ async fn kubernetes_declares_a_lifetime_and_sends_it_with_the_claim() {
     );
 }
 
-/// Local declares none, and its manager is a live route here rather than a dead address: a
-/// refusal that turned into a request would show up as a hit, and a dead address would not tell
-/// the two apart because an unreachable local route reports the same code as a refusal.
-#[tokio::test]
-async fn local_declares_no_lifetime_and_asks_its_manager_for_nothing() {
-    let hits = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&hits);
-    let manager = serve(Router::new().fallback(move || {
-        let counted = Arc::clone(&counted);
-        async move {
-            counted.fetch_add(1, Ordering::SeqCst);
-            Json(json!({ "sessionId": "s1", "containerId": "c1" }))
-        }
-    }))
+/// A local binding over a manager route that records each create body.
+async fn local_sandbox_recording(
+    bodies: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+) -> (LocalSandbox, tempfile::NamedTempFile) {
+    let manager = serve(
+        Router::new().route(
+            "/v1/sessions",
+            axum::routing::post(move |Json(body): Json<serde_json::Value>| {
+                let bodies = Arc::clone(&bodies);
+                async move {
+                    bodies.lock().unwrap().push(body);
+                    Json(json!({ "sessionId": "s1", "containerId": "c1", "running": true }))
+                }
+            })
+            .get(|| async { Json(json!([])) }),
+        ),
+    )
     .await;
-
     let token = tempfile::NamedTempFile::new().expect("a token file");
     std::fs::write(token.path(), "route-token").expect("the token is written");
-
     let sandbox = LocalSandbox::new(
         "sbx",
         &LocalSandboxBinding {
@@ -416,13 +379,37 @@ async fn local_declares_no_lifetime_and_asks_its_manager_for_nothing() {
     )
     .await
     .expect("the binding is complete");
+    (sandbox, token)
+}
 
-    refuses_a_created_lifetime(&sandbox).await;
-    assert_eq!(
-        hits.load(Ordering::SeqCst),
-        0,
-        "a refusal must cost no request: a container started and then left unbounded is exactly \
-         what the refusal exists to prevent"
+/// Local declares a lifetime: its manager ends the session, so a create carrying one sends it,
+/// in whole seconds rounded up like every other backend's.
+#[tokio::test]
+async fn local_declares_a_lifetime_and_sends_it_to_its_manager() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (sandbox, _token) = local_sandbox_recording(Arc::clone(&bodies)).await;
+    assert!(sandbox.capabilities().sandbox_lifetime);
+
+    sandbox
+        .create(CreateSandboxRequest {
+            timeout_ms: Some(1_500),
+            ..Default::default()
+        })
+        .await
+        .expect("a lifetime is accepted");
+    let bodies = bodies.lock().unwrap();
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(bodies[0]["timeoutMs"], 2_000, "{}", bodies[0]);
+}
+
+#[tokio::test]
+async fn local_refuses_a_lifetime_no_sandbox_can_be_built_to() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (sandbox, _token) = local_sandbox_recording(Arc::clone(&bodies)).await;
+    refuses_a_lifetime_no_sandbox_can_be_built_to(&sandbox).await;
+    assert!(
+        bodies.lock().unwrap().is_empty(),
+        "a refused lifetime must start no container"
     );
 }
 

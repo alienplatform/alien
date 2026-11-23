@@ -21,8 +21,3 @@ try {
 } finally {
   await box.terminate(created.sandboxId)
 }
-
-await assert.rejects(
-  () => sandbox("egress-unsupported").create(),
-  error => error.code === "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE" && error.retryable === false,
-)

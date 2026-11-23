@@ -31,16 +31,5 @@ async def main():
     finally:
         await box.terminate(created.sandbox_id)
 
-    try:
-        await Sandbox("egress-unsupported").create()
-    except AlienError as error:
-        assert (
-            error.code == "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE" and not error.retryable
-        )
-    else:
-        raise AssertionError(
-            "Internet without a gateway must be refused before creation"
-        )
-
 
 asyncio.run(main())

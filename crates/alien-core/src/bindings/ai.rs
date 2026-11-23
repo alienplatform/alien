@@ -244,6 +244,23 @@ impl AiBinding {
     pub const LOCAL_API_KEY_ENV: &'static str = "OPENAI_API_KEY";
     /// The BYO-key provider assumed on the Local platform.
     pub const LOCAL_DEFAULT_PROVIDER: &'static str = "openai";
+    /// When set on the `alien dev` process, local AI runs on Bedrock in this region with the
+    /// developer's own AWS credentials (the default chain's, with the developer's full identity;
+    /// not refreshed, so restart `alien dev` after an SSO session expires) instead of a
+    /// bring-your-own provider key.
+    pub const LOCAL_BEDROCK_REGION_ENV: &'static str = "ALIEN_AI_LOCAL_BEDROCK_REGION";
+    /// The provider name the local controller reports when it serves Bedrock.
+    pub const LOCAL_BEDROCK_PROVIDER: &'static str = "bedrock";
+
+    /// The region named by [`Self::LOCAL_BEDROCK_REGION_ENV`], validated; `None` when unset.
+    pub fn local_bedrock_region() -> Result<Option<String>, String> {
+        match std::env::var(Self::LOCAL_BEDROCK_REGION_ENV) {
+            Ok(region) if !region.is_empty() => BedrockAiBinding::new(region)
+                .map(|binding| Some(binding.region))
+                .map_err(|error| format!("{}: {error}", Self::LOCAL_BEDROCK_REGION_ENV)),
+            _ => Ok(None),
+        }
+    }
 
     pub fn bedrock(region: impl Into<String>) -> Self {
         Self::Bedrock(BedrockAiBinding {

@@ -70,7 +70,6 @@ http-body-util = { version = "0.1", features = ["full"] }
 httparse = { version = "1" }
 hybrid-array = { version = "0.4", default-features = false, features = ["alloc", "subtle", "zeroize"] }
 hyper = { version = "1", features = ["full"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "tls12"] }
 hyper-util = { version = "0.1", features = ["full"] }
 icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data", "utf16_iter", "utf8_iter"] }
@@ -231,7 +230,6 @@ http-body-util = { version = "0.1", features = ["full"] }
 httparse = { version = "1" }
 hybrid-array = { version = "0.4", default-features = false, features = ["alloc", "subtle", "zeroize"] }
 hyper = { version = "1", features = ["full"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "tls12"] }
 hyper-util = { version = "0.1", features = ["full"] }
 icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data", "utf16_iter", "utf8_iter"] }
@@ -342,7 +340,7 @@ data-encoding = { version = "2" }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
@@ -361,7 +359,7 @@ data-encoding = { version = "2" }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
@@ -380,7 +378,7 @@ data-encoding = { version = "2" }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
@@ -399,7 +397,7 @@ data-encoding = { version = "2" }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
@@ -418,7 +416,7 @@ data-encoding = { version = "2" }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
@@ -437,7 +435,7 @@ data-encoding = { version = "2" }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
@@ -456,7 +454,7 @@ data-encoding = { version = "2" }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
@@ -475,7 +473,7 @@ data-encoding = { version = "2" }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
@@ -495,7 +493,7 @@ der = { version = "0.7", default-features = false, features = ["oid", "pem", "st
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 errno = { version = "0.3" }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 libc = { version = "0.2", default-features = false, features = ["extra_traits"] }
 mio = { version = "1", features = ["net", "os-ext"] }
@@ -516,7 +514,7 @@ der = { version = "0.7", default-features = false, features = ["oid", "pem", "st
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 errno = { version = "0.3" }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 libc = { version = "0.2", default-features = false, features = ["extra_traits"] }
 mio = { version = "1", features = ["net", "os-ext"] }
@@ -537,7 +535,7 @@ der = { version = "0.7", default-features = false, features = ["oid", "pem", "st
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 errno = { version = "0.3" }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 libc = { version = "0.2", default-features = false, features = ["extra_traits"] }
 mio = { version = "1", features = ["net", "os-ext"] }
@@ -558,7 +556,7 @@ der = { version = "0.7", default-features = false, features = ["oid", "pem", "st
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 errno = { version = "0.3" }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 libc = { version = "0.2", default-features = false, features = ["extra_traits"] }
 mio = { version = "1", features = ["net", "os-ext"] }
@@ -578,7 +576,7 @@ data-encoding = { version = "2" }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
@@ -597,7 +595,7 @@ data-encoding = { version = "2" }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-features = false, features = ["oid"] }
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }

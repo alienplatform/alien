@@ -27,6 +27,8 @@ fn config() -> SandboxSessionConfig {
         preview_ports: vec![8080],
         env: HashMap::new(),
         links: Vec::new(),
+        max_lifetime: None,
+        egress_policy: None,
     }
 }
 
