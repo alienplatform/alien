@@ -416,11 +416,15 @@ impl Replication {
             std::collections::BTreeMap::new();
         loop {
             let mut summary = gateway.sandbox_credentials.summary()?;
-            summary.extend(examined.iter().map(|((aud, sub), ver)| crate::record::Summary {
-                aud: aud.clone(),
-                sub: sub.clone(),
-                ver: ver.clone(),
-            }));
+            summary.extend(
+                examined
+                    .iter()
+                    .map(|((aud, sub), ver)| crate::record::Summary {
+                        aud: aud.clone(),
+                        sub: sub.clone(),
+                        ver: ver.clone(),
+                    }),
+            );
             let known = serde_json::to_vec(&summary)
                 .into_alien_error()
                 .context(unavailable("encode credential summary"))?;

@@ -686,7 +686,9 @@ export interface Sandbox {
    * sandbox's matching requests, so the sandbox only ever holds a placeholder. The list is the
    * whole set: an empty list removes every rule. Resolves once every gateway replica holds the
    * new set, so the sandbox's next request uses it. Call it from the code that owns the
-   * sandbox, never from inside it. Backends without a gateway refuse explicitly.
+   * sandbox, never from inside it. Backends without a gateway refuse explicitly. A rejected
+   * call may be partly applied (some replicas hold the new set); retry with the whole intended
+   * list.
    */
   updateCredentials(sandboxId: string, rules: SandboxCredentialRule[]): Promise<void>
   /**

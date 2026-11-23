@@ -9,8 +9,8 @@ use std::{
     time::Duration,
 };
 
-use alien_error::AlienError;
 use crate::sandbox_credentials::{Rule, RuleTarget};
+use alien_error::AlienError;
 use tokio::sync::{watch, Semaphore};
 
 use crate::{
@@ -237,7 +237,9 @@ impl Connections {
                     rules.iter().any(|rule| rule.applies_to(&target, port))
                 });
             if covered {
-                session.cancel.send_replace(Some("credential rules changed"));
+                session
+                    .cancel
+                    .send_replace(Some("credential rules changed"));
             }
         }
     }

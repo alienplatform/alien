@@ -702,7 +702,8 @@ class Sandbox:
         """Replace the sandbox's credential rules; returns once every gateway replica holds them.
 
         The list is the whole set: an empty list removes every rule. Call it from the code that
-        owns the sandbox, never from inside it.
+        owns the sandbox, never from inside it. A failed call may be partly applied (some replicas
+        hold the new set); retry with the whole intended list.
         """
         await (await self._handle.get()).update_credentials(
             sandbox_id, json.dumps([dict(rule) for rule in rules])

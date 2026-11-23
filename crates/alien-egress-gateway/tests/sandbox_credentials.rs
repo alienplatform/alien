@@ -622,7 +622,9 @@ async fn open_tunnel(proxy: SocketAddr, port: u16, token: &str) -> TcpStream {
 }
 
 async fn request_in(stream: &mut TcpStream, port: u16) -> bool {
-    let request = format!("GET /turn HTTP/1.1\r\nHost: connector.svc:{port}\r\nAuthorization: placeholder\r\n\r\n");
+    let request = format!(
+        "GET /turn HTTP/1.1\r\nHost: connector.svc:{port}\r\nAuthorization: placeholder\r\n\r\n"
+    );
     if stream.write_all(request.as_bytes()).await.is_err() {
         return false;
     }
@@ -662,7 +664,9 @@ async fn a_rule_added_ends_the_sandbox_tunnels_that_would_skip_it() {
     let mut tunnel = open_tunnel(running.proxy, port, &token).await;
     let mut other_tunnel = open_tunnel(running.proxy, port, &other_token).await;
     assert!(request_in(&mut tunnel, port).await);
-    assert!(next(&mut origin).await.contains("authorization: placeholder"));
+    assert!(next(&mut origin)
+        .await
+        .contains("authorization: placeholder"));
     assert!(request_in(&mut other_tunnel, port).await);
     next(&mut origin).await;
 
@@ -677,7 +681,9 @@ async fn a_rule_added_ends_the_sandbox_tunnels_that_would_skip_it() {
     assert_eq!(status, 204, "{body}");
     assert!(!request_in(&mut tunnel, port).await, "old tunnel survived");
     assert!(request_in(&mut other_tunnel, port).await);
-    assert!(next(&mut origin).await.contains("authorization: placeholder"));
+    assert!(next(&mut origin)
+        .await
+        .contains("authorization: placeholder"));
 
     // Reconnecting goes through the inspected path and carries the value.
     let mut again = open_tunnel(running.proxy, port, &token).await;
@@ -1272,9 +1278,7 @@ async fn a_page_of_rejected_sets_does_not_hide_the_valid_sets_after_it() {
     gateway.policies.set_ready();
     let big = "v".repeat(6000);
     let rejected: Vec<Value> = (0..30)
-        .map(|index| {
-            json!({"link":"connector","header":format!("X-Rule-{index}"),"value":big})
-        })
+        .map(|index| json!({"link":"connector","header":format!("X-Rule-{index}"),"value":big}))
         .collect();
     let mut subs: Vec<String> = (0..40).map(|index| format!("a-{index:02}")).collect();
     subs.push("z-valid".into());

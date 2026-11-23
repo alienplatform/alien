@@ -227,7 +227,10 @@ impl AzureSandbox {
 
 /// Whether this sandbox's agent was given the CA, which host rules need.
 pub(super) fn has_ca(sandbox: &Sandbox) -> bool {
-    sandbox.labels.get(CA_LABEL).is_some_and(|value| value == "1")
+    sandbox
+        .labels
+        .get(CA_LABEL)
+        .is_some_and(|value| value == "1")
 }
 
 pub(super) fn identity(sandbox: &Sandbox) -> Result<&str> {

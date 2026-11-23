@@ -137,6 +137,8 @@ development. A sandbox without the gateway (egress `none`) refuses `updateCreden
 gateway older than this release refuses it too, with a message to re-run setup; it never
 accepts rules it cannot apply.
 
+On Azure the agent installs the CA the same way when it starts, and the binding records at create that it was handed over (Azure has no agent endpoint to ask later). A `host` rule is refused for a sandbox that was not given the CA.
+
 On GCP the agent in the sandbox forwards traffic to the gateway, and it installs the CA when
 the sandbox is created: it writes the trust bundle (the image's roots plus the CA) and every
 command gets the same trust variables as elsewhere. A sandbox whose agent image predates this
@@ -145,13 +147,14 @@ CA); create the sandbox again with the agent image of the current release.
 
 ## Refusals
 
-`updateCredentials` fails loudly and applies nothing when it cannot give the guarantees above:
+`updateCredentials` fails loudly when it cannot give the guarantees above. A refusal before any gateway is contacted (the first rows) changes nothing; a failure while writing can leave the new list on some replicas, so retry with the whole intended list:
 
 | Situation | Message says |
 |---|---|
 | The deployment's gateway image predates credentials | per-sandbox credentials are not available with the egress gateway image this release installs; a later release enables them |
 | The installed gateway is older than this release needs | the egress gateway does not serve per-sandbox credentials yet; deploy a release that installs a newer egress gateway and re-run setup |
-| A replica did not acknowledge | a retryable error; call again (the list replaces, so repeating is safe) |
+| A replica did not acknowledge | a retryable error; the replicas that already took the list keep it, so call again with the same list (the list replaces, so repeating is safe) |
+| Azure, `host` rule, sandbox whose agent was not given the CA | this sandbox was created without the gateway's CA; create it again (`link` rules work) |
 | GCP, `host` rule, agent image without the CA install | this sandbox's agent predates trust-bundle delivery |
 | AWS or Kubernetes, `host` rule, sandbox created before the gateway served credentials (no CA) | this sandbox was created without the gateway's CA; create it again (`link` rules work) |
 | The sandbox has no egress policy (egress `none`) | the sandbox has no gateway enforcement |
@@ -160,7 +163,8 @@ CA); create the sandbox again with the agent image of the current release.
 
 - Rules live only in gateway memory. After a gateway restart a replica catches up from its peers;
   if every replica restarted, send the list again (calling it each turn already does).
-- One update per sandbox is acknowledged by every replica or it fails: no partial success.
+- A successful call means every replica holds the list. A failed call may be partly applied: the gateway applies it on the replica that received it before the others acknowledge. Retry with the whole intended list.
+- When a list changes, the sandbox's open tunnels that the gateway relays without reading (a connection opened before a rule existed) are closed before the call returns; clients reconnect, and every request after the call carries the rules.
 - A `host` rule is HTTPS only, a `link` rule is plain HTTP only. A client with its own trust
   store needs the CA imported (see above).
 - A destination that echoes request headers can show the value to the sandbox.

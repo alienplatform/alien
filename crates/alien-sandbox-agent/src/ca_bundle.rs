@@ -187,8 +187,12 @@ mod tests {
     fn a_handed_over_ca_is_installed_and_every_trust_variable_points_at_it() {
         let dir = tempfile::tempdir().unwrap();
         let bundle = dir.path().join("bundle.pem");
-        let installed = install_handed_over(Some(CERT), &[], &bundle).unwrap().unwrap();
-        assert!(std::fs::read_to_string(&installed).unwrap().contains("BEGIN CERTIFICATE"));
+        let installed = install_handed_over(Some(CERT), &[], &bundle)
+            .unwrap()
+            .unwrap();
+        assert!(std::fs::read_to_string(&installed)
+            .unwrap()
+            .contains("BEGIN CERTIFICATE"));
         let mut env = std::collections::BTreeMap::new();
         trust_environment(installed.to_str().unwrap(), &mut env);
         for key in TRUST_VARIABLES {

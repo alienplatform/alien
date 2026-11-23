@@ -4707,7 +4707,9 @@ async fn without_a_gateway_a_command_gets_no_proxy_variables() {
 #[test]
 fn the_replica_envelope_carries_the_ca_only_when_there_is_one() {
     let replicas = ["10.0.0.4:22".to_string()];
-    assert!(egress_proxy_envelope(&replicas, None).get("caCert").is_none());
+    assert!(egress_proxy_envelope(&replicas, None)
+        .get("caCert")
+        .is_none());
     let envelope = egress_proxy_envelope(&replicas, Some("PEM"));
     assert_eq!(envelope["caCert"], "PEM");
 }
@@ -4743,8 +4745,10 @@ async fn an_agent_without_a_bundle_gets_no_trust_variables_and_is_asked_once() {
 async fn an_agent_that_installed_the_bundle_reports_where() {
     let mut client = MockAgentPlatformApi::new();
     client.expect_execute().times(1).returning(|_, _, _| {
-        Ok(br#"{"protocolVersion":1,"bootId":"b","status":"ready","egressCaPath":"/tmp/x.pem"}"#
-            .to_vec())
+        Ok(
+            br#"{"protocolVersion":1,"bootId":"b","status":"ready","egressCaPath":"/tmp/x.pem"}"#
+                .to_vec(),
+        )
     });
     let provider = provider(client);
     assert_eq!(
