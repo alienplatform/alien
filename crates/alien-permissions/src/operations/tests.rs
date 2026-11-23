@@ -257,9 +257,18 @@ fn container_service_actions_without_a_cluster_ceiling_are_refused() {
 fn cluster_level_actions_are_limited_to_the_cluster() {
     let result = compile_ecs(&["ecs:ListServices", "ecs:ListTasks"], Some(ECS_CLUSTER));
     assert_eq!(result["ok"], true);
-    for statement in result["value"].as_array().unwrap() {
-        assert_eq!(statement["resources"], json!([ECS_CLUSTER]));
-    }
+    // AWS has no resource type for ListServices and only a container-instance
+    // one for ListTasks, so a grant on the cluster ARN would never match.
+    let statements = result["value"].as_array().unwrap();
+    assert_eq!(statements.len(), 1);
+    assert_eq!(statements[0]["resources"], json!(["*"]));
+    assert_eq!(
+        statements[0]["condition"],
+        json!({"ArnEquals": {"ecs:cluster": ECS_CLUSTER}})
+    );
+    // Resource-scoped actions carry no condition.
+    let result = compile_ecs(&["ecs:DescribeServices"], Some(ECS_CLUSTER));
+    assert!(result["value"][0]["condition"].is_null());
 }
 
 #[test]

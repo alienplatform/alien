@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use alien_permission_types::PermissionSet;
+use alien_permission_types::{AwsConditionValue, PermissionSet};
 
 use super::{catalog, invalid, sorted, types::*, Result};
 
@@ -219,6 +219,9 @@ fn parse_cluster_arn(value: &str) -> Option<(&str, &str, &str, &str)> {
     .then_some((*p, *region, *account, name))
 }
 
+/// Actions AWS cannot scope by resource: limited by the `ecs:cluster` key.
+const ECS_CONDITION_ACTIONS: &[&str] = &["ecs:ListServices", "ecs:ListTasks"];
+
 const ECS_PLACEHOLDER: &str = "arn:aws:ecs:*:*:*";
 
 /// What the catalog placeholder becomes for an ECS action, per resource type.
@@ -226,9 +229,11 @@ fn ecs_ceiling(action: &str, cluster_arn: &str) -> Option<Vec<String>> {
     let (partition, region, account, name) = parse_cluster_arn(cluster_arn)?;
     let base = format!("arn:{partition}:ecs:{region}:{account}");
     match action {
-        "ecs:ListServices" | "ecs:ListTasks" | "ecs:DescribeClusters" => {
-            Some(vec![cluster_arn.to_string()])
-        }
+        "ecs:DescribeClusters" => Some(vec![cluster_arn.to_string()]),
+        // No resource type (ListServices) or only a container-instance one
+        // (ListTasks): a grant on the cluster ARN would never match, so the
+        // cluster is enforced with the `ecs:cluster` condition instead.
+        "ecs:ListServices" | "ecs:ListTasks" => Some(vec!["*".to_string()]),
         "ecs:DescribeServices" | "ecs:UpdateService" => {
             Some(vec![format!("{base}:service/{name}/*")])
         }
@@ -326,9 +331,19 @@ pub fn compile(
                 } else {
                     vec![resource.clone()]
                 };
+                let mut condition = statement.condition.clone();
+                if resource == ECS_PLACEHOLDER && ECS_CONDITION_ACTIONS.contains(&action.as_str()) {
+                    let cluster = ceilings.ecs_cluster_arn.clone().unwrap_or_default();
+                    condition
+                        .get_or_insert_with(Default::default)
+                        .entry("ArnEquals".to_string())
+                        .or_default()
+                        .insert("ecs:cluster".to_string(), AwsConditionValue::String(cluster));
+                }
                 compiled.push(AwsStatement {
                     actions: vec![action.clone()],
                     resources,
+                    condition,
                     ..statement.clone()
                 });
             }
