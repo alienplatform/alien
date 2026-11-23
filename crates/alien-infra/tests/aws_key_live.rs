@@ -1,7 +1,7 @@
 //! Opt-in AWS test for the key controller in a direct setup, on real KMS.
 //!
-//! Set `ALIEN_AWS_KEY_LIVE_TEST=1`, `AWS_ACCOUNT_ID`, `AWS_REGION`, `AWS_ACCESS_KEY_ID` and
-//! `AWS_SECRET_ACCESS_KEY`. Run with
+//! Set `ALIEN_AWS_KEY_LIVE_TEST=1`, `AWS_ACCOUNT_ID`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`,
+//! `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` (or `AWS_PROFILE`). Run with
 //! `cargo nextest run -p alien-infra --all-features --test aws_key_live --run-ignored ignored-only --no-capture`.
 //! It creates a throwaway management role and keys, then schedules every key for deletion with
 //! the minimum pending window and deletes the role. Keys cannot be deleted at once.

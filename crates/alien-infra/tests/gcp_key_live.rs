@@ -1,7 +1,7 @@
 //! Opt-in GCP test for the key controller in a direct setup, on real Cloud KMS.
 //!
-//! Set `ALIEN_GCP_KEY_LIVE_TEST=1`, `GOOGLE_SERVICE_ACCOUNT_KEY` (a service account key JSON of a
-//! disposable test project) and `GCP_REGION`. Run with
+//! Set `ALIEN_GCP_KEY_LIVE_TEST=1`, `GOOGLE_APPLICATION_CREDENTIALS` (a federation or impersonation file for a
+//! disposable test project; or Application Default Credentials) and `GCP_REGION`. Run with
 //! `cargo nextest run -p alien-infra --all-features --test gcp_key_live --run-ignored ignored-only --no-capture`.
 //! It creates a service account, a key ring and keys. Key rings and keys cannot be deleted in
 //! Cloud KMS, and the client has no call to destroy a key version, so the test deletes only the

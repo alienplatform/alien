@@ -16,7 +16,7 @@
 //! ```text
 //! export ALIEN_RETENTION_LIVE_TEST=1 \
 //!        AWS_TARGET_ACCOUNT_ID=... AWS_TARGET_REGION=... \
-//!        AWS_TARGET_ACCESS_KEY_ID=... AWS_TARGET_SECRET_ACCESS_KEY=...
+//!        AWS_TARGET_ACCESS_KEY_ID=... AWS_TARGET_SECRET_ACCESS_KEY=... AWS_TARGET_SESSION_TOKEN=... (short-lived: `aws configure export-credentials --profile alien-test-target --format env`)
 //! cargo test -p alien-deployment --test aws_retention_live -- --ignored --nocapture
 //! ```
 //!
@@ -68,7 +68,7 @@ fn aws_config() -> AwsClientConfig {
         credentials: AwsCredentials::AccessKeys {
             access_key_id: env("AWS_TARGET_ACCESS_KEY_ID"),
             secret_access_key: env("AWS_TARGET_SECRET_ACCESS_KEY"),
-            session_token: None,
+            session_token: std::env::var("AWS_TARGET_SESSION_TOKEN").ok(),
         },
         service_overrides: None,
     }

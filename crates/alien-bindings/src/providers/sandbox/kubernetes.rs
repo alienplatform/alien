@@ -26,7 +26,7 @@ use crate::traits::{
     PreviewCapability, ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_core::bindings::KubernetesSandboxBinding;
-use alien_core::{Platform, SandboxCapabilities, SandboxCapability};
+use alien_core::{Platform, SandboxCapabilities};
 use alien_error::{AlienError, Context, IntoAlienError};
 
 /// A capability with less than this left is replaced before it is used, so a request built at the

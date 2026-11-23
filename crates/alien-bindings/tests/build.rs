@@ -5,7 +5,7 @@ use alien_bindings::{
     BindingsProvider,
 };
 
-use alien_core::bindings::{self, BindingValue};
+use alien_core::bindings::{self};
 
 // Platform-specific providers are now internal implementation details
 // The unified BindingsProvider handles routing to appropriate implementations
@@ -131,7 +131,7 @@ impl AsyncTestContext for AwsProviderBuildTestContext {
             credentials: alien_aws_clients::AwsCredentials::AccessKeys {
                 access_key_id: access_key.clone(),
                 secret_access_key: secret_key.clone(),
-                session_token: None,
+                session_token: std::env::var("AWS_MANAGEMENT_SESSION_TOKEN").ok(),
             },
             service_overrides: None,
         };
@@ -237,6 +237,9 @@ impl AsyncTestContext for AwsProviderBuildTestContext {
         env_map.insert("AWS_REGION".to_string(), region);
         env_map.insert("AWS_ACCESS_KEY_ID".to_string(), access_key);
         env_map.insert("AWS_SECRET_ACCESS_KEY".to_string(), secret_key);
+        if let Ok(token) = env::var("AWS_MANAGEMENT_SESSION_TOKEN") {
+            env_map.insert("AWS_SESSION_TOKEN".to_string(), token);
+        }
         env_map.insert("AWS_ACCOUNT_ID".to_string(), account_id);
         env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "aws".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
@@ -337,19 +340,11 @@ impl AsyncTestContext for GcpProviderBuildTestContext {
         load_test_env();
         let binding_name = "test-gcp-build";
 
-        let service_account_key_json = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
-            .expect("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY must be set in .env.test");
         let gcp_region = env::var("GOOGLE_MANAGEMENT_REGION")
             .expect("GOOGLE_MANAGEMENT_REGION must be set in .env.test");
 
-        // Extract client_email from service account key JSON
-        let credential_value: serde_json::Value = serde_json::from_str(&service_account_key_json)
-            .expect("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY must be valid JSON");
-        let client_email = credential_value
-            .get("client_email")
-            .and_then(|v| v.as_str())
-            .expect("client_email field must be present in service account key")
-            .to_string();
+        let client_email = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_EMAIL")
+            .expect("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_EMAIL must be set in .env.test");
 
         let binding = bindings::BuildBinding::cloudbuild(
             std::collections::HashMap::new(),
@@ -358,10 +353,9 @@ impl AsyncTestContext for GcpProviderBuildTestContext {
         );
 
         let mut env_map: HashMap<String, String> = HashMap::new();
-        env_map.insert(
-            "GOOGLE_SERVICE_ACCOUNT_KEY".to_string(),
-            service_account_key_json,
-        );
+        env_map.extend(alien_gcp_clients::live_test::live_test_provider_env(
+            "MANAGEMENT",
+        ));
         env_map.insert("GCP_REGION".to_string(), gcp_region);
         env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "gcp".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
@@ -421,18 +415,9 @@ impl AsyncTestContext for AzureProviderBuildTestContext {
         );
 
         let mut env_map: HashMap<String, String> = HashMap::new();
-        env_map.insert(
-            "AZURE_TENANT_ID".to_string(),
-            env::var("AZURE_MANAGEMENT_TENANT_ID").unwrap(),
-        );
-        env_map.insert(
-            "AZURE_CLIENT_ID".to_string(),
-            env::var("AZURE_MANAGEMENT_CLIENT_ID").unwrap(),
-        );
-        env_map.insert(
-            "AZURE_CLIENT_SECRET".to_string(),
-            env::var("AZURE_MANAGEMENT_CLIENT_SECRET").unwrap(),
-        );
+        env_map.extend(alien_azure_clients::live_test::live_test_provider_env(
+            "MANAGEMENT",
+        ));
         env_map.insert(
             "AZURE_SUBSCRIPTION_ID".to_string(),
             env::var("AZURE_MANAGEMENT_SUBSCRIPTION_ID").unwrap(),

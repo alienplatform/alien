@@ -102,6 +102,8 @@ resource "google_project_service" "management_apis" {
     "artifactregistry.googleapis.com",
     "run.googleapis.com",
     "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "sts.googleapis.com",
     "cloudbuild.googleapis.com",
     "compute.googleapis.com",
     "secretmanager.googleapis.com",
@@ -127,6 +129,7 @@ resource "google_project_service" "target_apis" {
     "artifactregistry.googleapis.com",
     "run.googleapis.com",
     "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
     "compute.googleapis.com",
     "cloudbuild.googleapis.com",
     "secretmanager.googleapis.com",
@@ -140,18 +143,13 @@ resource "google_project_service" "target_apis" {
 }
 
 # ── Manager SA: Execution identity ────────────────────────────────────────────
-# Runs the alien-manager process. Needs permissions for all resource types it
+# Runs the alien-manager process. CI impersonates it through workload identity federation (ci.tf). Needs permissions for all resource types it
 # provisions, but NOT roles/owner. Uses scoped bootstrap roles instead.
 
 resource "google_service_account" "manager" {
   provider     = google.management
   account_id   = "alien-test-manager"
   display_name = "Alien Test Manager"
-}
-
-resource "google_service_account_key" "manager" {
-  provider           = google.management
-  service_account_id = google_service_account.manager.name
 }
 
 # Scoped roles for the manager SA on the management project.
@@ -163,7 +161,6 @@ locals {
     "roles/pubsub.admin",                    # Pub/Sub topics & subscriptions
     "roles/storage.admin",                   # GCS buckets
     "roles/iam.serviceAccountAdmin",         # Service accounts (create/delete)
-    "roles/iam.serviceAccountKeyAdmin",      # Recreate Terraform-managed target SA keys
     "roles/iam.serviceAccountUser",          # Bind SAs to resources (actAs)
     "roles/iam.roleAdmin",                   # Custom IAM roles
     "roles/resourcemanager.projectIamAdmin", # Project-level IAM bindings
@@ -431,11 +428,6 @@ resource "google_service_account" "target" {
   display_name = "Alien Test Target"
 }
 
-resource "google_service_account_key" "target" {
-  provider           = google.target
-  service_account_id = google_service_account.target.name
-}
-
 resource "google_project_iam_member" "target_roles" {
   provider = google.target
   for_each = toset(local.manager_roles)
@@ -454,20 +446,11 @@ resource "google_project_iam_member" "target_workload_identity_pool_admin" {
   member   = "serviceAccount:${google_service_account.target.email}"
 }
 
-resource "google_project_iam_member" "target_provider_container_admin" {
-  provider = google.target
-  for_each = var.target_provider_email != "" && var.target_provider_email != google_service_account.target.email ? toset([var.target_provider_email]) : toset([])
-  project  = var.target_project_id
-  role     = "roles/container.admin"
-  member   = "serviceAccount:${each.value}"
-}
-
 resource "time_sleep" "target_role_propagation" {
   create_duration = "90s"
 
   triggers = {
-    target_provider_email = var.target_provider_email
-    target_roles          = sha1(jsonencode(sort(local.manager_roles)))
+    target_roles = sha1(jsonencode(sort(local.manager_roles)))
     # Rerun the wait when the target-only grant changes, including on existing installs.
     target_only_roles = google_project_iam_member.target_workload_identity_pool_admin.role
   }
@@ -475,7 +458,6 @@ resource "time_sleep" "target_role_propagation" {
   depends_on = [
     google_project_iam_member.target_roles,
     google_project_iam_member.target_workload_identity_pool_admin,
-    google_project_iam_member.target_provider_container_admin,
   ]
 }
 
@@ -501,5 +483,4 @@ resource "google_project_iam_member" "target_management_access" {
 locals {
   registry_host    = "${var.management_region}-docker.pkg.dev"
   image_repository = "${local.registry_host}/${var.management_project_id}/alien-test/http-server"
-  manager_key_json = base64decode(google_service_account_key.manager.private_key)
 }

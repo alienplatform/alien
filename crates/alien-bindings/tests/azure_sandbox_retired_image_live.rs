@@ -16,7 +16,7 @@ use alien_azure_clients::azure::sandbox_data_plane::{
 use alien_azure_clients::AzureTokenCache;
 use alien_bindings::traits::{CreateSandboxRequest, RunCommandRequest, Sandbox};
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
-use alien_core::{azure_disk_image_label, AzureClientConfig, AzureCredentials, ClientConfig};
+use alien_core::{azure_disk_image_label, ClientConfig};
 use futures::StreamExt;
 
 fn env(name: &str) -> String {
@@ -52,15 +52,10 @@ async fn live_a_deleted_cached_image_is_looked_up_again() {
     let region = std::env::var("AZURE_SANDBOX_REGION").unwrap_or_else(|_| "westus2".to_string());
     let image = env("AZURE_SANDBOX_IMAGE");
     let group = env("AZURE_SANDBOX_GROUP");
-    let azure = AzureClientConfig {
-        subscription_id: env("AZURE_TARGET_SUBSCRIPTION_ID"),
-        tenant_id: env("AZURE_TARGET_TENANT_ID"),
-        region: Some(region.clone()),
-        credentials: AzureCredentials::ServicePrincipal {
-            client_id: env("AZURE_TARGET_CLIENT_ID"),
-            client_secret: env("AZURE_TARGET_CLIENT_SECRET"),
-        },
-        service_overrides: None,
+    let azure = {
+        let mut cfg = alien_azure_clients::live_test::live_test_config("TARGET");
+        cfg.region = Some(region.clone());
+        cfg
     };
     let plane = AzureSandboxDataPlaneClient::new(
         reqwest::Client::new(),

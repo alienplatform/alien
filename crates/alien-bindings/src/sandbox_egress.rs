@@ -417,7 +417,7 @@ impl SandboxEgressManager {
         )
         .map_err(|_| unavailable("system clock is outside the supported range"))?;
         let previous = LAST_MILLIS
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
                 last.checked_add(1).map(|next| next.max(millis))
             })
             .map_err(|_| unavailable("policy clock is exhausted"))?;
@@ -433,7 +433,7 @@ impl SandboxEgressManager {
         )
         .map_err(|_| unavailable("system clock is outside the supported range"))?;
         let previous = LAST_MILLIS
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
                 last.checked_add(1).map(|next| next.max(millis))
             })
             .map_err(|_| unavailable("policy clock is exhausted"))?;

@@ -13,10 +13,8 @@ use alien_gcp_clients::compute::{
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_gcp_clients::longrunning::Operation;
 use alien_gcp_clients::platform::{GcpClientConfig, GcpCredentials};
-use base64::{engine::general_purpose::STANDARD as base64_standard, Engine as _};
 use reqwest::Client;
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use test_context::{test_context, AsyncTestContext};
@@ -43,24 +41,14 @@ impl AsyncTestContext for CloudRunTestContext {
         dotenvy::from_path(root.join(".env.test")).expect("Failed to load .env.test");
         tracing_subscriber::fmt::try_init().ok();
 
-        let gcp_credentials_json = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
-            .unwrap_or_else(|_| panic!("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY must be set"));
+        let base_gcp_config = alien_gcp_clients::live_test::live_test_config("MANAGEMENT").await;
 
-        // Parse project_id from service account
-        let service_account_value: serde_json::Value =
-            serde_json::from_str(&gcp_credentials_json).unwrap();
-        let project_id = service_account_value
-            .get("project_id")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .expect("'project_id' must be present in the service account JSON");
+        let project_id = base_gcp_config.project_id.clone();
 
         let config = GcpClientConfig {
             project_id: project_id.clone(),
             region: TEST_LOCATION.to_string(),
-            credentials: GcpCredentials::ServiceAccountKey {
-                json: gcp_credentials_json,
-            },
+            credentials: base_gcp_config.credentials.clone(),
             service_overrides: None,
             project_number: None,
         };
@@ -219,7 +207,7 @@ impl CloudRunTestContext {
         result
     }
 
-    fn create_basic_service(&self, service_name: String) -> Service {
+    fn create_basic_service(&self, _service_name: String) -> Service {
         let container = Container::builder()
             .image(TEST_CONTAINER_IMAGE.to_string())
             .ports(vec![ContainerPort::builder().container_port(8080).build()])
@@ -450,16 +438,8 @@ async fn test_service_iam_policy(ctx: &mut CloudRunTestContext) {
     );
 
     // Try to set IAM policy (add a test binding)
-    let current_sa_email = {
-        let gcp_credentials_json = std::env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY").unwrap();
-        let service_account_value: serde_json::Value =
-            serde_json::from_str(&gcp_credentials_json).unwrap();
-        service_account_value
-            .get("client_email")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| "serviceAccount:test-service@example.com".to_string())
-    };
+    let current_sa_email = std::env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_EMAIL")
+        .unwrap_or_else(|_| "serviceAccount:test-service@example.com".to_string());
 
     let test_member = if current_sa_email.starts_with("serviceAccount:") {
         current_sa_email
@@ -775,7 +755,7 @@ async fn test_error_translation_service_already_exists(ctx: &mut CloudRunTestCon
         Error {
             error:
                 Some(ErrorData::RemoteResourceConflict {
-                    ref message,
+                    message: _,
                     ref resource_type,
                     ref resource_name,
                 }),

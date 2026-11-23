@@ -28,12 +28,10 @@ impl AsyncTestContext for AzureProviderTestContext {
 
         let subscription_id = env::var("AZURE_MANAGEMENT_SUBSCRIPTION_ID")
             .expect("AZURE_MANAGEMENT_SUBSCRIPTION_ID must be set in .env.test");
-        let tenant_id = env::var("AZURE_MANAGEMENT_TENANT_ID")
+        let _tenant_id = env::var("AZURE_MANAGEMENT_TENANT_ID")
             .expect("AZURE_MANAGEMENT_TENANT_ID must be set in .env.test");
-        let client_id = env::var("AZURE_MANAGEMENT_CLIENT_ID")
+        let _client_id = env::var("AZURE_MANAGEMENT_CLIENT_ID")
             .expect("AZURE_MANAGEMENT_CLIENT_ID must be set in .env.test");
-        let client_secret = env::var("AZURE_MANAGEMENT_CLIENT_SECRET")
-            .expect("AZURE_MANAGEMENT_CLIENT_SECRET must be set in .env.test");
         let resource_group_name = env::var("ALIEN_TEST_AZURE_RESOURCE_GROUP")
             .expect("ALIEN_TEST_AZURE_RESOURCE_GROUP must be set in .env.test");
         let managed_environment_name = env::var("ALIEN_TEST_AZURE_MANAGED_ENVIRONMENT_NAME")
@@ -43,15 +41,10 @@ impl AsyncTestContext for AzureProviderTestContext {
         let mut container_image = env::var("ALIEN_TEST_AZURE_CONTAINER_APP_IMAGE")
             .unwrap_or_else(|_| default_container_image.clone());
 
-        let client_config = alien_azure_clients::AzureClientConfig {
-            subscription_id: subscription_id.clone(),
-            tenant_id,
-            region: Some("eastus".to_string()),
-            credentials: alien_azure_clients::AzureCredentials::ServicePrincipal {
-                client_id,
-                client_secret,
-            },
-            service_overrides: None,
+        let client_config = {
+            let mut cfg = alien_azure_clients::live_test::live_test_config("MANAGEMENT");
+            cfg.region = Some("eastus".to_string());
+            cfg
         };
 
         let container_apps_client = AzureContainerAppsClient::new(

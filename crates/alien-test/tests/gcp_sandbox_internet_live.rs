@@ -47,9 +47,10 @@
 //! such as the E2E Artifact Registry repository.
 //!
 //! plus the variables the rest of the GCP E2E suite needs (manager, registry);
-//! `GOOGLE_TARGET_SERVICE_ACCOUNT_KEY` works in place of the token. `gcloud` must be on the
-//! PATH. With a token it opens the IAP tunnels with that token; with a key it uses its own login,
-//! which must be a principal that may open IAP tunnels in the project.
+//! `GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL` (the account a short-lived token was minted for, e.g.
+//! `gcloud auth print-access-token --impersonate-service-account=<email>`) names the caller. `gcloud`
+//! must be on the PATH. With a token it opens the IAP tunnels with that token; otherwise it uses its
+//! own login, which must be a principal that may open IAP tunnels in the project.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -127,7 +128,7 @@ fn gcp_config() -> GcpClientConfig {
         region: gcp.region.clone(),
         credentials: gcp
             .credentials()
-            .expect("GOOGLE_TARGET_ACCESS_TOKEN or GOOGLE_TARGET_SERVICE_ACCOUNT_KEY is set"),
+            .expect("GOOGLE_TARGET_ACCESS_TOKEN is set (a short-lived token)"),
         service_overrides: None,
         project_number: None,
     }
@@ -576,12 +577,8 @@ async fn caller_email() -> anyhow::Result<String> {
             .map(str::to_string)
             .context("the target token names no email (it needs the email scope)");
     }
-    let key = std::env::var("GOOGLE_TARGET_SERVICE_ACCOUNT_KEY")?;
-    let key: serde_json::Value = serde_json::from_str(&key).context("parse the key")?;
-    key["client_email"]
-        .as_str()
-        .map(str::to_string)
-        .context("the key names no client_email")
+    std::env::var("GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL")
+        .context("set GOOGLE_TARGET_ACCESS_TOKEN or GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL")
 }
 
 /// Client settings that act as the deployment's workload identity. The test's principal is

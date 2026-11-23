@@ -111,7 +111,7 @@ impl AsyncTestContext for AwsProviderTestContext {
             credentials: alien_aws_clients::AwsCredentials::AccessKeys {
                 access_key_id: access_key.clone(),
                 secret_access_key: secret_key.clone(),
-                session_token: None,
+                session_token: std::env::var("AWS_MANAGEMENT_SESSION_TOKEN").ok(),
             },
             service_overrides: None,
         };
@@ -386,17 +386,9 @@ impl AsyncTestContext for GcpProviderTestContext {
 
         let binding_name = "test-gcp-function";
 
-        let gcp_credentials_json = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
-            .expect("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY must be set in .env.test");
+        let base_gcp_config = alien_gcp_clients::live_test::live_test_config("MANAGEMENT").await;
 
-        // Parse project_id from service account
-        let service_account_value: serde_json::Value =
-            serde_json::from_str(&gcp_credentials_json).unwrap();
-        let project_id = service_account_value
-            .get("project_id")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .expect("'project_id' must be present in the service account JSON");
+        let project_id = base_gcp_config.project_id.clone();
 
         let gcp_region = env::var("GOOGLE_MANAGEMENT_REGION")
             .expect("GOOGLE_MANAGEMENT_REGION must be set in .env.test");
@@ -404,9 +396,7 @@ impl AsyncTestContext for GcpProviderTestContext {
         let config = alien_gcp_clients::GcpClientConfig {
             project_id: project_id.clone(),
             region: gcp_region.clone(),
-            credentials: alien_gcp_clients::GcpCredentials::ServiceAccountKey {
-                json: gcp_credentials_json.clone(),
-            },
+            credentials: base_gcp_config.credentials.clone(),
             service_overrides: None,
             project_number: None,
         };
@@ -470,10 +460,9 @@ impl AsyncTestContext for GcpProviderTestContext {
         );
 
         let mut env_map: HashMap<String, String> = HashMap::new();
-        env_map.insert(
-            "GOOGLE_SERVICE_ACCOUNT_KEY".to_string(),
-            gcp_credentials_json,
-        );
+        env_map.extend(alien_gcp_clients::live_test::live_test_provider_env(
+            "MANAGEMENT",
+        ));
         env_map.insert("GCP_REGION".to_string(), gcp_region.clone());
         env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "gcp".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");

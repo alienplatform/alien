@@ -11,7 +11,6 @@ use alien_azure_clients::azure::sandbox_data_plane::{
     AzureSandboxDataPlaneClient, CreateDiskImage, SandboxDataPlaneApi,
 };
 use alien_azure_clients::AzureTokenCache;
-use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 
 const TOKEN: &str = "registry-token-must-not-leak";
 
@@ -21,15 +20,10 @@ fn env(name: &str) -> String {
 
 fn client() -> AzureSandboxDataPlaneClient {
     let region = std::env::var("AZURE_SANDBOX_REGION").unwrap_or_else(|_| "westus2".to_string());
-    let config = AzureClientConfig {
-        subscription_id: env("AZURE_TARGET_SUBSCRIPTION_ID"),
-        tenant_id: env("AZURE_TARGET_TENANT_ID"),
-        region: Some(region.clone()),
-        credentials: AzureCredentials::ServicePrincipal {
-            client_id: env("AZURE_TARGET_CLIENT_ID"),
-            client_secret: env("AZURE_TARGET_CLIENT_SECRET"),
-        },
-        service_overrides: None,
+    let config = {
+        let mut cfg = alien_azure_clients::live_test::live_test_config("TARGET");
+        cfg.region = Some(region.clone());
+        cfg
     };
     AzureSandboxDataPlaneClient::new(
         reqwest::Client::new(),

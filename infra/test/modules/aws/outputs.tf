@@ -1,13 +1,3 @@
-output "management_access_key_id" {
-  value     = aws_iam_access_key.manager.id
-  sensitive = true
-}
-
-output "management_secret_access_key" {
-  value     = aws_iam_access_key.manager.secret
-  sensitive = true
-}
-
 output "management_role_arn" {
   value     = aws_iam_role.management.arn
   sensitive = true
@@ -15,16 +5,6 @@ output "management_role_arn" {
 
 output "management_role_name" {
   value     = aws_iam_role.management.name
-  sensitive = true
-}
-
-output "target_access_key_id" {
-  value     = aws_iam_access_key.target.id
-  sensitive = true
-}
-
-output "target_secret_access_key" {
-  value     = aws_iam_access_key.target.secret
   sensitive = true
 }
 
@@ -114,43 +94,6 @@ output "e2e_eks_kube_context" {
   sensitive = true
 }
 
-output "e2e_eks_kubeconfig" {
-  value = yamlencode({
-    apiVersion = "v1"
-    kind       = "Config"
-    clusters = [{
-      name = aws_eks_cluster.e2e.name
-      cluster = {
-        server                       = aws_eks_cluster.e2e.endpoint
-        "certificate-authority-data" = aws_eks_cluster.e2e.certificate_authority[0].data
-      }
-    }]
-    contexts = [{
-      name = aws_eks_cluster.e2e.name
-      context = {
-        cluster = aws_eks_cluster.e2e.name
-        user    = aws_eks_cluster.e2e.name
-      }
-    }]
-    "current-context" = aws_eks_cluster.e2e.name
-    users = [{
-      name = aws_eks_cluster.e2e.name
-      user = {
-        exec = {
-          apiVersion = "client.authentication.k8s.io/v1beta1"
-          command    = "aws"
-          args       = ["eks", "get-token", "--cluster-name", aws_eks_cluster.e2e.name, "--region", var.target_region]
-          env = [
-            { name = "AWS_ACCESS_KEY_ID", value = aws_iam_access_key.target.id },
-            { name = "AWS_SECRET_ACCESS_KEY", value = aws_iam_access_key.target.secret },
-          ]
-        }
-      }
-    }]
-  })
-  sensitive = true
-}
-
 output "e2e_k8s_public_host_suffix" {
   value     = "${aws_eip.e2e_ingress[0].public_ip}.sslip.io"
   sensitive = true
@@ -158,5 +101,15 @@ output "e2e_k8s_public_host_suffix" {
 
 output "e2e_ingress_eip_allocation_ids" {
   value     = aws_eip.e2e_ingress[*].id
+  sensitive = true
+}
+
+output "manager_ci_role_arn" {
+  value     = aws_iam_role.manager_ci.arn
+  sensitive = true
+}
+
+output "target_ci_role_arn" {
+  value     = aws_iam_role.target_ci.arn
   sensitive = true
 }

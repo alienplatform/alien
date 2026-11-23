@@ -1,13 +1,3 @@
-output "management_service_account_key" {
-  value     = local.manager_key_json
-  sensitive = true
-}
-
-output "target_service_account_key" {
-  value     = base64decode(google_service_account_key.target.private_key)
-  sensitive = true
-}
-
 output "e2e_network_name" {
   value     = google_compute_network.e2e.name
   sensitive = true
@@ -74,36 +64,6 @@ output "e2e_gke_kube_context" {
   sensitive = true
 }
 
-output "e2e_gke_kubeconfig" {
-  value = yamlencode({
-    apiVersion = "v1"
-    kind       = "Config"
-    clusters = [{
-      name = google_container_cluster.e2e.name
-      cluster = {
-        server                       = "https://${google_container_cluster.e2e.endpoint}"
-        "certificate-authority-data" = google_container_cluster.e2e.master_auth[0].cluster_ca_certificate
-      }
-    }]
-    contexts = [{
-      name = google_container_cluster.e2e.name
-      context = {
-        cluster = google_container_cluster.e2e.name
-        user    = google_container_cluster.e2e.name
-      }
-    }]
-    "current-context" = google_container_cluster.e2e.name
-    users = [{
-      name = google_container_cluster.e2e.name
-      user = {
-        "client-certificate-data" = google_container_cluster.e2e.master_auth[0].client_certificate
-        "client-key-data"         = google_container_cluster.e2e.master_auth[0].client_key
-      }
-    }]
-  })
-  sensitive = true
-}
-
 output "e2e_k8s_public_host_suffix" {
   value     = "${google_compute_global_address.e2e_ingress.address}.sslip.io"
   sensitive = true
@@ -117,4 +77,27 @@ output "e2e_ingress_ip_address" {
 output "e2e_ingress_ip_name" {
   value     = google_compute_global_address.e2e_ingress.name
   sensitive = true
+}
+
+output "manager_service_account_email" {
+  value     = google_service_account.manager.email
+  sensitive = true
+}
+
+output "target_service_account_email" {
+  value     = google_service_account.target.email
+  sensitive = true
+}
+
+output "ci_principal_set" {
+  value = local.ci_principal_set
+}
+
+output "ci_workload_identity_provider" {
+  description = "Full resource name of the GitHub OIDC provider, for google-github-actions/auth."
+  value       = google_iam_workload_identity_pool_provider.github.name
+}
+
+output "manager_service_account_unique_id" {
+  value = google_service_account.manager.unique_id
 }

@@ -13,7 +13,7 @@ terraform {
     azuread = {
       source                = "hashicorp/azuread"
       version               = "~> 3.0"
-      configuration_aliases = [azuread.management]
+      configuration_aliases = [azuread.management, azuread.target]
     }
     random = { source = "hashicorp/random", version = "~> 3.0" }
     time   = { source = "hashicorp/time", version = "~> 0.13" }
@@ -157,8 +157,16 @@ resource "azurerm_public_ip" "e2e_ingress" {
   sku                 = "Standard"
 }
 
-data "azurerm_client_config" "target" {
-  provider = azurerm.target
+# The test identities are existing app registrations (inputs). Role assignments
+# and ownership refer to their service principals, not to whoever runs Terraform.
+data "azuread_service_principal" "target" {
+  provider  = azuread.target
+  client_id = var.target_client_id
+}
+
+data "azuread_service_principal" "management" {
+  provider  = azuread.management
+  client_id = var.management_client_id
 }
 
 module "e2e_aks" {
@@ -218,7 +226,7 @@ module "e2e_aks" {
 
   role_assignments = {
     target_admin = {
-      principal_id               = data.azurerm_client_config.target.object_id
+      principal_id               = data.azuread_service_principal.target.object_id
       role_definition_id_or_name = "Azure Kubernetes Service RBAC Cluster Admin"
     }
   }
@@ -238,10 +246,6 @@ resource "time_sleep" "e2e_aks_rbac_propagation" {
     azurerm_role_assignment.e2e_aks_network,
     module.e2e_aks,
   ]
-}
-
-locals {
-  e2e_aks_kubeconfig = yamldecode(module.e2e_aks.kube_config)
 }
 
 # Custom role that allows using the shared environment. Created once here; the
@@ -268,32 +272,28 @@ resource "azurerm_role_definition" "shared_env_join" {
 }
 
 # ── Management: RBAC for Terraform execution identity ─────────────────────────
-# The Terraform SP (current authenticated principal) needs blob/table + ACR
+# The management test identity needs blob/table + ACR
 # access for exercising the storage clients and pushing images during setup.
 
 resource "azurerm_role_assignment" "manager_storage_blob" {
   provider             = azurerm.management
   scope                = azurerm_storage_account.test.id
   role_definition_name = "Storage Blob Data Contributor"
-  principal_id         = data.azurerm_client_config.management.object_id
+  principal_id         = data.azuread_service_principal.management.object_id
 }
 
 resource "azurerm_role_assignment" "manager_storage_table" {
   provider             = azurerm.management
   scope                = azurerm_storage_account.test.id
   role_definition_name = "Storage Table Data Contributor"
-  principal_id         = data.azurerm_client_config.management.object_id
+  principal_id         = data.azuread_service_principal.management.object_id
 }
 
 resource "azurerm_role_assignment" "manager_acr_push" {
   provider             = azurerm.management
   scope                = azurerm_container_registry.test.id
   role_definition_name = "AcrPush"
-  principal_id         = data.azurerm_client_config.management.object_id
-}
-
-data "azurerm_client_config" "management" {
-  provider = azurerm.management
+  principal_id         = data.azuread_service_principal.management.object_id
 }
 
 # Drop historical managed cloud-pull identities from state without requiring
@@ -330,27 +330,37 @@ removed {
   }
 }
 
-# GitHub Actions OIDC federation — lets the Terraform execution SP
-# (alien-terraform-bootstrap) authenticate using GitHub OIDC tokens in CI.
-# Required for ACR scope map creation and other management-side operations.
-# The FIC must be on the app that AZURE_MANAGEMENT_CLIENT_ID points to.
-#
-# We use a single environment-scoped FIC: when a workflow job declares
-# `environment: e2e-tests`, GitHub emits OIDC tokens whose `sub` is
-# `repo:OWNER/REPO:environment:e2e-tests` regardless of branch or event
-# (push to main, pull_request, workflow_dispatch on a feature branch all
-# match). This avoids per-branch FIC churn or hardcoding branch names.
-data "azuread_application" "terraform_bootstrap" {
+# GitHub Actions OIDC federation: the two test app registrations (management
+# and target) sign in from CI with a GitHub token, so they hold no client
+# secret. A job that declares `environment: cloud-tests` gets a token whose
+# `sub` is `repo:OWNER/REPO:environment:cloud-tests`, whatever the branch or
+# event. One federated credential per app registration keeps the management and
+# target identities separate.
+data "azuread_application" "management" {
   provider  = azuread.management
   client_id = var.management_client_id
 }
 
+data "azuread_application" "target" {
+  provider  = azuread.target
+  client_id = var.target_client_id
+}
+
 resource "azuread_application_federated_identity_credential" "github_environment" {
   provider       = azuread.management
-  application_id = data.azuread_application.terraform_bootstrap.id
-  display_name   = "github-actions-e2e-tests"
+  application_id = data.azuread_application.management.id
+  display_name   = "github-actions-cloud-tests"
   issuer         = "https://token.actions.githubusercontent.com"
-  subject        = "repo:alienplatform/alien:environment:e2e-tests"
+  subject        = "repo:alienplatform/alien:environment:cloud-tests"
+  audiences      = ["api://AzureADTokenExchange"]
+}
+
+resource "azuread_application_federated_identity_credential" "github_environment_target" {
+  provider       = azuread.target
+  application_id = data.azuread_application.target.id
+  display_name   = "github-actions-cloud-tests"
+  issuer         = "https://token.actions.githubusercontent.com"
+  subject        = "repo:alienplatform/alien:environment:cloud-tests"
   audiences      = ["api://AzureADTokenExchange"]
 }
 
@@ -360,19 +370,13 @@ resource "azuread_application_federated_identity_credential" "github_environment
 resource "azuread_application" "acr_pull" {
   provider     = azuread.management
   display_name = "alien-test-acr-pull"
-  owners       = [data.azurerm_client_config.management.object_id]
+  owners       = [data.azuread_service_principal.management.object_id]
 }
 
 resource "azuread_service_principal" "acr_pull" {
   provider  = azuread.management
   client_id = azuread_application.acr_pull.client_id
-  owners    = [data.azurerm_client_config.management.object_id]
-}
-
-resource "azuread_application_password" "acr_pull" {
-  provider       = azuread.management
-  application_id = azuread_application.acr_pull.id
-  display_name   = "alien-test"
+  owners    = [data.azuread_service_principal.management.object_id]
 }
 
 resource "azurerm_role_assignment" "acr_pull" {
@@ -385,19 +389,13 @@ resource "azurerm_role_assignment" "acr_pull" {
 resource "azuread_application" "acr_push" {
   provider     = azuread.management
   display_name = "alien-test-acr-push"
-  owners       = [data.azurerm_client_config.management.object_id]
+  owners       = [data.azuread_service_principal.management.object_id]
 }
 
 resource "azuread_service_principal" "acr_push" {
   provider  = azuread.management
   client_id = azuread_application.acr_push.client_id
-  owners    = [data.azurerm_client_config.management.object_id]
-}
-
-resource "azuread_application_password" "acr_push" {
-  provider       = azuread.management
-  application_id = azuread_application.acr_push.id
-  display_name   = "alien-test"
+  owners    = [data.azuread_service_principal.management.object_id]
 }
 
 resource "azurerm_role_assignment" "acr_push" {

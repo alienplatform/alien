@@ -140,7 +140,7 @@ async fn policy_request(
     // Simulate an acknowledgement lost after a successful local commit.
     if state
         .transient_failures
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
         .is_ok()
     {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

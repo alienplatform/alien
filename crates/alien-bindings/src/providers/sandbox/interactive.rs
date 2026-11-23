@@ -369,7 +369,7 @@ mod tests {
     }
 
     fn take_one(left: &AtomicUsize) -> bool {
-        left.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+        left.try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
             left.checked_sub(1)
         })
         .is_ok()

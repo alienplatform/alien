@@ -12,7 +12,7 @@ use alien_azure_clients::models::virtual_network::{
     AddressSpace, Subnet, SubnetPropertiesFormat, VirtualNetwork, VirtualNetworkPropertiesFormat,
 };
 use alien_azure_clients::network::{AzureNetworkClient, NetworkApi};
-use alien_azure_clients::{AzureClientConfig, AzureCredentials, AzureTokenCache};
+use alien_azure_clients::AzureTokenCache;
 use anyhow::Result;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -37,15 +37,10 @@ impl AsyncTestContext for ApplicationGatewayTestContext {
         let root: PathBuf = workspace_root::get_workspace_root();
         dotenvy::from_path(root.join(".env.test")).expect("Failed to load .env.test");
         tracing_subscriber::fmt::try_init().ok();
-        let config = AzureClientConfig {
-            subscription_id: env::var("AZURE_MANAGEMENT_SUBSCRIPTION_ID").unwrap(),
-            tenant_id: env::var("AZURE_MANAGEMENT_TENANT_ID").unwrap(),
-            region: Some("eastus".into()),
-            credentials: AzureCredentials::ServicePrincipal {
-                client_id: env::var("AZURE_MANAGEMENT_CLIENT_ID").unwrap(),
-                client_secret: env::var("AZURE_MANAGEMENT_CLIENT_SECRET").unwrap(),
-            },
-            service_overrides: None,
+        let config = {
+            let mut cfg = alien_azure_clients::live_test::live_test_config("MANAGEMENT");
+            cfg.region = Some("eastus".into());
+            cfg
         };
         let token = || AzureTokenCache::new(config.clone());
         Self {

@@ -23,6 +23,7 @@ fn load_test_env() {
     for (from, to) in [
         ("AWS_TARGET_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID"),
         ("AWS_TARGET_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"),
+        ("AWS_TARGET_SESSION_TOKEN", "AWS_SESSION_TOKEN"),
     ] {
         // Fail loud rather than fall through to whatever AWS creds are already
         // ambient (e.g. a developer's own profile): this test must sign as the

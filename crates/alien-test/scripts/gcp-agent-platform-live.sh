@@ -10,7 +10,7 @@
 #   teardown  Delete every engine, service account and role this script created.
 #
 # Required: GOOGLE_TARGET_PROJECT_ID, GOOGLE_TARGET_REGION, and gcloud logged in as a principal
-# that can administer the project. `suite` also needs GOOGLE_TARGET_SERVICE_ACCOUNT_KEY,
+# that can administer the project. `suite` also needs GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL (impersonated through Application Default Credentials),
 # ALIEN_TEST_GIT_TOKEN and ALIEN_TEST_PRIVATE_REPO (see the suite's module docs).
 set -euo pipefail
 
@@ -169,7 +169,6 @@ cmd_image() {
 }
 
 cmd_suite() {
-  : "${GOOGLE_TARGET_SERVICE_ACCOUNT_KEY:?set GOOGLE_TARGET_SERVICE_ACCOUNT_KEY}"
   : "${ALIEN_TEST_GIT_TOKEN:?set ALIEN_TEST_GIT_TOKEN}"
   : "${ALIEN_TEST_PRIVATE_REPO:?set ALIEN_TEST_PRIVATE_REPO}"
   require_image

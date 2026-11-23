@@ -14,10 +14,6 @@ variable "target_region" {
   type = string
 }
 
-variable "target_provider_email" {
-  type = string
-}
-
 variable "e2e_gke_cluster_name" {
   type    = string
   default = ""

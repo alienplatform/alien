@@ -399,7 +399,7 @@ impl Build for KubernetesBuild {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::bindings::{BindingValue, BuildBinding};
+    use alien_core::bindings::BuildBinding;
     use chrono::TimeZone as _;
 
     #[tokio::test]

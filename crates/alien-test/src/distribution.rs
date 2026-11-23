@@ -3489,7 +3489,7 @@ fn gcp_federated_management_config(
         .as_ref()
         .context("GCP management config is required to probe deployment federation")?;
     let credentials = management.credentials().context(
-        "GOOGLE_MANAGEMENT_ACCESS_TOKEN or GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY is required to probe deployment federation",
+        "GOOGLE_MANAGEMENT_ACCESS_TOKEN (a short-lived token) is required to probe deployment federation",
     )?;
     let service_account_email = management
         .management_identity_email

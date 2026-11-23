@@ -19,42 +19,60 @@ jobs:
     # GitHub's Ubuntu image ships the aws, gcloud and az CLIs the generator calls.
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: e2e-tests
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.TEST_AWS_TARGET_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.TEST_AWS_TARGET_SECRET_ACCESS_KEY }}
+    environment: cloud-tests
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - name: Mask non-secret infrastructure identifiers
-        env:
-          GCP_PROJECT_ID: ${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}
-        run: echo "::add-mask::$GCP_PROJECT_ID"
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Sign in to the clouds
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+          terraform_version: 1.14.5
+
+      - name: Test cloud configuration
         env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+          GCP_PROJECT_ID: ${{ vars.TEST_GCP_MGMT_PROJECT_ID }}
+        run: |
+          echo "::add-mask::$GCP_PROJECT_ID"
+          terraform -chdir=infra/test init -input=false
+          ./scripts/gen-env-test.sh
           # gcp-target-3 is the cloud tests' default GCP target.
-          GCP_PROJECT_ID: ${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}
-          GCP_SA_KEY: ${{ secrets.TEST_GCP_TARGET_3_SA_KEY }}
-          AZURE_CLIENT_ID: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.TEST_AZURE_TARGET_SUBSCRIPTION_ID }}
+          ./scripts/select-e2e-targets.sh --env-file .env.test \
+            --aws aws-target-1 --gcp gcp-target-3 --azure azure-target-1
+
+      - name: Sign in to the test clouds
+        uses: ./.github/actions/cloud-test-credentials
+        with:
+          management: "false"
+
+      - name: Use the target identity in the CLIs
         run: |
           set -euo pipefail
-          # Not a secret, so nothing masks it, and CLI errors print it into this public log.
-          account_id=$(aws sts get-caller-identity --query Account --output text)
-          echo "::add-mask::$account_id"
+          set -a; . ./.env.test; set +a
+          export AWS_ACCESS_KEY_ID="$AWS_TARGET_ACCESS_KEY_ID" \
+            AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY" \
+            AWS_SESSION_TOKEN="$AWS_TARGET_SESSION_TOKEN"
+          # Not secrets, so nothing masks them, and CLI errors print them into this public log.
+          echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
+          echo "::add-mask::$GOOGLE_TARGET_PROJECT_ID"
+          echo "::add-mask::$AZURE_TARGET_SUBSCRIPTION_ID"
+          {
+            echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+            echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+            echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN"
+          } >> "$GITHUB_ENV"
 
-          key_file="$RUNNER_TEMP/gcp-key.json"
-          printf '%s' "$GCP_SA_KEY" > "$key_file"
-          gcloud auth activate-service-account --key-file="$key_file"
+          gcloud auth login --cred-file="$GOOGLE_TARGET_CREDENTIALS_FILE" --quiet
           # The generator lists GCP machine types in the CLI's current project.
-          gcloud config set project "$GCP_PROJECT_ID"
+          gcloud config set project "$GOOGLE_TARGET_PROJECT_ID"
 
-          az login --service-principal --username "$AZURE_CLIENT_ID" \
-            --password "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" --output none
-          az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+          az login --service-principal --username "$AZURE_TARGET_CLIENT_ID" \
+            --tenant "$AZURE_TARGET_TENANT_ID" \
+            --federated-token "$(cat "$AZURE_TARGET_FEDERATED_TOKEN_FILE")" --output none
+          az account set --subscription "$AZURE_TARGET_SUBSCRIPTION_ID"
 
       - name: Regenerate the catalog
         run: python3 scripts/instance-catalog/generate.py

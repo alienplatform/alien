@@ -3,11 +3,9 @@ use alien_client_core::{ErrorData, Result};
 use alien_gcp_clients::cloudbuild::{
     Build, BuildStatus, BuildStep, CloudBuildApi, CloudBuildClient,
 };
-use alien_gcp_clients::platform::{GcpClientConfig, GcpCredentials};
-use base64::{engine::general_purpose::STANDARD as base64_standard, Engine as _};
+use alien_gcp_clients::platform::GcpClientConfig;
 use reqwest::Client;
 use std::collections::HashSet;
-use std::env;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -28,25 +26,16 @@ impl AsyncTestContext for CloudBuildTestContext {
         dotenvy::from_path(root.join(".env.test")).expect("Failed to load .env.test");
         tracing_subscriber::fmt::try_init().ok();
 
-        let gcp_credentials_json = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
-            .unwrap_or_else(|_| panic!("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY must be set"));
+        let base_gcp_config = alien_gcp_clients::live_test::live_test_config("MANAGEMENT").await;
 
-        let service_account_value: serde_json::Value =
-            serde_json::from_str(&gcp_credentials_json).unwrap();
-        let project_id = service_account_value
-            .get("project_id")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .expect("'project_id' must be present in the service account JSON");
+        let project_id = base_gcp_config.project_id.clone();
 
         let location = "us-central1".to_string(); // Cloud Build is regional
 
         let config = GcpClientConfig {
             project_id: project_id.clone(),
             region: location.clone(),
-            credentials: GcpCredentials::ServiceAccountKey {
-                json: gcp_credentials_json,
-            },
+            credentials: base_gcp_config.credentials.clone(),
             service_overrides: None,
             project_number: None,
         };

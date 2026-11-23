@@ -1,0 +1,155 @@
+name: Cloud test credentials
+description: >-
+  Signs the job in to the test clouds with GitHub OIDC: short-lived AWS role sessions, Google
+  workload identity federation with service account impersonation, and an Azure federated token
+  file. Nothing is stored in .env.test. The job needs `id-token: write` and must run in the
+  `cloud-tests` environment, which the cloud-side trust matches on. Run it after
+  `scripts/gen-env-test.sh` (and target selection): the ids and role names come from `.env.test`.
+
+  Exports to the job environment, per identity NAME in MANAGEMENT / TARGET:
+  AWS_NAME_ACCESS_KEY_ID, AWS_NAME_SECRET_ACCESS_KEY, AWS_NAME_SESSION_TOKEN,
+  GOOGLE_NAME_CREDENTIALS_FILE (a credential configuration file that impersonates the service
+  account), AZURE_NAME_FEDERATED_TOKEN_FILE.
+
+inputs:
+  management:
+    description: "Sign in the management identity"
+    default: "true"
+  target:
+    description: "Sign in the target identity"
+    default: "true"
+  aws-region:
+    description: "Region for the AWS STS calls"
+    default: us-east-1
+
+runs:
+  using: composite
+  steps:
+    - name: Read cloud test configuration
+      id: cfg
+      shell: bash
+      run: |
+        set -euo pipefail
+        (
+          set -a
+          . ./.env.test
+          {
+            echo "aws_mgmt_role=${AWS_MANAGEMENT_CI_ROLE_ARN:-}"
+            echo "aws_target_role=${AWS_TARGET_CI_ROLE_ARN:-}"
+            echo "gcp_provider=${GOOGLE_WORKLOAD_IDENTITY_PROVIDER:-}"
+            echo "gcp_mgmt_sa=${GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_EMAIL:-}"
+            echo "gcp_target_sa=${GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL:-}"
+          } >> "$GITHUB_OUTPUT"
+          for v in "${AWS_MANAGEMENT_CI_ROLE_ARN:-}" "${AWS_TARGET_CI_ROLE_ARN:-}" \
+            "${GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_EMAIL:-}" "${GOOGLE_TARGET_SERVICE_ACCOUNT_EMAIL:-}" \
+            "${AZURE_MANAGEMENT_CLIENT_ID:-}" "${AZURE_TARGET_CLIENT_ID:-}"; do
+            [ -n "$v" ] && echo "::add-mask::$v"
+          done
+        )
+
+    # One sign-in per identity, with the session returned as step outputs. Exporting it as the
+    # job's default AWS credentials would let a consumer pick the wrong account silently.
+    - name: AWS management role
+      if: inputs.management == 'true'
+      id: aws_mgmt
+      uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+      with:
+        role-to-assume: ${{ steps.cfg.outputs.aws_mgmt_role }}
+        role-session-name: cloud-tests-management
+        role-duration-seconds: 7200
+        aws-region: ${{ inputs.aws-region }}
+        output-credentials: true
+        output-env-credentials: false
+
+    - name: AWS target role
+      if: inputs.target == 'true'
+      id: aws_target
+      uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+      with:
+        role-to-assume: ${{ steps.cfg.outputs.aws_target_role }}
+        role-session-name: cloud-tests-target
+        role-duration-seconds: 7200
+        aws-region: ${{ inputs.aws-region }}
+        output-credentials: true
+        output-env-credentials: false
+
+    - name: Export AWS sessions
+      shell: bash
+      env:
+        MGMT_KEY: ${{ steps.aws_mgmt.outputs.aws-access-key-id }}
+        MGMT_SECRET: ${{ steps.aws_mgmt.outputs.aws-secret-access-key }}
+        MGMT_TOKEN: ${{ steps.aws_mgmt.outputs.aws-session-token }}
+        TARGET_KEY: ${{ steps.aws_target.outputs.aws-access-key-id }}
+        TARGET_SECRET: ${{ steps.aws_target.outputs.aws-secret-access-key }}
+        TARGET_TOKEN: ${{ steps.aws_target.outputs.aws-session-token }}
+      run: |
+        {
+          [ -n "$MGMT_KEY" ] && printf 'AWS_MANAGEMENT_ACCESS_KEY_ID=%s\nAWS_MANAGEMENT_SECRET_ACCESS_KEY=%s\nAWS_MANAGEMENT_SESSION_TOKEN=%s\n' "$MGMT_KEY" "$MGMT_SECRET" "$MGMT_TOKEN"
+          [ -n "$TARGET_KEY" ] && printf 'AWS_TARGET_ACCESS_KEY_ID=%s\nAWS_TARGET_SECRET_ACCESS_KEY=%s\nAWS_TARGET_SESSION_TOKEN=%s\n' "$TARGET_KEY" "$TARGET_SECRET" "$TARGET_TOKEN"
+        } >> "$GITHUB_ENV"
+        exit 0
+
+    # `create_credentials_file` writes a credential configuration that exchanges the GitHub token
+    # and impersonates the service account; the file holds no key.
+    - name: Google management service account
+      if: inputs.management == 'true'
+      id: gcp_mgmt
+      uses: google-github-actions/auth@0949e32778441b2c442592b7a0e6313466dc8f29 # v3.0.2
+      with:
+        workload_identity_provider: ${{ steps.cfg.outputs.gcp_provider }}
+        service_account: ${{ steps.cfg.outputs.gcp_mgmt_sa }}
+        create_credentials_file: true
+        export_environment_variables: false
+        cleanup_credentials: false
+
+    - name: Google target service account
+      if: inputs.target == 'true'
+      id: gcp_target
+      uses: google-github-actions/auth@0949e32778441b2c442592b7a0e6313466dc8f29 # v3.0.2
+      with:
+        workload_identity_provider: ${{ steps.cfg.outputs.gcp_provider }}
+        service_account: ${{ steps.cfg.outputs.gcp_target_sa }}
+        create_credentials_file: true
+        export_environment_variables: false
+        cleanup_credentials: false
+
+    # The file the auth action writes fetches its subject token from the runner by URL, which only
+    # the Google tooling understands. Our clients read the subject token from a file, so write a
+    # token file (kept fresh) per identity and point a copy of the configuration at it.
+    - name: Export Google credential files
+      shell: bash
+      env:
+        MGMT_FILE: ${{ steps.gcp_mgmt.outputs.credentials_file_path }}
+        TARGET_FILE: ${{ steps.gcp_target.outputs.credentials_file_path }}
+      run: |
+        set -euo pipefail
+        link() {
+          local name="$1" src="$2" token="$RUNNER_TEMP/gcp-$1-subject-token" out="$RUNNER_TEMP/gcp-$1-credentials.json"
+          "$GITHUB_ACTION_PATH/../../../scripts/ci-oidc-token-file.sh" "$token" "$(jq -er .audience "$src")"
+          jq --arg f "$token" '.credential_source = {file: $f}' "$src" > "$out"
+          linked="$out"
+        }
+        if [ -n "$MGMT_FILE" ]; then
+          link management "$MGMT_FILE"
+          echo "GOOGLE_MANAGEMENT_CREDENTIALS_FILE=$linked" >> "$GITHUB_ENV"
+        fi
+        if [ -n "$TARGET_FILE" ]; then
+          link target "$TARGET_FILE"
+          echo "GOOGLE_TARGET_CREDENTIALS_FILE=$linked" >> "$GITHUB_ENV"
+        fi
+        exit 0
+
+    # Both app registrations trust the same subject, so one token file serves both.
+    - name: Azure federated token
+      shell: bash
+      env:
+        MANAGEMENT: ${{ inputs.management }}
+        TARGET: ${{ inputs.target }}
+      run: |
+        file="$RUNNER_TEMP/azure-federated-token"
+        "$GITHUB_ACTION_PATH/../../../scripts/ci-oidc-token-file.sh" "$file"
+        {
+          [ "$MANAGEMENT" = true ] && echo "AZURE_MANAGEMENT_FEDERATED_TOKEN_FILE=$file"
+          [ "$TARGET" = true ] && echo "AZURE_TARGET_FEDERATED_TOKEN_FILE=$file"
+        } >> "$GITHUB_ENV"
+        exit 0

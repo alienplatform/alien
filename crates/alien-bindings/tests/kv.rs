@@ -14,7 +14,7 @@ use alien_gcp_clients::firestore::{
 #[cfg(feature = "gcp")]
 use alien_gcp_clients::longrunning::OperationResult;
 #[cfg(feature = "gcp")]
-use alien_gcp_clients::{GcpClientConfig, GcpCredentials};
+use alien_gcp_clients::GcpClientConfig;
 #[cfg(any(feature = "gcp", feature = "aws"))]
 use reqwest::Client;
 
@@ -31,7 +31,7 @@ use alien_client_core::{Error as CloudError, ErrorData as CloudErrorData};
 #[cfg(feature = "azure")]
 use alien_azure_clients::tables::{AzureTableManagementClient, TableManagementApi};
 #[cfg(feature = "azure")]
-use alien_azure_clients::{AzureClientConfig, AzureCredentials, AzureTokenCache};
+use alien_azure_clients::AzureTokenCache;
 
 use async_trait::async_trait;
 use rstest::rstest;
@@ -180,7 +180,7 @@ impl AsyncTestContext for AwsProviderTestContext {
             credentials: AwsCredentials::AccessKeys {
                 access_key_id: access_key.clone(),
                 secret_access_key: secret_key.clone(),
-                session_token: None,
+                session_token: std::env::var("AWS_MANAGEMENT_SESSION_TOKEN").ok(),
             },
             service_overrides: None,
         };
@@ -414,17 +414,9 @@ impl AsyncTestContext for GcpProviderTestContext {
 
         let binding_name = "test-gcp-kv";
 
-        let gcp_credentials_json = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
-            .expect("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY must be set in .env.test");
+        let base_gcp_config = alien_gcp_clients::live_test::live_test_config("MANAGEMENT").await;
 
-        // Parse project_id from service account
-        let service_account_value: serde_json::Value =
-            serde_json::from_str(&gcp_credentials_json).unwrap();
-        let project_id = service_account_value
-            .get("project_id")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .expect("'project_id' must be present in the service account JSON");
+        let project_id = base_gcp_config.project_id.clone();
 
         let gcp_region = env::var("GOOGLE_MANAGEMENT_REGION")
             .expect("GOOGLE_MANAGEMENT_REGION must be set in .env.test");
@@ -433,9 +425,7 @@ impl AsyncTestContext for GcpProviderTestContext {
         let firestore_config = GcpClientConfig {
             project_id: project_id.clone(),
             region: gcp_region.clone(),
-            credentials: GcpCredentials::ServiceAccountKey {
-                json: gcp_credentials_json.clone(),
-            },
+            credentials: base_gcp_config.credentials.clone(),
             service_overrides: None,
             project_number: None,
         };
@@ -489,10 +479,9 @@ impl AsyncTestContext for GcpProviderTestContext {
         );
 
         let mut env_map: HashMap<String, String> = HashMap::new();
-        env_map.insert(
-            "GOOGLE_SERVICE_ACCOUNT_KEY".to_string(),
-            gcp_credentials_json,
-        );
+        env_map.extend(alien_gcp_clients::live_test::live_test_provider_env(
+            "MANAGEMENT",
+        ));
         env_map.insert("GCP_REGION".to_string(), gcp_region);
         env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "gcp".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
@@ -721,12 +710,6 @@ impl AsyncTestContext for AzureProviderTestContext {
 
         let subscription_id = env::var("AZURE_MANAGEMENT_SUBSCRIPTION_ID")
             .expect("AZURE_MANAGEMENT_SUBSCRIPTION_ID must be set in .env.test");
-        let tenant_id = env::var("AZURE_MANAGEMENT_TENANT_ID")
-            .expect("AZURE_MANAGEMENT_TENANT_ID must be set in .env.test");
-        let client_id = env::var("AZURE_MANAGEMENT_CLIENT_ID")
-            .expect("AZURE_MANAGEMENT_CLIENT_ID must be set in .env.test");
-        let client_secret = env::var("AZURE_MANAGEMENT_CLIENT_SECRET")
-            .expect("AZURE_MANAGEMENT_CLIENT_SECRET must be set in .env.test");
         let resource_group_name = env::var("ALIEN_TEST_AZURE_RESOURCE_GROUP")
             .expect("ALIEN_TEST_AZURE_RESOURCE_GROUP must be set in .env.test");
         let account_name = env::var("ALIEN_TEST_AZURE_STORAGE_ACCOUNT")
@@ -738,15 +721,10 @@ impl AsyncTestContext for AzureProviderTestContext {
             Uuid::new_v4().hyphenated().to_string().replace("-", "")[..8].to_lowercase()
         );
 
-        let client_config = AzureClientConfig {
-            subscription_id: subscription_id.clone(),
-            tenant_id: tenant_id.clone(),
-            region: Some("eastus".to_string()),
-            credentials: AzureCredentials::ServicePrincipal {
-                client_id: client_id.clone(),
-                client_secret: client_secret.clone(),
-            },
-            service_overrides: None,
+        let client_config = {
+            let mut cfg = alien_azure_clients::live_test::live_test_config("MANAGEMENT");
+            cfg.region = Some("eastus".to_string());
+            cfg
         };
 
         let management_client = AzureTableManagementClient::new(
@@ -772,9 +750,9 @@ impl AsyncTestContext for AzureProviderTestContext {
         );
 
         let mut env_map: HashMap<String, String> = HashMap::new();
-        env_map.insert("AZURE_TENANT_ID".to_string(), tenant_id);
-        env_map.insert("AZURE_CLIENT_ID".to_string(), client_id);
-        env_map.insert("AZURE_CLIENT_SECRET".to_string(), client_secret);
+        env_map.extend(alien_azure_clients::live_test::live_test_provider_env(
+            "MANAGEMENT",
+        ));
         env_map.insert("AZURE_SUBSCRIPTION_ID".to_string(), subscription_id);
         env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "azure".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");

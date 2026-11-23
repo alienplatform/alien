@@ -21,8 +21,7 @@ run_ignored_test() {
 }
 
 # An absent stack is the success case; anything else — expired credentials, AccessDenied, a
-# throttle — must not be read as one. Matching the message is how `cleanup-aws-e2e-resources.sh`
-# draws the same distinction.
+# throttle — must not be read as one. Match the error message to tell them apart.
 stack_state() {
   local err
   if err=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" 2>&1 >/dev/null); then

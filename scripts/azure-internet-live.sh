@@ -15,7 +15,9 @@
 # create resources and role assignments in the subscription.
 #
 # Env (nothing is defaulted that names a subscription or secret):
-#   AZURE_TARGET_SUBSCRIPTION_ID, AZURE_TARGET_TENANT_ID, AZURE_TARGET_CLIENT_ID, AZURE_TARGET_CLIENT_SECRET
+#   AZURE_TARGET_SUBSCRIPTION_ID, AZURE_TARGET_TENANT_ID, AZURE_TARGET_CLIENT_ID
+#   Sign in first with `az login` (the identity that can create resources and role assignments in
+#   the subscription); no client secret is used. The driver job receives short-lived tokens.
 #   AZURE_INTERNET_PREFIX      short lowercase prefix, 3-10 chars (names every resource)
 #   AZURE_INTERNET_LOCATION    region, default eastus
 #   AZURE_INTERNET_VM_SIZE     gateway VM size, default Standard_D2s_v4 (pick one with quota)
@@ -31,7 +33,7 @@
 set -euo pipefail
 
 cmd="${1:-run}"
-: "${AZURE_TARGET_SUBSCRIPTION_ID:?}" "${AZURE_TARGET_TENANT_ID:?}" "${AZURE_TARGET_CLIENT_ID:?}" "${AZURE_TARGET_CLIENT_SECRET:?}"
+: "${AZURE_TARGET_SUBSCRIPTION_ID:?}" "${AZURE_TARGET_TENANT_ID:?}" "${AZURE_TARGET_CLIENT_ID:?}"
 : "${AZURE_INTERNET_PREFIX:?}"
 LOCATION="${AZURE_INTERNET_LOCATION:-eastus}"
 VM_SIZE="${AZURE_INTERNET_VM_SIZE:-Standard_D2s_v4}"
@@ -45,9 +47,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$WORK"
 
 token() { # token <scope>
-  curl -fsS --max-time 60 -X POST "https://login.microsoftonline.com/$AZURE_TARGET_TENANT_ID/oauth2/v2.0/token" \
-    -d grant_type=client_credentials -d client_id="$AZURE_TARGET_CLIENT_ID" \
-    -d client_secret="$AZURE_TARGET_CLIENT_SECRET" -d scope="$1" | jq -r .access_token
+  az account get-access-token --tenant "$AZURE_TARGET_TENANT_ID" --scope "$1" --query accessToken --output tsv
 }
 arm() { # arm <METHOD> <path> [curl args]; prints the body, fails on HTTP errors
   local method=$1 path=$2; shift 2
@@ -200,7 +200,7 @@ azure_resource_group_name = "$RG"
 azure_location = "$LOCATION"
 default_network_sandbox_gateway_vm_size = "$VM_SIZE"
 EOF
-export ARM_SUBSCRIPTION_ID="$SUB" ARM_TENANT_ID="$AZURE_TARGET_TENANT_ID" ARM_CLIENT_ID="$AZURE_TARGET_CLIENT_ID" ARM_CLIENT_SECRET="$AZURE_TARGET_CLIENT_SECRET"
+export ARM_SUBSCRIPTION_ID="$SUB" ARM_TENANT_ID="$AZURE_TARGET_TENANT_ID" ARM_USE_CLI=true
 # Azure occasionally resets a connection mid-apply; apply is idempotent, so one retry continues it.
 # One at a time: with three in parallel the azurerm provider flaked on the NSG and its rules
 # ("Root object was present, but now absent").
@@ -255,20 +255,22 @@ for _ in $(seq 1 80); do
   state=$(arm GET "$ENV_ID?api-version=2024-03-01" | jq -r .properties.provisioningState); [ "$state" = Succeeded ] && break; sleep 15
 done
 [ "$state" = Succeeded ] || { echo "container apps environment: $state"; exit 1; }
+scoped_tokens=$(for scope in https://management.azure.com/.default https://storage.azure.com/.default https://vault.azure.net/.default https://servicebus.azure.net/.default; do
+  printf '%s\t%s\n' "$scope" "$(token "$scope")"; done | jq -Rn '[inputs | split("\t") | {key: .[0], value: .[1]}] | from_entries')
 binding=$(jq -c . "$WORK/binding.json")
 gwbinding=$(jq -c . "$WORK/gateway-binding.json")
 job=$(jq -n --arg env "$ENV_ID" --arg loc "$LOCATION" --arg reg "$REGISTRY" --arg user "$ACR_USER" --arg pass "$ACR_PASS" \
   --arg image "$REGISTRY/driver:1" --arg sub "$SUB" --arg tenant "$AZURE_TARGET_TENANT_ID" --arg cid "$AZURE_TARGET_CLIENT_ID" \
-  --arg csecret "$AZURE_TARGET_CLIENT_SECRET" --arg rg "$RG" --arg vault "$vault" --arg binding "$binding" --arg gwbinding "$gwbinding" --arg ips "$ips" \
+  --arg tokens "$scoped_tokens" --arg rg "$RG" --arg vault "$vault" --arg binding "$binding" --arg gwbinding "$gwbinding" --arg ips "$ips" \
   --arg only "${AZURE_INTERNET_ONLY:-}" --arg listener "${AZURE_INTERNET_LISTENER_IP:-}" --arg vms "$vms" --arg probe "$private_probe" --arg region "$LOCATION" '
   {location:$loc, properties:{environmentId:$env, workloadProfileName:"Consumption",
    configuration:{triggerType:"Manual", replicaTimeout:3000, replicaRetryLimit:0,
      manualTriggerConfig:{parallelism:1, replicaCompletionCount:1},
-     secrets:[{name:"client-secret",value:$csecret},{name:"acr-pass",value:$pass}],
+     secrets:[{name:"scoped-tokens",value:$tokens},{name:"acr-pass",value:$pass}],
      registries:[{server:$reg, username:$user, passwordSecretRef:"acr-pass"}]},
    template:{containers:[{name:"driver", image:$image, resources:{cpu:1, memory:"2Gi"}, env:[
      {name:"AZURE_TARGET_SUBSCRIPTION_ID",value:$sub},{name:"AZURE_TARGET_TENANT_ID",value:$tenant},
-     {name:"AZURE_TARGET_CLIENT_ID",value:$cid},{name:"AZURE_TARGET_CLIENT_SECRET",secretRef:"client-secret"},
+     {name:"AZURE_TARGET_CLIENT_ID",value:$cid},{name:"AZURE_TARGET_SCOPED_TOKENS",secretRef:"scoped-tokens"},
      {name:"AZURE_RESOURCE_GROUP",value:$rg},{name:"AZURE_SANDBOX_REGION",value:$region},
      {name:"AZURE_INTERNET_VAULT_NAME",value:$vault},{name:"AZURE_INTERNET_BINDING",value:$binding},{name:"AZURE_INTERNET_GATEWAY_BINDING",value:$gwbinding},
      {name:"AZURE_INTERNET_GATEWAY_IPS",value:$ips},{name:"AZURE_INTERNET_GATEWAY_VMS",value:$vms},

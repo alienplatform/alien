@@ -1,7 +1,7 @@
 //! Opt-in Azure test for the key controller in a direct setup, on a real Key Vault.
 //!
 //! Set `ALIEN_AZURE_KEY_LIVE_TEST=1` and the usual `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID`,
-//! `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_REGION` of a disposable subscription. Run with
+//! `AZURE_CLIENT_ID`, `AZURE_FEDERATED_TOKEN_FILE`, `AZURE_REGION` of a disposable subscription. Run with
 //! `cargo nextest run -p alien-infra --all-features --test azure_key_live --run-ignored ignored-only --no-capture`.
 //! The controller creates `<prefix>-keys`, a vault with purge protection and an RSA key. The
 //! test deletes the resource group at the end; the vault stays soft-deleted and purge-protected

@@ -31,7 +31,7 @@ fn client() -> LambdaMicrovmsClient {
                 .expect("AWS_TARGET_ACCESS_KEY_ID"),
             secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY")
                 .expect("AWS_TARGET_SECRET_ACCESS_KEY"),
-            session_token: None,
+            session_token: std::env::var("AWS_TARGET_SESSION_TOKEN").ok(),
         },
         service_overrides: None,
     };

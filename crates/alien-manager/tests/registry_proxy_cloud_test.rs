@@ -550,6 +550,9 @@ async fn test_proxy_push_pull_ecr() {
     env_vars.insert("AWS_REGION".into(), region);
     env_vars.insert("AWS_ACCESS_KEY_ID".into(), access_key);
     env_vars.insert("AWS_SECRET_ACCESS_KEY".into(), secret_key);
+    if let Ok(token) = std::env::var("AWS_MANAGEMENT_SESSION_TOKEN") {
+        env_vars.insert("AWS_SESSION_TOKEN".into(), token);
+    }
     env_vars.insert("AWS_ACCOUNT_ID".into(), account_id);
     env_vars.insert("ALIEN_DEPLOYMENT_TYPE".into(), "aws".into());
 
@@ -574,7 +577,6 @@ async fn test_proxy_push_pull_gar() {
     let _guard = cloud_proxy_env_lock().await;
     load_test_env();
 
-    let sa_key = require_env!("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY");
     let project_id = require_env!("GOOGLE_MANAGEMENT_PROJECT_ID");
     let region = require_env!("GOOGLE_MANAGEMENT_REGION");
     let gar_repo_url = require_env!("E2E_GCP_GAR_REPOSITORY");
@@ -595,7 +597,9 @@ async fn test_proxy_push_pull_gar() {
     });
 
     let mut env_vars = HashMap::new();
-    env_vars.insert("GOOGLE_SERVICE_ACCOUNT_KEY".into(), sa_key);
+    env_vars.extend(alien_gcp_clients::live_test::live_test_provider_env(
+        "MANAGEMENT",
+    ));
     env_vars.insert("GCP_PROJECT_ID".into(), project_id.clone());
     env_vars.insert("GCP_REGION".into(), region);
     env_vars.insert("ALIEN_DEPLOYMENT_TYPE".into(), "gcp".into());
@@ -623,7 +627,6 @@ async fn test_proxy_push_gar_via_ngrok() {
     load_test_env();
 
     let ngrok_token = require_env!("NGROK_AUTHTOKEN");
-    let sa_key = require_env!("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY");
     let project_id = require_env!("GOOGLE_MANAGEMENT_PROJECT_ID");
     let region = require_env!("GOOGLE_MANAGEMENT_REGION");
     let gar_repo_url = require_env!("E2E_GCP_GAR_REPOSITORY");
@@ -644,7 +647,9 @@ async fn test_proxy_push_gar_via_ngrok() {
     });
 
     let mut env_vars = HashMap::new();
-    env_vars.insert("GOOGLE_SERVICE_ACCOUNT_KEY".into(), sa_key);
+    env_vars.extend(alien_gcp_clients::live_test::live_test_provider_env(
+        "MANAGEMENT",
+    ));
     env_vars.insert("GCP_PROJECT_ID".into(), project_id.clone());
     env_vars.insert("GCP_REGION".into(), region);
     env_vars.insert("ALIEN_DEPLOYMENT_TYPE".into(), "gcp".into());
@@ -727,9 +732,6 @@ async fn test_proxy_push_pull_acr() {
     load_test_env();
 
     let subscription_id = require_env!("AZURE_MANAGEMENT_SUBSCRIPTION_ID");
-    let tenant_id = require_env!("AZURE_MANAGEMENT_TENANT_ID");
-    let client_id = require_env!("AZURE_MANAGEMENT_CLIENT_ID");
-    let client_secret = require_env!("AZURE_MANAGEMENT_CLIENT_SECRET");
     let registry_name = require_env!("ALIEN_TEST_AZURE_REGISTRY_NAME");
     let resource_group = require_env!("ALIEN_TEST_AZURE_RESOURCE_GROUP");
 
@@ -741,9 +743,9 @@ async fn test_proxy_push_pull_acr() {
 
     let mut env_vars = HashMap::new();
     env_vars.insert("AZURE_SUBSCRIPTION_ID".into(), subscription_id);
-    env_vars.insert("AZURE_TENANT_ID".into(), tenant_id);
-    env_vars.insert("AZURE_CLIENT_ID".into(), client_id);
-    env_vars.insert("AZURE_CLIENT_SECRET".into(), client_secret);
+    env_vars.extend(alien_azure_clients::live_test::live_test_provider_env(
+        "MANAGEMENT",
+    ));
     env_vars.insert("ALIEN_DEPLOYMENT_TYPE".into(), "azure".into());
 
     // OIDC for CI
@@ -752,9 +754,6 @@ async fn test_proxy_push_pull_acr() {
     }
     if let Ok(v) = std::env::var("AZURE_MANAGEMENT_OIDC_SUBJECT") {
         env_vars.insert("AZURE_OIDC_SUBJECT".into(), v);
-    }
-    if let Ok(v) = std::env::var("AZURE_FEDERATED_TOKEN_FILE") {
-        env_vars.insert("AZURE_FEDERATED_TOKEN_FILE".into(), v);
     }
 
     let test = CloudProxyTest::start(
