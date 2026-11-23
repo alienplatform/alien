@@ -176,8 +176,10 @@ async fn run(args: Args) -> Result<(), String> {
 /// Entry point of the subcommand; returns the process exit code.
 pub fn main(args: impl IntoIterator<Item = std::ffi::OsString>) -> i32 {
     let args = Args::parse_from(
-        std::iter::once(std::ffi::OsString::from("operator verify-workload-patch-policy"))
-            .chain(args),
+        std::iter::once(std::ffi::OsString::from(
+            "operator verify-workload-patch-policy",
+        ))
+        .chain(args),
     );
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()

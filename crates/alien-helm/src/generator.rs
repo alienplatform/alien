@@ -3223,19 +3223,19 @@ fn restart_probe_docs(
         metadata("RoleBinding", "rbac.authorization.k8s.io/v1", -40, all),
         yaml_string(namespace)
     );
-    let pod_security = "runAsNonRoot: true\n        runAsUser: 1000\n        runAsGroup: 1000\n        seccompProfile:\n          type: RuntimeDefault\n";
-    let container_security = "allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true\n            capabilities:\n              drop: [\"ALL\"]\n";
+    let pod_settings = "runAsNonRoot: true\n        runAsUser: 1000\n        runAsGroup: 1000\n        seccompProfile:\n          type: RuntimeDefault\n";
+    let container_settings = "allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true\n            capabilities:\n              drop: [\"ALL\"]\n";
     let selector = format!(
         "selector:\n    matchLabels:\n      alien.dev/restart-probe: \"{probe_name}\"\n"
     );
     let deployment = format!(
-        "{}spec:\n  replicas: 0\n  {selector}  template:\n    metadata:\n      labels:\n        alien.dev/restart-probe: \"{probe_name}\"\n    spec:\n      automountServiceAccountToken: false\n      securityContext:\n        {pod_security}      containers:\n        - name: probe\n          image: {}\n          imagePullPolicy: IfNotPresent\n          securityContext:\n            {container_security}",
+        "{}spec:\n  replicas: 0\n  {selector}  template:\n    metadata:\n      labels:\n        alien.dev/restart-probe: \"{probe_name}\"\n    spec:\n      automountServiceAccountToken: false\n      securityContext:\n        {pod_settings}      containers:\n        - name: probe\n          image: {}\n          imagePullPolicy: IfNotPresent\n          securityContext:\n            {container_settings}",
         metadata("Deployment", "apps/v1", -30, all),
         yaml_string(image)
     );
     // The Job stays after a failure: its log says why.
     let job = format!(
-        "{}spec:\n  backoffLimit: 0\n  activeDeadlineSeconds: 180\n  ttlSecondsAfterFinished: 3600\n  template:\n    spec:\n      restartPolicy: Never\n      serviceAccountName: \"{probe_name}\"\n      securityContext:\n        {pod_security}      containers:\n        - name: verify\n          image: {}\n          imagePullPolicy: IfNotPresent\n          args:\n            - verify-workload-patch-policy\n            - {}\n            - \"--deployment={probe_name}\"\n            - \"--policy={policy_name}\"\n          securityContext:\n            {container_security}",
+        "{}spec:\n  backoffLimit: 0\n  activeDeadlineSeconds: 180\n  ttlSecondsAfterFinished: 3600\n  template:\n    spec:\n      restartPolicy: Never\n      serviceAccountName: \"{probe_name}\"\n      securityContext:\n        {pod_settings}      containers:\n        - name: verify\n          image: {}\n          imagePullPolicy: IfNotPresent\n          args:\n            - verify-workload-patch-policy\n            - {}\n            - \"--deployment={probe_name}\"\n            - \"--policy={policy_name}\"\n          securityContext:\n            {container_settings}",
         metadata("Job", "batch/v1", -20, "before-hook-creation,hook-succeeded"),
         yaml_string(image),
         yaml_string(&format!("--namespace={namespace}"))

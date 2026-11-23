@@ -4,7 +4,7 @@
 //! restarts a Deployment, StatefulSet or DaemonSet (`kubectl rollout restart`
 //! sets the `kubectl.kubernetes.io/restartedAt` annotation on the pod template)
 //! would otherwise let the Operator change the image, environment, service
-//! account, volumes or security settings of any workload it can patch. The
+//! account, volumes or privilege settings of any workload it can patch. The
 //! chart therefore ships a ValidatingAdmissionPolicy and binding together with
 //! the `patch` rule: for requests from the Operator's ServiceAccount, an UPDATE
 //! is admitted only when the object equals the stored one except for that
@@ -177,7 +177,7 @@ pub(crate) fn validations() -> Vec<(String, &'static str)> {
         ),
         (
             "object.spec.template.spec == oldObject.spec.template.spec".to_owned(),
-            "the pod spec (image, environment, service account, volumes, security settings) cannot be changed by a restart",
+            "the pod spec (image, environment, service account, volumes, privilege settings) cannot be changed by a restart",
         ),
         (
             same_except("newSpec", "oldSpec", &["template"]),
