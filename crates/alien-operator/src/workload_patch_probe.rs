@@ -13,10 +13,13 @@
 //!
 //! A cluster can have several API servers, and one that already enforces the
 //! policy says nothing about another that has not loaded it yet. The command
-//! counts the serving API servers from their identity Leases in `kube-system`
-//! (1 when they cannot be read, and it says so), sends every request on a
-//! fresh connection, and needs at least three times that many refusals in a
-//! row, spread over a stabilization window, before it passes. Requests go
+//! counts the serving API servers from the addresses of the `kubernetes`
+//! Service's EndpointSlice in `default` (each API server keeps its address
+//! there), sends every request on a fresh connection, and needs at least three
+//! times that many refusals in a row, spread over a stabilization window,
+//! before it passes. When the count cannot be read (forbidden, or not there)
+//! it does not assume one server: it uses a fixed conservative sample instead
+//! (at least 10 refusals over at least 10 seconds) and says so in its log. Requests go
 //! through the cluster's service address, which spreads new connections over
 //! the API servers, so this makes it very likely, not certain, that every one
 //! of them enforces the policy; the remaining limit is stated in the chart's
@@ -54,33 +57,43 @@ struct Args {
     stabilization_seconds: u64,
 }
 
-/// Label the API servers' identity Leases carry.
-const API_SERVER_LEASE_SELECTOR: &str = "apiserver.kubernetes.io/identity=kube-apiserver";
-/// A Lease not renewed for this long belongs to an API server that is gone.
-const API_SERVER_LEASE_MAX_AGE_SECONDS: i64 = 300;
 /// Refusals needed per API server.
 const REFUSALS_PER_API_SERVER: usize = 3;
+/// Sample used when the API servers cannot be counted.
+const FALLBACK_REFUSALS: usize = 10;
+const FALLBACK_STABILIZATION: Duration = Duration::from_secs(10);
 
-/// Count the API servers serving now from the identity Leases list. `None`
-/// when the body is not a Lease list.
-fn count_api_servers(body: &str, now: chrono::DateTime<chrono::Utc>) -> Option<usize> {
-    let list: Value = serde_json::from_str(body).ok()?;
-    let items = list["items"].as_array()?;
-    let serving = items
+/// Count the API servers serving now from the `kubernetes` EndpointSlice: one
+/// per address of an endpoint that is not marked not ready. `None` when the
+/// body is not an EndpointSlice or lists no address.
+fn count_api_servers(body: &str) -> Option<usize> {
+    let slice: Value = serde_json::from_str(body).ok()?;
+    let endpoints = slice["endpoints"].as_array()?;
+    let serving: usize = endpoints
         .iter()
-        .filter(|item| {
-            let renewed = item["spec"]["renewTime"]
-                .as_str()
-                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
-            // A Lease without a readable renew time counts: undercounting is
-            // the unsafe direction.
-            renewed.is_none_or(|time| {
-                (now - time.with_timezone(&chrono::Utc)).num_seconds()
-                    <= API_SERVER_LEASE_MAX_AGE_SECONDS
-            })
-        })
-        .count();
-    Some(serving)
+        .filter(|endpoint| endpoint["conditions"]["ready"] != json!(false))
+        .map(|endpoint| endpoint["addresses"].as_array().map_or(0, Vec::len))
+        .sum();
+    (serving > 0).then_some(serving)
+}
+
+/// How many refusals in a row, over how long, and what to log about it.
+fn sampling(count: Result<usize, String>, stabilization: Duration) -> (usize, Duration, String) {
+    match count {
+        Ok(count) => (
+            REFUSALS_PER_API_SERVER * count,
+            stabilization,
+            format!("{count} API server(s) serving"),
+        ),
+        Err(reason) => (
+            FALLBACK_REFUSALS,
+            stabilization.max(FALLBACK_STABILIZATION),
+            format!(
+                "cannot count the API servers ({reason}); using the fixed sample of {FALLBACK_REFUSALS} refusals over {} s",
+                stabilization.max(FALLBACK_STABILIZATION).as_secs()
+            ),
+        ),
+    }
 }
 
 /// An error with its causes, so a failed request says why.
@@ -167,14 +180,13 @@ impl Probe {
         Ok((status, text))
     }
 
-    /// The serving API servers, from their identity Leases in `kube-system`.
+    /// The serving API servers, from the `kubernetes` Service's EndpointSlice.
     async fn read_api_server_count(&self, base: &str) -> Result<usize, String> {
         let response = self
             .fresh_client()?
             .get(format!(
-                "{base}/apis/coordination.k8s.io/v1/namespaces/kube-system/leases"
+                "{base}/apis/discovery.k8s.io/v1/namespaces/default/endpointslices/kubernetes"
             ))
-            .query(&[("labelSelector", API_SERVER_LEASE_SELECTOR)])
             .bearer_auth(&self.token)
             .header("connection", "close")
             .send()
@@ -183,10 +195,9 @@ impl Probe {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(format!("the list was refused with {status}"));
+            return Err(format!("the read was refused with {status}"));
         }
-        count_api_servers(&text, chrono::Utc::now())
-            .ok_or_else(|| "the answer is not a Lease list".to_owned())
+        count_api_servers(&text).ok_or_else(|| "the answer lists no API server address".to_owned())
     }
 
     /// Patch a field no restart changes until the policy has refused it
@@ -292,19 +303,13 @@ async fn run(args: Args) -> Result<(), String> {
         required_refusals: REFUSALS_PER_API_SERVER,
         stabilization: Duration::from_secs(args.stabilization_seconds),
     };
-    let servers = match probe.read_api_server_count(&base).await {
-        Ok(count) => {
-            println!("verify-workload-patch-policy: {count} API server(s) serving");
-            count.max(1)
-        }
-        Err(reason) => {
-            println!(
-                "verify-workload-patch-policy: cannot count the API servers ({reason}); assuming 1"
-            );
-            1
-        }
-    };
-    probe.required_refusals = REFUSALS_PER_API_SERVER * servers;
+    let (required, stabilization, note) = sampling(
+        probe.read_api_server_count(&base).await,
+        probe.stabilization,
+    );
+    println!("verify-workload-patch-policy: {note}");
+    probe.required_refusals = required;
+    probe.stabilization = stabilization;
     probe
         .wait_until_refused(
             Duration::from_secs(args.deadline_seconds),
@@ -589,21 +594,74 @@ mod tests {
         assert!(error.contains("did not refuse"), "{error}");
     }
 
+    fn slice(endpoints: Value) -> String {
+        json!({"kind": "EndpointSlice", "endpoints": endpoints}).to_string()
+    }
+
     #[test]
-    fn counts_the_serving_api_servers_from_their_leases() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:10:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let list = json!({"items": [
-            {"spec": {"renewTime": "2026-01-01T00:09:58.000000Z"}},
-            {"spec": {"renewTime": "2026-01-01T00:09:50.000000Z"}},
-            // Renewed an hour ago: a server that is gone.
-            {"spec": {"renewTime": "2026-01-01T00:00:00.000000Z"}},
-            {"spec": {}},
-        ]});
-        assert_eq!(count_api_servers(&list.to_string(), now), Some(3));
-        assert_eq!(count_api_servers(r#"{"items": []}"#, now), Some(0));
-        assert_eq!(count_api_servers("not json", now), None);
-        assert_eq!(count_api_servers(r#"{"kind":"Status"}"#, now), None);
+    fn counts_the_serving_api_servers_from_the_endpoint_slice() {
+        let body = slice(json!([
+            {"addresses": ["10.0.0.1"], "conditions": {"ready": true}},
+            {"addresses": ["10.0.0.2"]},
+            {"addresses": ["10.0.0.3"], "conditions": {"ready": false}},
+        ]));
+        assert_eq!(count_api_servers(&body), Some(2));
+        assert_eq!(count_api_servers(&slice(json!([]))), None);
+        assert_eq!(count_api_servers("not json"), None);
+        assert_eq!(count_api_servers(r#"{"kind":"Status"}"#), None);
+    }
+
+    #[test]
+    fn a_known_count_scales_the_sample_and_an_unknown_one_uses_the_fixed_sample() {
+        let five = Duration::from_secs(5);
+        let (required, window, note) = sampling(Ok(2), five);
+        assert_eq!((required, window), (6, five));
+        assert!(note.contains("2 API server"), "{note}");
+        let (required, window, note) = sampling(Err("forbidden".into()), five);
+        assert_eq!((required, window), (10, Duration::from_secs(10)));
+        assert!(note.contains("fixed sample"), "{note}");
+        // A longer configured window is kept.
+        let (_, window, _) = sampling(Err("x".into()), Duration::from_secs(20));
+        assert_eq!(window, Duration::from_secs(20));
+    }
+
+    /// A fake API server that answers the EndpointSlice read with `status`.
+    async fn serve_slice(status: u16, body: String) -> String {
+        use axum::{http::StatusCode as S, routing::get, Router};
+        let app = Router::new().route(
+            "/apis/discovery.k8s.io/v1/namespaces/default/endpointslices/kubernetes",
+            get(move || {
+                let body = body.clone();
+                async move { (S::from_u16(status).unwrap(), body) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        base
+    }
+
+    #[tokio::test]
+    async fn reads_the_count_and_falls_back_when_the_read_is_forbidden() {
+        let base = serve_slice(
+            200,
+            slice(json!([
+                {"addresses": ["10.0.0.1"]},
+                {"addresses": ["10.0.0.2"]},
+            ])),
+        )
+        .await;
+        let probe = probe(base.clone(), 3, Duration::from_millis(30));
+        assert_eq!(probe.read_api_server_count(&base).await, Ok(2));
+
+        let forbidden = serve_slice(403, r#"{"kind":"Status","code":403}"#.into()).await;
+        let error = probe.read_api_server_count(&forbidden).await.unwrap_err();
+        assert!(error.contains("403"), "{error}");
+        let (required, window, note) = sampling(Err(error), Duration::from_secs(5));
+        assert_eq!((required, window), (10, Duration::from_secs(10)));
+        assert!(note.contains("fixed sample"), "{note}");
+
+        let missing = serve_slice(404, "{}".into()).await;
+        assert!(probe.read_api_server_count(&missing).await.is_err());
     }
 }

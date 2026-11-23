@@ -31,11 +31,13 @@
 //! enforce the policy fails the release before the Operator can patch anything.
 //! A cluster can have several API servers behind one address, and one that
 //! already refuses says nothing about another that has not loaded the policy.
-//! The command counts the serving API servers from their identity Leases in
-//! `kube-system` (the probe account may list Leases there and nothing else; 1
-//! when they cannot be read), sends every request on a new connection, and
-//! needs three times that many refusals in a row over at least 5 seconds,
-//! then admits restarts the same number of times.
+//! The command counts the serving API servers from the addresses of the
+//! `kubernetes` Service's EndpointSlice in `default` (the probe account may get
+//! that one object and nothing else), sends every request on a new connection,
+//! and needs three times that many refusals in a row over at least 5 seconds,
+//! then admits restarts the same number of times. When the count cannot be read
+//! (forbidden, or not there) it does not assume one server: it needs at least 10
+//! refusals over at least 10 seconds, and logs which path it used.
 //! The probe objects are removed when the release succeeds; after a failed
 //! release the Job (and its log) and the probe's own objects stay until the next
 //! successful release, and none of them can patch anything but the probe

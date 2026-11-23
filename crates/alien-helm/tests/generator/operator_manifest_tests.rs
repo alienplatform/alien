@@ -1024,7 +1024,7 @@ fn patchable_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
     let is_probe = |doc: &YamlValue| {
         doc["metadata"]["name"]
             .as_str()
-            .is_some_and(|name| name.ends_with("-probe"))
+            .is_some_and(|name| name.contains("-probe"))
     };
     for role in docs.iter().filter(|doc| is_role(doc) && !is_probe(doc)) {
         assert!(hook_events(role).is_empty(), "the patch rule is not a hook");
@@ -1329,34 +1329,49 @@ fn the_probe_runs_before_the_binding_and_names_what_the_policy_matches() {
                 })
                 .unwrap_or_else(|| panic!("no probe {kind}"))
         };
-        // The check counts the API servers from their identity Leases: the
-        // probe account may list Leases in kube-system, nothing else there.
-        let in_kube_system = |kind: &str| {
+        // The check counts the API servers from the `kubernetes` EndpointSlice
+        // in `default`: the probe account may get that one object, nothing else
+        // there, and the chart creates nothing in kube-system.
+        assert!(
+            !docs
+                .iter()
+                .any(|doc| doc["metadata"]["namespace"] == "kube-system"
+                    && doc["metadata"]["name"]
+                        .as_str()
+                        .is_some_and(|name| name.ends_with("-probe"))),
+            "the probe needs no grant in kube-system"
+        );
+        let in_default = |kind: &str| {
             docs.iter()
                 .find(|doc| {
                     doc["kind"] == kind
-                        && doc["metadata"]["namespace"] == "kube-system"
+                        && doc["metadata"]["namespace"] == "default"
                         && doc["metadata"]["name"]
                             .as_str()
-                            .is_some_and(|name| name.ends_with("-probe"))
+                            .is_some_and(|name| name.ends_with("-probe-count"))
                 })
-                .unwrap_or_else(|| panic!("no kube-system probe {kind}"))
+                .unwrap_or_else(|| panic!("no default-namespace probe {kind}"))
         };
         assert_eq!(
-            in_kube_system("Role")["rules"],
+            in_default("Role")["rules"],
             serde_yaml::to_value(vec![serde_yaml::to_value(serde_json::json!({
-                "apiGroups": ["coordination.k8s.io"],
-                "resources": ["leases"],
-                "verbs": ["list"],
+                "apiGroups": ["discovery.k8s.io"],
+                "resources": ["endpointslices"],
+                "resourceNames": ["kubernetes"],
+                "verbs": ["get"],
             }))
             .unwrap()])
             .unwrap()
         );
-        let lease_binding = in_kube_system("RoleBinding");
+        let lease_binding = in_default("RoleBinding");
         assert_eq!(lease_binding["subjects"][0]["namespace"], "ns1");
         assert_eq!(lease_binding["roleRef"]["kind"], "Role");
         assert_eq!(
-            in_kube_system("Role")["metadata"]["annotations"]["helm.sh/hook-weight"],
+            lease_binding["roleRef"]["name"],
+            in_default("Role")["metadata"]["name"]
+        );
+        assert_eq!(
+            in_default("Role")["metadata"]["annotations"]["helm.sh/hook-weight"],
             "-40"
         );
         let weight = |doc: &YamlValue| -> i32 {
@@ -1440,7 +1455,7 @@ fn the_probe_runs_before_the_binding_and_names_what_the_policy_matches() {
                     && !doc["metadata"]["name"]
                         .as_str()
                         .unwrap()
-                        .ends_with("-probe")
+                        .contains("-probe")
                     && hook_events(doc).iter().any(|e| e == "post-install")
             })
             .unwrap();

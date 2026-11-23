@@ -3225,15 +3225,29 @@ fn restart_probe_docs(
         metadata("RoleBinding", "rbac.authorization.k8s.io/v1", -40, all),
         yaml_string(namespace)
     );
-    // The check counts the API servers from their identity Leases, which live
-    // in `kube-system`: the probe account may list Leases there, nothing else.
-    let lease_role = format!(
-        "{}rules:\n  - apiGroups: ['coordination.k8s.io']\n    resources: ['leases']\n    verbs: ['list']\n",
-        metadata_in("Role", "rbac.authorization.k8s.io/v1", -40, all, "kube-system")
+    // The check counts the API servers from the addresses of the `kubernetes`
+    // Service's EndpointSlice in `default`: the probe account may read that one
+    // object, nothing else there. `default` always exists and is not a managed
+    // namespace; where even this is refused, the check cannot count and uses a
+    // fixed sample instead (the grant is a hook, so it is applied before the
+    // check; a refusal there fails the release like any hook).
+    // Named apart from the probe's own Role, which is in the release namespace
+    // (`default` can be that namespace).
+    let count_name = format!("{probe_name}-count");
+    let named = |yaml: String| {
+        yaml.replacen(
+            &format!("name: {probe_name}\n"),
+            &format!("name: {count_name}\n"),
+            1,
+        )
+    };
+    let count_role = format!(
+        "{}rules:\n  - apiGroups: ['discovery.k8s.io']\n    resources: ['endpointslices']\n    resourceNames: ['kubernetes']\n    verbs: ['get']\n",
+        named(metadata_in("Role", "rbac.authorization.k8s.io/v1", -40, all, "default"))
     );
-    let lease_binding = format!(
-        "{}subjects:\n  - kind: ServiceAccount\n    name: \"{probe_name}\"\n    namespace: {}\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name: \"{probe_name}\"\n",
-        metadata_in("RoleBinding", "rbac.authorization.k8s.io/v1", -40, all, "kube-system"),
+    let count_binding = format!(
+        "{}subjects:\n  - kind: ServiceAccount\n    name: \"{probe_name}\"\n    namespace: {}\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name: \"{count_name}\"\n",
+        named(metadata_in("RoleBinding", "rbac.authorization.k8s.io/v1", -40, all, "default")),
         yaml_string(namespace)
     );
     let pod_settings = "runAsNonRoot: true\n        runAsUser: 1000\n        runAsGroup: 1000\n        seccompProfile:\n          type: RuntimeDefault\n";
@@ -3256,8 +3270,8 @@ fn restart_probe_docs(
         account,
         role,
         binding,
-        lease_role,
-        lease_binding,
+        count_role,
+        count_binding,
         deployment,
         job,
     ]
