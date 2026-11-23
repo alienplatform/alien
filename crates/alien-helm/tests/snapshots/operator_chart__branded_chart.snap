@@ -347,7 +347,6 @@ rules:
   - secrets
   verbs:
   - get
-  - patch
   - update
   resourceNames:
   - acme-identity

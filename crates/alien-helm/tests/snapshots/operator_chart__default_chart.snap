@@ -214,7 +214,6 @@ rules:
   - secrets
   verbs:
   - get
-  - patch
   - update
   resourceNames:
   - alien-identity

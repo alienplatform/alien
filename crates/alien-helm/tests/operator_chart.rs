@@ -276,7 +276,7 @@ fn the_only_secret_access_is_the_identity_secret_in_the_release_namespace() {
         vec![(
             "".to_string(),
             "secrets".to_string(),
-            vec!["get".into(), "patch".into(), "update".into()],
+            vec!["get".into(), "update".into()],
             vec!["alien-identity".to_string()],
         )]
     );
@@ -1246,7 +1246,7 @@ fn a_plain_install_lists_the_default_plugin_with_reads_auto_and_changes_manual()
     let directory = tempfile::tempdir().unwrap();
     opt_in_chart(directory.path());
     let values = std::fs::read_to_string(directory.path().join("values.yaml")).unwrap();
-    assert!(values.contains("operations:\n  plugins:\n    kubernetes:\n      approval:\n"));
+    assert!(values.contains("operations:\n  plugins:\n    'kubernetes':\n      approval:\n"));
 }
 
 #[test]

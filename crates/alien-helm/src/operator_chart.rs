@@ -799,7 +799,7 @@ rules:
   # Required by the Operator's saved identity and local key.
   - apiGroups: ['']
     resources: ['secrets']
-    verbs: ['get', 'patch', 'update']
+    verbs: ['get', 'update']
     resourceNames: [{{ include "operator.identitySecret" . | quote }}]
 "#;
 
@@ -1119,9 +1119,16 @@ or `--set token=<enrollment token>`.
 - `helm upgrade` needs no token. A new `--set token=...` on upgrade restarts the pod, which uses
   it. With `existingSecret`, replacing the token in that Secret does not restart the pod: run
   `kubectl rollout restart deploy/<release>` afterwards.
-- An enrolled Operator keeps the manager address it enrolled with. If the control plane later moves
-  to a new hostname, a token for the new address is ignored until the old hostname is retired;
-  install again with a newly issued token then.
+- An enrolled Operator keeps the manager address it enrolled with. If the token names another
+  address, or the address saved in the Secret is changed, the Operator stops with a message instead
+  of using it. To move to a new address, uninstall (which deletes the identity Secret) and install
+  again with a newly issued token.
+- The identity Secret holds the Operator's keys and its local database key as plain JSON, so
+  whoever can read that Secret can act as the Operator. The chart's Role lets the Operator `get`
+  and `update` only that one Secret, in the release namespace. Keep read access to the namespace's
+  Secrets as narrow as the environment itself.
+- An install that keeps its identity in the data volume (an older chart) does not move into the
+  Secret. Switching it to this chart means enrolling again with a new token.
 - `helm uninstall` deletes the identity Secret. Installing again, or restoring the identity
   Secret from an old backup, needs a new token.
 
