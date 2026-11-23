@@ -104,6 +104,14 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_IDENTITY_SECRET")]
     pub identity_secret: Option<String>,
 
+    /// Name or ARN of an AWS Secrets Manager secret that holds the enrolled
+    /// identity and the local database key, for installs on Amazon ECS. Like
+    /// `OPERATOR_IDENTITY_SECRET`, it makes the data directory a cache; set
+    /// `OPERATOR_DATA_PERSISTENT=false`. The task role needs get, put,
+    /// describe and version-stage updates on this one secret.
+    #[arg(long, env = "OPERATOR_IDENTITY_AWS_SECRET")]
+    pub identity_aws_secret: Option<String>,
+
     /// Exact manager audience supplied by installation configuration.
     #[arg(long, env = "ALIEN_MANAGER_AUDIENCE")]
     pub manager_audience: Option<String>,
@@ -583,7 +591,18 @@ async fn run_operator_cli(
     .await?;
     refuse_owned_secret_with_identity_store(
         args.owned_secret.as_deref(),
-        args.identity_secret.as_deref(),
+        has_identity_store(
+            args.identity_secret.as_deref(),
+            args.identity_aws_secret.as_deref(),
+        ),
+    )?;
+    refuse_encryption_key_with_identity_store(
+        args.encryption_key_file.as_deref(),
+        env_string("OPERATOR_ENCRYPTION_KEY").is_some(),
+        has_identity_store(
+            args.identity_secret.as_deref(),
+            args.identity_aws_secret.as_deref(),
+        ),
     )?;
     let owned_values = load_owned_secret(
         args.owned_secret.as_deref(),
@@ -602,6 +621,7 @@ async fn run_operator_cli(
             open_operator_db(
                 &data_dir,
                 args.identity_secret.as_deref(),
+                args.identity_aws_secret.as_deref(),
                 args.namespace.clone(),
                 args.encryption_key_file.as_deref(),
                 args.data_persistent,
@@ -614,7 +634,7 @@ async fn run_operator_cli(
     db.set_telemetry_queue_cap(args.otlp_max_queued_bytes);
     // The manager an Operator talks to is fixed by its installation. A Secret that
     // names another one, or one that is not HTTPS, is refused before anything is sent.
-    if args.identity_secret.is_some() {
+    if args.identity_secret.is_some() || args.identity_aws_secret.is_some() {
         let configured = join_token
             .as_ref()
             .map(|token| token.manager_url.as_str())
@@ -709,6 +729,9 @@ async fn run_operator_cli(
         .await?;
     }
     let stored_identity = db.read_daily_identity().await?;
+    let enrolled_at_start = stored_identity
+        .as_ref()
+        .is_some_and(|identity| !identity.deployment_id.is_empty());
     if (args.enrollment_token_file.is_some() || args.enrollment_token.is_some())
         && join_token.is_none()
         && !stored_identity
@@ -787,7 +810,10 @@ async fn run_operator_cli(
         // observe-only environment starts as running, as it does when it
         // registers itself.
         if starts_observe_only(
-            args.identity_secret.is_some(),
+            has_identity_store(
+                args.identity_secret.as_deref(),
+                args.identity_aws_secret.as_deref(),
+            ),
             join_token.is_some(),
             args.initial_desired_release,
         ) && db.get_deployment_state().await?.is_none()
@@ -1114,6 +1140,10 @@ async fn run_operator_cli(
         pod_log_collection: crate::pod_logs::config_from_env()?,
         host_logs,
         host_inventory: crate::host_logs::inventory_config(host_logs, enrolled_by_token),
+        ecs: crate::ecs::config_from_env()?.map(|mut ecs| {
+            ecs.enrolled_at_start = enrolled_at_start;
+            ecs
+        }),
     };
     run_operator_with_cancel_and_loops_and_runtime(
         operator_config,
@@ -1942,11 +1972,27 @@ fn is_secret_file_mode_allowed(mode: u32) -> bool {
 /// kept outside the cache. Refuse the combination instead.
 fn refuse_owned_secret_with_identity_store(
     owned_secret: Option<&str>,
-    identity_secret: Option<&str>,
+    has_identity_store: bool,
 ) -> Result<()> {
-    if owned_secret.is_some() && identity_secret.is_some() {
+    if owned_secret.is_some() && has_identity_store {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "OPERATOR_OWNED_SECRET and OPERATOR_IDENTITY_SECRET are both set. Set only one: the chart for an install uses either the owned Secret or the identity Secret, not both.".to_string(),
+            message: "OPERATOR_OWNED_SECRET and an identity store (OPERATOR_IDENTITY_SECRET or OPERATOR_IDENTITY_AWS_SECRET) are both set. Set only one: an install uses either the owned Secret or an identity store, not both.".to_string(),
+        }));
+    }
+    Ok(())
+}
+
+/// With an identity store the database key lives in the store, so a key given
+/// by file or variable would be ignored without a word. Refuse the combination
+/// instead, like the owned Secret.
+fn refuse_encryption_key_with_identity_store(
+    encryption_key_file: Option<&std::path::Path>,
+    has_encryption_key_env: bool,
+    has_identity_store: bool,
+) -> Result<()> {
+    if has_identity_store && (encryption_key_file.is_some() || has_encryption_key_env) {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "An encryption key (OPERATOR_ENCRYPTION_KEY_FILE or OPERATOR_ENCRYPTION_KEY) and an identity store (OPERATOR_IDENTITY_SECRET or OPERATOR_IDENTITY_AWS_SECRET) are both set. Set only one: with an identity store the database key is kept in the store and the given key would be ignored.".to_string(),
         }));
     }
     Ok(())
@@ -1997,63 +2043,91 @@ async fn load_owned_secret(
 async fn open_operator_db(
     data_dir: &str,
     identity_secret: Option<&str>,
+    identity_aws_secret: Option<&str>,
     namespace: Option<String>,
     encryption_key_file: Option<&std::path::Path>,
     data_persistent: Option<bool>,
     has_join_token: bool,
 ) -> Result<(crate::db::OperatorDb, String)> {
-    let Some(secret_name) = identity_secret else {
-        let key = match local_key_file_to_generate(data_dir, encryption_key_file, has_join_token) {
-            Some(path) => load_or_create_local_key(&path).await?,
-            None => load_encryption_key(encryption_key_file).await?,
-        };
-        return Ok((crate::db::OperatorDb::new(data_dir, &key).await?, key));
-    };
-    let namespace = match namespace {
-        Some(namespace) => namespace,
-        None => tokio::fs::read_to_string(IN_CLUSTER_NAMESPACE_FILE)
-            .await
-            .map(|namespace| namespace.trim().to_string())
-            .ok()
-            .filter(|namespace| !namespace.is_empty())
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ConfigurationError {
-                    message: "OPERATOR_IDENTITY_SECRET needs the operator's namespace".into(),
-                })
-            })?,
-    };
-    // Tests point the startup at a fake API server; nothing else sets this.
-    #[cfg(test)]
-    let test_server = TEST_KUBE_SERVER.try_with(|url| url.clone()).ok();
-    #[cfg(not(test))]
-    let test_server: Option<String> = None;
-    let backend = match test_server {
-        #[cfg(test)]
-        Some(url) => crate::identity_store::KubernetesSecret::with_client(
-            alien_k8s_clients::KubernetesClient::new(alien_core::KubernetesClientConfig::Manual {
-                server_url: url,
-                certificate_authority_data: None,
-                insecure_skip_tls_verify: None,
-                client_certificate_data: None,
-                client_key_data: None,
-                token: None,
-                username: None,
-                password: None,
-                namespace: Some(namespace.clone()),
-                additional_headers: Default::default(),
-            })
-            .await
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Cannot create the test Kubernetes client".into(),
-            })?,
-            &namespace,
-            secret_name,
+    if identity_secret.is_some() && identity_aws_secret.is_some() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Set only one of OPERATOR_IDENTITY_SECRET and OPERATOR_IDENTITY_AWS_SECRET"
+                .into(),
+        }));
+    }
+    let (backend, secret_name): (
+        std::sync::Arc<dyn crate::identity_store::SecretBackend>,
+        &str,
+    ) = match (identity_secret, identity_aws_secret) {
+        (Some(secret_name), _) => {
+            let namespace = match namespace {
+                Some(namespace) => namespace,
+                None => tokio::fs::read_to_string(IN_CLUSTER_NAMESPACE_FILE)
+                    .await
+                    .map(|namespace| namespace.trim().to_string())
+                    .ok()
+                    .filter(|namespace| !namespace.is_empty())
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::ConfigurationError {
+                            message: "OPERATOR_IDENTITY_SECRET needs the operator's namespace"
+                                .into(),
+                        })
+                    })?,
+            };
+            // Tests point the startup at a fake API server; nothing else sets this.
+            #[cfg(test)]
+            let test_server = TEST_KUBE_SERVER.try_with(|url| url.clone()).ok();
+            #[cfg(not(test))]
+            let test_server: Option<String> = None;
+            let backend = match test_server {
+                #[cfg(test)]
+                Some(url) => crate::identity_store::KubernetesSecret::with_client(
+                    alien_k8s_clients::KubernetesClient::new(
+                        alien_core::KubernetesClientConfig::Manual {
+                            server_url: url,
+                            certificate_authority_data: None,
+                            insecure_skip_tls_verify: None,
+                            client_certificate_data: None,
+                            client_key_data: None,
+                            token: None,
+                            username: None,
+                            password: None,
+                            namespace: Some(namespace.clone()),
+                            additional_headers: Default::default(),
+                        },
+                    )
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::ConfigurationError {
+                        message: "Cannot create the test Kubernetes client".into(),
+                    })?,
+                    &namespace,
+                    secret_name,
+                ),
+                _ => {
+                    crate::identity_store::KubernetesSecret::in_cluster(&namespace, secret_name)
+                        .await?
+                }
+            };
+            (std::sync::Arc::new(backend), secret_name)
+        }
+        (None, Some(secret_id)) => (
+            std::sync::Arc::new(
+                crate::identity_store_aws::AwsSecret::from_environment(secret_id).await?,
+            ),
+            secret_id,
         ),
-        _ => crate::identity_store::KubernetesSecret::in_cluster(&namespace, secret_name).await?,
+        (None, None) => {
+            let key =
+                match local_key_file_to_generate(data_dir, encryption_key_file, has_join_token) {
+                    Some(path) => load_or_create_local_key(&path).await?,
+                    None => load_encryption_key(encryption_key_file).await?,
+                };
+            return Ok((crate::db::OperatorDb::new(data_dir, &key).await?, key));
+        }
     };
     let store = std::sync::Arc::new(crate::identity_store::SecretIdentityStore::new(
-        std::sync::Arc::new(backend),
+        backend,
         secret_name,
     ));
     let key = identity_secret_key(&store).await?;
@@ -2094,8 +2168,8 @@ async fn open_cache(
 ) -> Result<crate::db::OperatorDb> {
     match crate::db::OperatorDb::new(data_dir, key).await {
         Ok(db) => Ok(db),
-        Err(error) if data_persistent == Some(false) => {
-            warn!(error = %error, "Cannot open the local cache; starting with an empty one");
+        Err(error) if data_persistent == Some(false) && crate::db::OperatorDb::is_key_mismatch(&error) => {
+            warn!(error = %error, "The local cache was written with another key; starting with an empty one");
             let mut entries = tokio::fs::read_dir(data_dir).await.ok();
             while let Some(entry) = match entries.as_mut() {
                 Some(entries) => entries.next_entry().await.ok().flatten(),
@@ -2199,9 +2273,40 @@ const LOCAL_KEY_FILE_NAME: &str = "operator.key";
 
 /// Read the local key, or create it (64 hex characters, mode 0600, never
 /// replacing an existing file) on the first start.
+///
+/// The key is written to a temporary file, flushed to disk and then linked into
+/// place, so `operator.key` is either absent or complete: a crash cannot leave
+/// an empty file that blocks the next start. A file that is empty anyway (left
+/// by an earlier version that wrote in place) is treated as absent only when no
+/// database exists beside it: the database is created after the key is read,
+/// so with none, no data was ever encrypted with a key from this file. With a
+/// database present the file is the only copy of its key, so the start fails
+/// and names the file.
 async fn load_or_create_local_key(path: &std::path::Path) -> Result<String> {
     if tokio::fs::try_exists(path).await.unwrap_or(false) {
-        return read_secret_file(path, "local encryption key").await;
+        let empty = tokio::fs::read_to_string(path)
+            .await
+            .map(|contents| contents.trim().is_empty())
+            .unwrap_or(false);
+        if !empty {
+            return read_secret_file(path, "local encryption key").await;
+        }
+        let has_database = path.parent().is_some_and(crate::owned_secret::has_state);
+        if has_database {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "The local encryption key file '{}' is empty but the database beside it exists, so its key is lost. Restore the file from a backup, or remove the data directory to start over (the Operator then enrolls again).",
+                    path.display()
+                ),
+            }));
+        }
+        warn!(path = %path.display(), "The local encryption key file is empty and no database exists beside it; creating a new key");
+        tokio::fs::remove_file(path)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Cannot replace the empty key file '{}'", path.display()),
+            })?;
     }
     let mut random = [0u8; 32];
     getrandom::fill(&mut random).map_err(|_| {
@@ -2218,31 +2323,43 @@ async fn load_or_create_local_key(path: &std::path::Path) -> Result<String> {
                 message: format!("Cannot create '{}'", parent.display()),
             })?;
     }
-    use tokio::io::AsyncWriteExt;
-    let created = {
+    let write_error = |error: std::io::Error| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Cannot write '{}': {error}", path.display()),
+        })
+    };
+    let mut temporary_name = path.as_os_str().to_owned();
+    temporary_name.push(format!(".tmp-{}", std::process::id()));
+    let temporary = PathBuf::from(temporary_name);
+    // A temporary left by this process id's earlier crash is removed first.
+    let _ = tokio::fs::remove_file(&temporary).await;
+    {
+        use tokio::io::AsyncWriteExt;
         let mut options = tokio::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
         options.mode(0o600);
-        options.open(path).await
-    };
-    match created {
-        Ok(mut file) => {
-            file.write_all(key.as_bytes())
-                .await
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: format!("Cannot write '{}'", path.display()),
-                })?;
+        let mut file = options.open(&temporary).await.map_err(write_error)?;
+        file.write_all(key.as_bytes()).await.map_err(write_error)?;
+        file.sync_all().await.map_err(write_error)?;
+    }
+    // A hard link never replaces: another start that created the key first wins.
+    let linked = tokio::fs::hard_link(&temporary, path).await;
+    let _ = tokio::fs::remove_file(&temporary).await;
+    match linked {
+        Ok(()) => {
+            // Flush the directory entry, so the file is there after a crash.
+            if let Some(parent) = path.parent() {
+                if let Ok(directory) = tokio::fs::File::open(parent).await {
+                    let _ = directory.sync_all().await;
+                }
+            }
             Ok(key)
         }
-        // Another start created it first.
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             read_secret_file(path, "local encryption key").await
         }
-        Err(error) => Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!("Cannot create '{}': {error}", path.display()),
-        })),
+        Err(error) => Err(write_error(error)),
     }
 }
 
@@ -2359,6 +2476,12 @@ fn parse_operator_image_report(args: &OperatorImageArgs) -> Result<Option<Operat
         .map(|()| Some(report))
 }
 
+/// Whether the identity lives in a store outside the database (a Kubernetes Secret or an
+/// AWS Secrets Manager secret).
+fn has_identity_store(secret: Option<&str>, aws_secret: Option<&str>) -> bool {
+    secret.is_some() || aws_secret.is_some()
+}
+
 /// Whether a start with no deployment state writes the observe-only one: with the
 /// Secret identity store when no release is wanted (as before), and for every install
 /// enrolled by a join token, which has no Secret on a machine or a Docker host. The initial
@@ -2425,10 +2548,61 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 mod tests {
     #[test]
     fn an_owned_secret_with_an_identity_store_is_refused_not_silently_ignored() {
-        assert!(super::refuse_owned_secret_with_identity_store(Some("owned"), Some("id")).is_err());
-        assert!(super::refuse_owned_secret_with_identity_store(Some("owned"), None).is_ok());
-        assert!(super::refuse_owned_secret_with_identity_store(None, Some("id")).is_ok());
-        assert!(super::refuse_owned_secret_with_identity_store(None, None).is_ok());
+        let refuse = super::refuse_owned_secret_with_identity_store;
+        // The Kubernetes Secret and the AWS secret both count as an identity store.
+        assert!(refuse(Some("owned"), super::has_identity_store(Some("id"), None)).is_err());
+        assert!(refuse(Some("owned"), super::has_identity_store(None, Some("arn"))).is_err());
+        assert!(refuse(Some("owned"), false).is_ok());
+        assert!(refuse(None, true).is_ok());
+        assert!(refuse(None, false).is_ok());
+    }
+
+    #[test]
+    fn an_encryption_key_with_an_identity_store_is_refused_not_silently_ignored() {
+        let refuse = super::refuse_encryption_key_with_identity_store;
+        let file = std::path::Path::new("/keys/operator.key");
+        assert!(refuse(Some(file), false, true).is_err());
+        assert!(refuse(None, true, true).is_err());
+        assert!(refuse(Some(file), true, false).is_ok());
+        assert!(refuse(None, false, true).is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_local_key_is_created_whole_and_an_empty_file_is_handled_by_what_it_protects() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("operator.key");
+        let key = super::load_or_create_local_key(&path).await.unwrap();
+        assert_eq!(key.len(), 64);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), key);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // No temporary is left beside it, and a second start reads the same key.
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+        assert_eq!(super::load_or_create_local_key(&path).await.unwrap(), key);
+
+        // An empty file with no database beside it protects nothing: replaced.
+        let empty_dir = tempfile::tempdir().unwrap();
+        let empty = empty_dir.path().join("operator.key");
+        std::fs::write(&empty, "").unwrap();
+        std::fs::set_permissions(&empty, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let replaced = super::load_or_create_local_key(&empty).await.unwrap();
+        assert_eq!(replaced.len(), 64);
+
+        // With a database beside it the key is lost: fail, naming the file.
+        let lost_dir = tempfile::tempdir().unwrap();
+        let lost = lost_dir.path().join("operator.key");
+        std::fs::write(&lost, "").unwrap();
+        std::fs::set_permissions(&lost, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(lost_dir.path().join("operator.db"), "x").unwrap();
+        let error = super::load_or_create_local_key(&lost).await.unwrap_err();
+        assert!(error.to_string().contains("operator.key"), "{error}");
+        assert_eq!(std::fs::read_to_string(&lost).unwrap(), "");
     }
 
     use super::{
@@ -2561,6 +2735,35 @@ mod tests {
             .expect("a cache directory is emptied and opened again");
     }
 
+    #[tokio::test]
+    async fn a_cache_is_emptied_only_for_a_key_that_does_not_match_not_for_other_open_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_str().unwrap();
+        crate::db::OperatorDb::new(path, &"a".repeat(64))
+            .await
+            .unwrap();
+        let count = || {
+            std::fs::read_dir(directory.path())
+                .unwrap()
+                .filter(|entry| {
+                    entry
+                        .as_ref()
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("operator.db")
+                })
+                .count()
+        };
+        let before = count();
+        // Not a key mismatch (the key is not even a valid key): the files stay.
+        super::open_cache(path, "not-a-key", Some(false))
+            .await
+            .err()
+            .expect("an unusable key is an error");
+        assert_eq!(count(), before);
+    }
+
     /// Counts the enrollment-code requests an Operator makes with its token.
     async fn manager_counting_code_requests(
     ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
@@ -2656,6 +2859,16 @@ mod tests {
     fn the_observe_only_start_state_is_kept_for_the_secret_store_and_added_for_join_tokens() {
         use super::InitialDesiredReleaseArg::{Active, None as NoRelease};
         // A Kubernetes install with the identity Secret that wants no release, as before.
+        // Both store kinds count as a store: an ECS task (AWS secret) with no release wanted
+        // and no token starts observe-only, like the Kubernetes Secret.
+        assert!(super::has_identity_store(Some("a"), None));
+        assert!(super::has_identity_store(None, Some("arn")));
+        assert!(!super::has_identity_store(None, None));
+        assert!(super::starts_observe_only(
+            super::has_identity_store(None, Some("arn")),
+            false,
+            NoRelease
+        ));
         assert!(super::starts_observe_only(true, false, NoRelease));
         assert!(super::starts_observe_only(true, true, NoRelease));
         // A Secret install that asks for the active release registers and runs it itself.

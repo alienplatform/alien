@@ -1886,6 +1886,7 @@ mod persistence_tests {
                 pod_log_collection: None,
                 host_logs: None,
                 host_inventory: None,
+                ecs: None,
             },
             Some(db),
         ));
@@ -1929,6 +1930,9 @@ mod persistence_tests {
         struct ReadOnly(Secret);
         #[async_trait::async_trait]
         impl SecretBackend for ReadOnly {
+            fn restore_hint(&self, name: &str) -> String {
+                format!("Restore the Secret '{name}'.")
+            }
             async fn get(&self) -> Result<Option<Secret>> {
                 Ok(Some(self.0.clone()))
             }
