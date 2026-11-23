@@ -167,6 +167,10 @@ struct Inner {
     key: Option<String>,
     /// When `secret` was last read or written.
     fetched_at: Option<std::time::Instant>,
+    /// The UID of the Secret the identity in `memory` was read from or written
+    /// to. A Secret with another UID was deleted and created again, which is how
+    /// someone empties it on purpose to enrol again: nothing is written back.
+    uid: Option<String>,
 }
 
 /// How long a caller that only looks at the identity may be served a copy.
@@ -238,7 +242,7 @@ impl SecretIdentityStore {
         format!(
             "{what}. The operator keeps running on its current key and will not rotate it. \
              Restore the Secret '{}' (an empty Secret of that name in the release namespace; `helm upgrade` recreates it) \
-             and allow the operator `get`, `update` and `patch` on it.",
+             and allow the operator `get` and `update` on it.",
             self.name
         )
     }
@@ -281,7 +285,13 @@ impl SecretIdentityStore {
                 inner.secret = Some(secret.clone());
                 inner.fetched_at = Some(std::time::Instant::now());
                 let saved = parse_identity(&secret).ok().flatten();
-                if saved.is_none() {
+                if saved.is_none() && inner.uid != secret.metadata.uid {
+                    // A new Secret under the same name: start over. What this
+                    // operator holds in memory belonged to the one that was
+                    // deleted, and must not reappear in the new one.
+                    inner.memory = None;
+                    inner.key = None;
+                } else if saved.is_none() {
                     match self.restore(inner, &secret).await {
                         Restore::Done(restored) => secret = restored,
                         Restore::NothingToRestore => {}
@@ -299,6 +309,7 @@ impl SecretIdentityStore {
                         }
                     }
                 }
+                inner.uid = secret.metadata.uid.clone();
                 inner.memory = parse_identity(&secret)
                     .ok()
                     .flatten()
@@ -402,6 +413,7 @@ impl SecretIdentityStore {
         match self.backend.put(&secret).await {
             Ok(PutOutcome::Stored(stored)) => {
                 self.write_worked();
+                inner.uid = stored.metadata.uid.clone();
                 inner.secret = Some(stored);
                 inner.fetched_at = Some(std::time::Instant::now());
                 Ok(())
@@ -727,6 +739,7 @@ mod tests {
                 secret: std::sync::Mutex::new(Some(Secret {
                     metadata: ObjectMeta {
                         name: Some("identity".into()),
+                        uid: Some("uid-1".into()),
                         resource_version: Some("1".into()),
                         labels: Some([("app".to_string(), "operator".to_string())].into()),
                         ..Default::default()
@@ -739,17 +752,27 @@ mod tests {
                 gets: AtomicU32::new(0),
             })
         }
-        /// What `helm upgrade --force`, `kubectl replace` and GitOps replace do.
+        /// What `helm upgrade --force`, `kubectl replace` and GitOps replace do:
+        /// the same name, a new object, so a new UID.
         fn recreate_empty(&self) {
             let version = self.version.fetch_add(1, Ordering::Relaxed) + 1;
             *self.secret.lock().unwrap() = Some(Secret {
                 metadata: ObjectMeta {
                     name: Some("identity".into()),
+                    uid: Some(format!("uid-{version}")),
                     resource_version: Some(version.to_string()),
                     ..Default::default()
                 },
                 ..Default::default()
             });
+        }
+        /// The data removed from the same object (`kubectl edit`, a patch): same UID.
+        fn empty_in_place(&self) {
+            let version = self.version.fetch_add(1, Ordering::Relaxed) + 1;
+            let mut current = self.secret.lock().unwrap();
+            let secret = current.as_mut().unwrap();
+            secret.data = None;
+            secret.metadata.resource_version = Some(version.to_string());
         }
         fn delete(&self) {
             *self.secret.lock().unwrap() = None;
@@ -1009,7 +1032,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_running_operator_restores_its_identity_into_a_recreated_secret() {
+    async fn a_running_operator_restores_its_identity_into_a_secret_emptied_in_place() {
         let fake = Fake::with_empty_secret();
         let store = store(&fake);
         let key = store.encryption_key().await.unwrap();
@@ -1017,11 +1040,8 @@ mod tests {
             .persist_enrolled(&state("dep_1", "key-a"))
             .await
             .unwrap();
-        fake.delete();
-        assert_eq!(store.read().await.unwrap().unwrap().current, "key-a");
-        assert!(store.rotation_blocked().is_some());
-        // The fix the error message names, or a forced upgrade, recreates it empty.
-        fake.recreate_empty();
+        // An edit that drops the data from the same object (same UID).
+        fake.empty_in_place();
         assert_eq!(store.read().await.unwrap().unwrap().current, "key-a");
         assert!(store.rotation_blocked().is_none());
         // The Secret holds the identity and the local key again, so a restart finds both.
@@ -1029,6 +1049,43 @@ mod tests {
         assert_eq!(restarted.read().await.unwrap().unwrap().current, "key-a");
         assert_eq!(restarted.encryption_key().await.unwrap(), key);
         store.write(&state("dep_1", "key-b")).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_secret_deleted_and_created_again_is_not_filled_from_memory() {
+        let fake = Fake::with_empty_secret();
+        let store = store(&fake);
+        store.encryption_key().await.unwrap();
+        store
+            .persist_enrolled(&state("dep_1", "key-a"))
+            .await
+            .unwrap();
+        // Someone empties it on purpose to enrol again: a new object, a new UID.
+        fake.delete();
+        fake.recreate_empty();
+        assert!(store.read().await.unwrap().is_none());
+        assert!(
+            fake.stored().data.is_none(),
+            "the running operator wrote its identity into a Secret that was emptied on purpose"
+        );
+        // Later reads, and a write that is not an enrolled identity, do not bring it back.
+        assert!(store.read().await.unwrap().is_none());
+        assert!(fake.stored().data.is_none());
+        let restarted = self::store(&fake);
+        assert!(restarted.read().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_secret_replaced_in_one_step_is_not_filled_from_memory() {
+        let fake = Fake::with_empty_secret();
+        let store = store(&fake);
+        store
+            .persist_enrolled(&state("dep_1", "key-a"))
+            .await
+            .unwrap();
+        fake.recreate_empty();
+        assert!(store.read().await.unwrap().is_none());
+        assert!(fake.stored().data.is_none());
     }
 
     fn secret_with(identity: &[u8]) -> Secret {
@@ -1051,7 +1108,7 @@ mod tests {
             .persist_enrolled(&state("dep_1", "key-a"))
             .await
             .unwrap();
-        fake.recreate_empty();
+        fake.empty_in_place();
         fake.refuse_writes.store(true, Ordering::Relaxed);
         assert_eq!(store.read().await.unwrap().unwrap().current, "key-a");
         assert_eq!(store.read().await.unwrap().unwrap().current, "key-a");
@@ -1065,7 +1122,7 @@ mod tests {
             .persist_enrolled(&state("dep_1", "key-a"))
             .await
             .unwrap();
-        fake.recreate_empty();
+        fake.empty_in_place();
         fake.refuse_writes.store(true, Ordering::Relaxed);
         for _ in 0..3 {
             // The identity is still served from memory, but the key is not saved

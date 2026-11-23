@@ -10,10 +10,22 @@ use crate::error::{ErrorData, Result};
 const PREFIX: &str = "ax_join_v1_";
 
 /// What the token carries, fed to the existing enrollment request.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub(crate) struct EnrollmentToken {
     pub manager_url: String,
     pub code: String,
+}
+
+// No `Debug` in a build that ships: the code is a credential. Tests need one to unwrap errors;
+// theirs hides it.
+#[cfg(test)]
+impl std::fmt::Debug for EnrollmentToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnrollmentToken")
+            .field("manager_url", &self.manager_url)
+            .field("code", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -27,6 +39,27 @@ fn invalid(message: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::ConfigurationError {
         message: format!("Invalid enrollment token: {message}"),
     })
+}
+
+/// Why a manager URL cannot be used, if it cannot: it must be an HTTPS address
+/// (or a loopback address for local development) with no user name, password,
+/// query or fragment.
+pub(crate) fn manager_url_problem(manager_url: &str) -> Option<&'static str> {
+    let Ok(url) = reqwest::Url::parse(manager_url) else {
+        return Some("the manager URL is not valid");
+    };
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Some("the manager URL must not contain a user name, password, query or fragment");
+    }
+    let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    if !(url.scheme() == "https" || (url.scheme() == "http" && loopback)) {
+        return Some("the manager URL must use HTTPS");
+    }
+    None
 }
 
 impl EnrollmentToken {
@@ -46,20 +79,8 @@ impl EnrollmentToken {
         }
         // The code is sent to this URL, so it must be HTTPS (or a loopback
         // address for local development), as for any other enrollment.
-        let url =
-            reqwest::Url::parse(&payload.u).map_err(|_| invalid("the manager URL is not valid"))?;
-        if !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(invalid(
-                "the manager URL must not contain a user name, password, query or fragment",
-            ));
-        }
-        let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
-        if !(url.scheme() == "https" || (url.scheme() == "http" && loopback)) {
-            return Err(invalid("the manager URL must use HTTPS"));
+        if let Some(problem) = manager_url_problem(&payload.u) {
+            return Err(invalid(problem));
         }
         Ok(Self {
             manager_url: payload.u,

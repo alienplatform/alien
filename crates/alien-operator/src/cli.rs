@@ -604,6 +604,20 @@ async fn run_operator_cli(
     };
     let db = std::sync::Arc::new(db);
     db.set_telemetry_queue_cap(args.otlp_max_queued_bytes);
+    // The manager an Operator talks to is fixed by its installation. A Secret that
+    // names another one, or one that is not HTTPS, is refused before anything is sent.
+    if args.identity_secret.is_some() {
+        let configured = join_token
+            .as_ref()
+            .map(|token| token.manager_url.as_str())
+            .or(args.sync_url.as_deref())
+            .or_else(|| {
+                packaged_config
+                    .as_ref()
+                    .and_then(|config| config.manager_url.as_deref())
+            });
+        check_saved_manager(configured, db.read_daily_identity().await?.as_ref())?;
+    }
     // A token for another manager never overrides an enrolled operator.
     let join_token =
         join_token_for_saved_identity(join_token, db.read_daily_identity().await?.as_ref());
@@ -1649,7 +1663,8 @@ fn setup_tracing(verbose: bool) {
     tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().with_target(false))
-        .init();
+        .try_init()
+        .ok();
 }
 
 fn parse_platform(s: &str) -> std::result::Result<Platform, String> {
@@ -1969,8 +1984,36 @@ async fn open_operator_db(
                 })
             })?,
     };
-    let backend =
-        crate::identity_store::KubernetesSecret::in_cluster(&namespace, secret_name).await?;
+    // Tests point the startup at a fake API server; nothing else sets this.
+    #[cfg(test)]
+    let test_server = TEST_KUBE_SERVER.try_with(|url| url.clone()).ok();
+    #[cfg(not(test))]
+    let test_server: Option<String> = None;
+    let backend = match test_server {
+        #[cfg(test)]
+        Some(url) => crate::identity_store::KubernetesSecret::with_client(
+            alien_k8s_clients::KubernetesClient::new(alien_core::KubernetesClientConfig::Manual {
+                server_url: url,
+                certificate_authority_data: None,
+                insecure_skip_tls_verify: None,
+                client_certificate_data: None,
+                client_key_data: None,
+                token: None,
+                username: None,
+                password: None,
+                namespace: Some(namespace.clone()),
+                additional_headers: Default::default(),
+            })
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Cannot create the test Kubernetes client".into(),
+            })?,
+            &namespace,
+            secret_name,
+        ),
+        _ => crate::identity_store::KubernetesSecret::in_cluster(&namespace, secret_name).await?,
+    };
     let store = std::sync::Arc::new(crate::identity_store::SecretIdentityStore::new(
         std::sync::Arc::new(backend),
         secret_name,
@@ -2036,6 +2079,34 @@ async fn open_cache(
     }
 }
 
+/// In identity Secret mode the manager comes from the Secret when nothing else
+/// names one, and anyone who can edit the Secret could point the Operator at their own manager on
+/// its next start. The saved address must be a usable one (HTTPS, or loopback) and, when the
+/// installation names a manager (the token, `SYNC_URL`, the packaged configuration), the same one.
+fn check_saved_manager(
+    configured: Option<&str>,
+    saved: Option<&crate::daily_identity::DailyIdentityState>,
+) -> Result<()> {
+    let Some(saved) = saved.filter(|saved| !saved.manager_url.is_empty()) else {
+        return Ok(());
+    };
+    if let Some(problem) = crate::enrollment_token::manager_url_problem(&saved.manager_url) {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "The manager address saved in the identity Secret cannot be used: {problem}. The operator did not start. Delete the identity Secret (`helm upgrade` creates it again empty) and install with a newly issued token."
+            ),
+        }));
+    }
+    if let Some(configured) = configured {
+        if !crate::daily_identity::same_endpoint(&saved.manager_url, configured) {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "The manager address saved in the identity Secret is not the one this installation is configured with. The operator did not start. If the Secret was changed by mistake, delete it (`helm upgrade` creates it again empty) and install with a newly issued token.".into(),
+            }));
+        }
+    }
+    Ok(())
+}
+
 /// An enrolled operator keeps its identity when it is given a token for another
 /// manager (a token is a trust root, and an operator that works does not move).
 /// It says so once and goes on; it never fails to start for it.
@@ -2056,6 +2127,12 @@ fn join_token_for_saved_identity(
          ignoring it. To move the operator, uninstall the release (which deletes its identity Secret) and install again."
     );
     None
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    /// The address of a fake Kubernetes API server for the identity Secret, in a test.
+    static TEST_KUBE_SERVER: String;
 }
 
 const IN_CLUSTER_NAMESPACE_FILE: &str = "/var/run/secrets/kubernetes.io/serviceaccount/namespace";
@@ -2899,5 +2976,357 @@ mod plain_http_warning_tests {
         assert!(warning.contains("https://"), "{warning}");
         assert!(plain_http_url_warning("https://manager.example.test").is_none());
         assert!(plain_http_url_warning("HTTPS://manager.example.test").is_none());
+    }
+}
+
+/// Startup in identity Secret mode, driven through `run_operator_cli` against a fake Kubernetes
+/// API server and a fake manager, both real HTTP servers on loopback.
+#[cfg(test)]
+mod secret_startup_tests {
+    use super::*;
+    use alien_core::Platform;
+    use axum::{
+        extract::{Path as AxPath, State},
+        http::StatusCode,
+        response::{IntoResponse, Response},
+        routing::{get, post},
+        Json, Router,
+    };
+    use base64::Engine as _;
+    use clap::Parser;
+    use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
+
+    // ----- a Kubernetes API server that serves one Secret, with `resourceVersion` checks -----
+
+    #[derive(Clone, Default)]
+    struct Kube {
+        secret: Arc<Mutex<Option<serde_json::Value>>>,
+        version: Arc<AtomicUsize>,
+        puts: Arc<AtomicUsize>,
+    }
+
+    fn status(code: u16, reason: &str) -> Response {
+        (
+            StatusCode::from_u16(code).unwrap(),
+            Json(serde_json::json!({
+                "kind": "Status", "apiVersion": "v1", "status": "Failure",
+                "reason": reason, "code": code, "message": reason,
+                "details": {"name": "identity", "kind": "secrets"},
+            })),
+        )
+            .into_response()
+    }
+
+    async fn kube_get(State(kube): State<Kube>, AxPath(_): AxPath<(String, String)>) -> Response {
+        match kube.secret.lock().unwrap().clone() {
+            Some(secret) => Json(secret).into_response(),
+            None => status(404, "NotFound"),
+        }
+    }
+
+    async fn kube_put(
+        State(kube): State<Kube>,
+        AxPath(_): AxPath<(String, String)>,
+        Json(mut body): Json<serde_json::Value>,
+    ) -> Response {
+        kube.puts.fetch_add(1, Ordering::SeqCst);
+        let mut current = kube.secret.lock().unwrap();
+        let Some(existing) = current.as_ref() else {
+            return status(404, "NotFound");
+        };
+        if existing["metadata"]["resourceVersion"] != body["metadata"]["resourceVersion"] {
+            return status(409, "Conflict");
+        }
+        body["metadata"]["uid"] = existing["metadata"]["uid"].clone();
+        body["metadata"]["resourceVersion"] =
+            (kube.version.fetch_add(1, Ordering::SeqCst) + 100).to_string().into();
+        *current = Some(body.clone());
+        Json(body).into_response()
+    }
+
+    impl Kube {
+        /// An empty Secret, as the chart creates it.
+        fn with_empty_secret() -> Self {
+            let kube = Self::default();
+            *kube.secret.lock().unwrap() = Some(serde_json::json!({
+                "apiVersion": "v1", "kind": "Secret",
+                "metadata": {"name": "identity", "namespace": "ns", "uid": "uid-1", "resourceVersion": "1"},
+            }));
+            kube
+        }
+        async fn serve(&self) -> String {
+            let app = Router::new()
+                .route(
+                    "/api/v1/namespaces/{ns}/secrets/{name}",
+                    get(kube_get).put(kube_put),
+                )
+                .with_state(self.clone());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            url
+        }
+        fn identity(&self) -> Option<serde_json::Value> {
+            let secret = self.secret.lock().unwrap().clone()?;
+            let encoded = secret["data"]["identity"].as_str()?.to_owned();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .unwrap();
+            serde_json::from_slice(&bytes).ok()
+        }
+        fn put_identity(&self, identity: serde_json::Value) {
+            let mut secret = self.secret.lock().unwrap();
+            let secret = secret.as_mut().unwrap();
+            secret["data"] = serde_json::json!({
+                "identity": base64::engine::general_purpose::STANDARD
+                    .encode(identity.to_string()),
+            });
+            secret["metadata"]["resourceVersion"] = "50".into();
+        }
+    }
+
+    // ----- a manager: codes enroll once, a key proves itself by its hash -----
+
+    #[derive(Clone, Default)]
+    struct Manager {
+        /// code -> the key hash it enrolled, once used
+        codes: Arc<Mutex<HashMap<String, Option<String>>>>,
+        keys: Arc<Mutex<Vec<String>>>,
+        enrolls: Arc<AtomicUsize>,
+        accepted: Arc<AtomicUsize>,
+        exchanges: Arc<AtomicUsize>,
+    }
+
+    fn hash_of(key: &str) -> String {
+        Sha256::digest(key.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    async fn manager_enroll(State(m): State<Manager>, Json(body): Json<serde_json::Value>) -> Response {
+        m.enrolls.fetch_add(1, Ordering::SeqCst);
+        let hash = body["initialKeyHash"].as_str().unwrap().to_owned();
+        {
+            let mut codes = m.codes.lock().unwrap();
+            match codes.get_mut(body["code"].as_str().unwrap_or_default()) {
+                Some(used @ None) => *used = Some(hash.clone()),
+                Some(Some(used)) if *used == hash => {}
+                // Used by someone else, or not a code at all.
+                _ => return StatusCode::UNAUTHORIZED.into_response(),
+            }
+        }
+        m.accepted.fetch_add(1, Ordering::SeqCst);
+        m.keys.lock().unwrap().push(hash);
+        Json(serde_json::json!({
+            "deploymentId": "dep_1", "revision": 1,
+            "expiresAt": chrono::Utc::now() + chrono::Duration::hours(23),
+        }))
+        .into_response()
+    }
+
+    async fn manager_exchange(State(m): State<Manager>, Json(body): Json<serde_json::Value>) -> Response {
+        m.exchanges.fetch_add(1, Ordering::SeqCst);
+        let hash = hash_of(body["proof"]["key"].as_str().unwrap_or_default());
+        if !m.keys.lock().unwrap().contains(&hash) {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        Json(serde_json::json!({
+            "token": "ax_cap_v1_fixture",
+            "expiresAt": chrono::Utc::now() + chrono::Duration::minutes(30),
+        }))
+        .into_response()
+    }
+
+    impl Manager {
+        fn with_codes(codes: &[&str]) -> Self {
+            let manager = Self::default();
+            for code in codes {
+                manager.codes.lock().unwrap().insert((*code).into(), None);
+            }
+            manager
+        }
+        async fn serve(&self) -> String {
+            let app = Router::new()
+                .route("/v1/identity/enroll", post(manager_enroll))
+                .route("/v1/identity/exchange", post(manager_exchange))
+                .with_state(self.clone());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            url
+        }
+    }
+
+    // ----- one pod's start -----
+
+    struct Pod {
+        _directory: tempfile::TempDir,
+        args: Args,
+        operator_image: OperatorImageArgs,
+    }
+
+    fn token(manager: &str, code: &str) -> String {
+        let payload = serde_json::json!({"u": manager, "c": code}).to_string();
+        format!(
+            "ax_join_v1_{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload)
+        )
+    }
+
+    /// A pod with the token mounted (or none), a cache directory of its own, and the identity Secret
+    /// named `identity` in `ns`.
+    fn pod(token: Option<String>) -> Pod {
+        let directory = tempfile::tempdir().unwrap();
+        let mut argv: Vec<String> = [
+            "operator", "--platform", "kubernetes", "--namespace", "ns",
+            "--identity-secret", "identity", "--otlp-port", "0",
+        ]
+        .map(String::from)
+        .into();
+        argv.extend(["--data-dir".into(), directory.path().join("data").display().to_string()]);
+        if let Some(token) = token {
+            let file = directory.path().join("token");
+            std::fs::write(&file, token).unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+            argv.extend(["--enrollment-token-file".into(), file.display().to_string()]);
+        }
+        let OperatorCliArgs { args, operator_image } =
+            OperatorCliArgs::try_parse_from(argv).expect("parse operator test arguments");
+        Pod { _directory: directory, args, operator_image }
+    }
+
+    /// Start the pod and wait a moment: `Err` when it stopped, `Ok` when it was still running.
+    async fn start(pod: Pod, api: &str) -> std::result::Result<(), AlienError<ErrorData>> {
+        let run = TEST_KUBE_SERVER.scope(
+            api.to_string(),
+            run_operator_cli(
+                pod.args,
+                pod.operator_image,
+                NOOP_INIT,
+                NOOP_DEBUG_LOOP_HOOK,
+                NOOP_ACCESS_REQUEST_LOOP_HOOK,
+                NOOP_OPERATIONS_EXEC_LOOP_HOOK,
+                NOOP_OPERATIONS_SYNC_HANDLER_HOOK,
+            ),
+        );
+        match tokio::time::timeout(std::time::Duration::from_secs(6), run).await {
+            Ok(result) => result,
+            Err(_) => Ok(()),
+        }
+    }
+
+    fn identity_json(manager: &str, key: &str) -> serde_json::Value {
+        serde_json::json!({
+            "managerUrl": manager, "audience": manager, "deploymentId": "dep_1",
+            "current": key, "expiresAt": chrono::Utc::now() + chrono::Duration::hours(20),
+            "enrolledCodeHash": null, "pendingEnrollment": null, "previous": null,
+            "pending": null, "pendingStartedAt": null,
+        })
+    }
+
+    #[tokio::test]
+    async fn a_missing_secret_with_a_token_mounted_stops_before_the_code_is_used() {
+        let manager = Manager::with_codes(&["code-1"]);
+        let url = manager.serve().await;
+        let kube = Kube::default(); // no Secret at all
+        let api = kube.serve().await;
+        let error = start(pod(Some(token(&url, "code-1"))), &api)
+            .await
+            .expect_err("an operator with nowhere to keep its identity must not enroll");
+        assert!(error.to_string().contains("identity Secret"), "{error}");
+        assert_eq!(manager.enrolls.load(Ordering::SeqCst), 0, "the code was used");
+        assert!(kube.secret.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_used_token_on_restart_keeps_the_enrolled_identity() {
+        let manager = Manager::with_codes(&["code-1"]);
+        let url = manager.serve().await;
+        let kube = Kube::with_empty_secret();
+        let api = kube.serve().await;
+        // First start: enrolls.
+        start(pod(Some(token(&url, "code-1"))), &api).await.expect("first start");
+        assert_eq!(manager.accepted.load(Ordering::SeqCst), 1);
+        let enrolled = kube.identity().expect("the identity reached the Secret");
+        assert_eq!(enrolled["deploymentId"], "dep_1");
+        // A restart with the same, now used, token: the saved identity is the credential.
+        start(pod(Some(token(&url, "code-1"))), &api)
+            .await
+            .expect("a used token must not stop an enrolled operator");
+        assert_eq!(manager.accepted.load(Ordering::SeqCst), 1, "enrolled again");
+        assert_eq!(kube.identity().unwrap()["current"], enrolled["current"]);
+        assert!(manager.exchanges.load(Ordering::SeqCst) >= 2);
+    }
+
+    #[tokio::test]
+    async fn a_used_token_on_restart_without_an_enrolled_secret_says_to_issue_a_new_one() {
+        let manager = Manager::with_codes(&["code-1"]);
+        let url = manager.serve().await;
+        // The code was used by an earlier install; this Secret holds no identity.
+        manager.codes.lock().unwrap().insert("code-1".into(), Some("someone-else".into()));
+        let kube = Kube::with_empty_secret();
+        let api = kube.serve().await;
+        let error = start(pod(Some(token(&url, "code-1"))), &api)
+            .await
+            .expect_err("nothing can enroll with a used code");
+        assert!(error.to_string().contains("Issue a new enrollment token"), "{error}");
+        assert!(kube.identity().is_none_or(|i| i["deploymentId"] == ""));
+    }
+
+    #[tokio::test]
+    async fn two_pods_enrolling_at_once_leave_one_identity_that_the_manager_knows() {
+        let manager = Manager::with_codes(&["code-1"]);
+        let url = manager.serve().await;
+        let kube = Kube::with_empty_secret();
+        let api = kube.serve().await;
+        let (a, b) = tokio::join!(
+            start(pod(Some(token(&url, "code-1"))), &api),
+            start(pod(Some(token(&url, "code-1"))), &api),
+        );
+        // Both pods may send the one key the first of them saved in the Secret; the manager
+        // never accepts two different keys for one code.
+        let distinct: std::collections::HashSet<_> =
+            manager.keys.lock().unwrap().iter().cloned().collect();
+        assert_eq!(distinct.len(), 1, "a code enrolled two different keys");
+        // At least one pod runs on the identity that reached the Secret.
+        assert!(a.is_ok() || b.is_ok(), "{a:?} {b:?}");
+        let saved = kube.identity().expect("an identity in the Secret");
+        assert_eq!(saved["deploymentId"], "dep_1");
+        let key = saved["current"].as_str().unwrap();
+        assert!(
+            manager.keys.lock().unwrap().contains(&hash_of(key)),
+            "the Secret holds a key the manager never accepted"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_secret_naming_another_manager_or_plain_http_is_refused_at_start() {
+        let manager = Manager::with_codes(&[]);
+        let url = manager.serve().await;
+        for (saved, token_for) in [
+            ("https://attacker.example", Some(url.clone())),
+            ("http://attacker.example", Some(url.clone())),
+            ("http://attacker.example", None),
+        ] {
+            let kube = Kube::with_empty_secret();
+            kube.put_identity(identity_json(saved, "ax_day_v1_x"));
+            let api = kube.serve().await;
+            let token = token_for.map(|url| token(&url, "code-1"));
+            let error = start(pod(token), &api)
+                .await
+                .expect_err(&format!("{saved} must be refused"));
+            assert!(
+                error.to_string().contains("manager address saved in the identity Secret"),
+                "{error}"
+            );
+        }
+        assert_eq!(manager.exchanges.load(Ordering::SeqCst), 0);
     }
 }
