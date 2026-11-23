@@ -29,10 +29,21 @@
 //! restart never changes until the policy refuses it, then checks that a
 //! restart is admitted. Helm waits for that Job, so a cluster that does not
 //! enforce the policy fails the release before the Operator can patch anything.
+//! A cluster can have several API servers behind one address, and one that
+//! already refuses says nothing about another that has not loaded the policy.
+//! The command counts the serving API servers from their identity Leases in
+//! `kube-system` (the probe account may list Leases there and nothing else; 1
+//! when they cannot be read), sends every request on a new connection, and
+//! needs three times that many refusals in a row over at least 5 seconds,
+//! then admits restarts the same number of times.
 //! The probe objects are removed when the release succeeds; after a failed
 //! release the Job (and its log) and the probe's own objects stay until the next
 //! successful release, and none of them can patch anything but the probe
 //! Deployment.
+//!
+//! Limit: new connections reach an API server by chance (the cluster's service
+//! address picks one), so the repeated refusals make it very likely, not
+//! certain, that every API server enforces the policy.
 //!
 //! Limits: a cluster that serves the policy API with the admission plugin
 //! disabled passes no probe (the release fails); a policy deleted by hand

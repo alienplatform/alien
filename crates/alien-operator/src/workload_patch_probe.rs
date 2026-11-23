@@ -10,6 +10,17 @@
 //! it because of the policy, then checks that a restart patch is admitted. Only
 //! then does the hook that gives the Operator its permission run. A cluster that
 //! never enforces the policy fails the Job, and the release with it.
+//!
+//! A cluster can have several API servers, and one that already enforces the
+//! policy says nothing about another that has not loaded it yet. The command
+//! counts the serving API servers from their identity Leases in `kube-system`
+//! (1 when they cannot be read, and it says so), sends every request on a
+//! fresh connection, and needs at least three times that many refusals in a
+//! row, spread over a stabilization window, before it passes. Requests go
+//! through the cluster's service address, which spreads new connections over
+//! the API servers, so this makes it very likely, not certain, that every one
+//! of them enforces the policy; the remaining limit is stated in the chart's
+//! documentation.
 
 use std::{path::PathBuf, time::Duration};
 
@@ -38,6 +49,50 @@ struct Args {
     /// How long to wait for the cluster to start enforcing the policy.
     #[arg(long, default_value_t = 60)]
     deadline_seconds: u64,
+    /// The refusals in a row must span at least this long.
+    #[arg(long, default_value_t = 5)]
+    stabilization_seconds: u64,
+}
+
+/// Label the API servers' identity Leases carry.
+const API_SERVER_LEASE_SELECTOR: &str = "apiserver.kubernetes.io/identity=kube-apiserver";
+/// A Lease not renewed for this long belongs to an API server that is gone.
+const API_SERVER_LEASE_MAX_AGE_SECONDS: i64 = 300;
+/// Refusals needed per API server.
+const REFUSALS_PER_API_SERVER: usize = 3;
+
+/// Count the API servers serving now from the identity Leases list. `None`
+/// when the body is not a Lease list.
+fn count_api_servers(body: &str, now: chrono::DateTime<chrono::Utc>) -> Option<usize> {
+    let list: Value = serde_json::from_str(body).ok()?;
+    let items = list["items"].as_array()?;
+    let serving = items
+        .iter()
+        .filter(|item| {
+            let renewed = item["spec"]["renewTime"]
+                .as_str()
+                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
+            // A Lease without a readable renew time counts: undercounting is
+            // the unsafe direction.
+            renewed.is_none_or(|time| {
+                (now - time.with_timezone(&chrono::Utc)).num_seconds()
+                    <= API_SERVER_LEASE_MAX_AGE_SECONDS
+            })
+        })
+        .count();
+    Some(serving)
+}
+
+/// An error with its causes, so a failed request says why.
+fn describe(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
 }
 
 /// What one probe request showed.
@@ -70,66 +125,142 @@ fn classify(status: StatusCode, body: &str, policy: &str) -> Outcome {
 }
 
 struct Probe {
-    client: reqwest::Client,
+    /// Trust anchor for the cluster certificate (`None` for a test server).
+    ca: Option<reqwest::Certificate>,
     url: String,
     token: String,
     policy: String,
+    /// Refusals in a row required (3 per API server).
+    required_refusals: usize,
+    /// The refusals in a row must span at least this long.
+    stabilization: Duration,
 }
 
 impl Probe {
+    /// A client that opens a new connection for every request, so that the
+    /// cluster's service address can pick another API server each time.
+    fn fresh_client(&self) -> Result<reqwest::Client, String> {
+        let mut builder = reqwest::Client::builder()
+            .pool_max_idle_per_host(0)
+            .timeout(Duration::from_secs(10));
+        if let Some(ca) = &self.ca {
+            builder = builder.add_root_certificate(ca.clone());
+        }
+        builder
+            .build()
+            .map_err(|error| format!("cannot build the client: {error}"))
+    }
+
     async fn patch(&self, body: Value) -> Result<(StatusCode, String), String> {
         let response = self
-            .client
+            .fresh_client()?
             .patch(&self.url)
+            .header("connection", "close")
             .bearer_auth(&self.token)
             .header("content-type", "application/merge-patch+json")
             .body(body.to_string())
             .send()
             .await
-            .map_err(|error| format!("request failed: {error}"))?;
+            .map_err(|error| format!("request failed: {}", describe(&error)))?;
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         Ok((status, text))
     }
 
-    /// Patch a field no restart changes until the policy refuses it.
+    /// The serving API servers, from their identity Leases in `kube-system`.
+    async fn read_api_server_count(&self, base: &str) -> Result<usize, String> {
+        let response = self
+            .fresh_client()?
+            .get(format!(
+                "{base}/apis/coordination.k8s.io/v1/namespaces/kube-system/leases"
+            ))
+            .query(&[("labelSelector", API_SERVER_LEASE_SELECTOR)])
+            .bearer_auth(&self.token)
+            .header("connection", "close")
+            .send()
+            .await
+            .map_err(|error| format!("request failed: {}", describe(&error)))?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!("the list was refused with {status}"));
+        }
+        count_api_servers(&text, chrono::Utc::now())
+            .ok_or_else(|| "the answer is not a Lease list".to_owned())
+    }
+
+    /// Patch a field no restart changes until the policy has refused it
+    /// `required_refusals` times in a row on fresh connections, over at least
+    /// the stabilization window. Any other answer starts the count again.
     async fn wait_until_refused(&self, deadline: Duration, pause: Duration) -> Result<(), String> {
         let started = std::time::Instant::now();
         let mut attempt: u32 = 0;
+        let mut streak: usize = 0;
+        let mut streak_started = started;
         let mut last = String::from("no response");
         while started.elapsed() < deadline {
             attempt += 1;
             // A different value every time, so an admitted change is a change.
             let body = json!({"spec": {"minReadySeconds": attempt}});
-            match self.patch(body).await {
+            let refused = match self.patch(body).await {
                 Ok((status, text)) => match classify(status, &text, &self.policy) {
-                    Outcome::RefusedByPolicy => return Ok(()),
-                    Outcome::Admitted => last = "the change was admitted".to_owned(),
-                    Outcome::Other(detail) => last = detail,
+                    Outcome::RefusedByPolicy => true,
+                    Outcome::Admitted => {
+                        last = "the change was admitted".to_owned();
+                        false
+                    }
+                    Outcome::Other(detail) => {
+                        last = detail;
+                        false
+                    }
                 },
-                Err(error) => last = error,
+                Err(error) => {
+                    last = error;
+                    false
+                }
+            };
+            if refused {
+                if streak == 0 {
+                    streak_started = std::time::Instant::now();
+                }
+                streak += 1;
+                if streak >= self.required_refusals
+                    && streak_started.elapsed() >= self.stabilization
+                {
+                    return Ok(());
+                }
+            } else {
+                streak = 0;
             }
             tokio::time::sleep(pause).await;
         }
         Err(format!(
-            "the policy refused no change within {} s (last result: {last})",
+            "the policy did not refuse {} changes in a row over {} s within {} s (last result: {last})",
+            self.required_refusals,
+            self.stabilization.as_secs(),
             deadline.as_secs()
         ))
     }
 
-    /// A restart must still go through.
+    /// A restart must still go through, on every one of as many fresh
+    /// connections as the refusals used.
     async fn check_restart_admitted(&self) -> Result<(), String> {
-        let body = json!({"spec": {"template": {"metadata": {"annotations": {
-            RESTART_ANNOTATION: chrono::Utc::now().to_rfc3339()
-        }}}}});
-        let (status, text) = self.patch(body).await?;
-        match classify(status, &text, &self.policy) {
-            Outcome::Admitted => Ok(()),
-            Outcome::RefusedByPolicy => {
-                Err("the policy refused a restart of the probe Deployment".to_owned())
+        for _ in 0..self.required_refusals {
+            let body = json!({"spec": {"template": {"metadata": {"annotations": {
+                RESTART_ANNOTATION: chrono::Utc::now().to_rfc3339()
+            }}}}});
+            let (status, text) = self.patch(body).await?;
+            match classify(status, &text, &self.policy) {
+                Outcome::Admitted => {}
+                Outcome::RefusedByPolicy => {
+                    return Err("the policy refused a restart of the probe Deployment".to_owned())
+                }
+                Outcome::Other(detail) => {
+                    return Err(format!("a restart was not admitted ({detail})"))
+                }
             }
-            Outcome::Other(detail) => Err(format!("a restart was not admitted ({detail})")),
         }
+        Ok(())
     }
 }
 
@@ -147,23 +278,33 @@ async fn run(args: Args) -> Result<(), String> {
     } else {
         host
     };
-    let client = reqwest::Client::builder()
-        .add_root_certificate(
-            reqwest::Certificate::from_pem(&ca)
-                .map_err(|error| format!("invalid cluster certificate: {error}"))?,
-        )
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|error| format!("cannot build the client: {error}"))?;
-    let probe = Probe {
-        client,
+    let ca = reqwest::Certificate::from_pem(&ca)
+        .map_err(|error| format!("invalid cluster certificate: {error}"))?;
+    let base = format!("https://{host}:{port}");
+    let mut probe = Probe {
+        ca: Some(ca),
         url: format!(
-            "https://{host}:{port}/apis/apps/v1/namespaces/{}/deployments/{}",
+            "{base}/apis/apps/v1/namespaces/{}/deployments/{}",
             args.namespace, args.deployment
         ),
         token: token.trim().to_owned(),
         policy: args.policy,
+        required_refusals: REFUSALS_PER_API_SERVER,
+        stabilization: Duration::from_secs(args.stabilization_seconds),
     };
+    let servers = match probe.read_api_server_count(&base).await {
+        Ok(count) => {
+            println!("verify-workload-patch-policy: {count} API server(s) serving");
+            count.max(1)
+        }
+        Err(reason) => {
+            println!(
+                "verify-workload-patch-policy: cannot count the API servers ({reason}); assuming 1"
+            );
+            1
+        }
+    };
+    probe.required_refusals = REFUSALS_PER_API_SERVER * servers;
     probe
         .wait_until_refused(
             Duration::from_secs(args.deadline_seconds),
@@ -208,7 +349,7 @@ mod tests {
     use super::*;
     use std::sync::{
         atomic::{AtomicU32, Ordering},
-        Arc,
+        Arc, Mutex,
     };
 
     const POLICY: &str = "op-restart-abcd1234";
@@ -250,23 +391,86 @@ mod tests {
         assert_eq!(classify(StatusCode::OK, "{}", POLICY), Outcome::Admitted);
     }
 
-    /// A fake API server: admits the first `admit` patches that change
-    /// `minReadySeconds`, then refuses them like the policy does; restarts are
-    /// always admitted.
-    async fn serve(admit: u32, enforce: bool) -> (String, Arc<AtomicU32>) {
-        use axum::{extract::State, http::StatusCode as S, routing::patch, Router};
-        let seen = Arc::new(AtomicU32::new(0));
-        let state = (seen.clone(), admit, enforce);
+    /// How a fake API server answers a change of `minReadySeconds`.
+    #[derive(Clone, Copy)]
+    enum Behavior {
+        /// Admits the first `n` changes, then refuses every one.
+        EnforceAfter(u32),
+        /// Never refuses.
+        Never,
+        /// Two API servers behind one address: connections alternate between
+        /// one that enforces and one that has not loaded the policy yet. After
+        /// `lag` connections the second one enforces too.
+        Alternating { lag: usize },
+    }
+
+    #[derive(Clone)]
+    struct Fake {
+        changes: Arc<AtomicU32>,
+        /// Remote port of every connection, in the order first seen.
+        connections: Arc<Mutex<Vec<u16>>>,
+        /// Number of requests each connection carried.
+        requests: Arc<Mutex<Vec<u32>>>,
+        behavior: Behavior,
+        restart_refused: bool,
+    }
+
+    /// A fake API server that answers per connection.
+    async fn serve(behavior: Behavior) -> (String, Fake) {
+        serve_with(behavior, false).await
+    }
+
+    async fn serve_with(behavior: Behavior, restart_refused: bool) -> (String, Fake) {
+        use axum::{
+            extract::{ConnectInfo, State},
+            http::StatusCode as S,
+            routing::patch,
+            Router,
+        };
+        use std::net::SocketAddr;
+        let fake = Fake {
+            changes: Arc::new(AtomicU32::new(0)),
+            connections: Arc::new(Mutex::new(Vec::new())),
+            requests: Arc::new(Mutex::new(Vec::new())),
+            behavior,
+            restart_refused,
+        };
         async fn handle(
-            State((seen, admit, enforce)): State<(Arc<AtomicU32>, u32, bool)>,
+            State(fake): State<Fake>,
+            ConnectInfo(peer): ConnectInfo<SocketAddr>,
             body: String,
         ) -> (S, String) {
+            let index = {
+                let mut seen = fake.connections.lock().unwrap();
+                let mut requests = fake.requests.lock().unwrap();
+                match seen.iter().position(|port| *port == peer.port()) {
+                    Some(index) => {
+                        requests[index] += 1;
+                        index
+                    }
+                    None => {
+                        seen.push(peer.port());
+                        requests.push(1);
+                        seen.len() - 1
+                    }
+                }
+            };
             let body: Value = serde_json::from_str(&body).unwrap();
             if body["spec"]["minReadySeconds"].is_null() {
-                return (S::OK, "{}".into());
+                // A restart: the lagging server admits it, the other too.
+                return if fake.restart_refused && index % 2 == 1 {
+                    (S::UNPROCESSABLE_ENTITY, refusal(POLICY))
+                } else {
+                    (S::OK, "{}".into())
+                };
             }
-            let n = seen.fetch_add(1, Ordering::SeqCst);
-            if enforce && n >= admit {
+            let n = fake.changes.fetch_add(1, Ordering::SeqCst);
+            let enforced = match fake.behavior {
+                Behavior::EnforceAfter(admit) => n >= admit,
+                Behavior::Never => false,
+                Behavior::Alternating { lag } => index % 2 == 0 || index >= lag,
+            };
+            if enforced {
                 (S::UNPROCESSABLE_ENTITY, refusal(POLICY))
             } else {
                 (S::OK, "{}".into())
@@ -274,42 +478,132 @@ mod tests {
         }
         let app = Router::new()
             .route("/probe", patch(handle))
-            .with_state(state);
+            .with_state(fake.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/probe", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        (url, seen)
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap()
+        });
+        (url, fake)
     }
 
-    fn probe(url: String) -> Probe {
+    fn probe(url: String, required_refusals: usize, stabilization: Duration) -> Probe {
         Probe {
-            client: reqwest::Client::new(),
+            ca: None,
             url,
             token: "t".into(),
             policy: POLICY.into(),
+            required_refusals,
+            stabilization,
         }
     }
 
     #[tokio::test]
     async fn waits_through_the_window_then_passes() {
-        let (url, seen) = serve(3, true).await;
-        let probe = probe(url);
+        let (url, fake) = serve(Behavior::EnforceAfter(3)).await;
+        let probe = probe(url, 3, Duration::from_millis(30));
         probe
             .wait_until_refused(Duration::from_secs(5), Duration::from_millis(5))
             .await
             .unwrap();
-        // Three admitted changes, then the refusal.
-        assert_eq!(seen.load(Ordering::SeqCst), 4);
+        // Three admitted changes, then at least the three refusals in a row.
+        assert!(fake.changes.load(Ordering::SeqCst) >= 6);
         probe.check_restart_admitted().await.unwrap();
     }
 
     #[tokio::test]
+    async fn every_request_uses_a_fresh_connection() {
+        let (url, fake) = serve(Behavior::EnforceAfter(0)).await;
+        let probe = probe(url, 3, Duration::from_millis(30));
+        probe
+            .wait_until_refused(Duration::from_secs(5), Duration::from_millis(5))
+            .await
+            .unwrap();
+        probe.check_restart_admitted().await.unwrap();
+        let requests = fake.requests.lock().unwrap();
+        assert!(requests.len() >= 6, "{requests:?}");
+        assert!(
+            requests.iter().all(|count| *count == 1),
+            "a connection was reused: {requests:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_refusing_server_is_not_enough_when_another_has_not_loaded_the_policy() {
+        // Two servers behind one address; the second never loads the policy.
+        let (url, fake) = serve(Behavior::Alternating { lag: usize::MAX }).await;
+        let error = probe(url, 6, Duration::from_millis(30))
+            .wait_until_refused(Duration::from_millis(600), Duration::from_millis(5))
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("did not refuse 6 changes in a row"),
+            "{error}"
+        );
+        assert!(fake.connections.lock().unwrap().len() >= 6);
+    }
+
+    #[tokio::test]
+    async fn passes_once_the_lagging_server_enforces_too() {
+        let (url, _) = serve(Behavior::Alternating { lag: 10 }).await;
+        probe(url, 6, Duration::from_millis(30))
+            .wait_until_refused(Duration::from_secs(5), Duration::from_millis(5))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_refusals_must_span_the_stabilization_window() {
+        let (url, _) = serve(Behavior::EnforceAfter(0)).await;
+        let started = std::time::Instant::now();
+        probe(url, 3, Duration::from_millis(400))
+            .wait_until_refused(Duration::from_secs(5), Duration::from_millis(5))
+            .await
+            .unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(400));
+    }
+
+    #[tokio::test]
+    async fn a_restart_refused_on_one_server_fails() {
+        // Every second connection reaches a server that refuses restarts.
+        let (url, _) = serve_with(Behavior::EnforceAfter(0), true).await;
+        let error = probe(url, 3, Duration::from_millis(30))
+            .check_restart_admitted()
+            .await
+            .unwrap_err();
+        assert!(error.contains("refused a restart"), "{error}");
+    }
+
+    #[tokio::test]
     async fn a_cluster_that_never_enforces_fails() {
-        let (url, _) = serve(0, false).await;
-        let error = probe(url)
+        let (url, _) = serve(Behavior::Never).await;
+        let error = probe(url, 3, Duration::from_millis(30))
             .wait_until_refused(Duration::from_millis(200), Duration::from_millis(5))
             .await
             .unwrap_err();
-        assert!(error.contains("refused no change"), "{error}");
+        assert!(error.contains("did not refuse"), "{error}");
+    }
+
+    #[test]
+    fn counts_the_serving_api_servers_from_their_leases() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:10:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let list = json!({"items": [
+            {"spec": {"renewTime": "2026-01-01T00:09:58.000000Z"}},
+            {"spec": {"renewTime": "2026-01-01T00:09:50.000000Z"}},
+            // Renewed an hour ago: a server that is gone.
+            {"spec": {"renewTime": "2026-01-01T00:00:00.000000Z"}},
+            {"spec": {}},
+        ]});
+        assert_eq!(count_api_servers(&list.to_string(), now), Some(3));
+        assert_eq!(count_api_servers(r#"{"items": []}"#, now), Some(0));
+        assert_eq!(count_api_servers("not json", now), None);
+        assert_eq!(count_api_servers(r#"{"kind":"Status"}"#, now), None);
     }
 }

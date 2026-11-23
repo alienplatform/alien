@@ -38,8 +38,8 @@ pub mod protected;
 pub mod readiness_server;
 pub mod self_update;
 pub mod setup_credential;
-pub mod workload_patch_probe;
 mod workload_observation;
+pub mod workload_patch_probe;
 
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
 pub use config::{OperatorConfig, SyncConfig};

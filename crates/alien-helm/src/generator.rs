@@ -3171,13 +3171,7 @@ fn workload_restart_policy_docs(
     // it when a rollback goes to a chart that has none. Only the binding, which
     // gives the Operator the rule, is a hook.
     let role = format!("{}{rules}", object_metadata(role_kind, ""));
-    let mut hooks = restart_probe_docs(
-        &probe_name,
-        &object_name,
-        namespace,
-        labels,
-        image,
-    );
+    let mut hooks = restart_probe_docs(&probe_name, &object_name, namespace, labels, image);
     hooks.extend([
         format!("{}{subjects}", object_metadata(binding_kind, install_hook)),
         format!("{}{subjects}", object_metadata(binding_kind, delete_hook)),
@@ -3209,13 +3203,16 @@ fn restart_probe_docs(
     labels: &BTreeMap<String, String>,
     image: &str,
 ) -> Vec<String> {
-    let metadata = |kind: &str, api: &str, weight: i32, delete: &str| {
-        let mut yaml = format!("apiVersion: {api}\nkind: {kind}\nmetadata:\n  name: {probe_name}\n  namespace: {}\n  labels:\n", yaml_string(namespace));
+    let metadata_in = |kind: &str, api: &str, weight: i32, delete: &str, in_namespace: &str| {
+        let mut yaml = format!("apiVersion: {api}\nkind: {kind}\nmetadata:\n  name: {probe_name}\n  namespace: {}\n  labels:\n", yaml_string(in_namespace));
         append_operator_labels(&mut yaml, labels, 4);
         yaml.push_str(&format!(
             "  annotations:\n    helm.sh/hook: post-install,post-upgrade,post-rollback\n    helm.sh/hook-weight: \"{weight}\"\n    helm.sh/hook-delete-policy: {delete}\n"
         ));
         yaml
+    };
+    let metadata = |kind: &str, api: &str, weight: i32, delete: &str| {
+        metadata_in(kind, api, weight, delete, namespace)
     };
     let all = "before-hook-creation,hook-succeeded,hook-failed";
     let account = metadata("ServiceAccount", "v1", -40, all);
@@ -3228,11 +3225,21 @@ fn restart_probe_docs(
         metadata("RoleBinding", "rbac.authorization.k8s.io/v1", -40, all),
         yaml_string(namespace)
     );
+    // The check counts the API servers from their identity Leases, which live
+    // in `kube-system`: the probe account may list Leases there, nothing else.
+    let lease_role = format!(
+        "{}rules:\n  - apiGroups: ['coordination.k8s.io']\n    resources: ['leases']\n    verbs: ['list']\n",
+        metadata_in("Role", "rbac.authorization.k8s.io/v1", -40, all, "kube-system")
+    );
+    let lease_binding = format!(
+        "{}subjects:\n  - kind: ServiceAccount\n    name: \"{probe_name}\"\n    namespace: {}\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name: \"{probe_name}\"\n",
+        metadata_in("RoleBinding", "rbac.authorization.k8s.io/v1", -40, all, "kube-system"),
+        yaml_string(namespace)
+    );
     let pod_settings = "runAsNonRoot: true\n        runAsUser: 1000\n        runAsGroup: 1000\n        seccompProfile:\n          type: RuntimeDefault\n";
     let container_settings = "allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true\n            capabilities:\n              drop: [\"ALL\"]\n";
-    let selector = format!(
-        "selector:\n    matchLabels:\n      alien.dev/restart-probe: \"{probe_name}\"\n"
-    );
+    let selector =
+        format!("selector:\n    matchLabels:\n      alien.dev/restart-probe: \"{probe_name}\"\n");
     let deployment = format!(
         "{}spec:\n  replicas: 0\n  {selector}  template:\n    metadata:\n      labels:\n        alien.dev/restart-probe: \"{probe_name}\"\n    spec:\n      automountServiceAccountToken: false\n      {{{{- with (($.Values.runtime | default dict).imagePullSecrets) }}}}\n      imagePullSecrets:\n        {{{{- toYaml . | nindent 8 }}}}\n      {{{{- end }}}}\n      securityContext:\n        {pod_settings}      containers:\n        - name: probe\n          image: {}\n          imagePullPolicy: IfNotPresent\n          securityContext:\n            {container_settings}",
         metadata("Deployment", "apps/v1", -30, all),
@@ -3245,7 +3252,15 @@ fn restart_probe_docs(
         yaml_string(image),
         yaml_string(&format!("--namespace={namespace}"))
     );
-    vec![account, role, binding, deployment, job]
+    vec![
+        account,
+        role,
+        binding,
+        lease_role,
+        lease_binding,
+        deployment,
+        job,
+    ]
 }
 
 /// The access-request `CustomResourceDefinition`, white-labeled from `names`.
@@ -13989,7 +14004,10 @@ remoteOperator:
     #[ignore = "requires a disposable cluster (Kubernetes 1.30 or later) named by ALIEN_WORKLOAD_RESTART_KIND_CONTEXT"]
     fn product_chart_operator_updates_its_dynamic_workloads_but_only_restarts_others() {
         use alien_operations_sdk::{KubernetesPermissionRule, KubernetesPermissions, RiskTier};
-        use std::{io::Write, process::{Command, Stdio}};
+        use std::{
+            io::Write,
+            process::{Command, Stdio},
+        };
         let context = std::env::var("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT")
             .expect("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT names the cluster");
         let kubectl = |args: &[&str], stdin: Option<&str>| -> (bool, String) {
@@ -14002,7 +14020,12 @@ remoteOperator:
                 .spawn()
                 .unwrap();
             if let Some(input) = stdin {
-                child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(input.as_bytes())
+                    .unwrap();
             }
             let output = child.wait_with_output().unwrap();
             let text = format!(
@@ -14065,7 +14088,10 @@ remoteOperator:
                 .and_then(YamlValue::as_str)
                 .unwrap_or_default()
                 .to_owned();
-            if !hook.is_empty() && !hook.contains("post-install") || kind == "Job" || kind == "Deployment" {
+            if !hook.is_empty() && !hook.contains("post-install")
+                || kind == "Job"
+                || kind == "Deployment"
+            {
                 continue;
             }
             if hook.contains("post-install") && name.ends_with("-probe") {
@@ -14073,15 +14099,25 @@ remoteOperator:
             }
             if !matches!(
                 kind.as_str(),
-                "ServiceAccount" | "Role" | "RoleBinding" | "ClusterRole" | "ClusterRoleBinding"
-                    | "ValidatingAdmissionPolicy" | "ValidatingAdmissionPolicyBinding"
+                "ServiceAccount"
+                    | "Role"
+                    | "RoleBinding"
+                    | "ClusterRole"
+                    | "ClusterRoleBinding"
+                    | "ValidatingAdmissionPolicy"
+                    | "ValidatingAdmissionPolicyBinding"
             ) {
                 continue;
             }
             if kind == "ValidatingAdmissionPolicy" {
-                let expression = doc["spec"]["matchConditions"][0]["expression"].as_str().unwrap();
+                let expression = doc["spec"]["matchConditions"][0]["expression"]
+                    .as_str()
+                    .unwrap();
                 let first = expression.split('\'').nth(1).unwrap();
-                operator = format!("system:serviceaccount:{namespace}:{}", first.rsplit(':').next().unwrap());
+                operator = format!(
+                    "system:serviceaccount:{namespace}:{}",
+                    first.rsplit(':').next().unwrap()
+                );
             }
             if kind.starts_with("Cluster") || kind.starts_with("Validating") {
                 cluster_scoped.push(format!("{}/{name}", kind.to_lowercase()));
@@ -14109,7 +14145,10 @@ remoteOperator:
         }
         let _cleanup = Cleanup(&context, &cluster_scoped, namespace);
         assert!(kubectl(&["create", "namespace", namespace], None).0);
-        let (ok, text) = kubectl(&["--namespace", namespace, "apply", "-f", "-"], Some(&applied));
+        let (ok, text) = kubectl(
+            &["--namespace", namespace, "apply", "-f", "-"],
+            Some(&applied),
+        );
         assert!(ok, "apply the chart's objects: {text}");
         let workloads = format!(
             "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: dynamic\n  namespace: {namespace}\n  labels:\n    alien.dev/dynamic-deployment: customer-one\nspec:\n  replicas: 0\n  selector: {{matchLabels: {{app: dynamic}}}}\n  template:\n    metadata: {{labels: {{app: dynamic}}}}\n    spec:\n      containers: [{{name: main, image: \"registry.k8s.io/pause:3.10\"}}]\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: other\n  namespace: {namespace}\nspec:\n  replicas: 0\n  selector: {{matchLabels: {{app: other}}}}\n  template:\n    metadata: {{labels: {{app: other}}}}\n    spec:\n      containers: [{{name: main, image: \"registry.k8s.io/pause:3.10\"}}]\n"
@@ -14118,7 +14157,11 @@ remoteOperator:
         let as_operator = format!("--as={operator}");
         // The Operator updates with `replace` (its Role has `update`); `patch` is for restarts only.
         let replace = |name: &str, labelled: bool| {
-            let labels = if labelled { "\n  labels:\n    alien.dev/dynamic-deployment: customer-one" } else { "" };
+            let labels = if labelled {
+                "\n  labels:\n    alien.dev/dynamic-deployment: customer-one"
+            } else {
+                ""
+            };
             let manifest = format!(
                 "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {name}\n  namespace: {namespace}{labels}\nspec:\n  replicas: 0\n  selector: {{matchLabels: {{app: {name}}}}}\n  template:\n    metadata: {{labels: {{app: {name}}}}}\n    spec:\n      containers: [{{name: main, image: \"busybox\"}}]\n"
             );
@@ -14135,7 +14178,10 @@ remoteOperator:
             }
             std::thread::sleep(std::time::Duration::from_millis(250));
         }
-        assert!(refused, "the policy refuses an image change of a workload the Operator did not create");
+        assert!(
+            refused,
+            "the policy refuses an image change of a workload the Operator did not create"
+        );
         // The Operator's own dynamic workload can be updated: not the policy's business.
         let (ok, text) = replace("dynamic", true);
         assert!(ok, "a dynamic workload update is admitted: {text}");

@@ -1032,9 +1032,7 @@ fn patchable_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
     let hook_bindings = |event: &str| -> Vec<&YamlValue> {
         docs.iter()
             .filter(|doc| {
-                is_binding(doc)
-                    && !is_probe(doc)
-                    && hook_events(doc).iter().any(|e| e == event)
+                is_binding(doc) && !is_probe(doc) && hook_events(doc).iter().any(|e| e == event)
             })
             .collect()
     };
@@ -1227,8 +1225,7 @@ fn the_restart_probe_pulls_its_image_with_the_charts_pull_secrets() {
             .collect();
         assert_eq!(probes.len(), 1, "one probe {kind}");
         assert_eq!(
-            probes[0]["spec"]["template"]["spec"]["imagePullSecrets"][0]["name"],
-            "regcred",
+            probes[0]["spec"]["template"]["spec"]["imagePullSecrets"][0]["name"], "regcred",
             "probe {kind}"
         );
     }
@@ -1325,12 +1322,43 @@ fn the_probe_runs_before_the_binding_and_names_what_the_policy_matches() {
             docs.iter()
                 .find(|doc| {
                     doc["kind"] == kind
+                        && doc["metadata"]["namespace"] == "ns1"
                         && doc["metadata"]["name"]
                             .as_str()
                             .is_some_and(|name| name.ends_with("-probe"))
                 })
                 .unwrap_or_else(|| panic!("no probe {kind}"))
         };
+        // The check counts the API servers from their identity Leases: the
+        // probe account may list Leases in kube-system, nothing else there.
+        let in_kube_system = |kind: &str| {
+            docs.iter()
+                .find(|doc| {
+                    doc["kind"] == kind
+                        && doc["metadata"]["namespace"] == "kube-system"
+                        && doc["metadata"]["name"]
+                            .as_str()
+                            .is_some_and(|name| name.ends_with("-probe"))
+                })
+                .unwrap_or_else(|| panic!("no kube-system probe {kind}"))
+        };
+        assert_eq!(
+            in_kube_system("Role")["rules"],
+            serde_yaml::to_value(vec![serde_yaml::to_value(serde_json::json!({
+                "apiGroups": ["coordination.k8s.io"],
+                "resources": ["leases"],
+                "verbs": ["list"],
+            }))
+            .unwrap()])
+            .unwrap()
+        );
+        let lease_binding = in_kube_system("RoleBinding");
+        assert_eq!(lease_binding["subjects"][0]["namespace"], "ns1");
+        assert_eq!(lease_binding["roleRef"]["kind"], "Role");
+        assert_eq!(
+            in_kube_system("Role")["metadata"]["annotations"]["helm.sh/hook-weight"],
+            "-40"
+        );
         let weight = |doc: &YamlValue| -> i32 {
             doc["metadata"]["annotations"]["helm.sh/hook-weight"]
                 .as_str()
@@ -1391,10 +1419,12 @@ fn the_probe_runs_before_the_binding_and_names_what_the_policy_matches() {
         );
         // A failed probe fails the release (Helm waits for the Job) and leaves its log.
         assert_eq!(job["spec"]["backoffLimit"], 0);
-        assert!(!job["metadata"]["annotations"]["helm.sh/hook-delete-policy"]
-            .as_str()
-            .unwrap()
-            .contains("hook-failed"));
+        assert!(
+            !job["metadata"]["annotations"]["helm.sh/hook-delete-policy"]
+                .as_str()
+                .unwrap()
+                .contains("hook-failed")
+        );
         // Order: account objects, Deployment, Job, then the Operator's binding (weight 0).
         assert!(weight(hook("ServiceAccount")) < weight(hook("Deployment")));
         assert!(weight(hook("Role")) < weight(hook("Deployment")));
@@ -1404,8 +1434,13 @@ fn the_probe_runs_before_the_binding_and_names_what_the_policy_matches() {
         let operator_binding = docs
             .iter()
             .find(|doc| {
-                doc["kind"].as_str().is_some_and(|k| k.ends_with("RoleBinding"))
-                    && !doc["metadata"]["name"].as_str().unwrap().ends_with("-probe")
+                doc["kind"]
+                    .as_str()
+                    .is_some_and(|k| k.ends_with("RoleBinding"))
+                    && !doc["metadata"]["name"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("-probe")
                     && hook_events(doc).iter().any(|e| e == "post-install")
             })
             .unwrap();

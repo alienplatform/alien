@@ -849,7 +849,7 @@ fn can_patch_workloads(context: &str) -> bool {
 fn helm_chart(context: &str, verb: &str, chart: &Path, extra: &[&str]) -> (bool, String) {
     let mut arguments = vec!["--kube-context", context, verb, RELEASE];
     arguments.push(chart.to_str().unwrap());
-    arguments.extend(["--namespace", NAMESPACE]);
+    arguments.extend(["--namespace", NAMESPACE, "--timeout", "15m"]);
     arguments.extend(extra);
     run("helm", &arguments, None)
 }
@@ -909,7 +909,10 @@ fn the_grant_never_exists_without_an_enforcing_policy() {
     );
     assert!(manifest.contains("ValidatingAdmissionPolicy"));
     // The Role is part of the release; the probe objects and the binding are not.
-    assert!(!manifest.contains("kind: Job"), "hook objects are not in the manifest");
+    assert!(
+        !manifest.contains("kind: Job"),
+        "hook objects are not in the manifest"
+    );
 
     // Uninstall: the pre-delete hook removes the grant before the policy goes.
     let probe = Probe::start(&context, OPERATOR);
@@ -1078,7 +1081,11 @@ fn a_failed_probe_fails_the_release_and_leaves_no_grant() {
     // The Job stays for its log. Helm removes only the failed hook itself, so the probe's account
     // objects stay too (they can patch one Deployment with zero replicas) until the next
     // successful release removes them.
-    let (_, jobs) = kubectl(&context, &["get", "job", "-n", NAMESPACE, "-o", "name"], None);
+    let (_, jobs) = kubectl(
+        &context,
+        &["get", "job", "-n", NAMESPACE, "-o", "name"],
+        None,
+    );
     assert!(jobs.contains("-probe"), "the failed Job is kept: {jobs}");
     // Fixing the cause and upgrading again completes the grant and cleans up the probe.
     let good = tempfile::tempdir().unwrap();
@@ -1087,7 +1094,14 @@ fn a_failed_probe_fails_the_release_and_leaves_no_grant() {
     assert!(can_patch_workloads(&context));
     let (_, left) = kubectl(
         &context,
-        &["get", "serviceaccount,role,rolebinding,deployment,job", "-n", NAMESPACE, "-o", "name"],
+        &[
+            "get",
+            "serviceaccount,role,rolebinding,deployment,job",
+            "-n",
+            NAMESPACE,
+            "-o",
+            "name",
+        ],
         None,
     );
     assert!(!left.contains("-probe"), "the probe left objects: {left}");
