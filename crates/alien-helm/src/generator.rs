@@ -13978,6 +13978,183 @@ remoteOperator:
         );
     }
 
+    /// On a real cluster: a product chart's Operator may still update the workloads it created for
+    /// dynamic containers, while the same account can change nothing but a restart elsewhere.
+    #[test]
+    #[ignore = "requires a disposable cluster (Kubernetes 1.30 or later) named by ALIEN_WORKLOAD_RESTART_KIND_CONTEXT"]
+    fn product_chart_operator_updates_its_dynamic_workloads_but_only_restarts_others() {
+        use alien_operations_sdk::{KubernetesPermissionRule, KubernetesPermissions, RiskTier};
+        use std::{io::Write, process::{Command, Stdio}};
+        let context = std::env::var("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT")
+            .expect("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT names the cluster");
+        let kubectl = |args: &[&str], stdin: Option<&str>| -> (bool, String) {
+            let mut child = Command::new("kubectl")
+                .args(["--context", &context])
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            if let Some(input) = stdin {
+                child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+            }
+            let output = child.wait_with_output().unwrap();
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            println!("$ kubectl {}\n{}", args.join(" "), text.trim_end());
+            (output.status.success(), text)
+        };
+        let operation = KubernetesOperationPermissions {
+            plugin: "restarter".into(),
+            operation: "restart".into(),
+            tier: RiskTier::Mutating,
+            permissions: KubernetesPermissions {
+                schema_version: 1,
+                rules: vec![KubernetesPermissionRule {
+                    api_group: "apps".into(),
+                    resource: "deployments".into(),
+                    verbs: vec!["patch".into()],
+                    resource_names: vec![],
+                    reason: "Restart workloads".into(),
+                }],
+            },
+        };
+        let chart =
+            product_chart_with_operations(&dynamic_container_stack(), false, None, &[operation]);
+        let mut files = chart.files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let namespace = "tenant-ns";
+        let rendered = crate::test_utils::helm_template_with_api_versions(
+            &files,
+            Some(values),
+            "customer-one",
+            namespace,
+            &["admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy"],
+        );
+        rendered.assert_ok("product chart with a restart plugin");
+        // The account, its roles and the policy; hook copies (uninstall, probe Job) are left out
+        // and the binding hook is applied as an ordinary object.
+        let mut applied = String::new();
+        let mut cluster_scoped = Vec::new();
+        let mut operator = String::new();
+        for mut doc in parse_manifest_docs(&rendered.stdout) {
+            let kind = yaml_str(&doc, "kind").unwrap_or_default().to_owned();
+            let name = yaml_path(&doc, &["metadata", "name"])
+                .and_then(YamlValue::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let hook = yaml_path(&doc, &["metadata", "annotations", "helm.sh/hook"])
+                .and_then(YamlValue::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if !hook.is_empty() && !hook.contains("post-install") || kind == "Job" || kind == "Deployment" {
+                continue;
+            }
+            if hook.contains("post-install") && name.ends_with("-probe") {
+                continue;
+            }
+            if !matches!(
+                kind.as_str(),
+                "ServiceAccount" | "Role" | "RoleBinding" | "ClusterRole" | "ClusterRoleBinding"
+                    | "ValidatingAdmissionPolicy" | "ValidatingAdmissionPolicyBinding"
+            ) {
+                continue;
+            }
+            if kind == "ValidatingAdmissionPolicy" {
+                let expression = doc["spec"]["matchConditions"][0]["expression"].as_str().unwrap();
+                let first = expression.split('\'').nth(1).unwrap();
+                operator = format!("system:serviceaccount:{namespace}:{}", first.rsplit(':').next().unwrap());
+            }
+            if kind.starts_with("Cluster") || kind.starts_with("Validating") {
+                cluster_scoped.push(format!("{}/{name}", kind.to_lowercase()));
+            }
+            if let Some(annotations) = doc["metadata"].as_mapping_mut() {
+                annotations.remove("annotations");
+            }
+            applied.push_str("---\n");
+            applied.push_str(&serde_yaml::to_string(&doc).unwrap());
+        }
+        assert!(!operator.is_empty(), "the chart has a restart policy");
+        struct Cleanup<'a>(&'a str, &'a [String], &'a str);
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                for object in self.1 {
+                    let _ = Command::new("kubectl")
+                        .args(["--context", self.0, "delete", object, "--ignore-not-found"])
+                        .output();
+                }
+                let _ = Command::new("kubectl")
+                    .args(["--context", self.0, "delete", "namespace", self.2])
+                    .args(["--ignore-not-found", "--wait=true", "--timeout=120s"])
+                    .output();
+            }
+        }
+        let _cleanup = Cleanup(&context, &cluster_scoped, namespace);
+        assert!(kubectl(&["create", "namespace", namespace], None).0);
+        let (ok, text) = kubectl(&["--namespace", namespace, "apply", "-f", "-"], Some(&applied));
+        assert!(ok, "apply the chart's objects: {text}");
+        let workloads = format!(
+            "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: dynamic\n  namespace: {namespace}\n  labels:\n    alien.dev/dynamic-deployment: customer-one\nspec:\n  replicas: 0\n  selector: {{matchLabels: {{app: dynamic}}}}\n  template:\n    metadata: {{labels: {{app: dynamic}}}}\n    spec:\n      containers: [{{name: main, image: \"registry.k8s.io/pause:3.10\"}}]\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: other\n  namespace: {namespace}\nspec:\n  replicas: 0\n  selector: {{matchLabels: {{app: other}}}}\n  template:\n    metadata: {{labels: {{app: other}}}}\n    spec:\n      containers: [{{name: main, image: \"registry.k8s.io/pause:3.10\"}}]\n"
+        );
+        assert!(kubectl(&["apply", "-f", "-"], Some(&workloads)).0);
+        let as_operator = format!("--as={operator}");
+        // The Operator updates with `replace` (its Role has `update`); `patch` is for restarts only.
+        let replace = |name: &str, labelled: bool| {
+            let labels = if labelled { "\n  labels:\n    alien.dev/dynamic-deployment: customer-one" } else { "" };
+            let manifest = format!(
+                "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {name}\n  namespace: {namespace}{labels}\nspec:\n  replicas: 0\n  selector: {{matchLabels: {{app: {name}}}}}\n  template:\n    metadata: {{labels: {{app: {name}}}}}\n    spec:\n      containers: [{{name: main, image: \"busybox\"}}]\n"
+            );
+            kubectl(&[&as_operator, "replace", "-f", "-"], Some(&manifest))
+        };
+        // Wait until the policy is enforced: an update of the unlabelled workload is refused.
+        let started = std::time::Instant::now();
+        let mut refused = false;
+        while started.elapsed() < std::time::Duration::from_secs(30) {
+            let (ok, text) = replace("other", false);
+            if !ok && text.contains("ValidatingAdmissionPolicy") {
+                refused = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        assert!(refused, "the policy refuses an image change of a workload the Operator did not create");
+        // The Operator's own dynamic workload can be updated: not the policy's business.
+        let (ok, text) = replace("dynamic", true);
+        assert!(ok, "a dynamic workload update is admitted: {text}");
+        // Labelling an existing workload is itself refused (labels are frozen), so the exemption
+        // cannot be gained by the Operator.
+        let (ok, text) = replace("other", true);
+        assert!(!ok && text.contains("ValidatingAdmissionPolicy"), "{text}");
+        // A restart of the other workload still goes through.
+        let (ok, text) = kubectl(
+            &[
+                &as_operator,
+                "--namespace",
+                namespace,
+                "patch",
+                "deployment/other",
+                "--type=merge",
+                "-p",
+                r#"{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"2026-01-01T00:00:00Z"}}}}}"#,
+            ],
+            None,
+        );
+        assert!(ok, "a restart is admitted: {text}");
+    }
+
     #[test]
     fn product_dynamic_role_name_follows_the_helm_release() {
         let mut files = product_chart_for_stack(&dynamic_container_stack(), false, None).files;
