@@ -34,6 +34,7 @@ alien-client-config = { workspace = true }
 alien-commands = { workspace = true, default-features = false, features = ["dispatchers"] }
 alien-manager-api = { path = "../../client-sdks/manager/rust" }
 alien-k8s-clients = { workspace = true }
+bollard = { workspace = true }
 k8s-openapi = { workspace = true }
 sha2 = { workspace = true }
 

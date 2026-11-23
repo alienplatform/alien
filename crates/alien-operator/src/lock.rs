@@ -20,7 +20,7 @@ impl InstanceLock {
     /// Returns `Ok(lock)` if we are the only running instance, or an error
     /// if another instance already holds the lock.
     pub fn acquire(data_dir: &Path) -> std::io::Result<Self> {
-        fs::create_dir_all(data_dir)?;
+        create_private_dir(data_dir)?;
 
         let path = data_dir.join("operator.lock");
         let file = File::create(&path)?;
@@ -29,6 +29,20 @@ impl InstanceLock {
 
         Ok(Self { _file: file, path })
     }
+}
+
+/// Create the data directory (and missing parents) readable by the service
+/// user only, since the database key can sit beside the database. A directory
+/// that exists keeps the mode it has.
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
 }
 
 impl Drop for InstanceLock {
@@ -153,5 +167,23 @@ mod tests {
 
         drop(lock);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_data_directory_is_private_and_an_existing_one_keeps_its_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let new = root.path().join("var/lib/operator");
+        let lock = InstanceLock::acquire(&new).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&new), 0o700);
+        drop(lock);
+
+        let existing = root.path().join("existing");
+        fs::create_dir(&existing).unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o755)).unwrap();
+        let _lock = InstanceLock::acquire(&existing).unwrap();
+        assert_eq!(mode(&existing), 0o755);
     }
 }
