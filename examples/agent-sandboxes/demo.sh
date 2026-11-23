@@ -45,13 +45,20 @@ post "/api/threads/$THREAD/messages" "$(json user alice text 'Refund order 1003.
 wait_for "$THREAD" '"pending":[{' 120
 echo "(the UI shows Approve / Deny for this held write; approving through the API)"
 APPROVAL=$(events "$THREAD" 1 | grep '"pending":\[{' | tail -1 | sed -E 's/^data: //' | python3 -c 'import json,sys; p=json.load(sys.stdin)["pending"][0]; print(p["id"]); print(p["method"], p["path"], p["body"], file=sys.stderr)')
+echo "alice cannot approve her own write:"
 post "/api/threads/$THREAD/approvals/$APPROVAL" "{\"approve\":true,\"by\":\"alice\"}"
+echo "a manager can:"
+post "/api/threads/$THREAD/approvals/$APPROVAL" "{\"approve\":true,\"by\":\"manager\"}"
 
 say "4. Switch the user mid-thread"
 sleep 20
+echo "a process alice's session leaves running:"
+exec_in "$THREAD" 'nohup sleep 600 >/dev/null 2>&1 & echo started'
 post "/api/threads/$THREAD/messages" "$(json user bob text 'Cancel order 1004.')" >/dev/null
 sleep 40
-events "$THREAD" 1 | grep -E 'user switched|bob' | tail -4
+events "$THREAD" 1 | grep -E 'user switched|bob|ended' | tail -5
+echo "alice's leftover process is gone:"
+exec_in "$THREAD" 'pgrep -x sleep || echo "none running"'
 
 say "5. A key the sandbox never holds"
 post "/api/threads/$THREAD/messages" "$(json user alice text 'List the scanner findings.')" >/dev/null

@@ -65,36 +65,61 @@ This path is not demoed here: host rules reach public hosts only, never private 
 
 ## A turn, step by step
 
-1. A message arrives for a thread. The router sends `open` to the runner, which creates the thread's sandbox the first time, and resumes it if it was paused.
-2. **The router binds the sandbox to the user who is asking** ([`bind-turn.ts`](./control-plane/src/bind-turn.ts)). The connector issues a token for that thread and user, and the runner installs it on the sandbox's connector link as a credential rule: the egress gateway sets `Authorization: Bearer <token>` on the sandbox's requests to the connector. The call returns after the gateway has the rule, and the turn starts only then. The new token replaces the thread's previous one, so the previous user's access ends at that point.
-3. The runner starts one process for the turn: `claude -p --input-format stream-json --output-format stream-json --verbose`, with `--resume <session id>` after the first turn. It writes the user's message as one stream-json line and closes stdin; Claude Code answers, prints its `result` and exits. The conversation stays on the sandbox's disk, so nothing runs between turns.
-4. The router long-polls the runner's `events` command and streams the agent's events to the browser over server-sent events.
-5. When the agent runs `orders update`, the connector holds that HTTP request and lists it in its `approvals` command. The router shows it with Approve / Deny; `decide` answers the held request, and the agent sees the result as its command's output.
-6. After the turn, a thread left idle for `IDLE_PAUSE_SECONDS` (default 120) is paused. The next message resumes it.
+1. A message arrives for a thread. The router takes the thread's lock (open, turn start and pause of one thread run one at a time, so a thread gets one sandbox and a pause cannot catch a message half way) and sends `open` to the runner, which creates the thread's sandbox the first time, and resumes it if it was paused.
+2. If the user changed since the last message, the runner first ends every process the previous user's turns started in the sandbox, and the thread shows how many. Claude Code itself is one process per turn and keeps its conversation on disk, so it needs nothing to stay running.
+3. **The router binds the sandbox to the user who is asking** ([`bind-turn.ts`](./control-plane/src/bind-turn.ts)). The connector issues a token for that thread and user, and the runner installs it on the sandbox's connector link as a credential rule: the egress gateway sets `Authorization: Bearer <token>` on the sandbox's requests to the connector. The call returns after the gateway has the rule, and the turn starts only then. If the bind does not succeed the turn does not start and the thread shows the error. The new token replaces the thread's previous one, so the previous user's access ends at that point.
+4. The runner starts one process for the turn: `claude -p --input-format stream-json --output-format stream-json --verbose`, with `--resume <session id>` after the first turn. It writes the user's message as one stream-json line and closes stdin; Claude Code answers, prints its `result` and exits.
+5. The router long-polls the runner's `events` command and streams the agent's events to the browser over server-sent events.
+6. When the agent runs `orders update`, the connector holds that HTTP request and lists it in its `approvals` command. The router shows it with Approve / Deny; `decide` answers the held request, and the agent sees the result as its command's output.
+7. **When the turn ends, its access ends.** The runner removes the credential rule from the sandbox (rules apply to the whole sandbox, not to one process) and the connector revokes the turn's token. A process the agent left running in the background keeps running, but between turns it has no access through the connector: its next call is a 401. The next turn binds the sandbox again. Switch users and the previous user's background processes are ended before the new user is bound, so nothing runs as the wrong person.
+8. A thread left idle for `IDLE_PAUSE_SECONDS` (default 120) is paused, if it is still idle when the pause gets the thread's lock. A message that arrives during a pause waits for it and then resumes the sandbox.
+
+### Approvals
+
+A held write can be approved only by someone who is in [`access.ts`](./data-plane/connector/src/access.ts) with the `orders:approve` right (`manager` in the example) and who is not the user who asked. The decision must name the thread the write belongs to. And the write must still belong to a live turn: if the token that asked is no longer the thread's current token (the turn ended, another user took over, or it expired), the decision is refused with "the request's turn ended; ask again", and the write is never forwarded. The check runs again right before the connector forwards an approved write.
+
+The example has no sign-in, so the identity in the UI's *Approve as* box is a claim. In your product, your SaaS's own sign-in decides who is approving, and the control plane passes that identity to `decide`.
+
+### Where the per-turn token travels
+
+The connector creates the token and returns it over a command to your control plane, which hands it to the runner over another command; the runner gives it to the egress gateway. The control plane therefore sees each turn's token, and so does the command channel. It lives for the turn (revoked when the turn ends, with a time limit longer than the runner's turn timeout as a backstop). It never enters the sandbox, and the control plane does not store or log it.
 
 ## Run it locally
 
-Requires Docker.
+Requires Docker, [Bun](https://bun.sh), the `alien` CLI, `python3` (only for `demo.sh`) and, for the model, AWS credentials with Bedrock model access to the model you use (default `claude-sonnet-4-6`) in a region you choose.
 
 ```bash
 pnpm install
 
 # The sandbox image. Locally the stack uses it by tag; in the cloud it is built from data-plane/sandbox/.
 docker build -t agent-sandboxes-sandbox:dev data-plane/sandbox/
+```
 
-# The data plane (`alien` commands run in data-plane/, where alien.ts is).
-(cd data-plane && SANDBOX_IMAGE=agent-sandboxes-sandbox:dev ALIEN_AI_LOCAL_BEDROCK_REGION=us-east-1 \
-  alien dev --input internalApiUrl=http://internal-api:8080 --input scannerUrl=http://scanner:8081)
+`alien dev` stays in the foreground, so use one terminal for it and a second one for the rest.
 
-# The customer's key for their scanner, written into the deployment's own secret store and
-# given to the mock scanner. Any value works; the two must match.
+**Terminal 1**, the data plane (`alien` commands run in `data-plane/`, where `alien.ts` is):
+
+```bash
+cd data-plane
+SANDBOX_IMAGE=agent-sandboxes-sandbox:dev ALIEN_AI_LOCAL_BEDROCK_REGION=us-east-1 \
+  alien dev --input internalApiUrl=http://internal-api:8080 --input scannerUrl=http://scanner:8081
+```
+
+`alien dev` prints the deployment id and the values for the control plane, then waits for the scanner's key.
+
+**Terminal 2**:
+
+```bash
+# The customer's key for their scanner: written into the deployment's own secret store (from
+# data-plane/, where `alien dev` keeps its state) and given to the mock scanner. Any value works;
+# the two must match.
 export SCANNER_API_KEY=$(openssl rand -hex 16)
-printf '%s' "$SCANNER_API_KEY" | alien dev vault --deployment <deployment id> set deployer-secrets scanner-api-key --stdin
+(cd data-plane && printf '%s' "$SCANNER_API_KEY" | alien dev vault --deployment <deployment id> set deployer-secrets scanner-api-key --stdin)
 
 # The internal API and the scanner, on the local deployment network, outside the stack.
 docker compose -f customer-network/local/compose.yml up -d --build
 
-# The control plane, with the values `alien dev` prints.
+# The control plane, with the values `alien dev` printed.
 ALIEN_MANAGER_URL=<commands url> ALIEN_DEPLOYMENT_ID=<deployment id> ALIEN_TOKEN=<token> \
   pnpm control-plane
 ```
@@ -110,12 +135,12 @@ Open http://localhost:3000, start a thread and send a message.
    ```bash
    cd customer-network/terraform
    terraform init && terraform apply -var scanner_api_key=<a key you choose>
-   terraform output
+   terraform output -raw deploy_flags
    ```
 
-   The NAT gateway uses one Elastic IP and the stack adds its own; check the account's EIP and VPC quotas first.
+   The scanner's key is stored in the account as an SSM parameter and read by the instance at boot (it is also in Terraform's state). The NAT gateway uses one Elastic IP and the stack adds its own; check the account's EIP and VPC quotas first.
 
-2. Release the stack and deploy it into that VPC with `byo-vpc-aws`, passing the internal API's address. This is a normal Alien deployment: sign in, release, then deploy with a deployment group token.
+2. Release the stack and deploy it into that VPC with `byo-vpc-aws`. `deploy_flags` is the network (`--network byo`, the VPC, comma-separated subnet ids, the security group) and the two inputs, in the form `alien deploy` takes. This is a normal Alien deployment: sign in, release, then deploy with a deployment group token.
 
    ```bash
    # The AWS build runs on arm64 and a sandbox is a live resource there.
@@ -123,13 +148,10 @@ Open http://localhost:3000, start a thread and send a message.
    SANDBOX_LIFECYCLE=live alien release
 
    alien deploy --token <deployment group token> --platform aws --name agent-sandboxes \
-     --network byo --vpc-id <vpc_id> \
-     --public-subnet-ids <public_subnet_ids> --private-subnet-ids <private_subnet_ids> \
-     --security-group-ids <security_group_id> \
-     --input internalApiUrl=<internal_api_url> --input scannerUrl=<scanner_url>
+     $(cd ../customer-network/terraform && terraform output -raw deploy_flags)
    ```
 
-   Run it with AWS credentials for the account the stack goes into. The values come from `terraform output`. Then write the same scanner key into the deployment's secret store, as `alien deploy` prints (an SSM parameter in the account).
+   Run it with AWS credentials for the account the stack goes into. Then write the same scanner key into the deployment's secret store, as `alien deploy` prints (an SSM parameter in the account).
 
 3. Point the control plane at the deployment (`ALIEN_MANAGER_URL`, `ALIEN_DEPLOYMENT_ID`, `ALIEN_TOKEN`) and start it as above.
 
@@ -139,14 +161,14 @@ To remove everything: destroy the deployment, then `terraform destroy` in `custo
 
 ## Demo walkthrough
 
-Start a thread as `alice`. The **Run in sandbox** box runs a shell command in the thread's sandbox, outside the agent.
+Start a thread as `alice`. The **Run in sandbox** box runs a shell command in the thread's sandbox, outside the agent. The users are `alice` (reads and writes), `bob` (reads only) and `manager` (approves writes). *Approve as* picks who is approving.
 
 1. **Only placeholder keys.** Run `env | sort`. The only credentials are `ANTHROPIC_API_KEY=placeholder` and `CONNECTOR_TOKEN=placeholder`. Ask the agent to print its environment: the same.
 2. **Nothing else is reachable.** Run `curl -m5 https://example.com` and `curl -m5 http://<internal API private IP>:8080/orders`: both are refused. Then ask the agent to *list the orders*: it runs `orders list`, which goes through the connector and works.
-3. **Writes wait for approval.** Ask: *refund order 1003*. The agent runs `orders update 1003 --status refunded`, says it is waiting, and an Approve / Deny bar appears. Approve, and the agent reports the refund.
-4. **Switch the user mid-thread.** Pick `bob` and ask: *cancel order 1004*. Before the turn starts, the sandbox is bound to `bob`; `bob` may read orders but not change them, so the connector answers 403 and the agent says so. Reads still work.
+3. **Writes wait for approval.** Ask: *refund order 1003*. The agent runs `orders update 1003 --status refunded`, says it is waiting, and an Approve / Deny bar appears. Approve as `manager` (alice cannot approve her own write), and the agent reports the refund.
+4. **Switch the user mid-thread.** Pick `bob` and ask: *cancel order 1004*. The thread shows that alice's leftover processes were ended, and before the turn starts the sandbox is bound to `bob`; `bob` may read orders but not change them, so the connector answers 403 and the agent says so. Reads still work.
 5. **A key the sandbox never holds.** Ask the agent: *list the scanner findings*. It runs `scanner findings`, the connector adds the customer's key, and three findings come back. Run `env | sort` in the sandbox again: there is no scanner key, and `curl http://<scanner private IP>:8081/findings` is refused.
-6. **Idle threads pause and resume.** Ask the agent to *keep an orders watch running in the background*. It starts `orders watch` detached and reports its pid. Leave the thread idle until it shows *paused*, then send another message: it resumes, `pgrep -f "orders watch"` shows the same pid, and the agent remembers the earlier turns. Local sandboxes do not pause, so this one shows on AWS.
+6. **Idle threads pause and resume.** Ask the agent to *keep an orders watch running in the background*. It starts `orders watch` detached and reports its pid. Leave the thread idle until it shows *paused*, then send another message as the same user: it resumes, `pgrep -f "orders watch"` shows the same pid, and the agent remembers the earlier turns. Between turns the watcher has no credentials, so its calls get a 401 until the next turn binds the sandbox again. Local sandboxes do not pause, so this one shows on AWS.
 7. **Another account.** Apply `customer-network/terraform/` and deploy the same release into a second AWS account. Everything above works the same.
 
 ### What you should see
@@ -166,7 +188,7 @@ $ orders list                                         # before the first bind
 401: {"error":"no turn credentials on this request"}
 $ orders list                                         # after the turn is bound to alice: the four orders
 $ orders update 1001 --status shipped                 # held, listed for Approve / Deny
-waiting for approval...                               # then: approvedBy "alice"
+waiting for approval...                               # held until a manager decides
 $ orders update 1004 --status cancelled               # after switching to bob
 403: {"error":"bob may not change orders"}
 
@@ -185,18 +207,18 @@ $ curl -sS http://<scanner>:8081/findings             # refused by the gateway: 
 CONTROL_PLANE=http://localhost:3000 INTERNAL_API_IP=<private IP> SCANNER_IP=<private IP> ./demo.sh
 ```
 
-Moments 1 and 2 need no model. Set `WITH_MODEL=0` to run only those; the rest go through the agent, approve the held write as `alice`, switch to `bob`, and wait `IDLE_WAIT` seconds (default 180) for the pause before resuming.
+Moments 1 and 2 need no model. Set `WITH_MODEL=0` to run only those; the rest go through the agent, approve the held write as `manager`, switch to `bob`, and wait `IDLE_WAIT` seconds (default 180) for the pause before resuming.
 
 ## Make it yours
 
 - **Your internal systems:** replace `customer-network/internal-api/` and the routes in [`data-plane/connector/src/index.ts`](./data-plane/connector/src/index.ts), and give the agent its own tool in place of [`data-plane/sandbox/orders`](./data-plane/sandbox/orders).
-- **Who may do what:** [`data-plane/connector/src/access.ts`](./data-plane/connector/src/access.ts) maps users to actions; read it from your own user store.
+- **Who may do what:** [`data-plane/connector/src/access.ts`](./data-plane/connector/src/access.ts) maps users to actions, including who may approve; read it from your own user store.
 - **What needs approval:** the connector holds every write. Hold only some, or none.
 - **The model:** `MODEL`, and any model the deployment's AI service offers.
 
 Limits accepted to keep the example small: the connector keeps turn tokens and held writes in memory and runs one replica, so a connector restart fails the writes that were waiting and the next turn gets a new token. The control plane keeps threads in a JSON file and runs one process.
 
-This example was proven on AWS (deployed with `byo-vpc-aws`) and in `alien dev`. It is not covered on GCP, Azure or Kubernetes yet.
+This example was proven in `alien dev`.
 
 ## Tests
 
@@ -204,4 +226,4 @@ This example was proven on AWS (deployed with `byo-vpc-aws`) and in `alien dev`.
 pnpm test
 ```
 
-The tests cover the connector's tokens, access and approvals, and the router's order: the sandbox is bound to the asking user before each turn starts, a refused bind keeps the turn from starting, and an idle thread pauses and resumes.
+The tests cover the connector's tokens (revoke, replace, expiry), its HTTP handler on a real server (a token is checked before routing, bob's write is a 403, a write is held and not forwarded until approved, an approval after a user switch or a turn's end is refused), the approver rules and the wrong-thread check, the router's order (bind before the turn, a failed bind stops the turn, the turn's access is cleared at its end, a user switch ends the old processes first, a pause racing a message, two first messages give one sandbox), the runner's per-thread lock, and the script that ends a user's processes, run against real processes.
