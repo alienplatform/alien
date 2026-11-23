@@ -1657,6 +1657,11 @@ remoteOperator:
   collectorTokenRevision: ""
   serviceAccountAnnotations: {}
   podLabels: {}
+  # Set false to render nothing of the cluster-enforced workload restart: no admission policy or
+  # binding (cluster-scoped), no probe objects in `default`, and no workload `patch` grant. For an
+  # install whose installer is only an admin of the install namespace. A restart operation is then
+  # refused with an error saying it is not available.
+  workloadRestartPolicy: true
 "#
 }
 
@@ -1708,6 +1713,7 @@ fn remote_operator_values_schema() -> serde_json::Value {
                 "type": "object",
                 "additionalProperties": { "type": "string" }
             },
+            "workloadRestartPolicy": { "type": "boolean" },
             "podLabels": {
                 "type": "object",
                 "propertyNames": {
@@ -2206,6 +2212,11 @@ fn generate_operator_manifest_inner(
         ),
         dynamic_containers,
         options.image,
+        if integrated_product_chart {
+            ".Values.remoteOperator"
+        } else {
+            ".Values.runtime"
+        },
     );
     docs.extend(policy_docs);
     // Dynamic workloads need write access in this deployment namespace only.
@@ -3045,6 +3056,7 @@ fn workload_restart_policy_docs(
     grants: &RestartGrants,
     dynamic_containers: bool,
     image: &str,
+    values_path: &str,
 ) -> (Vec<String>, Vec<String>) {
     let resources: BTreeSet<&str> = grants.0.keys().map(|grant| grant.resource).collect();
     if resources.is_empty() {
@@ -3090,6 +3102,14 @@ fn workload_restart_policy_docs(
         policy.push_str(&format!(
             "    - name: not-a-dynamic-workload\n      expression: {{{{ printf \"{}\" .Release.Namespace | quote }}}}\n",
             workload_restart::dynamic_workload_exemption("'%s'")
+        ));
+        // With self-update on, the Operator updates its own Deployment (the image of its
+        // container). In a product chart it already holds an unrestricted update there, so
+        // exempting that one object by name takes nothing from the policy; off, nothing is
+        // exempted and the Operator's own Deployment stays under the policy.
+        policy.push_str(&format!(
+            "{{{{- if and (dig \"selfUpdate\" false .Values.runtime.image) (not (dig \"digest\" \"\" .Values.runtime.image)) }}}}\n    - name: not-the-operator-deployment\n      expression: {{{{ printf \"{}\" .Release.Namespace (include \"deployment.fullname\" .) | quote }}}}\n{{{{- end }}}}\n",
+            workload_restart::own_deployment_exemption("'%s'", "'%s'")
         ));
     }
     policy.push_str("  variables:\n");
@@ -3139,6 +3159,12 @@ fn workload_restart_policy_docs(
                 "  # Required by {reason} (limited to a restart by the admission policy of this chart)\n"
             ));
         }
+        if grant.resource_names.is_empty() {
+            rules.push_str(&format!(
+                "  # No resourceNames: the restart reaches every {} in scope, including ones in kube-system.\n",
+                grant.resource
+            ));
+        }
         rules.push_str(&format!(
             "  - apiGroups: ['apps']\n    resources: [{}]\n    verbs: ['patch']\n",
             yaml_string(grant.resource)
@@ -3178,8 +3204,9 @@ fn workload_restart_policy_docs(
     ]);
     let guard = |doc: String| {
         format!(
-            "{{{{- if {} }}}}\n{doc}{{{{- end }}}}\n",
-            workload_restart::POLICY_API_CONDITION
+            "{{{{- if and ({}) {} }}}}\n{doc}{{{{- end }}}}\n",
+            workload_restart::POLICY_API_CONDITION,
+            workload_restart::policy_enabled_condition(values_path)
         )
     };
     (
@@ -4561,6 +4588,14 @@ runtime:
     # a different key here than the one in use stops the install.
     key: ""
   replicas: 1
+  # Renders the cluster-enforced restart: the admission policy that limits the Operator's
+  # workload `patch` to a restart, the probe that proves the cluster enforces it before the grant
+  # exists, and the grant itself. They are cluster-scoped objects (a ValidatingAdmissionPolicy and
+  # its binding) plus a Role and Job objects in `default`, so an installer that is only an admin of
+  # the install namespace cannot apply them. Set false for such an install: nothing of it is
+  # rendered, the Operator gets no workload `patch`, and a restart operation is refused with an
+  # error saying it is not available. Applies only to a chart that grants a restart.
+  workloadRestartPolicy: true
   resources:
     requests:
       cpu: 100m
@@ -5474,6 +5509,7 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
             "properties": { "name": { "type": "string", "minLength": 1 } }
           }
         },
+        "workloadRestartPolicy": { "type": "boolean" },
         "podLabels": {
           "type": "object",
           "propertyNames": { "not": { "enum": ["app.kubernetes.io/name", "app.kubernetes.io/instance", "alien.dev/log-collector-exclude"] } },
@@ -14010,6 +14046,96 @@ remoteOperator:
             include_str!("../../alien-operator/src/loops/dynamic_containers/mod.rs")
                 .contains("const OWNER_LABEL: &str = \"alien.dev/dynamic-deployment\";")
         );
+    }
+
+    fn restart_operation_for_product() -> KubernetesOperationPermissions {
+        use alien_operations_sdk::{KubernetesPermissionRule, KubernetesPermissions, RiskTier};
+        KubernetesOperationPermissions {
+            plugin: "restarter".into(),
+            operation: "restart".into(),
+            tier: RiskTier::Mutating,
+            permissions: KubernetesPermissions {
+                schema_version: 1,
+                rules: vec![KubernetesPermissionRule {
+                    api_group: "apps".into(),
+                    resource: "deployments".into(),
+                    verbs: vec!["patch".into()],
+                    resource_names: vec![],
+                    reason: "Restart workloads".into(),
+                }],
+            },
+        }
+    }
+
+    fn render_product_with_restart(extra_values: &str) -> Vec<serde_yaml::Value> {
+        let chart = product_chart_with_operations(
+            &dynamic_container_stack(),
+            false,
+            None,
+            &[restart_operation_for_product()],
+        );
+        let mut files = chart.files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = format!(
+            r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+{extra_values}"#
+        );
+        let rendered = crate::test_utils::helm_template_with_api_versions(
+            &files,
+            Some(&values),
+            "customer-one",
+            "tenant-ns",
+            &["admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy"],
+        );
+        rendered.assert_ok("product chart with a restart plugin");
+        parse_manifest_docs(&rendered.stdout)
+    }
+
+    #[test]
+    fn product_restart_policy_leaves_the_operators_own_deployment_to_self_update() {
+        // Self-update moves the image of the Operator's own Deployment with an update that
+        // changes more than a restart; the policy must not refuse it. Only that one object
+        // is exempted, and only while self-update is on.
+        let off = render_product_with_restart("");
+        let off_policy = &docs_by_kind(&off, "ValidatingAdmissionPolicy")[0];
+        assert_eq!(
+            off_policy["spec"]["matchConditions"]
+                .as_sequence()
+                .unwrap()
+                .len(),
+            2
+        );
+
+        let on = render_product_with_restart("runtime:\n  image:\n    selfUpdate: true\n");
+        let policy = &docs_by_kind(&on, "ValidatingAdmissionPolicy")[0];
+        let conditions = policy["spec"]["matchConditions"].as_sequence().unwrap();
+        assert_eq!(conditions.len(), 3, "{conditions:?}");
+        assert_eq!(
+            conditions[2]["expression"],
+            "!(request.namespace == 'tenant-ns' && request.name == 'customer-one')"
+        );
+    }
+
+    #[test]
+    fn product_restart_policy_can_be_turned_off_and_renders_nothing_of_it() {
+        let docs = render_product_with_restart("  workloadRestartPolicy: false\n");
+        assert!(docs_by_kind(&docs, "ValidatingAdmissionPolicy").is_empty());
+        assert!(docs_by_kind(&docs, "ValidatingAdmissionPolicyBinding").is_empty());
+        for doc in &docs {
+            assert_ne!(doc["metadata"]["namespace"], "default", "{doc:?}");
+            let text = serde_yaml::to_string(doc).unwrap();
+            assert!(
+                !text.contains("restartedAt") && !text.contains("-restart-"),
+                "{text}"
+            );
+        }
     }
 
     /// On a real cluster: a product chart's Operator may still update the workloads it created for

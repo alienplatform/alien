@@ -51,10 +51,26 @@
 //! disabled passes no probe (the release fails); a policy deleted by hand
 //! leaves the rule unconfined.
 //!
+//! The policy, its binding, the probe objects (in `default`) and the grant are
+//! cluster-scoped or live outside the install namespace, so an installer that is
+//! only an admin of that namespace cannot apply them. `workloadRestartPolicy:
+//! false` (under `runtime`, or `remoteOperator` in a product chart; default on,
+//! also for values carried from an earlier chart) renders none of it, so such an
+//! install upgrades; the Operator then has no workload `patch` and a restart
+//! operation is refused as not available.
+//!
+//! The grant has no `resourceNames` unless the operation names workloads, so a
+//! restart reaches every workload of that kind in scope, `kube-system`
+//! DaemonSets included. The rendered Role says so next to the rule.
+//!
 //! A product chart's Operator also manages dynamic workloads in the release
 //! namespace (its Role already allows create/update/delete of Deployments
 //! there). Updates of workloads that already carry the Operator's dynamic
 //! workload label are exempt from the policy in that namespace only.
+//! With `runtime.image.selfUpdate` on, the Operator's own Deployment (found by
+//! name and namespace) is exempt as well: moving to a newer image is an update,
+//! not a restart, and the Operator already holds an unrestricted update on that
+//! Deployment there.
 //!
 //! Scope of the policy:
 //! - Only the main resource is matched. `deployments/status` is never granted,
@@ -92,6 +108,17 @@ pub(crate) const DYNAMIC_WORKLOAD_LABEL: &str = "alien.dev/dynamic-deployment";
 pub(crate) const POLICY_API_CONDITION: &str =
     r#".Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy""#;
 
+/// Template condition: the install has not turned the restart policy off with
+/// `workloadRestartPolicy: false` under `values_path` (`.Values.runtime` in the
+/// standalone chart, `.Values.remoteOperator` in a product chart). A value
+/// carried from an earlier chart (`--reuse-values`) has no such key and counts
+/// as on.
+pub(crate) fn policy_enabled_condition(values_path: &str) -> String {
+    format!(
+        r#"(ne (toString (dig "workloadRestartPolicy" true (default dict {values_path}))) "false")"#
+    )
+}
+
 /// RBAC resources of the workload kinds a restart can patch.
 pub(crate) const RESTART_RESOURCES: [&str; 3] = ["deployments", "statefulsets", "daemonsets"];
 
@@ -111,6 +138,15 @@ pub(crate) fn dynamic_workload_exemption(namespace_expression: &str) -> String {
     format!(
         "!(request.namespace == {namespace_expression} && oldObject.metadata.?labels.orValue({{}}).exists(k, k == '{DYNAMIC_WORKLOAD_LABEL}'))"
     )
+}
+
+/// Match condition that leaves the Operator's own Deployment (the object it
+/// updates to move to a newer image) out of the policy.
+pub(crate) fn own_deployment_exemption(
+    namespace_expression: &str,
+    name_expression: &str,
+) -> String {
+    format!("!(request.namespace == {namespace_expression} && request.name == {name_expression})")
 }
 
 /// Whether this rule verb is the `patch` the policy exists for. The grant is

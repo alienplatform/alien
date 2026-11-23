@@ -1452,10 +1452,7 @@ fn the_probe_runs_before_the_binding_and_names_what_the_policy_matches() {
                 doc["kind"]
                     .as_str()
                     .is_some_and(|k| k.ends_with("RoleBinding"))
-                    && !doc["metadata"]["name"]
-                        .as_str()
-                        .unwrap()
-                        .contains("-probe")
+                    && !doc["metadata"]["name"].as_str().unwrap().contains("-probe")
                     && hook_events(doc).iter().any(|e| e == "post-install")
             })
             .unwrap();
@@ -1473,5 +1470,75 @@ fn the_probe_runs_before_the_binding_and_names_what_the_policy_matches() {
                 "{permission:?} {api_versions:?}"
             );
         }
+    }
+}
+
+/// An install whose installer is only an admin of its namespace cannot apply the policy, its
+/// binding (both cluster-scoped) or the probe objects in `default`, and must be able to turn the
+/// feature off and still upgrade. Off, nothing of it is rendered and the Operator gets no
+/// workload `patch`; on (the default, also for a values file carried from an earlier chart that
+/// has no such key), all of it is.
+#[test]
+fn the_restart_policy_can_be_turned_off_and_then_renders_no_cluster_scoped_or_default_objects() {
+    let operations = [restart_operation(&WORKLOAD_KINDS, &[])];
+    let outside_the_namespace = |docs: &[YamlValue]| -> Vec<String> {
+        docs.iter()
+            .filter(|doc| {
+                let kind = doc["kind"].as_str().unwrap_or_default();
+                let namespace = doc["metadata"]["namespace"].as_str();
+                namespace == Some("default") || kind.starts_with("ValidatingAdmissionPolicy")
+            })
+            .map(|doc| {
+                format!(
+                    "{}/{}",
+                    doc["kind"].as_str().unwrap_or_default(),
+                    doc["metadata"]["name"].as_str().unwrap_or_default()
+                )
+            })
+            .collect()
+    };
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        for values in [None, Some("runtime:\n  workloadRestartPolicy: true\n")] {
+            let docs = rendered_operator_chart_with_values(
+                scope,
+                OperatorPermission::Remediation,
+                &operations,
+                &[POLICY_API],
+                values,
+            );
+            assert!(
+                !outside_the_namespace(&docs).is_empty(),
+                "{scope:?}: the default renders the policy"
+            );
+            assert!(!patchable_workloads(&docs).is_empty(), "{scope:?}");
+        }
+        let docs = rendered_operator_chart_with_values(
+            scope,
+            OperatorPermission::Remediation,
+            &operations,
+            &[POLICY_API],
+            Some("runtime:\n  workloadRestartPolicy: false\n"),
+        );
+        assert_eq!(
+            outside_the_namespace(&docs),
+            Vec::<String>::new(),
+            "{scope:?}"
+        );
+        assert!(
+            patchable_workloads(&docs).is_empty(),
+            "{scope:?}: no patch rule"
+        );
+        assert!(
+            restricted_workloads(&docs).is_empty(),
+            "{scope:?}: no policy"
+        );
+        assert!(
+            docs.iter().all(|doc| doc["kind"] != "Job"
+                || !doc["metadata"]["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("-probe")),
+            "{scope:?}: no probe"
+        );
     }
 }

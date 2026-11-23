@@ -13,7 +13,10 @@
 //! image, environment or replicas, is refused by the cluster. That policy
 //! needs Kubernetes 1.30 or later; on an older cluster the chart renders no
 //! workload patch, and the operation is not permitted there. Raw manifests
-//! never render it.
+//! never render it. The grant reaches every workload of the kind in scope unless
+//! the rule names them (`resourceNames`), `kube-system` DaemonSets included;
+//! an approver should read a rule without names that way. An install can turn
+//! the policy and the grant off with `workloadRestartPolicy: false`.
 //!
 //! Add this field to an operation in `metadata.json`:
 //! ```json
@@ -123,7 +126,7 @@ pub fn workload_patch_unavailable() -> PluginResult {
         WORKLOAD_PATCH_UNAVAILABLE,
         "This operation is not available on this cluster: restarting a workload needs the \
          cluster admission policy API (ValidatingAdmissionPolicy, Kubernetes 1.30 or later) \
-         and an installation that allows changes. The installation did not grant the permission.",
+         and an installation that allows changes. The installation did not grant the permission (a chart with `workloadRestartPolicy: false` renders none).",
     )
 }
 
