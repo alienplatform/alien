@@ -151,7 +151,7 @@ Start a thread as `alice`. The **Run in sandbox** box runs a shell command in th
 
 ### What you should see
 
-Captured from a local run (demos 1-4; the sandbox's commands, not the agent's wording):
+Captured from a local run (demos 1-5; the sandbox's commands, not the agent's wording):
 
 ```
 $ env | grep -E "KEY|TOKEN"
@@ -169,6 +169,12 @@ $ orders update 1001 --status shipped                 # held, listed for Approve
 waiting for approval...                               # then: approvedBy "alice"
 $ orders update 1004 --status cancelled               # after switching to bob
 403: {"error":"bob may not change orders"}
+
+$ scanner findings                                    # the connector adds the customer's key
+F-201 web-01 high, F-202 web-02 medium, F-203 db-01 low
+$ env | grep -ci scanner                              # in the sandbox
+0
+$ curl -sS http://<scanner>:8081/findings             # refused by the gateway: [403]
 ```
 
 ### Run the walkthrough as a script
