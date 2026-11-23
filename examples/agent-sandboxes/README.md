@@ -83,7 +83,7 @@ Open http://localhost:3000, start a thread and send a message.
 2. Release the stack and deploy it into that VPC with `byo-vpc-aws`, passing the internal API's address:
 
    ```bash
-   alien release
+   SANDBOX_LIFECYCLE=live alien release
    alien-deploy deploy --token <deployment group token> --platform aws \
      --network byo --vpc-id <vpc_id> \
      --public-subnet-ids <public_subnet_ids> --private-subnet-ids <private_subnet_ids> \

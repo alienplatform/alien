@@ -75,13 +75,17 @@ const runner = new alien.Container("runner")
   .permissions("runner")
   .build()
 
+// AWS builds a source sandbox from the release, which needs the live lifecycle; local
+// development takes a frozen one. Release for AWS with SANDBOX_LIFECYCLE=live.
+const sandboxLifecycle = process.env.SANDBOX_LIFECYCLE === "live" ? "live" : "frozen"
+
 export default new alien.Stack("agent-sandboxes")
   .platforms(["local", "aws"])
   .inputs(inputs)
   .add(llm, "live")
   .add(model, "live")
   .add(connector, "live")
-  .add(agent, "frozen")
+  .add(agent, sandboxLifecycle)
   .add(runner, "live")
   .permissions({
     profiles: {
