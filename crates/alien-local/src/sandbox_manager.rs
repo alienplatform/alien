@@ -164,6 +164,18 @@ impl LocalSandboxManager {
             .clone()
     }
 
+    /// Drops the map entry of a finished session when nobody else holds or waits on its lock
+    /// (the map and `lock` are the only owners), so the map does not grow with every session id.
+    fn release_session_lock(&self, name: &str, lock: Arc<tokio::sync::Mutex<()>>) {
+        let mut locks = self
+            .session_locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if Arc::strong_count(&lock) == 2 {
+            locks.remove(name);
+        }
+    }
+
     /// Connects to the local Docker daemon.
     pub fn new(state_dir: PathBuf) -> Result<Self> {
         let (docker, docker_host) = crate::docker_connection::connect_docker_with_host()?;
@@ -1269,8 +1281,23 @@ impl LocalSandboxManager {
     async fn terminate_target(&self, sandbox: &str, session_id: &str, target: &str) -> Result<()> {
         let name = Self::container_name(sandbox, session_id);
         let lock = self.session_lock(&name);
-        let _guard = lock.lock().await;
+        let guard = lock.lock().await;
+        let result = self
+            .terminate_locked(sandbox, session_id, target, &name)
+            .await;
+        drop(guard);
+        self.release_session_lock(&name, lock);
+        result
+    }
 
+    async fn terminate_locked(
+        &self,
+        sandbox: &str,
+        session_id: &str,
+        target: &str,
+        name: &str,
+    ) -> Result<()> {
+        let name = name.to_string();
         let removed = self
             .docker
             .remove_container(
@@ -1567,6 +1594,34 @@ mod tests {
         ] {
             assert!(exec_user(refused).is_err(), "{refused:?}");
         }
+    }
+
+    #[test]
+    fn a_finished_sessions_lock_entry_is_dropped_unless_someone_else_holds_it() {
+        let manager = LocalSandboxManager {
+            docker: Docker::connect_with_http(
+                "http://127.0.0.1:1",
+                5,
+                bollard::API_DEFAULT_VERSION,
+            )
+            .unwrap(),
+            state_dir: PathBuf::new(),
+            docker_host: String::new(),
+            gateway_key: alien_bindings::sandbox_egress_token::generate_signing_key(),
+            gateways: Default::default(),
+            gateway_image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.to_string(),
+            gateway_secret: new_gateway_secret(),
+            session_locks: Default::default(),
+        };
+        let lock = manager.session_lock("a");
+        manager.release_session_lock("a", lock);
+        assert!(manager.session_locks.lock().unwrap().is_empty());
+
+        let lock = manager.session_lock("b");
+        let waiter = manager.session_lock("b");
+        manager.release_session_lock("b", lock);
+        assert_eq!(manager.session_locks.lock().unwrap().len(), 1);
+        drop(waiter);
     }
 
     /// Against a gateway image that predates admin protocol 2, the credentials call is refused
