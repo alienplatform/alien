@@ -183,3 +183,32 @@ async fn live_vertex_claude_streaming() {
         "SSE must close with message_stop: {body}"
     );
 }
+
+#[tokio::test]
+#[ignore = "hits real Vertex embeddings; needs GCP_PROJECT, GCP_LOCATION, and GCP_ACCESS_TOKEN"]
+async fn live_vertex_embeddings() {
+    let base = serve(build_router(vec![vertex_gemini_route()])).await;
+    let response = reqwest::Client::new()
+        .post(format!("{base}/llm/v1/embeddings"))
+        .json(&json!({
+            "model": "gemini-embedding-001",
+            "input": ["hello", "world"],
+            "dimensions": 256
+        }))
+        .send()
+        .await
+        .expect("Vertex embeddings request");
+    let status = response.status();
+    let body: Value = response.json().await.expect("embeddings body");
+    assert!(status.is_success(), "embeddings failed: {status}: {body}");
+    let data = body["data"].as_array().expect("data array");
+    assert_eq!(data.len(), 2, "{body}");
+    for (index, item) in data.iter().enumerate() {
+        assert_eq!(item["index"], index, "{body}");
+        assert_eq!(item["embedding"].as_array().expect("vector").len(), 256);
+    }
+    eprintln!(
+        "PASS embeddings: 2 vectors of 256 dims, usage {}",
+        body["usage"]
+    );
+}

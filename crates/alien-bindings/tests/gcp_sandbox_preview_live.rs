@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_bindings::providers::sandbox::gcp_agent_platform::{
-    EdgeTokenSigner, GcpAgentPlatformSandbox, IamEdgeTokenSigner,
+    EdgeTokenSigner, GcpAgentPlatformSandbox, IamEdgeTokenSigner, SignedEdgeToken,
 };
 use alien_bindings::traits::{CreateSandboxRequest, PreviewCapability, Sandbox};
 use alien_core::{GcpClientConfig, GcpCredentials};
@@ -97,11 +97,74 @@ fn provider(
         template.to_string(),
         Some(3600),
     )
-    .with_preview_signer(Arc::new(IamEdgeTokenSigner::new(
-        Arc::new(iam),
-        signer_account,
-    )))
+    .with_preview_signer(signer(iam, signer_account))
     .with_preview_ports(ports.to_vec())
+}
+
+/// Signs the edge credential through IAM, or, when `GCP_SIGNER_KEY_FILE` names the signer's own key
+/// file (a project where nobody may impersonate the signer), with that key through `openssl`.
+fn signer(iam: alien_gcp_clients::iam::IamClient, account: &str) -> Arc<dyn EdgeTokenSigner> {
+    match std::env::var("GCP_SIGNER_KEY_FILE") {
+        Ok(key_file) => Arc::new(KeyFileSigner {
+            key_file,
+            account: account.to_string(),
+        }),
+        Err(_) => Arc::new(IamEdgeTokenSigner::new(Arc::new(iam), account)),
+    }
+}
+
+#[derive(Debug)]
+struct KeyFileSigner {
+    key_file: String,
+    account: String,
+}
+
+#[async_trait::async_trait]
+impl EdgeTokenSigner for KeyFileSigner {
+    async fn sign(&self) -> alien_bindings::Result<SignedEdgeToken> {
+        use base64::Engine as _;
+        use std::io::Write;
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        let now = chrono::Utc::now().timestamp();
+        let key: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&self.key_file).expect("key file"))
+                .expect("json");
+        let header = b64(
+            serde_json::json!({"alg": "RS256", "typ": "JWT", "kid": key["private_key_id"]})
+                .to_string()
+                .as_bytes(),
+        );
+        let claims = b64(serde_json::json!({
+            "iat": now, "exp": now + 300, "iss": self.account, "sub": self.account,
+            "nonce": uuid::Uuid::new_v4().as_u128() % 1_000_000_000 + 1,
+            "aud": "https://aiplatform.googleapis.com/",
+        })
+        .to_string()
+        .as_bytes());
+        let input = format!("{header}.{claims}");
+        let pem = std::env::temp_dir().join(format!("m1g-{}.pem", uuid::Uuid::new_v4()));
+        std::fs::write(&pem, key["private_key"].as_str().unwrap()).expect("pem");
+        std::fs::set_permissions(&pem, std::os::unix::fs::PermissionsExt::from_mode(0o600)).ok();
+        let mut child = std::process::Command::new("openssl")
+            .args(["dgst", "-sha256", "-sign"])
+            .arg(&pem)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("openssl");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let signature = child.wait_with_output().expect("signature").stdout;
+        std::fs::remove_file(&pem).ok();
+        Ok(SignedEdgeToken {
+            jwt: format!("{input}.{}", b64(&signature)),
+            expires_at: now + 300,
+        })
+    }
 }
 
 /// Sends one request with the preview's headers, and the caller's bearer under the header the
