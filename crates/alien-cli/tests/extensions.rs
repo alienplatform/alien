@@ -1324,7 +1324,7 @@ fn doctored(zip: &[u8], manifest: &serde_json::Value, extra: &[(&str, &[u8])]) -
     let options = zip::write::SimpleFileOptions::default();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).unwrap();
-        let name = entry.name().to_string();
+        let name = entry.name().unwrap().to_string();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).unwrap();
         if name == "manifest.json" {

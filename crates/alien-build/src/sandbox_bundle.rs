@@ -549,7 +549,7 @@ mod tests {
         let mut archive = zip::ZipArchive::new(file).expect("reads as a zip");
 
         let mut names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).expect("entry").name().to_string())
+            .map(|i| archive.by_index(i).expect("entry").name().expect("utf-8 name").to_string())
             .collect();
         names.sort();
         assert_eq!(names, vec!["Dockerfile", AGENT_FILENAME]);

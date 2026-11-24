@@ -545,7 +545,7 @@ mod tests {
         assert_eq!(first, core_zip(&manifest, b"\0asm module", None).unwrap());
 
         let mut archive = zip::ZipArchive::new(Cursor::new(first)).unwrap();
-        let names: Vec<_> = archive.file_names().map(str::to_string).collect();
+        let names: Vec<_> = archive.file_names().map(|n| n.expect("utf-8 name").to_string()).collect();
         assert_eq!(names, ["manifest.json", "hooks.wasm"]);
         let mut wasm = Vec::new();
         archive
