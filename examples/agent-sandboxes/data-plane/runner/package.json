@@ -9,7 +9,7 @@
     "test:ts": "tsc --noEmit"
   },
   "dependencies": {
-    "@alienplatform/bindings": "^3.3.72",
+    "@alienplatform/bindings": "^3.3.76",
     "@alienplatform/commands": "^3.3.72"
   },
   "devDependencies": {
