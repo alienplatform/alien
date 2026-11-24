@@ -341,6 +341,34 @@ impl ObjectStore for LocalStorage {
         )
     }
 
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
+        let list_prefix_for_inner = prefix
+            .map(|p| prefixed_path(&self.base_dir, p))
+            .unwrap_or_else(|| self.base_dir.clone());
+        let offset_for_inner = prefixed_path(&self.base_dir, offset);
+
+        let base_dir_for_stream = self.base_dir.clone();
+
+        // Forward to the inner store so it can send a native start-after request
+        // instead of listing the whole prefix and filtering on the client.
+        Box::pin(
+            self.inner
+                .list_with_offset(Some(&list_prefix_for_inner), &offset_for_inner)
+                .and_then(move |mut meta| {
+                    let captured_base_dir = base_dir_for_stream.clone();
+                    async move {
+                        meta.location =
+                            relativize_path(&captured_base_dir, meta.location, "LocalStorage")?;
+                        Ok(meta)
+                    }
+                }),
+        )
+    }
+
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
         let list_prefix_for_inner = prefix
             .map(|p| prefixed_path(&self.base_dir, p))
@@ -381,5 +409,36 @@ impl ObjectStore for LocalStorage {
 impl std::fmt::Display for LocalStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "LocalStorage(url={})", self.url)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::ObjectStore;
+
+    #[tokio::test]
+    async fn list_with_offset_returns_only_keys_after_offset_relative_to_base_dir() {
+        let directory = tempfile::tempdir().unwrap();
+        let store =
+            LocalStorage::new_from_url(&format!("file://{}/base/", directory.path().display()))
+                .unwrap();
+        for key in ["items/a", "items/b", "items/c", "items/d", "other/z"] {
+            store
+                .put(&Path::from(key), Bytes::from_static(b"x").into())
+                .await
+                .unwrap();
+        }
+
+        let listed: Vec<String> = store
+            .list_with_offset(Some(&Path::from("items")), &Path::from("items/b"))
+            .map_ok(|meta| meta.location.to_string())
+            .try_collect()
+            .await
+            .unwrap();
+
+        let mut listed = listed;
+        listed.sort();
+        assert_eq!(listed, vec!["items/c", "items/d"]);
     }
 }

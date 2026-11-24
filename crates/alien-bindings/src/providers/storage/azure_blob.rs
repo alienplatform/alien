@@ -285,6 +285,34 @@ impl ObjectStore for BlobStorage {
         )
     }
 
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
+        let list_prefix_for_inner = prefix
+            .map(|p| prefixed_path(&self.base_dir, p))
+            .unwrap_or_else(|| self.base_dir.clone());
+        let offset_for_inner = prefixed_path(&self.base_dir, offset);
+
+        let base_dir_for_stream = self.base_dir.clone();
+
+        // Forward to the inner store so it can send a native start-after request
+        // instead of listing the whole prefix and filtering on the client.
+        Box::pin(
+            self.inner
+                .list_with_offset(Some(&list_prefix_for_inner), &offset_for_inner)
+                .and_then(move |mut meta| {
+                    let captured_base_dir = base_dir_for_stream.clone();
+                    async move {
+                        meta.location =
+                            relativize_path(&captured_base_dir, meta.location, "AzureStorage")?;
+                        Ok(meta)
+                    }
+                }),
+        )
+    }
+
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
         let list_prefix_for_inner = prefix
             .map(|p| prefixed_path(&self.base_dir, p))
