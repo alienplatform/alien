@@ -21313,6 +21313,21 @@
           },
           {
             "type": "object",
+            "description": "Report decisions on access requests for the recorded deployment.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "operatorAccessRequests"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Relay commands to one app worker, without dispatch or administrative rights.",
             "required": [
               "target",
