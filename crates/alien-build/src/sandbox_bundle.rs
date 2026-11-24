@@ -320,7 +320,9 @@ fn write_bundle_inner(
     if let Some(bytes) = agent_bytes {
         // `AGENT_MODE` makes the entry executable; the Dockerfile's `--chmod` covers
         // builders that drop archive modes, and neither alone is reliable across both.
-        let options: SimpleFileOptions = SimpleFileOptions::default().unix_permissions(AGENT_MODE);
+        let options: SimpleFileOptions = SimpleFileOptions::default()
+            .unix_permissions(AGENT_MODE)
+            .system(zip::System::Unix);
         zip.start_file(AGENT_FILENAME, options)
             .into_alien_error()
             .context(failed("write", destination))?;
@@ -332,7 +334,9 @@ fn write_bundle_inner(
     if let Some(bytes) = command_bytes {
         zip.start_file(
             "image-command.json",
-            SimpleFileOptions::default().unix_permissions(0o444),
+            SimpleFileOptions::default()
+                .unix_permissions(0o444)
+                .system(zip::System::Unix),
         )
         .into_alien_error()
         .context(failed("write image command", destination))?;
@@ -342,7 +346,9 @@ fn write_bundle_inner(
     }
     zip.start_file(
         "Dockerfile",
-        SimpleFileOptions::default().unix_permissions(0o644),
+        SimpleFileOptions::default()
+            .unix_permissions(0o644)
+            .system(zip::System::Unix),
     )
     .into_alien_error()
     .context(failed("write", destination))?;
@@ -549,7 +555,14 @@ mod tests {
         let mut archive = zip::ZipArchive::new(file).expect("reads as a zip");
 
         let mut names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).expect("entry").name().expect("utf-8 name").to_string())
+            .map(|i| {
+                archive
+                    .by_index(i)
+                    .expect("entry")
+                    .name()
+                    .expect("utf-8 name")
+                    .to_string()
+            })
             .collect();
         names.sort();
         assert_eq!(names, vec!["Dockerfile", AGENT_FILENAME]);

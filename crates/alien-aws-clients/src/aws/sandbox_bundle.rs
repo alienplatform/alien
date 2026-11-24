@@ -53,7 +53,8 @@ pub fn render(bucket: &str, image: &str, resource_id: &str) -> Result<RenderedBu
     // archive is flat: `CreateMicrovmImage` looks for the Dockerfile at its root.
     let options = SimpleFileOptions::default()
         .last_modified_time(zip::DateTime::default())
-        .unix_permissions(0o644);
+        .unix_permissions(0o644)
+        .system(zip::System::Unix);
     zip.start_file("Dockerfile", options)
         .map_err(|error| failed(&error))?;
     zip.write_all(dockerfile.as_bytes())

@@ -14303,7 +14303,7 @@ dependencies = [
  "zeroize",
  "zerotrie",
  "zerovec",
- "zlib-rs",
+ "zip",
 ]
 
 [[package]]

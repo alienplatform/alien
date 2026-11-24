@@ -169,7 +169,7 @@ zerofrom = { version = "0.1", default-features = false, features = ["alloc", "de
 zeroize = { version = "1" }
 zerotrie = { version = "0.2", default-features = false, features = ["alloc", "yoke", "zerofrom"] }
 zerovec = { version = "0.11", default-features = false, features = ["alloc", "derive", "yoke"] }
-zlib-rs = { version = "0.6", default-features = false, features = ["std"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
 anstyle-parse = { version = "1" }
@@ -334,7 +334,7 @@ zerofrom = { version = "0.1", default-features = false, features = ["alloc", "de
 zeroize = { version = "1" }
 zerotrie = { version = "0.2", default-features = false, features = ["alloc", "yoke", "zerofrom"] }
 zerovec = { version = "0.11", default-features = false, features = ["alloc", "derive", "yoke"] }
-zlib-rs = { version = "0.6", default-features = false, features = ["std"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 const-oid = { version = "0.10", default-features = false, features = ["db"] }

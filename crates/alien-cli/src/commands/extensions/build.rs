@@ -414,7 +414,8 @@ fn core_zip(
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
         .last_modified_time(zip::DateTime::default())
-        .unix_permissions(0o644);
+        .unix_permissions(0o644)
+        .system(zip::System::Unix);
     let json = |value: &serde_json::Value| {
         serde_json::to_vec_pretty(value)
             .into_alien_error()
@@ -545,7 +546,10 @@ mod tests {
         assert_eq!(first, core_zip(&manifest, b"\0asm module", None).unwrap());
 
         let mut archive = zip::ZipArchive::new(Cursor::new(first)).unwrap();
-        let names: Vec<_> = archive.file_names().map(|n| n.expect("utf-8 name").to_string()).collect();
+        let names: Vec<_> = archive
+            .file_names()
+            .map(|n| n.expect("utf-8 name").to_string())
+            .collect();
         assert_eq!(names, ["manifest.json", "hooks.wasm"]);
         let mut wasm = Vec::new();
         archive
